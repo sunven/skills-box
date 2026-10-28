@@ -3,6 +3,7 @@ pub mod backup;
 pub mod baseline;
 pub mod cli;
 pub mod commands;
+pub mod detach;
 pub mod detail;
 pub mod env;
 pub mod error;

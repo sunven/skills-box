@@ -30,6 +30,11 @@ pub mod codes {
     pub const SKILL_SOURCE_UNRESOLVABLE: &str = "skill.source_unresolvable";
     pub const AGENT_INVALID: &str = "agent.invalid";
     pub const AGENT_NOT_DETECTED: &str = "agent.not_detected";
+    pub const AGENT_NOT_ATTACHED: &str = "agent.not_attached";
+    pub const AGENT_NATIVE: &str = "agent.native";
+    pub const AGENT_BROKEN: &str = "agent.broken";
+    pub const AGENT_DEPENDENCY_CONFLICT: &str = "agent.dependency_conflict";
+    pub const AGENT_DETACH_FAILED: &str = "agent.detach_failed";
     pub const AGENT_UNSUPPORTED_GLOBAL: &str = "agent.unsupported_global";
     pub const PATH_APP_DATA: &str = "path.app_data";
     pub const PATH_INVALID: &str = "path.invalid";
@@ -212,7 +217,7 @@ impl AppError {
     pub fn skill_unmanaged(name: &str) -> Self {
         Self::new(
             codes::SKILL_UNMANAGED,
-            format!("skill「{name}」没有 lock 条目，不可更新。"),
+            format!("skill「{name}」没有 lock 条目，不可更新或断开。"),
         )
         .hint("未受管 skill 只能只读展示或手动处理，请刷新库存确认状态。")
     }
@@ -220,9 +225,9 @@ impl AppError {
     pub fn skill_copy_only(name: &str) -> Self {
         Self::new(
             codes::SKILL_COPY_ONLY,
-            format!("skill「{name}」只有 agent 副本，没有共享目录，无法更新。"),
+            format!("skill「{name}」只有 agent 副本，没有共享目录，无法更新或断开。"),
         )
-        .hint("v1 不支持 copy-only 更新；请先卸载，再重新安装。")
+        .hint("v1 不支持 copy-only 更新或断开；请先卸载，再重新安装。")
     }
 
     pub fn skill_source_unresolvable(name: &str, detail: impl Into<String>) -> Self {
@@ -438,6 +443,50 @@ impl AppError {
         )
         .hint("请刷新环境检测后重新选择 agent。")
         .retryable(true)
+    }
+
+    pub fn agent_not_attached(name: &str) -> Self {
+        Self::new(
+            codes::AGENT_NOT_ATTACHED,
+            format!("agent「{name}」没有挂载这个 skill，无法断开。"),
+        )
+        .hint("请刷新库存后重试。")
+    }
+
+    /// Universal/shared agents read the canonical store directly; there is no
+    /// per-agent attachment to remove.
+    pub fn agent_native(name: &str) -> Self {
+        Self::new(
+            codes::AGENT_NATIVE,
+            format!("agent「{name}」共享 canonical store，不提供断开。"),
+        )
+        .detail("universal / native 挂载没有独立目录，移除它不会改变该 agent 可见的 skill。")
+        .hint("如需移除该 skill，请使用「彻底卸载」。")
+    }
+
+    pub fn agent_broken(name: &str, path: &std::path::Path) -> Self {
+        Self::new(
+            codes::AGENT_BROKEN,
+            format!("agent「{name}」的挂载是断链，只读提示，不提供断开。"),
+        )
+        .detail(path.display().to_string())
+        .hint("v1 不修复或清理断链；请手动检查该 agent 目录。")
+    }
+
+    pub fn agent_dependency_conflict(name: &str, detail: impl Into<String>) -> Self {
+        Self::new(
+            codes::AGENT_DEPENDENCY_CONFLICT,
+            format!("skill「{name}」的 copy 挂载仍被其他 agent 的符号链接引用，已阻止断开。"),
+        )
+        .detail(detail)
+        .hint("v1 不会自动改指；请先处理这些 agent 的链接，或改用「彻底卸载」。")
+    }
+
+    pub fn agent_detach_failed(detail: impl Into<String>) -> Self {
+        Self::new(codes::AGENT_DETACH_FAILED, "断开 agent 挂载失败。")
+            .detail(detail)
+            .hint("请检查该 agent 目录的权限后重试；canonical 与 lock 未被修改。")
+            .retryable(true)
     }
 
     pub fn backup_failed(detail: impl Into<String>) -> Self {

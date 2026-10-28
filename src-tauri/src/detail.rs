@@ -185,6 +185,16 @@ pub fn read_with_agents(
             agent_name: attachment.agent_name.clone(),
             path: paths.display(&attachment.path),
             mode: attachment.mode,
+            detachable: inventory::attachment_is_detachable(
+                located.management,
+                located.canonical_path.is_some(),
+                agents
+                    .iter()
+                    .find(|agent| agent.id == attachment.agent_id)
+                    .map(|agent| agent.universal)
+                    .unwrap_or(false),
+                attachment.mode,
+            ),
         })
         .collect();
 
