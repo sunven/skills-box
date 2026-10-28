@@ -21,7 +21,12 @@ pub mod codes {
     pub const LOCK_UNSUPPORTED_VERSION: &str = "lock.unsupported_version";
     pub const LOCK_READ_FAILED: &str = "lock.read_failed";
     pub const SKILL_NOT_FOUND: &str = "skill.not_found";
+    pub const SKILL_NOT_IN_SOURCE: &str = "skill.not_in_source";
+    pub const SKILL_INVALID_NAME: &str = "skill.invalid_name";
+    pub const SKILL_INSTALL_FAILED: &str = "skill.install_failed";
     pub const SKILL_READ_FAILED: &str = "skill.read_failed";
+    pub const AGENT_INVALID: &str = "agent.invalid";
+    pub const AGENT_UNSUPPORTED_GLOBAL: &str = "agent.unsupported_global";
     pub const PATH_APP_DATA: &str = "path.app_data";
     pub const PATH_INVALID: &str = "path.invalid";
     pub const PATH_OUTSIDE_ALLOWED_ROOT: &str = "path.outside_allowed_root";
@@ -38,6 +43,13 @@ pub mod codes {
     pub const TASK_NOT_FOUND: &str = "task.not_found";
     pub const TASK_CANNOT_CANCEL: &str = "task.cannot_cancel";
     pub const SKILL_CONFLICT: &str = "skill.conflict";
+    pub const BACKUP_FAILED: &str = "backup.failed";
+    pub const VERIFY_FAILED: &str = "verify.failed";
+    pub const VERIFY_CANONICAL_MISSING: &str = "verify.canonical_missing";
+    pub const VERIFY_LOCK_MISSING: &str = "verify.lock_missing";
+    pub const VERIFY_ATTACHMENT_MISSING: &str = "verify.attachment_missing";
+    pub const VERIFY_ATTACHMENT_MODE: &str = "verify.attachment_mode";
+    pub const VERIFY_COPY_FALLBACK: &str = "verify.copy_fallback";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -296,6 +308,122 @@ impl AppError {
         )
         .detail(detail)
         .hint("请先卸载或重命名现有 skill，再重新安装。")
+    }
+
+    pub fn skill_invalid_name(detail: impl Into<String>) -> Self {
+        Self::new(
+            codes::SKILL_INVALID_NAME,
+            "skill 名无效，请使用单个名称（不能以 - 或 * 开头）。",
+        )
+        .detail(detail)
+        .hint("从仓库预览中选择 skill，或手动输入不带路径的名称。")
+    }
+
+    pub fn skill_not_in_source(name: &str, detail: impl Into<String>) -> Self {
+        Self::new(
+            codes::SKILL_NOT_IN_SOURCE,
+            format!("来源中未找到 skill「{name}」。"),
+        )
+        .detail(detail)
+        .hint("请重新预览仓库并选择存在的 skill。")
+        .retryable(true)
+    }
+
+    pub fn skill_install_failed(name: &str, detail: impl Into<String>) -> Self {
+        Self::new(
+            codes::SKILL_INSTALL_FAILED,
+            format!("skill「{name}」安装失败。"),
+        )
+        .detail(detail)
+        .hint("可以单独重试该 skill。")
+        .retryable(true)
+    }
+
+    pub fn agent_invalid(detail: impl Into<String>) -> Self {
+        Self::new(codes::AGENT_INVALID, "agent 标识无效。").detail(detail)
+    }
+
+    pub fn agent_unsupported_global(name: &str) -> Self {
+        Self::new(
+            codes::AGENT_UNSUPPORTED_GLOBAL,
+            format!("agent「{name}」不支持全局安装。"),
+        )
+        .hint("请取消选择该 agent，或使用其项目级安装方式。")
+    }
+
+    pub fn backup_failed(detail: impl Into<String>) -> Self {
+        Self::new(codes::BACKUP_FAILED, "无法创建安装前的 lock 快照。")
+            .detail(detail)
+            .hint("请检查应用数据目录与磁盘空间后重试。")
+            .retryable(true)
+    }
+
+    pub fn verify_failed(detail: impl Into<String>) -> Self {
+        Self::new(codes::VERIFY_FAILED, "安装后校验失败。")
+            .detail(detail)
+            .hint("可以单独重试该 skill。")
+            .retryable(true)
+    }
+
+    pub fn verify_canonical_missing(name: &str, path: &std::path::Path) -> Self {
+        Self::new(
+            codes::VERIFY_CANONICAL_MISSING,
+            format!("共享目录中缺少 skill「{name}」。"),
+        )
+        .detail(path.display().to_string())
+        .hint("CLI 报告安装成功，但 canonical 目录不存在；请重试。")
+        .retryable(true)
+    }
+
+    pub fn verify_lock_missing(name: &str) -> Self {
+        Self::new(
+            codes::VERIFY_LOCK_MISSING,
+            format!("lock 中缺少 skill「{name}」。"),
+        )
+        .hint("CLI 可能未能写入 lock；请重试安装。")
+        .retryable(true)
+    }
+
+    pub fn verify_attachment_missing(
+        name: &str,
+        agent: &str,
+        path: &std::path::Path,
+    ) -> Self {
+        Self::new(
+            codes::VERIFY_ATTACHMENT_MISSING,
+            format!("agent「{agent}」缺少 skill「{name}」的挂载。"),
+        )
+        .detail(path.display().to_string())
+        .hint("请检查该 agent 目录的权限后重试。")
+        .retryable(true)
+    }
+
+    pub fn verify_attachment_mode(
+        name: &str,
+        agent: &str,
+        path: &std::path::Path,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self::new(
+            codes::VERIFY_ATTACHMENT_MODE,
+            format!("agent「{agent}」的挂载模式异常（{name}）。"),
+        )
+        .detail(format!("{}：{}", path.display(), detail.into()))
+        .hint("挂载应为指向 canonical 的符号链接；请检查后重试。")
+        .retryable(true)
+    }
+
+    pub fn verify_copy_fallback(
+        name: &str,
+        agent: &str,
+        path: &std::path::Path,
+    ) -> Self {
+        Self::new(
+            codes::VERIFY_COPY_FALLBACK,
+            format!("「{name}」在 agent「{agent}」上是副本而非符号链接。"),
+        )
+        .detail(path.display().to_string())
+        .hint("CLI 可能静默回退为 copy；建议检查该 agent 目录的写权限。")
     }
 }
 
