@@ -68,6 +68,7 @@ export function makeSkill(
     updatedAt: null,
     canonicalPath: "~/.agents/skills/alpha",
     attachments: [],
+    localModification: "clean",
     warnings: [],
     ...overrides,
   };
@@ -88,6 +89,7 @@ export function makeAnomalies(
     stale: group(0),
     unmanaged: group(0),
     broken: group(0),
+    modified: group(0),
     ...overrides,
   };
 }

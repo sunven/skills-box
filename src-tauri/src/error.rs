@@ -20,7 +20,12 @@ pub mod codes {
     pub const LOCK_CORRUPT: &str = "lock.corrupt";
     pub const LOCK_UNSUPPORTED_VERSION: &str = "lock.unsupported_version";
     pub const LOCK_READ_FAILED: &str = "lock.read_failed";
+    pub const SKILL_NOT_FOUND: &str = "skill.not_found";
+    pub const SKILL_READ_FAILED: &str = "skill.read_failed";
     pub const PATH_APP_DATA: &str = "path.app_data";
+    pub const PATH_INVALID: &str = "path.invalid";
+    pub const PATH_OUTSIDE_ALLOWED_ROOT: &str = "path.outside_allowed_root";
+    pub const OPEN_FAILED: &str = "open.failed";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -155,6 +160,41 @@ impl AppError {
             .detail(detail)
             .hint("请检查磁盘空间与目录权限，然后重新检测。")
     }
+
+    pub fn skill_not_found(name: &str) -> Self {
+        Self::new(
+            codes::SKILL_NOT_FOUND,
+            format!("找不到 skill「{name}」的目录。"),
+        )
+        .hint("请刷新库存后重试；如果目录已被外部删除，列表会自动更新。")
+    }
+
+    pub fn skill_read_failed(detail: impl Into<String>) -> Self {
+        Self::new(codes::SKILL_READ_FAILED, "读取 skill 详情失败。")
+            .detail(detail)
+            .hint("请检查该 skill 目录的权限后重试。")
+            .retryable(true)
+    }
+
+    pub fn path_invalid(detail: impl Into<String>) -> Self {
+        Self::new(codes::PATH_INVALID, "无效的 skill 标识或路径。").detail(detail)
+    }
+
+    pub fn path_outside_allowed_root(detail: impl Into<String>) -> Self {
+        Self::new(
+            codes::PATH_OUTSIDE_ALLOWED_ROOT,
+            "路径不在允许的 skill 目录内，已拒绝打开。",
+        )
+        .detail(detail)
+        .hint("只允许打开 canonical store 或已知 agent 目录中的 skill。")
+    }
+
+    pub fn open_failed(detail: impl Into<String>) -> Self {
+        Self::new(codes::OPEN_FAILED, "无法打开文件或目录。")
+            .detail(detail)
+            .hint("请检查系统默认应用与文件权限。")
+            .retryable(true)
+    }
 }
 
 impl std::fmt::Display for AppError {
@@ -209,6 +249,20 @@ mod tests {
             codes::LOCK_READ_FAILED
         );
         assert_eq!(AppError::path_app_data("denied").code, codes::PATH_APP_DATA);
+        assert_eq!(
+            AppError::skill_not_found("alpha").code,
+            codes::SKILL_NOT_FOUND
+        );
+        assert_eq!(
+            AppError::skill_read_failed("denied").code,
+            codes::SKILL_READ_FAILED
+        );
+        assert_eq!(AppError::path_invalid("x").code, codes::PATH_INVALID);
+        assert_eq!(
+            AppError::path_outside_allowed_root("x").code,
+            codes::PATH_OUTSIDE_ALLOWED_ROOT
+        );
+        assert_eq!(AppError::open_failed("x").code, codes::OPEN_FAILED);
     }
 
     #[test]

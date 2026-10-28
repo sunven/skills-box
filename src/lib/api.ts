@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { EnvReport, InventorySnapshot } from "./types";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import type { EnvReport, InventorySnapshot, SkillDetail } from "./types";
 
 /**
  * The single IPC gateway. Components never call `invoke` directly; keeping the
@@ -11,6 +12,29 @@ export function getEnvironment(refresh = false): Promise<EnvReport> {
 
 export function getInventory(): Promise<InventorySnapshot> {
   return invoke<InventorySnapshot>("get_inventory");
+}
+
+/** Detail is fetched on demand; the frontend only sends the inventory id. */
+export function getSkillDetail(skillId: string): Promise<SkillDetail> {
+  return invoke<SkillDetail>("get_skill_detail", { skillId });
+}
+
+/** Rust resolves and guards the folder; no path crosses the IPC boundary. */
+export function openSkillFolder(skillId: string): Promise<void> {
+  return invoke<void>("open_skill_folder", { skillId });
+}
+
+/** Rust resolves and guards SKILL.md; opens with the default editor. */
+export function openSkillMd(skillId: string): Promise<void> {
+  return invoke<void>("open_skill_md", { skillId });
+}
+
+/** External links are https-only and leave the app through the opener. */
+export function openExternalUrl(url: string): Promise<void> {
+  if (!/^https:\/\//i.test(url)) {
+    return Promise.reject(new Error("只允许通过 opener 打开 https 链接。"));
+  }
+  return openUrl(url);
 }
 
 /** Normalize a rejected Tauri command into an `AppError`-shaped object. */

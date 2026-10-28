@@ -1,40 +1,16 @@
 import { Badge } from "./ui/badge";
 import { cn } from "../lib/utils";
+import { agentColor, agentInitials } from "../lib/agent-style";
 import type { InventorySkill } from "../lib/types";
 import {
   ATTACHMENT_LABELS,
+  LOCAL_MODIFICATION_LABELS,
   UPDATE_LABELS,
   formatUpdatedAt,
   hasBrokenAttachment,
+  hasLocalModificationWarning,
   uniqueAttachments,
 } from "../lib/inventory-view";
-
-const AGENT_PALETTE = [
-  "#c96145",
-  "#2f3437",
-  "#3f7ef7",
-  "#6e40c9",
-  "#0f766e",
-  "#a64b0a",
-  "#b45309",
-  "#be123c",
-];
-
-function agentColor(id: string): string {
-  let hash = 0;
-  for (const character of id) {
-    hash = (hash * 31 + character.charCodeAt(0)) | 0;
-  }
-  return AGENT_PALETTE[Math.abs(hash) % AGENT_PALETTE.length]!;
-}
-
-function initials(name: string): string {
-  const words = name.split(/\s+/).filter(Boolean);
-  if (words.length >= 2) {
-    return `${words[0]![0] ?? ""}${words[1]![0] ?? ""}`.toUpperCase();
-  }
-  return name.slice(0, 2).toUpperCase();
-}
 
 function updateVariant(
   state: InventorySkill["update"],
@@ -80,7 +56,7 @@ function AgentAvatars({ skill }: AgentAvatarsProps) {
             )}
             style={{ backgroundColor: agentColor(attachment.agentId) }}
           >
-            {initials(attachment.agentName)}
+            {agentInitials(attachment.agentName)}
           </span>
         );
       })}
@@ -138,6 +114,19 @@ export function SkillRow({ skill, selected, onSelect }: SkillRowProps) {
           ) : null}
           {unmounted ? <Badge variant="muted">未挂载</Badge> : null}
           {broken ? <Badge variant="destructive">断链</Badge> : null}
+          {hasLocalModificationWarning(skill) ? (
+            <Badge
+              data-testid="local-modification-badge"
+              variant={skill.localModification === "modified" ? "warning" : "muted"}
+              title={
+                skill.localModification === "modified"
+                  ? "当前文件与基线指纹不一致；更新或卸载前请确认并备份。"
+                  : "首次扫描没有可比较的基线或 lock hash；更新或卸载前请确认。"
+              }
+            >
+              {LOCAL_MODIFICATION_LABELS[skill.localModification]}
+            </Badge>
+          ) : null}
           {skill.warnings.length > 0 ? (
             <span title={skill.warnings.join("\n")}>
               <Badge variant="warning">警告</Badge>
