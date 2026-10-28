@@ -149,21 +149,20 @@ fn validate_agents(
         }
     }
 
-    let resolved = resolve_agent_dirs(paths, &ids);
+    let detected = crate::inventory::detected_agent_dirs(paths);
     let mut targets = Vec::new();
     for id in ids {
-        let target = resolved
+        let target = detected
             .iter()
             .find(|agent| agent.id == id)
             .ok_or_else(|| {
-                AppError::agent_unsupported_global(
-                    catalog()
-                        .agents
-                        .iter()
-                        .find(|definition| definition.id == id)
-                        .map(|definition| definition.display_name.as_str())
-                        .unwrap_or(id.as_str()),
-                )
+                let display_name = catalog()
+                    .agents
+                    .iter()
+                    .find(|definition| definition.id == id)
+                    .map(|definition| definition.display_name.as_str())
+                    .unwrap_or(id.as_str());
+                AppError::agent_not_detected(display_name)
             })?;
         targets.push(InstallTarget {
             id: target.id.clone(),
@@ -181,8 +180,9 @@ fn validate_agents(
     Ok((agent_ids, targets))
 }
 
-/// Resolve agent ids to absolute global skills directories without requiring
-/// the agent to be detected. Detection only decides what the UI offers.
+/// Resolve known agent ids to absolute global skills directories without their
+/// config roots existing. Install validation additionally requires detection;
+/// this helper exists for verification fixtures and future callers.
 pub fn resolve_agent_dirs(paths: &AppPaths, ids: &[String]) -> Vec<AgentDir> {
     let parent = capture_process_env();
     let env = build_child_env(ChildEnvParams {
@@ -626,7 +626,7 @@ mod tests {
     fn fixture() -> (tempfile::TempDir, AppPaths) {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home");
-        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(home.join(".qoder")).unwrap();
         let paths = AppPaths::new(&home, tmp.path().join("app-data"));
         (tmp, paths)
     }
@@ -806,6 +806,17 @@ mod tests {
         let error =
             validate_request(&paths, &request("acme/skills", &["alpha"], &["eve"])).unwrap_err();
         assert_eq!(error.code, codes::AGENT_UNSUPPORTED_GLOBAL);
+    }
+
+    #[test]
+    fn validation_rejects_agent_that_is_not_detected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+        let paths = AppPaths::new(&home, tmp.path().join("app-data"));
+        let error =
+            validate_request(&paths, &request("acme/skills", &["alpha"], &["qoder"])).unwrap_err();
+        assert_eq!(error.code, codes::AGENT_NOT_DETECTED);
     }
 
     #[test]

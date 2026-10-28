@@ -1500,6 +1500,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home");
         fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(home.join(".qoder")).unwrap();
         let paths = AppPaths::new(&home, tmp.path().join("app-data"));
         paths.ensure_dirs().unwrap();
         let executor = Arc::new(InstallExecutor::new(response));
@@ -1646,6 +1647,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home");
         fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(home.join(".qoder")).unwrap();
         let paths = AppPaths::new(&home, tmp.path().join("app-data"));
         paths.ensure_dirs().unwrap();
         let executor = Arc::new(InstallExecutor::new(InstallResponse::success(
@@ -1723,6 +1725,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home");
         fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(home.join(".qoder")).unwrap();
         let paths = AppPaths::new(&home, tmp.path().join("app-data"));
         paths.ensure_dirs().unwrap();
         let executor = Arc::new(InstallExecutor::new(InstallResponse::success(
@@ -1768,6 +1771,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home");
         fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(home.join(".qoder")).unwrap();
         let paths = AppPaths::new(&home, tmp.path().join("app-data"));
         paths.ensure_dirs().unwrap();
         let executor = Arc::new(InstallExecutor::new(InstallResponse::success(
@@ -1802,6 +1806,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home");
         fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(home.join(".qoder")).unwrap();
         let paths = AppPaths::new(&home, tmp.path().join("app-data"));
         paths.ensure_dirs().unwrap();
         let executor = Arc::new(InstallExecutor::new(InstallResponse::success(
@@ -1896,6 +1901,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home");
         fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(home.join(".qoder")).unwrap();
         let paths = AppPaths::new(&home, tmp.path().join("app-data"));
         paths.ensure_dirs().unwrap();
         write_pre_lock(&paths, &["existing"]);
@@ -1943,6 +1949,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home");
         fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(home.join(".qoder")).unwrap();
         let paths = AppPaths::new(&home, tmp.path().join("app-data"));
         paths.ensure_dirs().unwrap();
         let executor = Arc::new(InstallExecutor::new(
@@ -1991,6 +1998,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home");
         fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(home.join(".qoder")).unwrap();
         let paths = AppPaths::new(&home, tmp.path().join("app-data"));
         paths.ensure_dirs().unwrap();
         let executor = Arc::new(InstallExecutor::new(

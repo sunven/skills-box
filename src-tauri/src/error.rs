@@ -26,6 +26,7 @@ pub mod codes {
     pub const SKILL_INSTALL_FAILED: &str = "skill.install_failed";
     pub const SKILL_READ_FAILED: &str = "skill.read_failed";
     pub const AGENT_INVALID: &str = "agent.invalid";
+    pub const AGENT_NOT_DETECTED: &str = "agent.not_detected";
     pub const AGENT_UNSUPPORTED_GLOBAL: &str = "agent.unsupported_global";
     pub const PATH_APP_DATA: &str = "path.app_data";
     pub const PATH_INVALID: &str = "path.invalid";
@@ -349,6 +350,15 @@ impl AppError {
             format!("agent「{name}」不支持全局安装。"),
         )
         .hint("请取消选择该 agent，或使用其项目级安装方式。")
+    }
+
+    pub fn agent_not_detected(name: &str) -> Self {
+        Self::new(
+            codes::AGENT_NOT_DETECTED,
+            format!("未检测到 agent「{name}」，无法安装。"),
+        )
+        .hint("请刷新环境检测后重新选择 agent。")
+        .retryable(true)
     }
 
     pub fn backup_failed(detail: impl Into<String>) -> Self {
