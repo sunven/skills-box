@@ -161,6 +161,22 @@ export interface AgentAttachment {
   agentName: string;
   path: string;
   mode: AttachmentMode;
+  /** Backend-computed detach eligibility (managed + canonical + link/copy + non-universal). */
+  detachable: boolean;
+}
+
+/** Result of a native detach from one agent. */
+export interface DetachResult {
+  skillId: string;
+  agentId: string;
+  agentName: string;
+  mode: AttachmentMode;
+  attachmentPath: string;
+  canonicalPath: string;
+  backupPath?: string;
+  logPath: string;
+  remainingAgents: string[];
+  unmounted: boolean;
 }
 
 export interface InventorySkill {

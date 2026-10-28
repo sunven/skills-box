@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   ArrowUpCircle,
@@ -7,13 +8,20 @@ import {
   Loader2,
   MousePointerClick,
   RefreshCw,
+  Unlink,
 } from "lucide-react";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
+import { DetachDialog, type DetachDialogError } from "./detach-dialog";
 import { SkillMarkdown } from "./skill-markdown";
-import { asAppError, openSkillFolder, openSkillMd } from "../lib/api";
+import { asAppError, detachAgent, openSkillFolder, openSkillMd } from "../lib/api";
 import { agentColor, agentInitials } from "../lib/agent-style";
-import type { SkillDetail, UpdateSkillResult } from "../lib/types";
+import type {
+  AgentAttachment,
+  DetachResult,
+  SkillDetail,
+  UpdateSkillResult,
+} from "../lib/types";
 import {
   ATTACHMENT_LABELS,
   LOCAL_MODIFICATION_LABELS,
@@ -87,8 +95,10 @@ function HashValue({ hash }: { hash: string }) {
 
 function AgentAttachmentRow({
   attachment,
+  onDetach,
 }: {
   attachment: SkillDetail["attachments"][number];
+  onDetach: (attachment: AgentAttachment) => void;
 }) {
   const broken = attachment.mode === "broken";
   return (
@@ -140,6 +150,18 @@ function AgentAttachmentRow({
           </p>
         ) : null}
       </div>
+      {attachment.detachable ? (
+        <Button
+          variant="outline"
+          size="sm"
+          className="ml-auto h-6 shrink-0 px-2 text-[10.5px]"
+          aria-label={`断开 ${attachment.agentName}`}
+          onClick={() => onDetach(attachment)}
+        >
+          <Unlink className="size-3" aria-hidden="true" />
+          断开
+        </Button>
+      ) : null}
     </li>
   );
 }
@@ -153,12 +175,17 @@ export function DetailPane({
 }: DetailPaneProps) {
   const skillId = skill?.name ?? null;
   const query = useSkillDetailQuery(skillId);
+  const queryClient = useQueryClient();
   const detail = query.data ?? null;
   const [view, setView] = useState<DetailView>("rendered");
   const [pendingAction, setPendingAction] = useState<ActionKind | null>(null);
   const [actionError, setActionError] = useState<ReturnType<typeof asAppError>>(
     null,
   );
+  const [detachTarget, setDetachTarget] = useState<AgentAttachment | null>(null);
+  const [detachPending, setDetachPending] = useState(false);
+  const [detachError, setDetachError] = useState<DetachDialogError | null>(null);
+  const [detachNotice, setDetachNotice] = useState<DetachResult | null>(null);
   const actionErrorRef = useRef<HTMLDivElement>(null);
   const detailError = asAppError(query.error);
 
@@ -166,6 +193,10 @@ export function DetailPane({
     setView("rendered");
     setActionError(null);
     setPendingAction(null);
+    setDetachTarget(null);
+    setDetachPending(false);
+    setDetachError(null);
+    setDetachNotice(null);
   }, [skillId]);
 
   useEffect(() => {
@@ -234,6 +265,32 @@ export function DetailPane({
       setActionError(asAppError(error) ?? { message: "未知错误" });
     } finally {
       setPendingAction(null);
+    }
+  };
+
+  const openDetach = (attachment: AgentAttachment) => {
+    setDetachError(null);
+    setDetachTarget(attachment);
+  };
+
+  const confirmDetach = async () => {
+    if (!detachTarget || !skill) return;
+    setDetachPending(true);
+    setDetachError(null);
+    try {
+      const result = await detachAgent(skill.name, detachTarget.agentId);
+      setDetachNotice(result);
+      setDetachTarget(null);
+    } catch (error) {
+      setDetachError(
+        asAppError(error) ?? { message: "断开失败，请刷新后重试。" },
+      );
+    } finally {
+      setDetachPending(false);
+      // A failed attempt may still have changed the disk; always re-read the
+      // detail and inventory so the UI never shows an assumed state.
+      void queryClient.invalidateQueries({ queryKey: ["skill", skill.name] });
+      void queryClient.invalidateQueries({ queryKey: ["inventory"] });
     }
   };
 
@@ -370,6 +427,26 @@ export function DetailPane({
             {actionError.message}
             {actionError.detail ? ` · ${actionError.detail}` : ""}
             {actionError.hint ? ` ${actionError.hint}` : ""}
+          </div>
+        ) : null}
+
+        {detachNotice ? (
+          <div
+            role="status"
+            data-testid="detach-result"
+            className="mt-2 rounded-md border border-success/30 bg-success-soft px-2.5 py-2 text-[10.5px] leading-relaxed text-success"
+          >
+            <p className="font-medium">
+              已从 {detachNotice.agentName} 断开；canonical 与 lock 已保留。
+            </p>
+            {detachNotice.unmounted ? (
+              <p className="mt-0.5">已无 agent 挂载，显示「未挂载」。</p>
+            ) : null}
+            {detachNotice.backupPath ? (
+              <p className="mt-0.5 break-all font-mono text-[9.5px]">
+                备份：{detachNotice.backupPath}
+              </p>
+            ) : null}
           </div>
         ) : null}
 
@@ -584,6 +661,7 @@ export function DetailPane({
                     <AgentAttachmentRow
                       key={`${attachment.agentId}:${attachment.path}`}
                       attachment={attachment}
+                      onDetach={openDetach}
                     />
                   ))}
                 </ul>
@@ -683,6 +761,23 @@ export function DetailPane({
           </>
         ) : null}
       </div>
+      <DetachDialog
+        open={detachTarget !== null}
+        skillName={detail?.name ?? skill.name}
+        canonicalPath={detail?.canonicalPath ?? null}
+        target={detachTarget}
+        otherAttachments={attachments.filter(
+          (attachment) => attachment.agentId !== detachTarget?.agentId,
+        )}
+        pending={detachPending}
+        error={detachError}
+        onClose={() => {
+          if (detachPending) return;
+          setDetachTarget(null);
+          setDetachError(null);
+        }}
+        onConfirm={() => void confirmDetach()}
+      />
     </aside>
   );
 }

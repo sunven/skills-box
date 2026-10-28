@@ -42,18 +42,21 @@ const agentNames: Record<string, string> = {
   "claude-code": "Claude Code",
   "gemini-cli": "Gemini CLI",
   codex: "Codex",
+  qoder: "Qoder",
 };
 
 export function attachment(
   agentId: string,
   mode: AttachmentMode = "link",
   path?: string,
+  detachable?: boolean,
 ): AgentAttachment {
   return {
     agentId,
     agentName: agentNames[agentId] ?? agentId,
     path: path ?? `~/.${agentId}/skills/alpha`,
     mode,
+    detachable: detachable ?? (mode === "link" || mode === "copy"),
   };
 }
 
