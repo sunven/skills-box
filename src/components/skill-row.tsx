@@ -11,22 +11,11 @@ import {
   hasLocalModificationWarning,
   uniqueAttachments,
 } from "../lib/inventory-view";
-
-function updateVariant(
-  state: InventorySkill["update"],
-): "success" | "warning" | "muted" | "destructive" {
-  switch (state) {
-    case "current":
-      return "success";
-    case "update":
-      return "warning";
-    case "error":
-    case "path_missing":
-      return "destructive";
-    default:
-      return "muted";
-  }
-}
+import {
+  updateBadgeTitle,
+  updateBadgeVariant,
+  type UpdateViewSkill,
+} from "../lib/update-view";
 
 interface AgentAvatarsProps {
   skill: InventorySkill;
@@ -74,7 +63,7 @@ function AgentAvatars({ skill }: AgentAvatarsProps) {
 }
 
 interface SkillRowProps {
-  skill: InventorySkill;
+  skill: UpdateViewSkill;
   selected: boolean;
   onSelect: (name: string) => void;
 }
@@ -103,7 +92,11 @@ export function SkillRow({ skill, selected, onSelect }: SkillRowProps) {
           <span className="truncate text-[12.5px] font-semibold">
             {skill.name}
           </span>
-          <Badge variant={updateVariant(skill.update)}>
+          <Badge
+            data-testid="update-badge"
+            variant={updateBadgeVariant(skill.update)}
+            title={updateBadgeTitle(skill)}
+          >
             {UPDATE_LABELS[skill.update]}
           </Badge>
           {skill.management === "copy_only" ? (

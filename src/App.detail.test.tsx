@@ -217,8 +217,11 @@ describe("skill detail panel", () => {
     expect(pane.getByText("共享")).toBeInTheDocument();
     expect(pane.getByText("链接目标缺失；只读提示，不自动修复。")).toBeInTheDocument();
     expect(
-      pane.queryByRole("button", { name: /断开|检查更新|^更新$|卸载/ }),
+      pane.queryByRole("button", { name: /断开|^更新$|卸载/ }),
     ).toBeNull();
+    expect(
+      pane.getByRole("button", { name: "检查更新" }),
+    ).toBeInTheDocument();
 
     // Rendered SKILL.md hides frontmatter and renders Markdown.
     const rendered = pane.getByTestId("skill-md-rendered");
