@@ -11,13 +11,15 @@
 //! the directory itself may not be a symlink, and the target may not be the
 //! canonical store. Symlinks are never followed when deleting.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use crate::backup::{BackupAction, BackupAttachment, BackupStore};
 use crate::error::AppError;
-use crate::inventory::{self, AgentDir, ManagementState, AttachmentMode};
+use crate::inventory::{self, AgentDir, AttachmentMode, ManagementState};
 use crate::lock::LockFile;
 use crate::logs::{OperationEntry, OperationLog};
 use crate::paths::AppPaths;
@@ -161,9 +163,100 @@ pub fn detach_agent(
             }
         }
         AttachmentMode::Copy => {
-            let error = AppError::agent_detach_failed("copy 断开尚未实现");
-            log_failure(&log, skill_id, agent_id, None, &error);
-            return Err(error);
+            let target_real = fs::canonicalize(&target).map_err(|error| {
+                AppError::agent_detach_failed(format!(
+                    "无法解析 copy 目录 {}：{error}",
+                    target.display()
+                ))
+            })?;
+            let canonical_real = fs::canonicalize(&canonical).unwrap_or_else(|_| canonical.clone());
+            if target_real == canonical_real {
+                let error = AppError::path_invalid(format!(
+                    "断链目标不能是 canonical 目录：{}",
+                    target.display()
+                ));
+                log_failure(&log, skill_id, agent_id, None, &error);
+                return Err(error);
+            }
+
+            let dependents = find_copy_dependents(agents, &canonical, &target)?;
+            if !dependents.is_empty() {
+                let list = dependents
+                    .iter()
+                    .map(|dependent| {
+                        format!(
+                            "{}（{}）",
+                            dependent.label,
+                            paths.display(&dependent.path)
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("、");
+                let error = AppError::agent_dependency_conflict(
+                    skill_id,
+                    format!("依赖此 copy 目录的符号链接：{list}"),
+                );
+                log_failure(&log, skill_id, agent_id, None, &error);
+                return Err(error);
+            }
+
+            let backup_attachment = BackupAttachment {
+                agent_id: agent.id.clone(),
+                agent_name: agent.display_name.clone(),
+                path: target.clone(),
+                mode: AttachmentMode::Copy,
+            };
+            let backup = match BackupStore::new(paths).create(
+                BackupAction::Detach,
+                skill_id,
+                None,
+                std::slice::from_ref(&backup_attachment),
+                std::slice::from_ref(&agent.id),
+            ) {
+                Ok(backup) => backup,
+                Err(error) => {
+                    log_failure(&log, skill_id, agent_id, None, &error);
+                    return Err(error);
+                }
+            };
+            let backup_display = paths.display(&backup.path);
+            result.backup_path = Some(backup_display.clone());
+
+            // Re-lstat immediately before deleting. A path that changed into
+            // a symlink must never be followed by remove_dir_all.
+            let metadata = match fs::symlink_metadata(&target) {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    let error = AppError::agent_detach_failed(format!(
+                        "备份后无法读取 {}：{error}",
+                        target.display()
+                    ));
+                    log_failure(
+                        &log,
+                        skill_id,
+                        agent_id,
+                        Some(backup_display),
+                        &error,
+                    );
+                    return Err(error);
+                }
+            };
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                let error = AppError::agent_detach_failed(format!(
+                    "copy 目录在备份后发生了变化，已停止删除：{}",
+                    target.display()
+                ));
+                log_failure(&log, skill_id, agent_id, Some(backup_display), &error);
+                return Err(error);
+            }
+            if let Err(error) = fs::remove_dir_all(&target) {
+                let error = AppError::agent_detach_failed(format!(
+                    "无法删除 copy 目录 {}：{error}",
+                    target.display()
+                ));
+                log_failure(&log, skill_id, agent_id, Some(backup_display), &error);
+                return Err(error);
+            }
         }
         AttachmentMode::Native | AttachmentMode::Broken => unreachable!("mode was filtered above"),
     }
@@ -173,7 +266,13 @@ pub fn detach_agent(
             "删除后目标仍然存在：{}",
             target.display()
         ));
-        log_failure(&log, skill_id, agent_id, None, &error);
+        log_failure(
+            &log,
+            skill_id,
+            agent_id,
+            result.backup_path.clone(),
+            &error,
+        );
         return Err(error);
     }
 
@@ -182,10 +281,82 @@ pub fn detach_agent(
         skill_id,
         vec![agent_id.to_string()],
         "detached",
-        None,
+        result.backup_path.clone(),
         None,
     ));
     Ok(result)
+}
+
+#[derive(Debug)]
+struct DependentLink {
+    label: String,
+    path: PathBuf,
+}
+
+/// Find every symlink (inside any detected agent skills directory or the
+/// canonical store) whose realpath is the copy directory being removed.
+/// Dangling symlinks cannot resolve and are ignored.
+fn find_copy_dependents(
+    agents: &[AgentDir],
+    canonical_dir: &Path,
+    target: &Path,
+) -> Result<Vec<DependentLink>, AppError> {
+    let target_real = fs::canonicalize(target).map_err(|error| {
+        AppError::agent_detach_failed(format!(
+            "无法解析 copy 目录 {}：{error}",
+            target.display()
+        ))
+    })?;
+
+    let mut roots: Vec<(String, PathBuf)> = Vec::new();
+    for agent in agents {
+        if same_dir(&agent.skills_dir, canonical_dir) {
+            continue;
+        }
+        roots.push((agent.display_name.clone(), agent.skills_dir.clone()));
+    }
+    roots.push(("canonical".to_string(), canonical_dir.to_path_buf()));
+
+    let mut seen_roots: BTreeSet<PathBuf> = BTreeSet::new();
+    let mut seen_links: BTreeSet<PathBuf> = BTreeSet::new();
+    let mut dependents = Vec::new();
+    for (label, root) in roots {
+        let Ok(metadata) = fs::symlink_metadata(&root) else {
+            continue;
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            continue;
+        }
+        let root_real = fs::canonicalize(&root).unwrap_or_else(|_| root.clone());
+        if !seen_roots.insert(root_real) {
+            continue;
+        }
+        let Ok(entries) = fs::read_dir(&root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path == target {
+                continue;
+            }
+            let Ok(metadata) = fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if !metadata.file_type().is_symlink() {
+                continue;
+            }
+            let Ok(resolved) = fs::canonicalize(&path) else {
+                continue;
+            };
+            if resolved == target_real && seen_links.insert(path.clone()) {
+                dependents.push(DependentLink {
+                    label: label.clone(),
+                    path,
+                });
+            }
+        }
+    }
+    Ok(dependents)
 }
 
 fn validate_target(
@@ -275,6 +446,14 @@ mod tests {
 
     impl Fixture {
         fn new() -> Self {
+            Self::with_shared_agent(true)
+        }
+
+        fn without_shared_agent() -> Self {
+            Self::with_shared_agent(false)
+        }
+
+        fn with_shared_agent(shared: bool) -> Self {
             let tmp = tempfile::tempdir().unwrap();
             let home = tmp.path().join("home");
             let paths = AppPaths::new(&home, tmp.path().join("app-data"));
@@ -287,7 +466,7 @@ mod tests {
                 fs::create_dir_all(dir).unwrap();
             }
             let canonical_root = paths.canonical_skills_dir();
-            let agents = vec![
+            let mut agents = vec![
                 AgentDir {
                     id: "claude-code".to_string(),
                     display_name: "Claude Code".to_string(),
@@ -306,13 +485,15 @@ mod tests {
                     universal: true,
                     skills_dir: gemini.clone(),
                 },
-                AgentDir {
+            ];
+            if shared {
+                agents.push(AgentDir {
                     id: "codex".to_string(),
                     display_name: "Codex".to_string(),
                     universal: true,
                     skills_dir: canonical_root.clone(),
-                },
-            ];
+                });
+            }
             Self {
                 _tmp: tmp,
                 paths,
@@ -463,5 +644,102 @@ mod tests {
             2,
             "native codex + qoder link remain; claude is gone"
         );
+    }
+
+    #[test]
+    fn copy_detach_without_dependents_backs_up_then_deletes_the_copy() {
+        let fixture = Fixture::without_shared_agent();
+        let canonical = fixture.managed_skill("alpha");
+        let copy = fixture.copy(&fixture.claude, "alpha");
+        let copy_before = fs::read(copy.join("SKILL.md")).unwrap();
+        let canonical_before = fs::read(canonical.join("SKILL.md")).unwrap();
+        let lock_before = fs::read(fixture.paths.lock_path()).unwrap();
+
+        let result = fixture.detach("alpha", "claude-code").unwrap();
+
+        assert_eq!(result.mode, AttachmentMode::Copy);
+        assert!(result.unmounted, "no other agent is attached");
+        assert!(result.remaining_agents.is_empty());
+        assert!(fs::symlink_metadata(&copy).is_err(), "copy directory is gone");
+        assert_eq!(
+            fs::read(canonical.join("SKILL.md")).unwrap(),
+            canonical_before
+        );
+        assert_eq!(fs::read(fixture.paths.lock_path()).unwrap(), lock_before);
+
+        let backup_path = result.backup_path.clone().expect("copy detach backup");
+        assert!(
+            backup_path.contains("detach-alpha"),
+            "timestamp-action-skill layout: {backup_path}"
+        );
+        let backups = fixture.backup_dirs();
+        assert_eq!(backups.len(), 1);
+        let backup = &backups[0];
+        assert_eq!(
+            fs::read(backup.join("skill-lock.json")).unwrap(),
+            lock_before
+        );
+        assert_eq!(
+            fs::read(backup.join("attachments/claude-code/SKILL.md")).unwrap(),
+            copy_before
+        );
+        assert!(
+            !backup.join("canonical").exists(),
+            "detach must not copy the canonical store"
+        );
+        let manifest: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(backup.join("attachment-manifest.json")).unwrap())
+                .unwrap();
+        assert_eq!(manifest["action"], "detach");
+        assert_eq!(manifest["skill"], "alpha");
+        assert_eq!(manifest["canonicalPresent"], false);
+        assert_eq!(
+            manifest["agents"],
+            serde_json::json!(["claude-code"])
+        );
+        assert_eq!(manifest["attachments"][0]["mode"], "copy");
+        assert_eq!(manifest["attachments"][0]["backedUp"], true);
+
+        let lines = fixture.log_lines();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0]["action"], "detach");
+        assert_eq!(lines[0]["result"], "detached");
+        assert_eq!(lines[0]["agents"], serde_json::json!(["claude-code"]));
+        assert_eq!(lines[0]["backupPath"], backup_path);
+    }
+
+    #[test]
+    fn copy_detach_with_a_cross_agent_symlink_dependency_is_blocked_without_changes() {
+        let fixture = Fixture::new();
+        let canonical = fixture.managed_skill("alpha");
+        let copy = fixture.copy(&fixture.claude, "alpha");
+        // Gemini reads Claude's copy through a relative symlink, like the real
+        // HyperFrames layout; deleting the copy would dangle it.
+        fixture.link(&fixture.gemini, "alpha", &copy);
+        let lock_before = fs::read(fixture.paths.lock_path()).unwrap();
+        let copy_before = fs::read(copy.join("SKILL.md")).unwrap();
+
+        let error = fixture.detach("alpha", "claude-code").unwrap_err();
+
+        assert_eq!(error.code, crate::error::codes::AGENT_DEPENDENCY_CONFLICT);
+        let detail = error.detail.as_deref().unwrap_or_default();
+        assert!(detail.contains("Gemini CLI"), "{detail}");
+        assert!(detail.contains("~/.gemini/skills/alpha"), "{detail}");
+        assert!(copy.join("SKILL.md").is_file(), "copy must stay intact");
+        assert_eq!(fs::read(copy.join("SKILL.md")).unwrap(), copy_before);
+        assert_eq!(fs::read(fixture.paths.lock_path()).unwrap(), lock_before);
+        assert!(
+            fixture.backup_dirs().is_empty(),
+            "a blocked detach must not create a backup"
+        );
+        let lines = fixture.log_lines();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0]["action"], "detach");
+        assert_eq!(lines[0]["result"], "failed");
+        assert_eq!(
+            lines[0]["error"]["code"],
+            crate::error::codes::AGENT_DEPENDENCY_CONFLICT
+        );
+        assert!(lines[0].get("backupPath").is_none());
     }
 }
