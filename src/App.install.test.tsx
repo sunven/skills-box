@@ -181,10 +181,10 @@ describe("install wizard steps 1-2", () => {
     await startPreview(state, dialog);
 
     emit(state, event("preparing", { message: "正在准备预览…", completed: 0, total: 1 }));
-    emit(state, event("running_cli", { message: "正在读取仓库中的 skill…", completed: 0, total: 1 }));
+    emit(state, event("cloning", { message: "正在克隆仓库并读取 skill 列表…", completed: 0, total: 1 }));
 
     const progress = within(dialog).getByTestId("task-progress");
-    expect(within(progress).getByText("正在读取仓库")).toBeInTheDocument();
+    expect(within(progress).getByText("正在克隆仓库")).toBeInTheDocument();
     expect(within(progress).getByText("0/1")).toBeInTheDocument();
     expect(within(progress).getByRole("button", { name: "取消预览" })).toBeInTheDocument();
 
@@ -214,6 +214,10 @@ describe("install wizard steps 1-2", () => {
     expect(within(dialog).getByText("预览完成 · 2/2")).toBeInTheDocument();
 
     const next = within(dialog).getByRole("button", { name: "下一步" });
+    expect(alpha).toBeChecked();
+    expect(beta).not.toBeChecked();
+    expect(next).toBeEnabled();
+    fireEvent.click(alpha);
     expect(next).toBeDisabled();
     fireEvent.click(alpha);
     expect(next).toBeEnabled();
@@ -325,7 +329,7 @@ describe("install wizard steps 1-2", () => {
     await startPreview(state, dialog);
 
     emit(state, event("preparing", { completed: 0, total: 1 }));
-    emit(state, event("running_cli", { message: "正在读取仓库中的 skill…", completed: 0, total: 1 }));
+    emit(state, event("cloning", { message: "正在克隆仓库并读取 skill 列表…", completed: 0, total: 1 }));
     fireEvent.click(within(dialog).getByRole("button", { name: "取消预览" }));
 
     await waitFor(() =>
@@ -340,7 +344,7 @@ describe("install wizard steps 1-2", () => {
     const state = setup();
     const dialog = await openWizard();
     await startPreview(state, dialog);
-    emit(state, event("running_cli", { message: "正在读取仓库中的 skill…", completed: 0, total: 1 }));
+    emit(state, event("cloning", { message: "正在克隆仓库并读取 skill 列表…", completed: 0, total: 1 }));
 
     fireEvent.keyDown(document, { key: "Escape" });
 

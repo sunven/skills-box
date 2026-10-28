@@ -26,6 +26,8 @@ pub const PREVIEW_TIMEOUT: Duration = Duration::from_secs(60);
 #[serde(rename_all = "snake_case")]
 pub enum TaskPhase {
     Preparing,
+    /// Preview clones the repository before parsing its SKILL.md files.
+    Cloning,
     RunningCli,
     Verifying,
     Completed,
@@ -360,8 +362,8 @@ impl TaskManager {
             &sink,
             TaskEvent::progress(
                 &task_id,
-                TaskPhase::RunningCli,
-                "正在读取仓库中的 skill…",
+                TaskPhase::Cloning,
+                "正在克隆仓库并读取 skill 列表…",
                 0,
                 1,
             ),
@@ -822,7 +824,7 @@ mod tests {
             phases,
             vec![
                 TaskPhase::Preparing,
-                TaskPhase::RunningCli,
+                TaskPhase::Cloning,
                 TaskPhase::Verifying,
                 TaskPhase::Completed
             ]
@@ -948,7 +950,7 @@ mod tests {
 
         loop {
             let event = receiver.recv().await.unwrap();
-            if event.phase == TaskPhase::RunningCli {
+            if event.phase == TaskPhase::Cloning {
                 break;
             }
         }

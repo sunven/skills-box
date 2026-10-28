@@ -32,7 +32,8 @@ const FINAL_PHASES: ReadonlySet<TaskPhase> = new Set([
 
 const PHASE_LABELS: Record<TaskPhase, string> = {
   preparing: "准备中",
-  running_cli: "正在读取仓库",
+  cloning: "正在克隆仓库",
+  running_cli: "正在执行 CLI",
   verifying: "正在解析结果",
   completed: "已完成",
   failed: "失败",
@@ -284,12 +285,15 @@ export function InstallWizard({
       const resultPreview = event.result?.preview ?? null;
       setPreview(resultPreview);
       if (resultPreview) {
+        const installable = resultPreview.skills.filter(
+          (skill) => !skill.conflict,
+        );
+        setSelected(new Set(installable.map((skill) => skill.name)));
         if (
           !resultPreview.parseFailed &&
           resultPreview.skills.length === 1 &&
-          !resultPreview.skills[0]!.conflict
+          installable.length === 1
         ) {
-          setSelected(new Set([resultPreview.skills[0]!.name]));
           setStep(3);
         } else {
           setStep(2);

@@ -80,6 +80,7 @@ export type AttachmentMode = "link" | "copy" | "native" | "broken";
 
 export type TaskPhase =
   | "preparing"
+  | "cloning"
   | "running_cli"
   | "verifying"
   | "completed"
