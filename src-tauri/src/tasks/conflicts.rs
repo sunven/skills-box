@@ -10,6 +10,7 @@ use serde::Serialize;
 
 use crate::error::AppError;
 use crate::inventory::ManagementState;
+use crate::lock::LockFile;
 use crate::paths::AppPaths;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -21,6 +22,11 @@ pub struct ConflictInfo {
 
 /// Look up existing skills by name. Returns only names that already exist as
 /// managed, copy-only, or unmanaged entries.
+///
+/// Stale lock entries have no folder and are therefore dropped from the
+/// inventory snapshot, but they still occupy the lock key: installing the same
+/// name would make the CLI overwrite that entry, so they are reported as
+/// managed conflicts too (spec §7.1).
 pub fn find_conflicts(
     paths: &AppPaths,
     names: &[String],
@@ -29,6 +35,7 @@ pub fn find_conflicts(
         return Ok(HashMap::new());
     }
     let snapshot = crate::inventory::read(paths)?;
+    let lock = LockFile::read(&paths.lock_path())?;
     let wanted: std::collections::HashSet<&str> = names.iter().map(String::as_str).collect();
     let mut conflicts = HashMap::new();
     for skill in snapshot.skills {
@@ -38,6 +45,24 @@ pub fn find_conflicts(
                 ConflictInfo {
                     management: skill.management,
                     source: skill.source,
+                },
+            );
+        }
+    }
+    for name in &wanted {
+        if conflicts.contains_key(*name) {
+            continue;
+        }
+        // Present in the strict v3 lock but absent from the snapshot: a stale
+        // lock entry. Never install over it silently.
+        if let Some(entry) = lock.get(name) {
+            let source = crate::tasks::update::normalized_lock_source(entry)
+                .or_else(|| Some(entry.source.clone()));
+            conflicts.insert(
+                (*name).to_string(),
+                ConflictInfo {
+                    management: ManagementState::Managed,
+                    source,
                 },
             );
         }
@@ -111,5 +136,24 @@ mod tests {
     fn empty_name_list_skips_inventory_read() {
         let paths = AppPaths::new("/nonexistent/home", "/nonexistent/app-data");
         assert!(find_conflicts(&paths, &[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn stale_lock_entries_still_reserve_their_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let paths = AppPaths::new(&home, tmp.path().join("app-data"));
+        fs::create_dir_all(paths.agents_root()).unwrap();
+        // Lock entry with no canonical folder and no agent copy anywhere.
+        fs::write(
+            paths.lock_path(),
+            r#"{"version":3,"skills":{"ghost":{"source":"acme/skills","sourceType":"github","sourceUrl":"https://github.com/acme/skills.git","skillPath":"skills/ghost/SKILL.md","skillFolderHash":"0123456789abcdef0123456789abcdef01234567","installedAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-02-03T04:05:06.000Z"}}}"#,
+        )
+        .unwrap();
+
+        let conflicts = find_conflicts(&paths, &["ghost".to_string()]).unwrap();
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts["ghost"].management, ManagementState::Managed);
+        assert_eq!(conflicts["ghost"].source.as_deref(), Some("acme/skills"));
     }
 }

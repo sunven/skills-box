@@ -28,7 +28,7 @@ use super::install::{
     INSTALL_TIMEOUT, InstallOutput, InstallPlan, InstallTarget, UNIVERSAL_AGENT_ID,
     install_command, parse_install_output, verify_install,
 };
-use super::manager::{TaskOverall, TaskSkillResult, TaskSkillStatus};
+use super::manager::{TaskSkillResult, TaskSkillStatus};
 use super::source::validate_source;
 
 #[derive(Debug, Clone)]
@@ -59,6 +59,7 @@ impl UpdateItem {
             skills: vec![self.name.clone()],
             agent_ids: self.agent_ids.clone(),
             targets: self.targets.clone(),
+            retry: false,
         }
     }
 
@@ -90,7 +91,6 @@ pub fn update_command(
     runtime: &crate::cli::CliRuntime,
     timeout: Duration,
 ) -> CommandSpec {
-    let _ = INSTALL_TIMEOUT;
     item.command(runtime, timeout)
 }
 
@@ -334,10 +334,7 @@ pub fn verify_update(
         }
         InstallOutput::Unrecognized(detail) => {
             return UpdateVerification {
-                result: Err(super::manager::classify_install_failure(
-                    &output.stderr,
-                    &detail,
-                )),
+                result: Err(AppError::cli_invalid_json(detail)),
                 warnings: Vec::new(),
             };
         }
@@ -398,39 +395,6 @@ pub fn verify_update(
     UpdateVerification {
         result,
         warnings: verification.warnings,
-    }
-}
-
-pub fn overall_for_update(results: &[TaskSkillResult], cancelled: bool) -> TaskOverall {
-    if cancelled {
-        return TaskOverall::Cancelled;
-    }
-    let updated = results
-        .iter()
-        .filter(|result| result.status == TaskSkillStatus::Updated)
-        .count();
-    if updated > 0 && updated == results.len() {
-        TaskOverall::Success
-    } else if updated > 0 {
-        TaskOverall::Partial
-    } else {
-        TaskOverall::Failed
-    }
-}
-
-pub fn summary_message(overall: TaskOverall, results: &[TaskSkillResult]) -> String {
-    let updated = results
-        .iter()
-        .filter(|result| result.status == TaskSkillStatus::Updated)
-        .count();
-    let unfinished = results.len().saturating_sub(updated);
-    match overall {
-        TaskOverall::Success => format!("更新完成：{updated} 个 skill 已更新。"),
-        TaskOverall::Partial => {
-            format!("部分更新完成：{updated} 个成功，{unfinished} 个未完成。")
-        }
-        TaskOverall::Failed => format!("更新失败：{unfinished} 个 skill 未完成。"),
-        TaskOverall::Cancelled => format!("更新已取消：{updated} 个已更新。"),
     }
 }
 
@@ -818,7 +782,10 @@ mod tests {
             },
         ];
         assert_eq!(retryable_names(&results), vec!["b".to_string()]);
-        assert_eq!(overall_for_update(&results, false), TaskOverall::Partial);
+        assert_eq!(
+            crate::tasks::summary::overall_for(&results, TaskSkillStatus::Updated),
+            crate::tasks::manager::TaskOverall::Partial
+        );
     }
 
     // ------------------------------------------------------------------
@@ -1091,6 +1058,8 @@ mod tests {
         assert_eq!(final_event.total, Some(1));
 
         let result = final_event.result.expect("update result");
+        assert_eq!(result.action, crate::tasks::manager::TaskAction::Update);
+        assert!(result.started_at > 0, "startedAt is populated");
         assert_eq!(result.overall, TaskOverall::Success);
         assert_eq!(result.skills.len(), 1);
         assert_eq!(result.skills[0].name, "alpha");
@@ -1268,7 +1237,10 @@ mod tests {
         };
         assert_eq!(line_for("alpha")["result"], "updated");
         assert_eq!(line_for("beta")["result"], "failed");
-        assert_eq!(line_for("beta")["error"]["code"], "skill.install_failed");
+        assert_eq!(
+            line_for("beta")["error"]["code"],
+            crate::error::codes::SKILL_INSTALL_FAILED
+        );
         assert_eq!(line_for("copy-only")["result"], "skipped");
         assert!(line_for("copy-only").get("backupPath").is_none());
     }
@@ -1308,7 +1280,10 @@ mod tests {
         let lines = log_lines(&fixture);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0]["result"], "failed");
-        assert_eq!(lines[0]["error"]["code"], "backup.failed");
+        assert_eq!(
+            lines[0]["error"]["code"],
+            crate::error::codes::BACKUP_FAILED
+        );
     }
 
     #[tokio::test]
@@ -1373,6 +1348,47 @@ mod tests {
             !fixture.paths.interrupted_marker_path().exists(),
             "normal completion clears the interruption marker"
         );
+    }
+
+    #[tokio::test]
+    async fn update_cannot_be_cancelled_during_verification_or_baseline() {
+        let fixture = Fixture::new(&[("alpha", "acme/skills", None)]);
+        let executor = Arc::new(UpdateExecutor::new(vec![
+            UpdateResponse::installed("alpha").with_post(simulate_update(
+                fixture.canonical.clone(),
+                fixture.qoder.clone(),
+                fixture.claude.clone(),
+                fixture.paths.lock_path(),
+                "alpha",
+            )),
+        ]));
+        let manager = update_manager(&fixture.paths, executor.clone());
+        let (sink, mut receiver) = sink();
+        let task_id = manager
+            .start_update(vec!["alpha".to_string()], sink)
+            .await
+            .unwrap();
+        loop {
+            let event = receiver.recv().await.unwrap();
+            if event.phase == TaskPhase::Verifying && event.completed == Some(0) {
+                let error = manager.cancel_task(&task_id).unwrap_err();
+                assert_eq!(error.code, codes::TASK_CANNOT_CANCEL);
+                break;
+            }
+        }
+        let final_event = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let event = receiver.recv().await.unwrap();
+                if event.phase.is_final() {
+                    return event;
+                }
+            }
+        })
+        .await
+        .expect("update should finish");
+        assert_eq!(final_event.phase, TaskPhase::Completed);
+        assert_eq!(final_event.result.unwrap().overall, TaskOverall::Success);
+        assert_eq!(executor.calls().len(), 1);
     }
 
     #[tokio::test]

@@ -574,14 +574,15 @@ describe("skill detail panel", () => {
       detailPane().getByRole("button", { name: "彻底卸载" }),
     ).toBeInTheDocument();
 
-    // The anomaly filter includes modified and unknown local changes.
+    // The anomaly filter includes copy-only rows plus modified and unknown
+    // local changes.
     fireEvent.click(screen.getByRole("button", { name: /^异常/ }));
     await waitFor(() => {
       expect(
         screen
           .queryAllByTestId("skill-row")
           .map((element) => element.getAttribute("data-skill-name")),
-      ).toEqual(["alpha", "beta", "gamma"]);
+      ).toEqual(["alpha", "beta", "delta", "gamma"]);
     });
   });
 

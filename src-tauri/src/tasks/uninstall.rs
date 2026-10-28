@@ -66,15 +66,21 @@ impl UninstallPlan {
     }
 }
 
-/// `npx -y skills@1.7.4 remove -g -s <name> -y`./// Resolve an inventory id into an executable uninstall plan. This runs before
+/// Resolve an inventory id into an executable uninstall plan. This runs before
 /// a task is registered so unmanaged skills and dependency conflicts reject
 /// synchronously without spawning anything.
+///
+/// The CLI command itself is built by [`uninstall_command`]:
+/// `npx -y skills@1.7.4 remove -g -s <name> -y`.
 pub fn plan_uninstall(
     paths: &AppPaths,
     agents: &[AgentDir],
     skill_id: &str,
 ) -> Result<UninstallPlan, AppError> {
     security::validate_skill_id(skill_id)?;
+    // Same metacharacter rule as install/update; the CLI is never run through
+    // a shell, but a name from a malicious on-disk folder must not reach argv.
+    super::install::validate_skill_name(skill_id)?;
     let Some(located) = inventory::locate_with_agents(paths, agents, skill_id)? else {
         return Err(AppError::skill_not_found(skill_id));
     };
@@ -253,10 +259,18 @@ pub fn classify_remove_output(output: &ExecOutput) -> Option<AppError> {
         return None;
     }
     let detail = super::parser::truncate_chars(&combined, 16 * 1024);
-    if detail.is_empty() {
-        Some(AppError::cli_failed("skills remove 未返回任何输出。"))
+    if !output.success() {
+        if detail.is_empty() {
+            Some(AppError::cli_exit_nonzero(
+                "skills remove 以非零退出码结束且未输出详情。",
+            ))
+        } else {
+            Some(AppError::cli_exit_nonzero(detail))
+        }
+    } else if detail.is_empty() {
+        Some(AppError::cli_invalid_json("skills remove 未返回任何输出。"))
     } else {
-        Some(AppError::cli_failed(detail))
+        Some(AppError::cli_partial_failure(detail))
     }
 }
 
@@ -269,22 +283,12 @@ pub fn evaluate_output(
 ) -> Result<(), AppError> {
     if !output.success() {
         return Err(classify_remove_output(output)
-            .unwrap_or_else(|| AppError::cli_failed("skills remove 执行失败。")));
+            .unwrap_or_else(|| AppError::cli_exit_nonzero("skills remove 执行失败。")));
     }
     verification?;
     match classify_remove_output(output) {
         Some(error) => Err(error),
         None => Ok(()),
-    }
-}
-
-pub fn summary_message(overall: super::manager::TaskOverall, name: &str) -> String {
-    use super::manager::TaskOverall;
-    match overall {
-        TaskOverall::Success => format!("已彻底卸载「{name}」。"),
-        TaskOverall::Partial => format!("卸载部分完成：「{name}」仍有残留。"),
-        TaskOverall::Failed => format!("卸载未完成：「{name}」仍保留部分文件或 lock 条目。"),
-        TaskOverall::Cancelled => "卸载已取消。".to_string(),
     }
 }
 
@@ -544,6 +548,10 @@ mod tests {
             let error = fixture.plan(id).unwrap_err();
             assert_eq!(error.code, codes::PATH_INVALID, "{id:?}");
         }
+        for id in ["alpha;rm", "$(id)", "`id`", "a|b", "a&b", "a>b", "a*b"] {
+            let error = fixture.plan(id).unwrap_err();
+            assert_eq!(error.code, codes::SKILL_INVALID_NAME, "{id:?}");
+        }
         let error = fixture.plan("ghost").unwrap_err();
         assert_eq!(error.code, codes::SKILL_NOT_FOUND);
     }
@@ -729,11 +737,11 @@ mod tests {
         assert!(classify_remove_output(&output(0, MISSING, "")).is_none());
 
         let failure = classify_remove_output(&output(0, PARTIAL, "")).expect("partial failure");
-        assert_eq!(failure.code, codes::CLI_FAILED);
+        assert_eq!(failure.code, codes::CLI_PARTIAL_FAILURE);
         assert!(failure.detail.unwrap().contains("Failed to remove"));
 
         let nonzero = classify_remove_output(&output(1, "", "boom")).expect("nonzero");
-        assert_eq!(nonzero.code, codes::CLI_FAILED);
+        assert_eq!(nonzero.code, codes::CLI_EXIT_NONZERO);
         assert_eq!(nonzero.detail.as_deref(), Some("boom"));
     }
 }
@@ -1046,6 +1054,8 @@ mod execution_tests {
         assert_eq!(final_event.total, Some(1));
 
         let result = final_event.result.expect("uninstall result");
+        assert_eq!(result.action, crate::tasks::manager::TaskAction::Uninstall);
+        assert!(result.started_at > 0, "startedAt is populated");
         assert_eq!(result.overall, TaskOverall::Success);
         assert_eq!(result.skills.len(), 1);
         assert_eq!(result.skills[0].name, "alpha");
@@ -1239,7 +1249,7 @@ mod execution_tests {
         let result = final_event.result.unwrap();
         assert_eq!(result.overall, TaskOverall::Failed);
         let error = result.skills[0].error.as_ref().unwrap();
-        assert_eq!(error.code, codes::CLI_FAILED);
+        assert_eq!(error.code, codes::CLI_EXIT_NONZERO);
         assert!(
             error
                 .detail

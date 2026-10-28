@@ -22,12 +22,12 @@ use crate::process::{CancelToken, ExecError, ProcessExecutor};
 
 use super::conflicts::{ConflictInfo, ConflictProvider};
 use super::install::{
-    self, INSTALL_TIMEOUT, InstallOutput, InstallPlan, InstallRequest,
-    install_command as build_install_command, parse_install_output, snapshot_lock, summary_message,
-    validate_request, verify_install,
+    self, INSTALL_TIMEOUT, InstallOutput, InstallPlan, InstallRequest, install_command,
+    parse_install_output, snapshot_lock, validate_request, verify_install,
 };
 use super::parser::{ParsedSkill, PreviewParseOutcome, parse_preview_output};
 use super::source::{SourceSpec, validate_source};
+use super::summary;
 use super::uninstall as uninstall_task;
 use super::update as update_task;
 
@@ -55,6 +55,15 @@ impl TaskPhase {
     pub fn is_final(self) -> bool {
         matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskAction {
+    Preview,
+    Install,
+    Update,
+    Uninstall,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -90,6 +99,8 @@ pub struct TaskSkillResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskResult {
+    /// Which mutation produced this result (`preview` for read-only tasks).
+    pub action: TaskAction,
     pub overall: TaskOverall,
     pub skills: Vec<TaskSkillResult>,
     pub warnings: Vec<AppError>,
@@ -97,6 +108,8 @@ pub struct TaskResult {
     pub backup_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log_path: Option<String>,
+    /// Epoch milliseconds; set when the task was registered.
+    pub started_at: u64,
     pub finished_at_epoch_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preview: Option<PreviewSummary>,
@@ -271,6 +284,8 @@ struct TaskEntry {
     cancellable: bool,
     /// Present for install/update/uninstall (never for preview).
     mutation: Option<MutationState>,
+    action: TaskAction,
+    started_at_epoch_ms: u64,
 }
 
 #[derive(Debug)]
@@ -504,6 +519,8 @@ impl TaskManager {
                     cancel: cancel.clone(),
                     cancellable: true,
                     mutation: None,
+                    action: TaskAction::Preview,
+                    started_at_epoch_ms: now_ms(),
                 },
             );
         }
@@ -530,13 +547,16 @@ impl TaskManager {
         let paths = self.inner.paths.clone();
         let plan = tokio::task::spawn_blocking(move || {
             let plan = validate_request(&paths, &request)?;
-            if let Some(conflict) = install::conflicts_for(&paths, &plan.skills)? {
+            let retry_source = plan.retry.then_some(plan.source.as_str());
+            if let Some(conflict) = install::conflicts_for(&paths, &plan.skills, retry_source)? {
                 return Err(conflict);
             }
             Ok::<InstallPlan, AppError>(plan)
         })
         .await
-        .map_err(|error| AppError::cli_failed(format!("校验安装请求失败：{error}")))??;
+        .map_err(|error| {
+            AppError::new(codes::TASK_INTERNAL, format!("校验安装请求失败：{error}"))
+        })??;
 
         // The permit is taken after validation so invalid requests do not
         // briefly occupy the write slot, and held for the whole task.
@@ -557,6 +577,8 @@ impl TaskManager {
                         started_at_epoch_ms: now_ms(),
                         snapshot_paths: Vec::new(),
                     }),
+                    action: TaskAction::Install,
+                    started_at_epoch_ms: now_ms(),
                 },
             );
         }
@@ -596,6 +618,7 @@ impl TaskManager {
         skill_id: String,
         agent_id: String,
     ) -> Result<crate::detach::DetachResult, AppError> {
+        self.ensure_not_shutting_down()?;
         let permit = self.try_acquire_mutation()?;
         let paths = self.inner.paths.clone();
         tokio::task::spawn_blocking(move || {
@@ -632,7 +655,10 @@ impl TaskManager {
             Ok(Ok(plan)) => plan,
             Ok(Err(error)) => return Err(error),
             Err(error) => {
-                return Err(AppError::cli_failed(format!("校验更新请求失败：{error}")));
+                return Err(AppError::new(
+                    codes::TASK_INTERNAL,
+                    format!("校验更新请求失败：{error}"),
+                ));
             }
         };
 
@@ -654,6 +680,8 @@ impl TaskManager {
                         started_at_epoch_ms: now_ms(),
                         snapshot_paths: Vec::new(),
                     }),
+                    action: TaskAction::Update,
+                    started_at_epoch_ms: now_ms(),
                 },
             );
         }
@@ -692,7 +720,10 @@ impl TaskManager {
             Ok(Ok(plan)) => plan,
             Ok(Err(error)) => return Err(error),
             Err(error) => {
-                return Err(AppError::cli_failed(format!("校验卸载请求失败：{error}")));
+                return Err(AppError::new(
+                    codes::TASK_INTERNAL,
+                    format!("校验卸载请求失败：{error}"),
+                ));
             }
         };
 
@@ -713,6 +744,8 @@ impl TaskManager {
                         started_at_epoch_ms: now_ms(),
                         snapshot_paths: Vec::new(),
                     }),
+                    action: TaskAction::Uninstall,
+                    started_at_epoch_ms: now_ms(),
                 },
             );
         }
@@ -810,10 +843,7 @@ impl TaskManager {
                 self.finish(
                     &task_id,
                     &sink,
-                    FinishOutcome::Failed(AppError::network_fetch_failed(format!(
-                        "预览超时（{} 秒），请检查网络后重试。",
-                        timeout.as_secs()
-                    ))),
+                    FinishOutcome::Failed(AppError::cli_timeout("预览", timeout)),
                 );
                 return;
             }
@@ -821,7 +851,7 @@ impl TaskManager {
                 self.finish(
                     &task_id,
                     &sink,
-                    FinishOutcome::Failed(AppError::env_cli_missing(format!(
+                    FinishOutcome::Failed(AppError::cli_spawn_failed(format!(
                         "无法启动 {program}: {message}"
                     ))),
                 );
@@ -866,11 +896,13 @@ impl TaskManager {
                     .collect();
                 let count = preview_skills.len() as u32;
                 let result = TaskResult {
+                    action: TaskAction::Preview,
                     overall: TaskOverall::Success,
                     skills: Vec::new(),
                     warnings: Vec::new(),
                     backup_path: None,
                     log_path: None,
+                    started_at: 0,
                     finished_at_epoch_ms: now_ms(),
                     preview: Some(PreviewSummary {
                         source: source.normalized.clone(),
@@ -892,11 +924,13 @@ impl TaskManager {
                     TaskEvent::progress(&task_id, TaskPhase::Verifying, "正在确认预览结果…", 0, 1),
                 );
                 let result = TaskResult {
+                    action: TaskAction::Preview,
                     overall: TaskOverall::Success,
                     skills: Vec::new(),
                     warnings: Vec::new(),
                     backup_path: None,
                     log_path: None,
+                    started_at: 0,
                     finished_at_epoch_ms: now_ms(),
                     preview: Some(PreviewSummary {
                         source: source.normalized.clone(),
@@ -931,11 +965,13 @@ impl TaskManager {
                         "预览输出无法解析，已展示原始文本；可手动输入 skill 名。",
                     );
                     let result = TaskResult {
+                        action: TaskAction::Preview,
                         overall: TaskOverall::Success,
                         skills: Vec::new(),
                         warnings: vec![warning],
                         backup_path: None,
                         log_path: None,
+                        started_at: 0,
                         finished_at_epoch_ms: now_ms(),
                         preview: Some(PreviewSummary {
                             source: source.normalized.clone(),
@@ -1009,7 +1045,10 @@ impl TaskManager {
         let snapshot = tokio::select! {
             result = tokio::task::spawn_blocking(move || -> Result<PathBuf, AppError> {
                 LockFile::read(&paths.lock_path())?;
-                if let Some(conflict) = install::conflicts_for(&paths, &snapshot_plan.skills)? {
+                let retry_source = snapshot_plan.retry.then_some(snapshot_plan.source.as_str());
+                if let Some(conflict) =
+                    install::conflicts_for(&paths, &snapshot_plan.skills, retry_source)?
+                {
                     return Err(conflict);
                 }
                 snapshot_lock(&paths, &snapshot_task)
@@ -1067,7 +1106,7 @@ impl TaskManager {
                 total,
             ),
         );
-        let spec = build_install_command(&runtime, &plan, self.inner.config.install_timeout);
+        let spec = install_command(&runtime, &plan, self.inner.config.install_timeout);
         let output = match self.inner.executor.run(spec, cancel.clone()).await {
             Ok(output) => output,
             Err(ExecError::Cancelled) => {
@@ -1078,10 +1117,7 @@ impl TaskManager {
                 self.finish(
                     &task_id,
                     &sink,
-                    FinishOutcome::Failed(AppError::cli_failed(format!(
-                        "安装超时（{} 秒）。",
-                        timeout.as_secs()
-                    ))),
+                    FinishOutcome::Failed(AppError::cli_timeout("安装", timeout)),
                 );
                 return;
             }
@@ -1089,7 +1125,7 @@ impl TaskManager {
                 self.finish(
                     &task_id,
                     &sink,
-                    FinishOutcome::Failed(AppError::env_cli_missing(format!(
+                    FinishOutcome::Failed(AppError::cli_spawn_failed(format!(
                         "无法启动 {program}: {message}"
                     ))),
                 );
@@ -1126,8 +1162,14 @@ impl TaskManager {
                 return;
             }
             InstallOutput::Unrecognized(detail) => {
-                let error = classify_install_failure(&detail, &output.stderr);
-                self.finish(&task_id, &sink, FinishOutcome::Failed(error));
+                self.finish(
+                    &task_id,
+                    &sink,
+                    FinishOutcome::Failed(AppError::cli_invalid_json(format!(
+                        "{detail}\n{}",
+                        output.stderr.trim()
+                    ))),
+                );
                 return;
             }
         };
@@ -1162,14 +1204,41 @@ impl TaskManager {
             emit(&sink, event);
         }
 
-        let overall = install::overall_for(&verification.results);
-        let message = summary_message(overall, &verification.results);
+        // A verified install is the known-good state for local-modification
+        // detection: record the baseline before reporting success (spec §3.6).
+        let mut warnings = verification.warnings;
+        let baselines = BaselineStore::new(&self.inner.paths);
+        for result in &verification.results {
+            if result.status != TaskSkillStatus::Installed {
+                continue;
+            }
+            let name = result.name.clone();
+            let canonical = self.inner.paths.canonical_skills_dir().join(&name);
+            let baseline_store = baselines.clone();
+            match tokio::task::spawn_blocking(move || {
+                baseline_store.record_from_dir(&name, &canonical, true)
+            })
+            .await
+            {
+                Ok(Ok(_)) => {}
+                Ok(Err(error)) => warnings.push(baseline_write_warning(error)),
+                Err(error) => warnings.push(baseline_write_warning(
+                    AppError::new(codes::BASELINE_WRITE_FAILED, "无法刷新本地基线指纹。")
+                        .detail(error.to_string()),
+                )),
+            }
+        }
+
+        let overall = summary::overall_for(&verification.results, TaskSkillStatus::Installed);
+        let message = summary::message(TaskAction::Install, overall, &verification.results);
         let result = TaskResult {
+            action: TaskAction::Install,
             overall,
             skills: verification.results,
-            warnings: verification.warnings,
+            warnings,
             backup_path: Some(self.inner.paths.display(&snapshot)),
             log_path: None,
+            started_at: 0,
             finished_at_epoch_ms: now_ms(),
             preview: None,
         };
@@ -1295,28 +1364,20 @@ impl TaskManager {
             let backup = match backup_outcome {
                 Ok(Ok(backup)) => backup,
                 Ok(Err(error)) => {
-                    let _ = log.append(&OperationEntry::new(
-                        "update",
-                        &item.name,
-                        item.agent_ids.clone(),
-                        "failed",
-                        None,
-                        Some(error.clone()),
-                    ));
                     // A backup failure aborts the operation: no CLI runs.
+                    let error =
+                        log_backup_failure(&log, "update", &item.name, &item.agent_ids, error);
                     self.finish(&task_id, &sink, FinishOutcome::Failed(error));
                     return;
                 }
                 Err(error) => {
-                    let error = AppError::backup_failed(error.to_string());
-                    let _ = log.append(&OperationEntry::new(
+                    let error = log_backup_failure(
+                        &log,
                         "update",
                         &item.name,
-                        item.agent_ids.clone(),
-                        "failed",
-                        None,
-                        Some(error.clone()),
-                    ));
+                        &item.agent_ids,
+                        AppError::backup_failed(error.to_string()),
+                    );
                     self.finish(&task_id, &sink, FinishOutcome::Failed(error));
                     return;
                 }
@@ -1364,10 +1425,10 @@ impl TaskManager {
 
             let spec =
                 update_task::update_command(item, &runtime, self.inner.config.install_timeout);
-            // Once the CLI exits the current skill is written; cancellation
-            // is accepted again while it is verified.
+            // The write window stays sealed until this skill is backed up,
+            // updated, verified and re-baselined. Cancellation is only
+            // re-enabled at the top of the next iteration (between skills).
             let exec_result = self.inner.executor.run(spec, cancel.clone()).await;
-            self.set_task_cancellable(&task_id, true);
             let output = match exec_result {
                 Ok(output) => output,
                 Err(ExecError::Cancelled) => {
@@ -1377,14 +1438,13 @@ impl TaskManager {
                         item.agent_ids.clone(),
                         "cancelled",
                         Some(backup_display.clone()),
-                        None,
+                        Some(AppError::cli_cancelled()),
                     ));
                     cancelled = true;
                     break;
                 }
                 Err(ExecError::Timeout(timeout)) => {
-                    let error =
-                        AppError::cli_failed(format!("更新超时（{} 秒）。", timeout.as_secs()));
+                    let error = AppError::cli_timeout("更新", timeout);
                     results.push(failed_update_result(
                         &log,
                         item,
@@ -1402,7 +1462,8 @@ impl TaskManager {
                     continue;
                 }
                 Err(ExecError::Spawn { program, message }) => {
-                    let error = AppError::env_cli_missing(format!("无法启动 {program}: {message}"));
+                    let error =
+                        AppError::cli_spawn_failed(format!("无法启动 {program}: {message}"));
                     results.push(failed_update_result(
                         &log,
                         item,
@@ -1496,22 +1557,20 @@ impl TaskManager {
                 .await
                 {
                     Ok(Ok(_)) => {}
-                    Ok(Err(error)) => warnings.push(
+                    Ok(Err(error)) => warnings.push(baseline_write_warning(error)),
+                    Err(error) => warnings.push(baseline_write_warning(
                         AppError::new(
-                            "baseline.write_failed",
-                            "更新成功，但无法刷新本地基线指纹。",
-                        )
-                        .detail(error.message),
-                    ),
-                    Err(error) => warnings.push(
-                        AppError::new(
-                            "baseline.write_failed",
+                            codes::BASELINE_WRITE_FAILED,
                             "更新成功，但无法刷新本地基线指纹。",
                         )
                         .detail(error.to_string()),
-                    ),
+                    )),
                 }
             }
+
+            // This skill is fully written, verified and re-baselined, so the
+            // next cancellation check is a genuine "between skills" point.
+            self.set_task_cancellable(&task_id, true);
 
             let result_status = update_task::status_label(status);
             let _ = log.append(&OperationEntry::new(
@@ -1528,7 +1587,6 @@ impl TaskManager {
                 error,
                 backup_path: Some(backup_display.clone()),
             });
-            self.set_task_cancellable(&task_id, true);
             emit_update_progress(
                 &sink,
                 &task_id,
@@ -1541,20 +1599,25 @@ impl TaskManager {
             tokio::task::yield_now().await;
         }
 
-        self.set_task_cancellable(&task_id, true);
-        let overall = update_task::overall_for_update(&results, cancelled || cancel.is_cancelled());
-        let message = update_task::summary_message(overall, &results);
+        let overall = if cancelled || cancel.is_cancelled() {
+            TaskOverall::Cancelled
+        } else {
+            summary::overall_for(&results, TaskSkillStatus::Updated)
+        };
+        let message = summary::message(TaskAction::Update, overall, &results);
         let backup_path = if backup_paths.len() == 1 {
             backup_paths.first().cloned()
         } else {
             None
         };
         let result = TaskResult {
+            action: TaskAction::Update,
             overall,
             skills: results,
             warnings,
             backup_path,
             log_path: Some(log_path),
+            started_at: 0,
             finished_at_epoch_ms: now_ms(),
             preview: None,
         };
@@ -1632,28 +1695,20 @@ impl TaskManager {
         let backup = match backup_outcome {
             Ok(Ok(backup)) => backup,
             Ok(Err(error)) => {
-                let _ = log.append(&OperationEntry::new(
-                    "uninstall",
-                    &plan.name,
-                    plan.agent_ids.clone(),
-                    "failed",
-                    None,
-                    Some(error.clone()),
-                ));
                 // A backup failure aborts the operation: no CLI runs.
+                let error =
+                    log_backup_failure(&log, "uninstall", &plan.name, &plan.agent_ids, error);
                 self.finish(&task_id, &sink, FinishOutcome::Failed(error));
                 return;
             }
             Err(error) => {
-                let error = AppError::backup_failed(error.to_string());
-                let _ = log.append(&OperationEntry::new(
+                let error = log_backup_failure(
+                    &log,
                     "uninstall",
                     &plan.name,
-                    plan.agent_ids.clone(),
-                    "failed",
-                    None,
-                    Some(error.clone()),
-                ));
+                    &plan.agent_ids,
+                    AppError::backup_failed(error.to_string()),
+                );
                 self.finish(&task_id, &sink, FinishOutcome::Failed(error));
                 return;
             }
@@ -1711,7 +1766,7 @@ impl TaskManager {
                     plan.agent_ids.clone(),
                     "cancelled",
                     Some(backup_display.clone()),
-                    None,
+                    Some(AppError::cli_cancelled()),
                 ));
                 self.finish(&task_id, &sink, FinishOutcome::Cancelled);
                 return;
@@ -1724,7 +1779,7 @@ impl TaskManager {
                     &log,
                     &log_path,
                     &backup_display,
-                    AppError::cli_failed(format!("卸载超时（{} 秒）。", timeout.as_secs())),
+                    AppError::cli_timeout("卸载", timeout),
                 );
                 return;
             }
@@ -1736,7 +1791,7 @@ impl TaskManager {
                     &log,
                     &log_path,
                     &backup_display,
-                    AppError::env_cli_missing(format!("无法启动 {program}: {message}")),
+                    AppError::cli_spawn_failed(format!("无法启动 {program}: {message}")),
                 );
                 return;
             }
@@ -1799,18 +1854,13 @@ impl TaskManager {
         {
             warnings.push(
                 AppError::new(
-                    "baseline.clear_failed",
+                    codes::BASELINE_CLEAR_FAILED,
                     "卸载成功，但无法清除本地基线指纹。",
                 )
                 .detail(clear_error.to_string()),
             );
         }
 
-        let overall = if status == TaskSkillStatus::Removed {
-            TaskOverall::Success
-        } else {
-            TaskOverall::Failed
-        };
         let log_result = if status == TaskSkillStatus::Removed {
             "removed"
         } else {
@@ -1824,18 +1874,30 @@ impl TaskManager {
             Some(backup_display.clone()),
             error.clone(),
         ));
-        let message = uninstall_task::summary_message(overall, &plan.name);
-        let result = TaskResult {
+        let skill_result = TaskSkillResult {
+            name: plan.name.clone(),
+            status,
+            error,
+            backup_path: Some(backup_display.clone()),
+        };
+        // Same roll-up helper as install/update, even for the single row.
+        let overall = summary::overall_for(
+            std::slice::from_ref(&skill_result),
+            TaskSkillStatus::Removed,
+        );
+        let message = summary::message(
+            TaskAction::Uninstall,
             overall,
-            skills: vec![TaskSkillResult {
-                name: plan.name.clone(),
-                status,
-                error,
-                backup_path: Some(backup_display.clone()),
-            }],
+            std::slice::from_ref(&skill_result),
+        );
+        let result = TaskResult {
+            action: TaskAction::Uninstall,
+            overall,
+            skills: vec![skill_result],
             warnings,
             backup_path: Some(backup_display),
             log_path: Some(log_path),
+            started_at: 0,
             finished_at_epoch_ms: now_ms(),
             preview: None,
         };
@@ -1864,21 +1926,28 @@ impl TaskManager {
             Some(backup_display.to_string()),
             Some(error.clone()),
         ));
+        let skill_result = TaskSkillResult {
+            name: plan.name.clone(),
+            status: TaskSkillStatus::Failed,
+            error: Some(error),
+            backup_path: Some(backup_display.to_string()),
+        };
+        let message = summary::message(
+            TaskAction::Uninstall,
+            TaskOverall::Failed,
+            std::slice::from_ref(&skill_result),
+        );
         let result = TaskResult {
+            action: TaskAction::Uninstall,
             overall: TaskOverall::Failed,
-            skills: vec![TaskSkillResult {
-                name: plan.name.clone(),
-                status: TaskSkillStatus::Failed,
-                error: Some(error),
-                backup_path: Some(backup_display.to_string()),
-            }],
+            skills: vec![skill_result],
             warnings: Vec::new(),
             backup_path: Some(backup_display.to_string()),
             log_path: Some(log_path.to_string()),
+            started_at: 0,
             finished_at_epoch_ms: now_ms(),
             preview: None,
         };
-        let message = uninstall_task::summary_message(TaskOverall::Failed, &plan.name);
         self.finish(task_id, sink, FinishOutcome::Completed(result, message));
     }
 
@@ -1894,7 +1963,7 @@ impl TaskManager {
     }
 
     fn finish(&self, task_id: &str, sink: &EventSink, outcome: FinishOutcome) {
-        let (cancel_requested, clear_marker) = {
+        let (cancel_requested, clear_marker, action, started_at) = {
             let mut tasks = self.lock_tasks();
             let Some(entry) = tasks.get_mut(task_id) else {
                 return;
@@ -1908,6 +1977,8 @@ impl TaskManager {
                 // A confirmed application exit keeps the marker so the next
                 // launch can warn and point at the retained snapshots.
                 entry.mutation.is_some() && !self.inner.shutting_down.load(Ordering::SeqCst),
+                entry.action,
+                entry.started_at_epoch_ms,
             )
         };
         if clear_marker {
@@ -1928,19 +1999,23 @@ impl TaskManager {
             outcome
         };
         let event = match outcome {
-            FinishOutcome::Completed(result, message) => {
+            FinishOutcome::Completed(mut result, message) => {
+                result.action = action;
+                result.started_at = started_at;
                 let phase = if result.overall == TaskOverall::Cancelled {
                     TaskPhase::Cancelled
                 } else {
                     TaskPhase::Completed
                 };
+                let error =
+                    (result.overall == TaskOverall::Cancelled).then(AppError::task_cancelled);
                 let total = result
                     .preview
                     .as_ref()
                     .map(|preview| preview.skills.len().max(1) as u32)
                     .or_else(|| (!result.skills.is_empty()).then_some(result.skills.len() as u32))
                     .unwrap_or(1);
-                TaskEvent::finished(task_id, phase, message, total, total, result, None)
+                TaskEvent::finished(task_id, phase, message, total, total, result, error)
             }
             FinishOutcome::Failed(error) => TaskEvent::finished(
                 task_id,
@@ -1949,11 +2024,13 @@ impl TaskManager {
                 0,
                 1,
                 TaskResult {
+                    action,
                     overall: TaskOverall::Failed,
                     skills: Vec::new(),
                     warnings: Vec::new(),
                     backup_path: None,
                     log_path: None,
+                    started_at,
                     finished_at_epoch_ms: now_ms(),
                     preview: None,
                 },
@@ -1962,19 +2039,21 @@ impl TaskManager {
             FinishOutcome::Cancelled => TaskEvent::finished(
                 task_id,
                 TaskPhase::Cancelled,
-                "预览已取消。",
+                "任务已取消。",
                 0,
                 1,
                 TaskResult {
+                    action,
                     overall: TaskOverall::Cancelled,
                     skills: Vec::new(),
                     warnings: Vec::new(),
                     backup_path: None,
                     log_path: None,
+                    started_at,
                     finished_at_epoch_ms: now_ms(),
                     preview: None,
                 },
-                None,
+                Some(AppError::task_cancelled()),
             ),
         };
         emit(sink, event);
@@ -2029,6 +2108,34 @@ fn emit_update_progress(
     emit(sink, event);
 }
 
+/// Log a mandatory-backup failure and return the same error, so both the
+/// update and uninstall paths abort with one identical code path.
+fn log_backup_failure(
+    log: &OperationLog,
+    action: &str,
+    name: &str,
+    agents: &[String],
+    error: AppError,
+) -> AppError {
+    let _ = log.append(&OperationEntry::new(
+        action,
+        name,
+        agents.to_vec(),
+        "failed",
+        None,
+        Some(error.clone()),
+    ));
+    error
+}
+
+fn baseline_write_warning(error: AppError) -> AppError {
+    AppError::new(
+        codes::BASELINE_WRITE_FAILED,
+        "操作成功，但无法刷新本地基线指纹。",
+    )
+    .detail(error.message)
+}
+
 pub(super) fn classify_install_failure(detail: &str, stderr: &str) -> AppError {
     let combined = if stderr.trim().is_empty() {
         detail.trim().to_string()
@@ -2047,8 +2154,10 @@ pub(super) fn classify_install_failure(detail: &str, stderr: &str) -> AppError {
         || lower.contains("network is unreachable")
     {
         AppError::network_fetch_failed(detail)
+    } else if detail.is_empty() {
+        AppError::cli_exit_nonzero("skills CLI 以非零退出码结束且未输出详情。")
     } else {
-        AppError::cli_failed(detail)
+        AppError::cli_exit_nonzero(detail)
     }
 }
 
@@ -2072,10 +2181,8 @@ fn classify_cli_failure(stdout: &str, stderr: &str) -> AppError {
         AppError::network_fetch_failed(detail)
     } else if lower.contains("authentication failed") {
         AppError::source_preview_failed(format!("仓库不存在或无法公开访问：{detail}"))
-    } else if detail.is_empty() {
-        AppError::source_preview_failed("skills CLI 未返回预览输出。")
     } else {
-        AppError::source_preview_failed(detail)
+        AppError::cli_exit_nonzero(detail)
     }
 }
 
@@ -2378,7 +2485,24 @@ mod tests {
             .expect("timeout should finish the task");
 
         assert_eq!(event.phase, TaskPhase::Failed);
-        assert_eq!(event.error.unwrap().code, codes::NETWORK_FETCH_FAILED);
+        assert_eq!(event.error.unwrap().code, codes::CLI_TIMEOUT);
+    }
+
+    #[tokio::test]
+    async fn preview_spawn_failure_maps_to_cli_spawn_failed() {
+        let (manager, _) = manager(
+            ScriptedExecutor::new().expect_any(ScriptedResponse::spawn_error("npx not found")),
+            HashMap::new(),
+            Duration::from_secs(60),
+        );
+        let (sink, mut receiver) = sink();
+        manager.start_preview("owner/repo", sink).await.unwrap();
+        let event = tokio::time::timeout(Duration::from_secs(2), final_event(&mut receiver))
+            .await
+            .expect("spawn failure should finish the task");
+
+        assert_eq!(event.phase, TaskPhase::Failed);
+        assert_eq!(event.error.unwrap().code, codes::CLI_SPAWN_FAILED);
     }
 
     #[tokio::test]
@@ -2644,6 +2768,7 @@ mod tests {
             source: "vercel-labs/skills".to_string(),
             skills: skills.iter().map(|value| value.to_string()).collect(),
             agents: agents.iter().map(|value| value.to_string()).collect(),
+            retry: false,
         }
     }
 
@@ -2796,11 +2921,19 @@ mod tests {
         assert_eq!(final_event.total, Some(1));
 
         let result = final_event.result.expect("install result");
+        assert_eq!(result.action, TaskAction::Install);
+        assert!(result.started_at > 0, "startedAt is populated");
         assert_eq!(result.overall, TaskOverall::Success);
         assert_eq!(result.skills.len(), 1);
         assert_eq!(result.skills[0].name, "find-skills");
         assert_eq!(result.skills[0].status, TaskSkillStatus::Installed);
         assert!(result.warnings.is_empty());
+        // The verified folder becomes the known-good baseline so later local
+        // modifications are detected (spec §3.6).
+        let baseline = BaselineStore::new(&paths)
+            .load("find-skills")
+            .expect("baseline recorded after a verified install");
+        assert!(baseline.verified);
         let backup = result.backup_path.expect("lock snapshot path");
         let snapshot = PathBuf::from(&backup).join("skill-lock.json");
         assert!(snapshot.is_file(), "snapshot at {snapshot:?}");
@@ -2961,7 +3094,7 @@ mod tests {
         )
         .await;
         assert_eq!(final_event.phase, TaskPhase::Failed);
-        assert_eq!(final_event.error.unwrap().code, codes::CLI_FAILED);
+        assert_eq!(final_event.error.unwrap().code, codes::CLI_INVALID_JSON);
         assert_eq!(fixture.executor.call_count(), 1);
     }
 
@@ -2994,6 +3127,60 @@ mod tests {
         assert_eq!(fixture.executor.call_count(), 0);
         assert!(receiver.try_recv().is_err());
         assert!(taken.join("SKILL.md").is_file(), "no overwrite");
+    }
+
+    #[tokio::test]
+    async fn explicit_retry_may_overwrite_a_same_source_partial_install() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(home.join(".qoder")).unwrap();
+        let paths = AppPaths::new(&home, tmp.path().join("app-data"));
+        paths.ensure_dirs().unwrap();
+        let executor = Arc::new(InstallExecutor::new(InstallResponse::success(
+            INSTALL_SUCCESS,
+            post_state(
+                home.clone(),
+                vec![PostSkill::installed("find-skills", ".qoder/skills")],
+            ),
+        )));
+        let manager = TaskManager::new(
+            Arc::new(FakeRuntime::ok()),
+            executor.clone(),
+            Arc::new(FakeConflicts::default()),
+            paths.clone(),
+            TaskManagerConfig {
+                preview_timeout: Duration::from_secs(60),
+                install_timeout: Duration::from_secs(5),
+            },
+        );
+        // A previous attempt partially wrote the same source: managed lock
+        // entry plus canonical folder, but the agent attachment is missing.
+        write_pre_lock(&paths, &["find-skills"]);
+        let canonical = home.join(".agents/skills/find-skills");
+        fs::create_dir_all(&canonical).unwrap();
+        fs::write(canonical.join("SKILL.md"), "# old attempt\n").unwrap();
+
+        let (sink, _receiver) = sink();
+        let error = manager
+            .start_install(install_request(&["find-skills"], &["qoder"]), sink)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.code,
+            codes::SKILL_CONFLICT,
+            "plain duplicate rejected"
+        );
+        assert_eq!(executor.call_count(), 0);
+
+        let mut retry = install_request(&["find-skills"], &["qoder"]);
+        retry.retry = true;
+        let (_phases, final_event) = run_install_task(&manager, retry).await;
+        assert_eq!(final_event.phase, TaskPhase::Completed);
+        let result = final_event.result.expect("retry result");
+        assert_eq!(result.overall, TaskOverall::Success);
+        assert_eq!(result.skills[0].status, TaskSkillStatus::Installed);
+        assert_eq!(executor.call_count(), 1);
     }
 
     #[tokio::test]
@@ -3210,6 +3397,26 @@ mod tests {
         assert_eq!(executor.call_count(), 0, "detach must not spawn a CLI");
     }
 
+    #[tokio::test]
+    async fn detach_is_rejected_while_the_app_is_shutting_down() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(tmp.path().join("home"), tmp.path().join("app-data"));
+        paths.ensure_dirs().unwrap();
+        let manager = TaskManager::new(
+            Arc::new(FakeRuntime::ok()),
+            Arc::new(ScriptedExecutor::new()),
+            Arc::new(FakeConflicts::default()),
+            paths,
+            TaskManagerConfig::default(),
+        );
+        manager.shutdown_mutations().await;
+        let error = manager
+            .detach_agent("alpha".to_string(), "qoder".to_string())
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, codes::TASK_SHUTTING_DOWN);
+    }
+
     // ------------------------------------------------------------------
     // Interrupted-mutation marker and exit protection (ticket 10)
     // ------------------------------------------------------------------
@@ -3352,6 +3559,25 @@ mod tests {
         manager.dismiss_interrupted_marker();
         assert!(manager.interrupted_report().is_none());
         assert!(Path::new(&startup.snapshots_present[0]).exists());
+    }
+
+    #[test]
+    fn task_result_serializes_action_and_started_at_for_the_frontend() {
+        let result = TaskResult {
+            action: TaskAction::Uninstall,
+            overall: TaskOverall::Success,
+            skills: Vec::new(),
+            warnings: Vec::new(),
+            backup_path: None,
+            log_path: None,
+            started_at: 1_793_163_988_000,
+            finished_at_epoch_ms: 1_793_163_989_000,
+            preview: None,
+        };
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["action"], "uninstall");
+        assert_eq!(json["startedAt"], 1_793_163_988_000u64);
+        assert_eq!(json["finishedAtEpochMs"], 1_793_163_989_000u64);
     }
 
     #[tokio::test]

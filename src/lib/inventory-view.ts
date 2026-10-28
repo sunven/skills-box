@@ -100,6 +100,9 @@ export function hasLocalModificationWarning(skill: InventorySkill): boolean {
 export function isAnomalyRow(skill: InventorySkill): boolean {
   return (
     skill.management === "unmanaged" ||
+    // Copy-only rows have no canonical folder; spec §4.2 counts them as
+    // anomalies even though they stay visible and uninstallable.
+    skill.management === "copy_only" ||
     hasBrokenAttachment(skill) ||
     hasLocalModificationWarning(skill) ||
     skill.update === "path_missing" ||

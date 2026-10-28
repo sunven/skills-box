@@ -115,7 +115,7 @@ impl OperationLog {
 }
 
 fn log_write_failed(path: &Path, error: std::io::Error) -> AppError {
-    AppError::new("log.write_failed", "无法写入操作日志。")
+    AppError::new(crate::error::codes::LOG_WRITE_FAILED, "无法写入操作日志。")
         .detail(format!("{}：{error}", path.display()))
 }
 
@@ -231,7 +231,7 @@ mod tests {
         fs::create_dir_all(&path).unwrap();
         let log = OperationLog::from_path(path);
         let error = log.append(&entry("updated", None)).unwrap_err();
-        assert_eq!(error.code, "log.write_failed");
+        assert_eq!(error.code, crate::error::codes::LOG_WRITE_FAILED);
     }
 
     #[test]

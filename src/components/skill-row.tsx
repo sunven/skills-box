@@ -70,7 +70,7 @@ interface SkillRowProps {
 
 export function SkillRow({ skill, selected, onSelect }: SkillRowProps) {
   const broken = hasBrokenAttachment(skill);
-  const unmounted =
+  const unattached =
     skill.attachments.length === 0 && skill.management !== "unmanaged";
 
   return (
@@ -105,7 +105,7 @@ export function SkillRow({ skill, selected, onSelect }: SkillRowProps) {
           {skill.management === "unmanaged" ? (
             <Badge variant="warning">未受管</Badge>
           ) : null}
-          {unmounted ? <Badge variant="muted">未挂载</Badge> : null}
+          {unattached ? <Badge variant="muted">未挂载</Badge> : null}
           {broken ? <Badge variant="destructive">断链</Badge> : null}
           {hasLocalModificationWarning(skill) ? (
             <Badge

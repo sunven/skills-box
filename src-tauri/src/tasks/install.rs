@@ -23,9 +23,10 @@ use crate::inventory::{AgentDir, ManagementState};
 use crate::lock::LockFile;
 use crate::paths::AppPaths;
 use crate::process::CommandSpec;
+use crate::security;
 
 use super::conflicts::find_conflicts;
-use super::manager::{TaskOverall, TaskSkillResult, TaskSkillStatus};
+use super::manager::{TaskSkillResult, TaskSkillStatus};
 use super::source::validate_source;
 
 pub const INSTALL_TIMEOUT: Duration = crate::timeouts::WRITE_TIMEOUT;
@@ -37,6 +38,11 @@ pub struct InstallRequest {
     pub source: String,
     pub skills: Vec<String>,
     pub agents: Vec<String>,
+    /// Explicit user retry of failed items from a previous partial install.
+    /// Only a same-source managed/stale lock entry may be overwritten; plain
+    /// installs keep rejecting every same-name conflict.
+    #[serde(default)]
+    pub retry: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +62,8 @@ pub struct InstallPlan {
     pub agent_ids: Vec<String>,
     /// Selected agents resolved to absolute skills directories.
     pub targets: Vec<InstallTarget>,
+    /// True only for an explicit retry request (see [`InstallRequest::retry`]).
+    pub retry: bool,
 }
 
 impl InstallPlan {
@@ -79,6 +87,7 @@ pub fn validate_request(
         skills,
         agent_ids,
         targets,
+        retry: request.retry,
     })
 }
 
@@ -91,21 +100,7 @@ pub fn validate_skill_names(raw: &[String]) -> Result<Vec<String>, AppError> {
     let mut names = Vec::new();
     for value in raw {
         let name = value.trim();
-        let invalid = name.is_empty()
-            || name.len() > 255
-            || name == "*"
-            || name == "."
-            || name == ".."
-            || name.starts_with('-')
-            || name.starts_with('*')
-            || name.contains(['/', '\\', '\0'])
-            || name.chars().any(char::is_control)
-            || name.chars().any(is_shell_metacharacter);
-        if invalid {
-            return Err(AppError::skill_invalid_name(format!(
-                "无效的 skill 名：{value:?}"
-            )));
-        }
+        validate_skill_name(name)?;
         if seen.insert(name.to_string()) {
             names.push(name.to_string());
         }
@@ -114,6 +109,28 @@ pub fn validate_skill_names(raw: &[String]) -> Result<Vec<String>, AppError> {
         return Err(AppError::skill_invalid_name("至少需要一个 skill 名。"));
     }
     Ok(names)
+}
+
+/// The single skill-name rule shared by install/update and the native
+/// detach/uninstall entry points. `value` must already be the exact name (no
+/// trimming) so an inventory id can never resolve to a different directory.
+pub fn validate_skill_name(value: &str) -> Result<(), AppError> {
+    let invalid = value.is_empty()
+        || value.len() > 255
+        || value == "*"
+        || value == "."
+        || value == ".."
+        || value.starts_with('-')
+        || value.starts_with('*')
+        || value.contains(['/', '\\', '\0'])
+        || value.chars().any(char::is_control)
+        || value.chars().any(is_shell_metacharacter);
+    if invalid {
+        return Err(AppError::skill_invalid_name(format!(
+            "无效的 skill 名：{value:?}"
+        )));
+    }
+    Ok(())
 }
 
 fn is_shell_metacharacter(character: char) -> bool {
@@ -239,10 +256,25 @@ pub fn resolve_agent_dirs(paths: &AppPaths, ids: &[String]) -> Vec<AgentDir> {
 
 /// Reject same-name managed/copy-only/unmanaged skills before spawning. The
 /// CLI would otherwise overwrite them silently.
-pub fn conflicts_for(paths: &AppPaths, skills: &[String]) -> Result<Option<AppError>, AppError> {
+///
+/// `retry_source` is only `Some(owner/repo)` for an explicit retry of a
+/// previous partial install: a managed (including stale-lock) entry from the
+/// same source may be overwritten, because this is exactly the skill that the
+/// earlier attempt partially wrote. Every other duplicate stays rejected.
+pub fn conflicts_for(
+    paths: &AppPaths,
+    skills: &[String],
+    retry_source: Option<&str>,
+) -> Result<Option<AppError>, AppError> {
     let conflicts = find_conflicts(paths, skills)?;
     for name in skills {
         if let Some(conflict) = conflicts.get(name) {
+            let retryable_managed = retry_source.is_some()
+                && conflict.management == ManagementState::Managed
+                && conflict.source.as_deref() == retry_source;
+            if retryable_managed {
+                continue;
+            }
             let management = match conflict.management {
                 ManagementState::Managed => "已安装",
                 ManagementState::CopyOnly => "仅副本",
@@ -396,9 +428,11 @@ pub fn parse_install_output(raw: &str) -> InstallOutput {
 /// before the CLI runs. A missing lock is a normal fresh-machine state and is
 /// recorded as absent.
 pub fn snapshot_lock(paths: &AppPaths, task_id: &str) -> Result<PathBuf, AppError> {
-    let directory = paths
-        .backups_dir()
-        .join(format!("{}-install-{}", now_ms(), sanitize(task_id)));
+    let directory = paths.backups_dir().join(format!(
+        "{}-install-{}",
+        now_ms(),
+        security::safe_component(task_id)
+    ));
     fs::create_dir_all(&directory)
         .map_err(|error| AppError::backup_failed(format!("{}：{error}", directory.display())))?;
     let source = paths.lock_path();
@@ -503,8 +537,22 @@ fn verify_installed(
     }
 
     match lock {
-        Ok(lock) if lock.contains(name) => {}
-        Ok(_) => return Err(AppError::verify_lock_missing(name)),
+        Ok(lock) => match lock.get(name) {
+            None => return Err(AppError::verify_lock_missing(name)),
+            Some(entry) => {
+                // Update sources may carry `#ref`; the lock stores the base
+                // repository. A different base means the CLI wrote a lock
+                // entry for an unexpected repository.
+                let expected = plan.source.split('#').next().unwrap_or(&plan.source);
+                if entry.source != expected {
+                    return Err(AppError::verify_lock_mismatch(
+                        name,
+                        expected,
+                        &entry.source,
+                    ));
+                }
+            }
+        },
         Err(error) => {
             return Err(AppError::verify_failed(format!(
                 "lock 无法读取：{}",
@@ -565,49 +613,6 @@ fn verify_installed(
     Ok(())
 }
 
-pub fn overall_for(results: &[TaskSkillResult]) -> TaskOverall {
-    let installed = results
-        .iter()
-        .filter(|result| result.status == TaskSkillStatus::Installed)
-        .count();
-    if installed == results.len() && !results.is_empty() {
-        TaskOverall::Success
-    } else if installed > 0 {
-        TaskOverall::Partial
-    } else {
-        TaskOverall::Failed
-    }
-}
-
-pub fn summary_message(overall: TaskOverall, results: &[TaskSkillResult]) -> String {
-    let installed = results
-        .iter()
-        .filter(|result| result.status == TaskSkillStatus::Installed)
-        .count();
-    let unfinished = results.len() - installed;
-    match overall {
-        TaskOverall::Success => format!("安装完成，已验证 {installed} 个 skill。"),
-        TaskOverall::Partial => {
-            format!("部分安装完成：{installed} 个成功，{unfinished} 个未完成。")
-        }
-        TaskOverall::Failed => format!("安装失败：{unfinished} 个 skill 未完成。"),
-        TaskOverall::Cancelled => "安装已取消。".to_string(),
-    }
-}
-
-fn sanitize(value: &str) -> String {
-    value
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect()
-}
-
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -650,6 +655,7 @@ mod tests {
             source: source.to_string(),
             skills: skills.iter().map(|value| value.to_string()).collect(),
             agents: agents.iter().map(|value| value.to_string()).collect(),
+            retry: false,
         }
     }
 
@@ -676,6 +682,7 @@ mod tests {
                 universal: false,
                 skills_dir: PathBuf::from("/Users/tester/.qoder/skills"),
             }],
+            retry: false,
         }
     }
 
@@ -739,6 +746,7 @@ mod tests {
                 .chain(std::iter::once(UNIVERSAL_AGENT_ID.to_string()))
                 .collect(),
             targets,
+            retry: false,
         }
     }
 
@@ -1019,6 +1027,62 @@ mod tests {
         assert_eq!(
             result.results[1].error.as_ref().unwrap().code,
             codes::VERIFY_CANONICAL_MISSING
+        );
+    }
+
+    #[test]
+    fn retry_permits_only_same_source_managed_or_stale_names() {
+        let (_tmp, paths) = fixture();
+        install_state(&paths, "alpha", None, false);
+        write_lock(&paths, &["alpha"]);
+        // Plain duplicate is always rejected.
+        let error = conflicts_for(&paths, &["alpha".to_string()], None)
+            .unwrap()
+            .expect("plain duplicate must conflict");
+        assert_eq!(error.code, codes::SKILL_CONFLICT);
+        // A retry from the same source may overwrite the managed entry.
+        assert!(
+            conflicts_for(&paths, &["alpha".to_string()], Some("acme/skills"))
+                .unwrap()
+                .is_none()
+        );
+        // A different source stays a conflict even for a retry.
+        let error = conflicts_for(&paths, &["alpha".to_string()], Some("other/repo"))
+            .unwrap()
+            .expect("different source must conflict");
+        assert_eq!(error.code, codes::SKILL_CONFLICT);
+
+        // Stale lock entries reserve the name too, but a same-source retry is
+        // the partial-install case this flag exists for.
+        fs::remove_dir_all(paths.canonical_skills_dir()).unwrap();
+        let error = conflicts_for(&paths, &["alpha".to_string()], None)
+            .unwrap()
+            .expect("stale lock must conflict");
+        assert_eq!(error.code, codes::SKILL_CONFLICT);
+        assert!(
+            conflicts_for(&paths, &["alpha".to_string()], Some("acme/skills"))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn verifier_rejects_a_lock_entry_from_a_different_source() {
+        let (tmp, paths) = fixture();
+        let plan = verification_plan(paths.home(), &["find-skills"], &["qoder"]);
+        let agent_dir = tmp.path().join("home/.qoder/skills");
+        install_state(&paths, "find-skills", Some(&agent_dir), false);
+        write_lock(&paths, &["find-skills"]);
+        let raw = fs::read_to_string(paths.lock_path())
+            .unwrap()
+            .replace("acme/skills", "other/repo");
+        fs::write(paths.lock_path(), raw).unwrap();
+
+        let result = verify_install(&paths, &plan, &parse_results(SUCCESS));
+        assert_eq!(result.results[0].status, TaskSkillStatus::Failed);
+        assert_eq!(
+            result.results[0].error.as_ref().unwrap().code,
+            codes::VERIFY_LOCK_MISMATCH
         );
     }
 

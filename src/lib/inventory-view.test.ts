@@ -70,7 +70,7 @@ describe("inventory view model", () => {
       filterSkills(skills, { ...defaults, status: "anomaly" }).map(
         (s) => s.name,
       ),
-    ).toEqual(["gamma"]);
+    ).toEqual(["gamma", "delta"]);
     expect(
       filterSkills(skills, { ...defaults, status: "unknown" }).map(
         (s) => s.name,
@@ -86,7 +86,7 @@ describe("inventory view model", () => {
       update: 0,
       current: 0,
       unknown: 4,
-      anomaly: 1,
+      anomaly: 2,
       unmanaged: 1,
     });
 
@@ -105,12 +105,19 @@ describe("inventory view model", () => {
     ]);
   });
 
-  it("treats unmanaged skills and broken attachments as anomalies", () => {
+  it("treats unmanaged skills, copy-only skills and broken attachments as anomalies", () => {
     const broken = makeSkill({
       name: "broken",
       attachments: [attachment("claude-code", "broken")],
     });
+    const copyOnly = makeSkill({
+      name: "copy-only",
+      management: "copy_only",
+      canonicalPath: null,
+      attachments: [attachment("claude-code", "copy")],
+    });
     expect(isAnomalyRow(broken)).toBe(true);
+    expect(isAnomalyRow(copyOnly)).toBe(true);
     expect(isAnomalyRow(makeSkill({ name: "ok" }))).toBe(false);
   });
 

@@ -82,7 +82,7 @@ function detachResult(agentId: string, agentName: string): DetachResult {
     backupPath: "~/Library/Application Support/com.sunven.skills-box/backups/1-detach-alpha",
     logPath: "~/Library/Application Support/com.sunven.skills-box/logs/operations.jsonl",
     remainingAgents: [],
-    unmounted: true,
+    unattached: true,
   };
 }
 

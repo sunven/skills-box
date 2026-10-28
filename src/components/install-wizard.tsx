@@ -5,7 +5,6 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { useModalFocus } from "../hooks/use-modal-focus";
 import {
-  asAppError,
   cancelTask,
   startInstall,
   startPreview,
@@ -17,8 +16,13 @@ import type {
   PreviewSummary,
   TaskEvent,
   TaskPhase,
-  TaskResult,
 } from "../lib/types";
+import {
+  TASK_PHASE_LABELS,
+  TASK_SKILL_STATUS_LABELS,
+  taskOverallHeading,
+  useTaskRunner,
+} from "../lib/task-runner";
 
 interface InstallWizardProps {
   open: boolean;
@@ -27,39 +31,11 @@ interface InstallWizardProps {
   onClose: () => void;
 }
 
-interface WizardError {
-  code?: string;
-  message: string;
-  detail?: string;
-  hint?: string;
-}
-
-const FINAL_PHASES: ReadonlySet<TaskPhase> = new Set([
-  "completed",
-  "failed",
-  "cancelled",
-]);
-
-const PHASE_LABELS: Record<TaskPhase, string> = {
-  preparing: "准备中",
-  cloning: "正在克隆仓库",
-  backup: "正在备份",
-  running_cli: "正在执行 CLI",
-  verifying: "正在校验结果",
-  completed: "已完成",
-  failed: "失败",
-  cancelled: "已取消",
-};
-
 type Step = 1 | 2 | 3 | 4 | 5;
 
 interface AgentCount {
   managed: number;
   unmanaged: number;
-}
-
-function isFinalPhase(phase: TaskPhase | null): boolean {
-  return phase !== null && FINAL_PHASES.has(phase);
 }
 
 function parseManualNames(input: string): string[] {
@@ -120,34 +96,6 @@ function defaultAgentSelection(
   );
 }
 
-function skillStatusLabel(status: TaskResult["skills"][number]["status"]): string {
-  switch (status) {
-    case "installed":
-      return "已安装";
-    case "updated":
-      return "已更新";
-    case "removed":
-      return "已卸载";
-    case "skipped":
-      return "未找到";
-    case "failed":
-      return "失败";
-  }
-}
-
-function overallHeading(overall: TaskResult["overall"]): string {
-  switch (overall) {
-    case "success":
-      return "安装完成";
-    case "partial":
-      return "安装部分失败";
-    case "failed":
-      return "安装失败";
-    case "cancelled":
-      return "安装已取消";
-  }
-}
-
 function StepBars({ step }: { step: Step }) {
   return (
     <div className="mt-3 flex gap-1.5" aria-hidden="true">
@@ -196,7 +144,7 @@ export function TaskProgress({
       <div className="flex items-center gap-2 text-xs">
         <Loader2 className="size-3.5 animate-spin text-primary" aria-hidden="true" />
         <span className="font-medium">
-          {phase ? PHASE_LABELS[phase] : PHASE_LABELS.preparing}
+          {phase ? TASK_PHASE_LABELS[phase] : TASK_PHASE_LABELS.preparing}
         </span>
         <span className="font-mono text-[11px] text-muted-foreground">
           {completed}/{safeTotal}
@@ -236,47 +184,95 @@ export function InstallWizard({
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const onCloseRef = useRef(onClose);
-  const taskIdRef = useRef<string | null>(null);
-  const phaseRef = useRef<TaskPhase | null>(null);
-  const installRunningRef = useRef(false);
   const agentsTouchedRef = useRef(false);
   const lastInstallRef = useRef<{ skills: string[]; agents: string[] } | null>(
     null,
   );
-  const runSeq = useRef(0);
 
   const [step, setStep] = useState<Step>(1);
   const [sourceInput, setSourceInput] = useState("");
-  const [taskId, setTaskId] = useState<string | null>(null);
-  const [phase, setPhase] = useState<TaskPhase | null>(null);
-  const [completed, setCompleted] = useState(0);
-  const [total, setTotal] = useState(1);
-  const [lastMessage, setLastMessage] = useState("");
-  const [previewRunning, setPreviewRunning] = useState(false);
-  const [installRunning, setInstallRunning] = useState(false);
-  const [cancelling, setCancelling] = useState(false);
-  const [startError, setStartError] = useState<WizardError | null>(null);
-  const [taskError, setTaskError] = useState<WizardError | null>(null);
-  const [cancelledNotice, setCancelledNotice] = useState(false);
-  const [installCancelled, setInstallCancelled] = useState(false);
   const [preview, setPreview] = useState<PreviewSummary | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [manualInput, setManualInput] = useState("");
   const [selectedAgents, setSelectedAgents] = useState<Set<string>>(new Set());
-  const [installResult, setInstallResult] = useState<TaskResult | null>(null);
 
   useEffect(() => {
     onCloseRef.current = onClose;
   }, [onClose]);
-  useEffect(() => {
-    taskIdRef.current = taskId;
-  }, [taskId]);
-  useEffect(() => {
-    phaseRef.current = phase;
-  }, [phase]);
-  useEffect(() => {
-    installRunningRef.current = installRunning;
-  }, [installRunning]);
+
+  const invalidateMutationQueries = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ["inventory"] });
+    void queryClient.invalidateQueries({ queryKey: ["skill"] });
+  }, [queryClient]);
+
+  // Preview is read-only; only its completed summary drives the wizard steps.
+  const handlePreviewEvent = useCallback((event: TaskEvent) => {
+    if (event.phase === "completed") {
+      const resultPreview = event.result?.preview ?? null;
+      setPreview(resultPreview);
+      if (resultPreview) {
+        const installable = resultPreview.skills.filter(
+          (skill) => !skill.conflict,
+        );
+        setSelected(new Set(installable.map((skill) => skill.name)));
+        if (
+          !resultPreview.parseFailed &&
+          resultPreview.skills.length === 1 &&
+          installable.length === 1
+        ) {
+          setStep(3);
+        } else {
+          setStep(2);
+        }
+      } else {
+        setStep(2);
+      }
+      return;
+    }
+    if (event.phase === "failed") {
+      setStep(1);
+      return;
+    }
+    if (event.phase === "cancelled") {
+      setStep(1);
+    }
+  }, []);
+
+  const handleInstallEvent = useCallback(
+    (event: TaskEvent) => {
+      if (
+        event.phase === "completed" ||
+        event.phase === "failed" ||
+        event.phase === "cancelled"
+      ) {
+        invalidateMutationQueries();
+      }
+    },
+    [invalidateMutationQueries],
+  );
+
+  const previewRunner = useTaskRunner({
+    fallbackFailure: "预览失败，请重试。",
+    fallbackStart: "无法开始预览，请稍后重试。",
+    onEvent: handlePreviewEvent,
+  });
+  const installRunner = useTaskRunner({
+    fallbackFailure: "安装失败，请重试。",
+    fallbackStart: "无法开始安装，请稍后重试。",
+    onEvent: handleInstallEvent,
+  });
+
+  const previewState = previewRunner.state;
+  const installState = installRunner.state;
+  const previewRunning = previewState.running;
+  const installRunning = installState.running;
+  const previewPhase = previewState.phase;
+  const installPhase = installState.phase;
+  const previewCancelling = previewState.cancelling;
+  const installCancelling = installState.cancelling;
+  const installResult = installState.result;
+  const installCancelled = installPhase === "cancelled";
+  const cancelledNotice = previewPhase === "cancelled";
 
   // Compute agent defaults when the step is first shown. Recompute if the
   // inventory arrives late, but never overwrite an explicit user choice.
@@ -285,57 +281,46 @@ export function InstallWizard({
     setSelectedAgents(defaultAgentSelection(agents, inventorySkills));
   }, [open, step, agents, inventorySkills]);
 
-  const invalidateMutationQueries = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: ["inventory"] });
-    void queryClient.invalidateQueries({ queryKey: ["skill"] });
-  }, [queryClient]);
-
   const closeWizard = useCallback(() => {
-    const activeTask = taskIdRef.current;
-    const activePhase = phaseRef.current;
-    if (installRunningRef.current) {
+    const previewTask = previewRunner.stateRef.current;
+    const installTask = installRunner.stateRef.current;
+    if (installTask.running) {
       // Before the CLI spawns the task can still be cancelled. Once writing
       // starts the modal stays open and the backend refuses cancellation.
-      if (activePhase !== "preparing") return;
-      if (activeTask) {
-        void cancelTask(activeTask).catch(() => {
+      if (installTask.phase !== "preparing") return;
+      if (installTask.taskId) {
+        void cancelTask(installTask.taskId).catch(() => {
           // Best effort; the backend rejects cancellation after the seal.
         });
       }
-    } else if (activeTask && activePhase && !isFinalPhase(activePhase)) {
-      void cancelTask(activeTask).catch(() => {
+    } else if (previewTask.running && previewTask.taskId) {
+      void cancelTask(previewTask.taskId).catch(() => {
         // Closing is best-effort cancellation; the read-only task times out.
       });
     }
-    runSeq.current += 1;
+    previewRunner.reset();
+    installRunner.reset();
     onCloseRef.current();
-  }, []);
+  }, [
+    installRunner.reset,
+    installRunner.stateRef,
+    previewRunner.reset,
+    previewRunner.stateRef,
+  ]);
 
   useEffect(() => {
     if (!open) return;
-    runSeq.current += 1;
+    previewRunner.reset();
+    installRunner.reset();
     setStep(1);
     setSourceInput("");
-    setTaskId(null);
-    setPhase(null);
-    setCompleted(0);
-    setTotal(1);
-    setLastMessage("");
-    setPreviewRunning(false);
-    setInstallRunning(false);
-    setCancelling(false);
-    setStartError(null);
-    setTaskError(null);
-    setCancelledNotice(false);
-    setInstallCancelled(false);
     setPreview(null);
     setSelected(new Set());
     setManualInput("");
     setSelectedAgents(new Set());
-    setInstallResult(null);
     lastInstallRef.current = null;
     agentsTouchedRef.current = false;
-  }, [open]);
+  }, [open, installRunner.reset, previewRunner.reset]);
 
   useModalFocus({
     open,
@@ -387,209 +372,57 @@ export function InstallWizard({
     [editableAgents, selectedAgents],
   );
 
-  const writingLocked = installRunning && phase !== "preparing";
-  const canCancelTask =
-    Boolean(taskId) && !cancelling && (previewRunning || phase === "preparing");
+  const writingLocked = installRunning && installPhase !== "preparing";
 
-  const handleTaskEvent = (event: TaskEvent) => {
-    setPhase(event.phase);
-    if (event.completed !== undefined) setCompleted(event.completed);
-    if (event.total !== undefined) setTotal(event.total);
-    if (event.message) setLastMessage(event.message);
-
-    if (event.phase === "completed") {
-      setPreviewRunning(false);
-      setCancelling(false);
-      const resultPreview = event.result?.preview ?? null;
-      setPreview(resultPreview);
-      if (resultPreview) {
-        const installable = resultPreview.skills.filter(
-          (skill) => !skill.conflict,
-        );
-        setSelected(new Set(installable.map((skill) => skill.name)));
-        if (
-          !resultPreview.parseFailed &&
-          resultPreview.skills.length === 1 &&
-          installable.length === 1
-        ) {
-          setStep(3);
-        } else {
-          setStep(2);
-        }
-      } else {
-        setStep(2);
-      }
-      return;
-    }
-    if (event.phase === "failed") {
-      setPreviewRunning(false);
-      setCancelling(false);
-      setTaskError(
-        event.error ?? {
-          code: "source.preview_failed",
-          message: "预览失败，请重试。",
-        },
-      );
-      setStep(1);
-      return;
-    }
-    if (event.phase === "cancelled") {
-      setPreviewRunning(false);
-      setCancelling(false);
-      setCancelledNotice(true);
-      setStep(1);
-    }
-  };
-
-  const handlePreview = async () => {
+  const handlePreview = () => {
     if (previewRunning || installRunning) return;
     const source = sourceInput.trim();
     if (!source) {
-      setStartError({
-        code: "source.missing",
+      previewRunner.setStartError({
         message: "请输入公开 GitHub 仓库，例如 owner/repo。",
       });
       return;
     }
-    const seq = ++runSeq.current;
-    setStartError(null);
-    setTaskError(null);
-    setCancelledNotice(false);
+    installRunner.reset();
     setPreview(null);
     setSelected(new Set());
     setSelectedAgents(new Set());
-    setInstallResult(null);
     lastInstallRef.current = null;
     agentsTouchedRef.current = false;
     setManualInput("");
     setStep(1);
-    setPreviewRunning(true);
-    setPhase("preparing");
-    setCompleted(0);
-    setTotal(1);
-    setLastMessage("正在准备预览…");
-    setTaskId(null);
-
-    try {
-      const id = await startPreview(source, (event) => {
-        if (runSeq.current !== seq) return;
-        handleTaskEvent(event);
-      });
-      if (runSeq.current !== seq) {
-        void cancelTask(id).catch(() => {
-          // The wizard was closed while the invoke was in flight.
-        });
-        return;
-      }
-      setTaskId(id);
-    } catch (error) {
-      if (runSeq.current !== seq) return;
-      setStartError(
-        asAppError(error) ?? {
-          message: "无法开始预览，请稍后重试。",
-        },
-      );
-      setPhase(null);
-      setPreviewRunning(false);
-    }
+    previewRunner.start({
+      total: 1,
+      message: "正在准备预览…",
+      launch: (onEvent) => startPreview(source, onEvent),
+    });
   };
 
-  const handleInstallEvent = (event: TaskEvent) => {
-    setPhase(event.phase);
-    if (event.completed !== undefined) setCompleted(event.completed);
-    if (event.total !== undefined) setTotal(event.total);
-    if (event.message) setLastMessage(event.message);
-
-    if (event.phase === "completed") {
-      setInstallRunning(false);
-      setCancelling(false);
-      setInstallResult(event.result ?? null);
-      invalidateMutationQueries();
-      return;
-    }
-    if (event.phase === "failed") {
-      setInstallRunning(false);
-      setCancelling(false);
-      setTaskError(
-        event.error ?? {
-          code: "cli.failed",
-          message: "安装失败，请重试。",
-        },
-      );
-      invalidateMutationQueries();
-      return;
-    }
-    if (event.phase === "cancelled") {
-      setInstallRunning(false);
-      setCancelling(false);
-      setInstallCancelled(true);
-    }
-  };
-
-  const handleStartInstall = async (names: string[]) => {
+  const handleStartInstall = (names: string[], retry = false) => {
     if (!preview || installRunning || previewRunning || names.length === 0) {
       return;
     }
     const requestAgents = Array.from(selectedAgents);
     lastInstallRef.current = { skills: names, agents: requestAgents };
-    const seq = ++runSeq.current;
     setStep(5);
-    setInstallRunning(true);
-    setTaskError(null);
-    setStartError(null);
-    setInstallCancelled(false);
-    setInstallResult(null);
-    setTaskId(null);
-    setPhase("preparing");
-    setCompleted(0);
-    setTotal(names.length);
-    setLastMessage("正在准备安装…");
-
-    try {
-      const id = await startInstall(
-        { source: preview.source, skills: names, agents: requestAgents },
-        (event) => {
-          if (runSeq.current !== seq) return;
-          handleInstallEvent(event);
-        },
-      );
-      if (runSeq.current !== seq) {
-        void cancelTask(id).catch(() => {
-          // The wizard was closed while the invoke was in flight.
-        });
-        return;
-      }
-      setTaskId(id);
-    } catch (error) {
-      if (runSeq.current !== seq) return;
-      setTaskError(
-        asAppError(error) ?? {
-          message: "无法开始安装，请稍后重试。",
-        },
-      );
-      setPhase(null);
-      setInstallRunning(false);
-    }
+    // `retry` is only set by the explicit retry buttons. A plain install
+    // still rejects every same-name managed/stale/copy-only row.
+    installRunner.start({
+      total: names.length,
+      message: "正在准备安装…",
+      launch: (onEvent) =>
+        startInstall(
+          { source: preview.source, skills: names, agents: requestAgents, retry },
+          onEvent,
+        ),
+    });
   };
 
-  const handleCancel = async () => {
-    if (!taskId || cancelling) return;
-    setCancelling(true);
-    try {
-      const ack = await cancelTask(taskId);
-      if (!ack.accepted) {
-        setTaskError({
-          message: ack.message ?? "任务已结束，无法取消。",
-        });
-      }
-    } catch (error) {
-      setTaskError(
-        asAppError(error) ?? {
-          message: "无法取消任务。",
-        },
-      );
-    } finally {
-      setCancelling(false);
+  const handleCancel = () => {
+    if (installRunning) {
+      void installRunner.cancel("任务已结束，无法取消。");
+    } else {
+      void previewRunner.cancel("任务已结束，无法取消。");
     }
   };
 
@@ -717,29 +550,29 @@ export function InstallWizard({
                 示例：mattpocock/skills · 将读取仓库内的 SKILL.md 列表。不支持子目录、#ref、GitLab、SSH、本地路径或 Notion。
               </p>
 
-              {startError ? (
+              {previewState.startError ? (
                 <div
                   role="alert"
                   className="mt-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive"
                 >
-                  <p className="font-medium">{startError.message}</p>
-                  {startError.code ? (
+                  <p className="font-medium">{previewState.startError.message}</p>
+                  {previewState.startError.code ? (
                     <p className="mt-0.5 font-mono text-[10.5px] opacity-70">
-                      {startError.code}
+                      {previewState.startError.code}
                     </p>
                   ) : null}
                 </div>
               ) : null}
 
-              {taskError ? (
+              {previewState.taskError ? (
                 <div
                   role="alert"
                   className="mt-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive"
                 >
-                  <p className="font-medium">{taskError.message}</p>
-                  {taskError.detail ? (
+                  <p className="font-medium">{previewState.taskError.message}</p>
+                  {previewState.taskError.detail ? (
                     <p className="mt-0.5 line-clamp-3 text-[10.5px] opacity-70">
-                      {taskError.detail}
+                      {previewState.taskError.detail}
                     </p>
                   ) : null}
                 </div>
@@ -747,14 +580,14 @@ export function InstallWizard({
 
               {previewRunning ? (
                 <TaskProgress
-                  phase={phase}
-                  message={lastMessage}
-                  completed={completed}
-                  total={total}
-                  cancelling={cancelling}
-                  canCancel={canCancelTask}
+                  phase={previewState.phase}
+                  message={previewState.message}
+                  completed={previewState.completed}
+                  total={previewState.total}
+                  cancelling={previewCancelling}
+                  canCancel={Boolean(previewState.taskId) && !previewCancelling}
                   cancelLabel="取消预览"
-                  onCancel={() => void handleCancel()}
+                  onCancel={handleCancel}
                 />
               ) : null}
 
@@ -780,7 +613,7 @@ export function InstallWizard({
                   role="status"
                   className="ml-auto font-mono text-[10.5px] text-muted-foreground"
                 >
-                  {lastMessage} · {completed}/{total}
+                  {previewState.message} · {previewState.completed}/{previewState.total}
                 </span>
               </div>
 
@@ -1065,22 +898,24 @@ export function InstallWizard({
               {installRunning ? (
                 <>
                   <TaskProgress
-                    phase={phase}
-                    message={lastMessage}
-                    completed={completed}
-                    total={total}
-                    cancelling={cancelling}
+                    phase={installState.phase}
+                    message={installState.message}
+                    completed={installState.completed}
+                    total={installState.total}
+                    cancelling={installCancelling}
                     canCancel={
-                      Boolean(taskId) && phase === "preparing" && !cancelling
+                      Boolean(installState.taskId) &&
+                      installPhase === "preparing" &&
+                      !installCancelling
                     }
                     cancelLabel="取消安装"
-                    onCancel={() => void handleCancel()}
+                    onCancel={handleCancel}
                   />
                   <p
                     data-testid="install-lock-note"
                     className="mt-2 rounded-md border border-border bg-muted/50 px-2.5 py-1.5 text-[11px] text-muted-foreground"
                   >
-                    {phase === "preparing"
+                    {installPhase === "preparing"
                       ? "正在写入前准备；取消后不会调用 CLI。"
                       : "写入阶段不可取消。"}
                   </p>
@@ -1097,21 +932,41 @@ export function InstallWizard({
                 </p>
               ) : null}
 
-              {taskError ? (
+              {installState.startError ? (
+                <div
+                  role="alert"
+                  data-testid="install-start-error"
+                  className="mt-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive"
+                >
+                  <p className="font-medium">{installState.startError.message}</p>
+                  {installState.startError.detail ? (
+                    <p className="mt-0.5 line-clamp-4 text-[10.5px] opacity-70">
+                      {installState.startError.detail}
+                    </p>
+                  ) : null}
+                  {installState.startError.hint ? (
+                    <p className="mt-0.5 text-[10.5px] opacity-80">
+                      {installState.startError.hint}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {installState.taskError ? (
                 <div
                   role="alert"
                   data-testid="install-error"
                   className="mt-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive"
                 >
-                  <p className="font-medium">{taskError.message}</p>
-                  {taskError.detail ? (
+                  <p className="font-medium">{installState.taskError.message}</p>
+                  {installState.taskError.detail ? (
                     <p className="mt-0.5 line-clamp-4 text-[10.5px] opacity-70">
-                      {taskError.detail}
+                      {installState.taskError.detail}
                     </p>
                   ) : null}
-                  {taskError.hint ? (
+                  {installState.taskError.hint ? (
                     <p className="mt-0.5 text-[10.5px] opacity-80">
-                      {taskError.hint}
+                      {installState.taskError.hint}
                     </p>
                   ) : null}
                 </div>
@@ -1121,10 +976,10 @@ export function InstallWizard({
                 <div data-testid="install-result" data-overall={installResult.overall}>
                   <div className="flex items-baseline gap-2">
                     <h3 className="text-sm font-semibold">
-                      {overallHeading(installResult.overall)}
+                      {taskOverallHeading("install", installResult.overall)}
                     </h3>
                     <span className="text-[11px] text-muted-foreground">
-                      {lastMessage}
+                      {installState.message}
                     </span>
                   </div>
                   <ul className="mt-2 space-y-1.5">
@@ -1145,7 +1000,7 @@ export function InstallWizard({
                                 : "rounded border border-warning/30 bg-warning-soft px-1.5 py-0.5 text-[10px] text-warning"
                             }
                           >
-                            {skillStatusLabel(skill.status)}
+                            {TASK_SKILL_STATUS_LABELS[skill.status]}
                           </span>
                           {skill.status !== "installed" ? (
                             <Button
@@ -1153,7 +1008,9 @@ export function InstallWizard({
                               size="sm"
                               className="ml-auto h-7"
                               disabled={installRunning}
-                              onClick={() => void handleStartInstall([skill.name])}
+                              onClick={() =>
+                                void handleStartInstall([skill.name], true)
+                              }
                             >
                               重试
                             </Button>
@@ -1244,21 +1101,23 @@ export function InstallWizard({
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => void handleStartInstall(retryNames)}
+                    onClick={() => void handleStartInstall(retryNames, true)}
                   >
                     重试失败项
                   </Button>
                 ) : null}
-                {taskError && lastInstall ? (
+                {installState.taskError && lastInstall ? (
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => void handleStartInstall(lastInstall.skills)}
+                    onClick={() =>
+                      void handleStartInstall(lastInstall.skills, true)
+                    }
                   >
                     重试
                   </Button>
                 ) : null}
-                {taskError || installCancelled ? (
+                {installState.taskError || installCancelled ? (
                   <Button variant="ghost" size="sm" onClick={() => setStep(4)}>
                     返回确认
                   </Button>

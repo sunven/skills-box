@@ -13,7 +13,8 @@ use std::time::UNIX_EPOCH;
 use crate::baseline::{BaselineStore, LocalModification};
 use crate::error::AppError;
 use crate::inventory::{
-    self, AgentAttachment, AgentDir, ManagementState, UpdateState, frontmatter,
+    self, AgentAttachment, AgentDir, AttachmentLocation, AttachmentMode, ManagementState,
+    UpdateState, frontmatter,
 };
 use crate::paths::AppPaths;
 use crate::security::{self, AllowedRoot};
@@ -329,6 +330,25 @@ pub fn resolve_open_target(
     security::validate_skill_id(skill_id)?;
     let located = inventory::locate_with_agents(paths, agents, skill_id)?
         .ok_or_else(|| AppError::skill_not_found(skill_id))?;
+    // A copy-only skill has no canonical folder. With more than one independent
+    // copy there is no single folder we can confidently open for the user.
+    if located.management == ManagementState::CopyOnly {
+        let copies: Vec<&AttachmentLocation> = located
+            .attachments
+            .iter()
+            .filter(|attachment| attachment.mode == AttachmentMode::Copy)
+            .collect();
+        if copies.len() > 1 {
+            let paths = copies
+                .iter()
+                .map(|attachment| {
+                    format!("{}（{}）", attachment.path.display(), attachment.agent_name)
+                })
+                .collect::<Vec<_>>()
+                .join("、");
+            return Err(AppError::skill_ambiguous(skill_id, paths));
+        }
+    }
     let folder = located
         .canonical_path
         .or(located.primary_path)
@@ -765,6 +785,31 @@ mod tests {
             resolve_open_target(&fixture.paths, &fixture.agents, "beta", OpenTarget::Folder)
                 .unwrap();
         assert_eq!(folder, copy);
+    }
+
+    #[test]
+    fn open_target_rejects_ambiguous_copy_only_skills() {
+        let fixture = Fixture::new();
+        let claude_copy = fixture.claude.join("beta");
+        fs::create_dir_all(&claude_copy).unwrap();
+        fs::write(claude_copy.join("SKILL.md"), "# beta claude\n").unwrap();
+        let gemini_root = fixture.paths.home().join(".gemini/skills");
+        let gemini_copy = gemini_root.join("beta");
+        fs::create_dir_all(&gemini_copy).unwrap();
+        fs::write(gemini_copy.join("SKILL.md"), "# beta gemini\n").unwrap();
+        fixture.write_lock(&[("beta", String::new())]);
+        let mut agents = fixture.agents.clone();
+        agents.push(AgentDir {
+            id: "gemini-cli".to_string(),
+            display_name: "Gemini CLI".to_string(),
+            universal: false,
+            skills_dir: gemini_root,
+        });
+
+        let error =
+            resolve_open_target(&fixture.paths, &agents, "beta", OpenTarget::Folder).unwrap_err();
+        assert_eq!(error.code, codes::SKILL_AMBIGUOUS);
+        assert!(error.detail.unwrap().contains("Gemini CLI"));
     }
 
     #[test]

@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
 
-use crate::error::AppError;
+use crate::error::{AppError, codes};
 use crate::paths::AppPaths;
 
 pub const BASELINE_VERSION: u32 = 1;
@@ -118,7 +118,7 @@ impl BaselineStore {
         verified: bool,
     ) -> Result<Baseline, AppError> {
         fs::create_dir_all(&self.dir).map_err(|error| {
-            AppError::new("baseline.write_failed", "无法创建基线指纹目录。")
+            AppError::new(codes::BASELINE_WRITE_FAILED, "无法创建基线指纹目录。")
                 .detail(error.to_string())
                 .hint("请检查应用数据目录的权限。")
         })?;
@@ -134,7 +134,8 @@ impl BaselineStore {
             recorded_at_epoch_ms: epoch_ms(),
         };
         let serialized = serde_json::to_string_pretty(&baseline).map_err(|error| {
-            AppError::new("baseline.write_failed", "无法序列化基线指纹。").detail(error.to_string())
+            AppError::new(codes::BASELINE_WRITE_FAILED, "无法序列化基线指纹。")
+                .detail(error.to_string())
         })?;
 
         let destination = self.baseline_path(name);
@@ -143,15 +144,17 @@ impl BaselineStore {
             .join(format!(".tmp-{}-{}", std::process::id(), epoch_nanos()));
         fs::write(&temp, serialized).map_err(|error| {
             let _ = fs::remove_file(&temp);
-            AppError::new("baseline.write_failed", "无法写入基线指纹。")
+            AppError::new(codes::BASELINE_WRITE_FAILED, "无法写入基线指纹。")
                 .detail(error.to_string())
                 .hint("请检查应用数据目录的权限与磁盘空间。")
         })?;
         if let Err(error) = fs::rename(&temp, &destination) {
             let _ = fs::remove_file(&temp);
-            return Err(AppError::new("baseline.write_failed", "无法保存基线指纹。")
-                .detail(error.to_string())
-                .hint("请检查应用数据目录的权限与磁盘空间。"));
+            return Err(
+                AppError::new(codes::BASELINE_WRITE_FAILED, "无法保存基线指纹。")
+                    .detail(error.to_string())
+                    .hint("请检查应用数据目录的权限与磁盘空间。"),
+            );
         }
         Ok(baseline)
     }
@@ -163,7 +166,7 @@ impl BaselineStore {
         verified: bool,
     ) -> Result<Baseline, AppError> {
         let fingerprint = fingerprint_folder(path).map_err(|error| {
-            AppError::new("skill.read_failed", "无法计算 skill 目录指纹。")
+            AppError::new(codes::SKILL_READ_FAILED, "无法计算 skill 目录指纹。")
                 .detail(error.to_string())
         })?;
         self.record(name, path, &fingerprint, verified)

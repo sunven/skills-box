@@ -245,7 +245,7 @@ export function DetailPane({
     ...skill,
     attachments,
   });
-  const unmounted = attachments.length === 0 && management !== "unmanaged";
+  const unattached = attachments.length === 0 && management !== "unmanaged";
   const localWarning = hasLocalModificationWarning({
     ...skill,
     management,
@@ -350,7 +350,7 @@ export function DetailPane({
               {LOCAL_MODIFICATION_LABELS[localModification]}
             </Badge>
           ) : null}
-          {unmounted ? <Badge variant="muted">未挂载</Badge> : null}
+          {unattached ? <Badge variant="muted">未挂载</Badge> : null}
           {broken ? <Badge variant="destructive">断链</Badge> : null}
           {warnings.length > 0 ? (
             <Badge variant="warning" title={warnings.join("\n")}>
@@ -453,7 +453,7 @@ export function DetailPane({
             <p className="font-medium">
               已从 {detachNotice.agentName} 断开；canonical 与 lock 已保留。
             </p>
-            {detachNotice.unmounted ? (
+            {detachNotice.unattached ? (
               <p className="mt-0.5">已无 agent 挂载，显示「未挂载」。</p>
             ) : null}
             {detachNotice.backupPath ? (

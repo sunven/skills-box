@@ -24,6 +24,7 @@ use serde::Serialize;
 use crate::error::AppError;
 use crate::inventory::AttachmentMode;
 use crate::paths::AppPaths;
+use crate::security::safe_component;
 
 pub const BACKUP_MANIFEST_FILE: &str = "attachment-manifest.json";
 pub const BACKUP_LOCK_FILE: &str = "skill-lock.json";
@@ -313,24 +314,6 @@ fn copy_tree(source: &Path, destination: &Path) -> io::Result<()> {
 
 fn io_backup_error(path: &Path, error: io::Error) -> AppError {
     AppError::backup_failed(format!("{}：{error}", path.display()))
-}
-
-fn safe_component(value: &str) -> String {
-    let mut safe: String = value
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .take(80)
-        .collect();
-    if safe.is_empty() || safe == "." || safe == ".." {
-        safe = "skill".to_string();
-    }
-    safe
 }
 
 fn now_ms() -> u64 {

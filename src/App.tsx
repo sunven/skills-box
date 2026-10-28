@@ -182,18 +182,21 @@ function App() {
       : null;
   const mutationsEnabled = (report?.mutationsEnabled ?? false) && !lockError;
 
+  // A manual environment refresh is also a full read-model refresh: the
+  // inventory may have changed under us, and cached detail/update results are
+  // no longer trustworthy.
   const handleRecheck = () => {
     recheck.mutate();
+    void inventoryQuery.refetch();
+    void queryClient.invalidateQueries({ queryKey: ["skill"] });
+    void queryClient.invalidateQueries({ queryKey: ["updateReport"] });
   };
 
   const handleCheckUpdates = (skillIds?: string[]) => {
     checkUpdates.mutate(skillIds);
   };
 
-  const handleRetryInventory = () => {
-    recheck.mutate();
-    void inventoryQuery.refetch();
-  };
+  const handleRetryInventory = handleRecheck;
 
   const handleClearFilters = () => {
     const defaults = defaultFilters();

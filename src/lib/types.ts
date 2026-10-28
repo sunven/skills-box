@@ -116,6 +116,8 @@ export type TaskPhase =
   | "failed"
   | "cancelled";
 
+export type TaskAction = "preview" | "install" | "update" | "uninstall";
+
 export type TaskOverall = "success" | "partial" | "failed" | "cancelled";
 
 export type TaskSkillStatus =
@@ -153,11 +155,13 @@ export interface PreviewSummary {
 }
 
 export interface TaskResult {
+  action: TaskAction;
   overall: TaskOverall;
   skills: TaskSkillResult[];
   warnings: AppError[];
   backupPath?: string;
   logPath?: string;
+  startedAt: number;
   finishedAtEpochMs: number;
   preview?: PreviewSummary;
 }
@@ -186,6 +190,11 @@ export interface InstallRequest {
   source: string;
   skills: string[];
   agents: string[];
+  /**
+   * Explicit retry of failed items from a previous partial install. Rust only
+   * allows overwriting a managed/stale lock entry from the same source.
+   */
+  retry?: boolean;
 }
 
 export interface AgentAttachment {
@@ -208,7 +217,8 @@ export interface DetachResult {
   backupPath?: string;
   logPath: string;
   remainingAgents: string[];
-  unmounted: boolean;
+  /** True when no agent attachment remains; the skill is still managed. */
+  unattached: boolean;
 }
 
 export interface InventorySkill {
