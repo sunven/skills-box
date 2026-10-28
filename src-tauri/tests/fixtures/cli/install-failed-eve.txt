@@ -1,0 +1,7 @@
+[
+  {
+    "name": "find-skills",
+    "status": "failed",
+    "error": "Eve does not support global skill installation"
+  }
+]

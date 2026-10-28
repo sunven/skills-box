@@ -37,6 +37,7 @@ impl AppState {
             runtime,
             Arc::new(TokioExecutor),
             Arc::new(InventoryConflictProvider::new(paths.clone())),
+            paths.clone(),
             TaskManagerConfig::default(),
         );
         Self {
@@ -61,6 +62,7 @@ pub fn run() {
             commands::open_skill_folder,
             commands::open_skill_md,
             commands::start_preview,
+            commands::start_install,
             commands::check_updates,
             commands::cancel_task
         ])

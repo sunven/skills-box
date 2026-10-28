@@ -12,7 +12,7 @@ use crate::detail::{self, OpenTarget, SkillDetail};
 use crate::env::EnvReport;
 use crate::error::AppError;
 use crate::inventory::InventorySnapshot;
-use crate::tasks::{CancelAck, EventSink, TaskEvent, TaskId};
+use crate::tasks::{CancelAck, EventSink, InstallRequest, TaskEvent, TaskId};
 use crate::update::UpdateCheckReport;
 
 #[tauri::command]
@@ -117,6 +117,20 @@ pub async fn check_updates(
     skill_ids: Option<Vec<String>>,
 ) -> Result<UpdateCheckReport, AppError> {
     state.updates.check(skill_ids).await
+}
+
+#[tauri::command]
+pub async fn start_install(
+    state: State<'_, AppState>,
+    request: InstallRequest,
+    on_event: Channel<TaskEvent>,
+) -> Result<TaskId, AppError> {
+    let sink: EventSink = Arc::new(move |event| {
+        // A closed window must not abort a mutation that may already be
+        // writing; the task still finishes and its result is discarded.
+        let _ = on_event.send(event);
+    });
+    state.tasks.start_install(request, sink).await
 }
 
 #[tauri::command]

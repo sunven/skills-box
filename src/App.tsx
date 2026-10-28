@@ -207,6 +207,7 @@ function App() {
       <InstallWizard
         open={installOpen}
         inventorySkills={skills}
+        agents={report?.agents ?? []}
         onClose={() => setInstallOpen(false)}
       />
     </div>

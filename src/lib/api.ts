@@ -3,6 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import type {
   CancelAck,
   EnvReport,
+  InstallRequest,
   InventorySnapshot,
   SkillDetail,
   TaskEvent,
@@ -59,6 +60,20 @@ export function startPreview(
 
 export function cancelTask(taskId: string): Promise<CancelAck> {
   return invoke<CancelAck>("cancel_task", { taskId });
+}
+
+/**
+ * Start a serialized install mutation. Rust re-validates the source, skills,
+ * and agent ids, rejects conflicts, snapshots the lock, and appends `-a
+ * universal`; the frontend never supplies argv, paths, or env.
+ */
+export function startInstall(
+  request: InstallRequest,
+  onEvent: (event: TaskEvent) => void,
+): Promise<string> {
+  const channel = new Channel<TaskEvent>();
+  channel.onmessage = onEvent;
+  return invoke<string>("start_install", { request, onEvent: channel });
 }
 
 /**
