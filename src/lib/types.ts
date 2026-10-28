@@ -77,6 +77,7 @@ export type UpdateState =
   | "error"
   | "path_missing";
 export type AttachmentMode = "link" | "copy" | "native" | "broken";
+export type LocalModification = "clean" | "modified" | "unknown";
 
 export interface AgentAttachment {
   agentId: string;
@@ -94,6 +95,7 @@ export interface InventorySkill {
   updatedAt: string | null;
   canonicalPath: string | null;
   attachments: AgentAttachment[];
+  localModification: LocalModification;
   warnings: string[];
 }
 
@@ -115,6 +117,7 @@ export interface AnomalySummary {
   stale: AnomalyGroup;
   unmanaged: AnomalyGroup;
   broken: AnomalyGroup;
+  modified: AnomalyGroup;
 }
 
 export interface InventorySnapshot {
@@ -123,4 +126,38 @@ export interface InventorySnapshot {
   anomalies: AnomalySummary;
   warnings: string[];
   generatedAtEpochMs: number;
+}
+
+export type SkillMdStatus = "ok" | "missing" | "too_large" | "unreadable";
+
+export interface SkillMd {
+  status: SkillMdStatus;
+  path: string | null;
+  content: string | null;
+  sizeBytes: number | null;
+  limitBytes: number;
+  error: string | null;
+}
+
+export interface SkillDetail {
+  id: string;
+  name: string;
+  description: string | null;
+  source: string | null;
+  sourceType: string | null;
+  ref: string | null;
+  skillPath: string | null;
+  installedAt: string | null;
+  updatedAt: string | null;
+  canonicalPath: string | null;
+  directoryPath: string | null;
+  directoryMtimeEpochMs: number | null;
+  hash: string | null;
+  management: ManagementState;
+  update: UpdateState;
+  localModification: LocalModification;
+  localModificationDetail: string | null;
+  attachments: AgentAttachment[];
+  warnings: string[];
+  skillMd: SkillMd;
 }

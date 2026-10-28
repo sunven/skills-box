@@ -70,6 +70,15 @@ export const ATTACHMENT_LABELS: Record<AgentAttachment["mode"], string> = {
   broken: "断链",
 };
 
+export const LOCAL_MODIFICATION_LABELS: Record<
+  InventorySkill["localModification"],
+  string
+> = {
+  clean: "干净",
+  modified: "本地改动",
+  unknown: "本地改动?",
+};
+
 export function defaultFilters(): InventoryFilters {
   return { query: "", source: "all", agent: "all", status: "all" };
 }
@@ -78,8 +87,22 @@ export function hasBrokenAttachment(skill: InventorySkill): boolean {
   return skill.attachments.some((attachment) => attachment.mode === "broken");
 }
 
+/**
+ * Unmanaged skills have no lock reference, so their local-modification value
+ * is always unknown and must not count as a modified warning.
+ */
+export function hasLocalModificationWarning(skill: InventorySkill): boolean {
+  return (
+    skill.management !== "unmanaged" && skill.localModification !== "clean"
+  );
+}
+
 export function isAnomalyRow(skill: InventorySkill): boolean {
-  return skill.management === "unmanaged" || hasBrokenAttachment(skill);
+  return (
+    skill.management === "unmanaged" ||
+    hasBrokenAttachment(skill) ||
+    hasLocalModificationWarning(skill)
+  );
 }
 
 export function matchesStatus(
@@ -253,4 +276,15 @@ export function uniqueAttachments(skill: InventorySkill): AgentAttachment[] {
 export function formatUpdatedAt(value: string | null): string {
   if (!value) return "—";
   return value.slice(0, 10);
+}
+
+export function formatEpochMs(value: number | null): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toISOString().slice(0, 10);
+}
+
+export function shortHash(hash: string, length = 12): string {
+  return hash.length > length ? `${hash.slice(0, length)}…` : hash;
 }

@@ -10,6 +10,7 @@ import type {
   InventorySnapshot,
 } from "./lib/types";
 import { healthyReport } from "./test/fixtures";
+import { detailForSkill } from "./test/detail-fixtures";
 import {
   attachment,
   codexAgent,
@@ -38,13 +39,23 @@ function mockCommands(
     env?: ReturnType<typeof healthyReport>;
   } = {},
 ) {
-  mockIPC((command) => {
+  mockIPC((command, payload) => {
     if (command === "get_environment") {
       return options.env ?? healthyReport();
     }
     if (command === "get_inventory") {
       if (options.inventoryError) throw options.inventoryError;
       return typeof inventory === "function" ? inventory() : inventory;
+    }
+    if (command === "get_skill_detail") {
+      const skillId = (payload as { skillId: string }).skillId;
+      const snapshot =
+        typeof inventory === "function" ? inventory() : inventory;
+      const skill = snapshot.skills.find((entry) => entry.name === skillId);
+      return skill ? detailForSkill(skill) : null;
+    }
+    if (command === "open_skill_folder" || command === "open_skill_md") {
+      return null;
     }
     throw new Error(`unexpected command: ${command}`);
   });

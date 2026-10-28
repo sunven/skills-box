@@ -23,7 +23,8 @@ export function AnomalyBanner({ anomalies, onOpen }: AnomalyBannerProps) {
         <strong className="block text-xs">异常 {anomalies.total}</strong>
         <span className="text-warning/90">
           {anomalies.stale.count} 条 stale lock · {anomalies.unmanaged.count}{" "}
-          个未受管 · {anomalies.broken.count} 个断链
+          个未受管 · {anomalies.broken.count} 个断链 ·{" "}
+          {anomalies.modified.count} 个本地改动
         </span>
       </span>
       <span className="shrink-0 pt-3 text-[10.5px] underline underline-offset-2">
@@ -40,7 +41,10 @@ interface AnomalyDialogProps {
 }
 
 const CATEGORIES: Array<{
-  key: keyof Pick<AnomalySummary, "stale" | "unmanaged" | "broken">;
+  key: keyof Pick<
+    AnomalySummary,
+    "stale" | "unmanaged" | "broken" | "modified"
+  >;
   label: string;
   description: string;
 }> = [
@@ -58,6 +62,12 @@ const CATEGORIES: Array<{
     key: "broken",
     label: "断链",
     description: "agent 挂载的符号链接目标缺失；只读提示，不自动修复。",
+  },
+  {
+    key: "modified",
+    label: "本地改动",
+    description:
+      "当前文件与基线或 lock hash 不一致；「本地改动?」表示首次扫描无法确认，更新前需确认并备份。",
   },
 ];
 

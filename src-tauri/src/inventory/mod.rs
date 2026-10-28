@@ -19,10 +19,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::Serialize;
 
 use crate::agents::{DetectedAgent, DetectionContext, detect_agents};
+use crate::baseline::{BaselineStore, LocalModification};
 use crate::env::capture_process_env;
 use crate::env::child_env::{ChildEnvParams, build_child_env};
 use crate::error::AppError;
-use crate::lock::LockFile;
+use crate::lock::{LockEntry, LockFile};
 use crate::paths::AppPaths;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -72,6 +73,7 @@ pub struct InventorySkill {
     pub updated_at: Option<String>,
     pub canonical_path: Option<String>,
     pub attachments: Vec<AgentAttachment>,
+    pub local_modification: LocalModification,
     pub warnings: Vec<String>,
 }
 
@@ -101,6 +103,7 @@ pub struct AnomalySummary {
     pub stale: AnomalyGroup,
     pub unmanaged: AnomalyGroup,
     pub broken: AnomalyGroup,
+    pub modified: AnomalyGroup,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -161,57 +164,15 @@ pub fn read_with_agents(
     paths: &AppPaths,
     agents: &[AgentDir],
 ) -> Result<InventorySnapshot, AppError> {
-    // Strict lock read happens first: corruption must never degrade into an
-    // empty list or partial scan.
-    let lock = LockFile::read(&paths.lock_path())?;
-    let canonical_dir = paths.canonical_skills_dir();
-    let mut warnings = Vec::new();
-    let canonical = scan_canonical(&canonical_dir, &mut warnings);
-    let scanned_agents = scan_agents(agents, &canonical_dir, &canonical, &lock, &mut warnings);
-
-    let mut aggregates: BTreeMap<String, Aggregate> = BTreeMap::new();
-    for scanned in &scanned_agents {
-        if scanned.shared {
-            for (name, path) in &canonical {
-                let aggregate = aggregates.entry(name.clone()).or_default();
-                aggregate.has_real_content = true;
-                aggregate.attachments.push(AgentAttachment {
-                    agent_id: scanned.agent.id.clone(),
-                    agent_name: scanned.agent.display_name.clone(),
-                    path: paths.display(path),
-                    mode: AttachmentMode::Native,
-                });
-            }
-        } else {
-            for entry in &scanned.entries {
-                let aggregate = aggregates.entry(entry.name.clone()).or_default();
-                if entry.mode != AttachmentMode::Broken {
-                    aggregate.has_real_content = true;
-                    if aggregate.primary.is_none() {
-                        aggregate.primary = Some(entry.path.clone());
-                    }
-                }
-                aggregate.attachments.push(AgentAttachment {
-                    agent_id: scanned.agent.id.clone(),
-                    agent_name: scanned.agent.display_name.clone(),
-                    path: paths.display(&entry.path),
-                    mode: entry.mode,
-                });
-            }
-        }
-    }
-
-    let mut names: BTreeSet<String> = BTreeSet::new();
-    names.extend(canonical.keys().cloned());
-    names.extend(aggregates.keys().cloned());
-    names.extend(lock.entries().keys().cloned());
-
+    let catalog = build_catalog(paths, agents)?;
+    let baseline_store = BaselineStore::new(paths);
     let mut skills = Vec::new();
-    let mut stale: Vec<String> = Vec::new();
-    for name in names {
-        let canonical_path = canonical.get(&name);
-        let aggregate = aggregates.get(&name);
-        let lock_entry = lock.get(&name);
+    let mut stale = Vec::new();
+
+    for name in &catalog.names {
+        let canonical_path = catalog.canonical.get(name);
+        let aggregate = catalog.aggregates.get(name);
+        let lock_entry = catalog.lock.get(name);
         let has_real_content = canonical_path.is_some()
             || aggregate
                 .map(|aggregate| aggregate.has_real_content)
@@ -221,7 +182,9 @@ pub fn read_with_agents(
             Some(_) if canonical_path.is_some() => ManagementState::Managed,
             Some(_) if has_real_content => ManagementState::CopyOnly,
             Some(_) => {
-                stale.push(name);
+                if !stale.contains(name) {
+                    stale.push(name.clone());
+                }
                 continue;
             }
             None => ManagementState::Unmanaged,
@@ -231,6 +194,18 @@ pub fn read_with_agents(
             .cloned()
             .or_else(|| aggregate.and_then(|aggregate| aggregate.primary.clone()));
         let (description, warnings) = read_description(primary.as_deref());
+        let assessment = baseline_store.assess(
+            name,
+            primary.as_deref(),
+            lock_entry.map(|entry| entry.skill_folder_hash.as_str()),
+        );
+        let local_modification = if management == ManagementState::Unmanaged {
+            // Baselines are still recorded for later adoption, but unmanaged
+            // rows never surface local-modification warnings or anomalies.
+            LocalModification::Unknown
+        } else {
+            assessment.state
+        };
 
         skills.push(InventorySkill {
             name: name.clone(),
@@ -241,8 +216,20 @@ pub fn read_with_agents(
             updated_at: lock_entry.map(|entry| entry.updated_at.clone()),
             canonical_path: canonical_path.map(|path| paths.display(path)),
             attachments: aggregate
-                .map(|aggregate| aggregate.attachments.clone())
+                .map(|aggregate| {
+                    aggregate
+                        .attachments
+                        .iter()
+                        .map(|attachment| AgentAttachment {
+                            agent_id: attachment.agent_id.clone(),
+                            agent_name: attachment.agent_name.clone(),
+                            path: paths.display(&attachment.path),
+                            mode: attachment.mode,
+                        })
+                        .collect()
+                })
                 .unwrap_or_default(),
+            local_modification,
             warnings,
         });
     }
@@ -262,15 +249,30 @@ pub fn read_with_agents(
                 .map(|attachment| format!("{} · {}", skill.name, attachment.agent_name))
         })
         .collect();
+    let modified_examples: Vec<String> = skills
+        .iter()
+        .filter(|skill| skill.management != ManagementState::Unmanaged)
+        .filter_map(|skill| match skill.local_modification {
+            LocalModification::Clean => None,
+            LocalModification::Modified => Some(format!("{} · 本地改动", skill.name)),
+            LocalModification::Unknown => Some(format!("{} · 本地改动?", skill.name)),
+        })
+        .collect();
     let broken_count = broken_examples.len();
+    let modified_count = modified_examples.len();
     let stale_group = group(stale.iter().cloned(), stale.len());
     let unmanaged_group = group(unmanaged_names.iter().cloned(), unmanaged_names.len());
     let broken_group = group(broken_examples.into_iter(), broken_count);
+    let modified_group = group(modified_examples.into_iter(), modified_count);
     let anomalies = AnomalySummary {
-        total: stale_group.count + unmanaged_group.count + broken_group.count,
+        total: stale_group.count
+            + unmanaged_group.count
+            + broken_group.count
+            + modified_group.count,
         stale: stale_group,
         unmanaged: unmanaged_group,
         broken: broken_group,
+        modified: modified_group,
     };
 
     Ok(InventorySnapshot {
@@ -281,19 +283,148 @@ pub fn read_with_agents(
                 id: agent.id.clone(),
                 display_name: agent.display_name.clone(),
                 universal: agent.universal,
-                shared: same_dir(&agent.skills_dir, &canonical_dir),
+                shared: same_dir(&agent.skills_dir, &catalog.canonical_dir),
                 global_skills_dir: Some(paths.display(&agent.skills_dir)),
             })
             .collect(),
         anomalies,
-        warnings,
+        warnings: catalog.warnings,
         generated_at_epoch_ms: epoch_ms(),
+    })
+}
+
+/// Resolve one inventory row to its real paths. Used by detail and open
+/// commands so the frontend never supplies a path.
+#[derive(Debug, Clone)]
+pub struct LocatedSkill {
+    pub name: String,
+    pub management: ManagementState,
+    pub canonical_path: Option<PathBuf>,
+    pub primary_path: Option<PathBuf>,
+    pub attachments: Vec<AttachmentLocation>,
+    pub lock_entry: Option<LockEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachmentLocation {
+    pub agent_id: String,
+    pub agent_name: String,
+    pub path: PathBuf,
+    pub mode: AttachmentMode,
+}
+
+pub fn locate(paths: &AppPaths, name: &str) -> Result<Option<LocatedSkill>, AppError> {
+    let agents = detected_agent_dirs(paths);
+    locate_with_agents(paths, &agents, name)
+}
+
+pub fn locate_with_agents(
+    paths: &AppPaths,
+    agents: &[AgentDir],
+    name: &str,
+) -> Result<Option<LocatedSkill>, AppError> {
+    let catalog = build_catalog(paths, agents)?;
+    let canonical_path = catalog.canonical.get(name).cloned();
+    let aggregate = catalog.aggregates.get(name);
+    let lock_entry = catalog.lock.get(name).cloned();
+    let has_real_content = canonical_path.is_some()
+        || aggregate
+            .map(|aggregate| aggregate.has_real_content)
+            .unwrap_or(false);
+
+    let management = match (&lock_entry, canonical_path.is_some(), has_real_content) {
+        (Some(_), true, _) => ManagementState::Managed,
+        (Some(_), false, true) => ManagementState::CopyOnly,
+        (Some(_), false, false) => return Ok(None),
+        (None, false, false) => return Ok(None),
+        (None, _, _) => ManagementState::Unmanaged,
+    };
+
+    let primary_path = canonical_path
+        .clone()
+        .or_else(|| aggregate.and_then(|aggregate| aggregate.primary.clone()));
+
+    Ok(Some(LocatedSkill {
+        name: name.to_string(),
+        management,
+        canonical_path,
+        primary_path,
+        attachments: aggregate
+            .map(|aggregate| aggregate.attachments.clone())
+            .unwrap_or_default(),
+        lock_entry,
+    }))
+}
+
+#[derive(Debug)]
+struct Catalog {
+    lock: LockFile,
+    canonical_dir: PathBuf,
+    canonical: BTreeMap<String, PathBuf>,
+    aggregates: BTreeMap<String, Aggregate>,
+    names: BTreeSet<String>,
+    warnings: Vec<String>,
+}
+
+fn build_catalog(paths: &AppPaths, agents: &[AgentDir]) -> Result<Catalog, AppError> {
+    // Strict lock read happens first: corruption must never degrade into an
+    // empty list or partial scan.
+    let lock = LockFile::read(&paths.lock_path())?;
+    let canonical_dir = paths.canonical_skills_dir();
+    let mut warnings = Vec::new();
+    let canonical = scan_canonical(&canonical_dir, &mut warnings);
+    let scanned_agents = scan_agents(agents, &canonical_dir, &canonical, &lock, &mut warnings);
+
+    let mut aggregates: BTreeMap<String, Aggregate> = BTreeMap::new();
+    for scanned in &scanned_agents {
+        if scanned.shared {
+            for (name, path) in &canonical {
+                let aggregate = aggregates.entry(name.clone()).or_default();
+                aggregate.has_real_content = true;
+                aggregate.attachments.push(AttachmentLocation {
+                    agent_id: scanned.agent.id.clone(),
+                    agent_name: scanned.agent.display_name.clone(),
+                    path: path.clone(),
+                    mode: AttachmentMode::Native,
+                });
+            }
+        } else {
+            for entry in &scanned.entries {
+                let aggregate = aggregates.entry(entry.name.clone()).or_default();
+                if entry.mode != AttachmentMode::Broken {
+                    aggregate.has_real_content = true;
+                    if aggregate.primary.is_none() {
+                        aggregate.primary = Some(entry.path.clone());
+                    }
+                }
+                aggregate.attachments.push(AttachmentLocation {
+                    agent_id: scanned.agent.id.clone(),
+                    agent_name: scanned.agent.display_name.clone(),
+                    path: entry.path.clone(),
+                    mode: entry.mode,
+                });
+            }
+        }
+    }
+
+    let mut names: BTreeSet<String> = BTreeSet::new();
+    names.extend(canonical.keys().cloned());
+    names.extend(aggregates.keys().cloned());
+    names.extend(lock.entries().keys().cloned());
+
+    Ok(Catalog {
+        lock,
+        canonical_dir,
+        canonical,
+        aggregates,
+        names,
+        warnings,
     })
 }
 
 #[derive(Debug, Default)]
 struct Aggregate {
-    attachments: Vec<AgentAttachment>,
+    attachments: Vec<AttachmentLocation>,
     has_real_content: bool,
     primary: Option<PathBuf>,
 }
@@ -525,6 +656,20 @@ mod tests {
             for name in names {
                 skills.insert((*name).to_string(), lock_entry(name));
             }
+            self.write_lock_entries(skills);
+        }
+
+        fn write_lock_with_hashes(&self, entries: &[(&str, &str)]) {
+            let mut skills = serde_json::Map::new();
+            for (name, hash) in entries {
+                let mut entry = lock_entry(name);
+                entry["skillFolderHash"] = serde_json::json!(hash);
+                skills.insert((*name).to_string(), entry);
+            }
+            self.write_lock_entries(skills);
+        }
+
+        fn write_lock_entries(&self, skills: serde_json::Map<String, serde_json::Value>) {
             let lock = serde_json::json!({
                 "version": 3,
                 "skills": skills,
@@ -697,7 +842,28 @@ mod tests {
             snapshot.anomalies.broken.examples,
             vec!["epsilon · Claude Code"]
         );
-        assert_eq!(snapshot.anomalies.total, 4);
+        // Fixture lock hashes are not the real folder tree hashes, so managed
+        // rows start as "本地改动?" until a verified baseline exists.
+        assert_eq!(
+            snapshot.anomalies.modified.count,
+            4,
+            "{:?}",
+            snapshot.anomalies.modified
+        );
+        assert_eq!(
+            snapshot.anomalies.modified.examples,
+            vec![
+                "alpha · 本地改动?",
+                "beta · 本地改动?",
+                "epsilon · 本地改动?"
+            ]
+        );
+        assert_eq!(snapshot.anomalies.total, 8);
+        assert_eq!(alpha.local_modification, LocalModification::Unknown);
+        assert_eq!(beta.local_modification, LocalModification::Unknown);
+        assert_eq!(gamma.local_modification, LocalModification::Unknown);
+        assert_eq!(epsilon.local_modification, LocalModification::Unknown);
+        assert_eq!(zeta.local_modification, LocalModification::Unknown);
         assert_eq!(snapshot.agents.len(), 3);
         let codex = snapshot
             .agents
@@ -715,6 +881,38 @@ mod tests {
     }
 
     #[test]
+    fn matching_lock_hash_is_clean_then_the_baseline_detects_local_edits() {
+        let fixture = Fixture::new();
+        let alpha = fixture.canonical_skill("alpha", "original body");
+        let hash = crate::baseline::git_tree_hash(&alpha).unwrap();
+        fixture.write_lock_with_hashes(&[("alpha", &hash)]);
+        fixture.link(&fixture.claude, "alpha", &alpha);
+
+        let first = fixture.read();
+        assert_eq!(
+            skill(&first, "alpha").local_modification,
+            LocalModification::Clean
+        );
+        assert_eq!(first.anomalies.modified.count, 0);
+        let baselines: Vec<_> = fs::read_dir(fixture.paths.baselines_dir())
+            .unwrap()
+            .collect();
+        assert_eq!(baselines.len(), 1, "first scan must record a baseline");
+
+        fs::write(alpha.join("SKILL.md"), "locally edited").unwrap();
+        let second = fixture.read();
+        assert_eq!(
+            skill(&second, "alpha").local_modification,
+            LocalModification::Modified
+        );
+        assert_eq!(second.anomalies.modified.count, 1);
+        assert_eq!(
+            second.anomalies.modified.examples,
+            vec!["alpha · 本地改动"]
+        );
+    }
+
+    #[test]
     fn snapshot_serialization_matches_the_frontend_contract() {
         let fixture = Fixture::new();
         fixture.write_lock(&["alpha"]);
@@ -726,6 +924,9 @@ mod tests {
         assert_eq!(json["skills"][0]["name"], "alpha");
         assert_eq!(json["skills"][0]["management"], "managed");
         assert_eq!(json["skills"][0]["update"], "unknown");
+        // Random fixture lock hashes cannot be compared with the local tree.
+        assert_eq!(json["skills"][0]["localModification"], "unknown");
+        assert!(json["anomalies"]["modified"]["count"].is_number());
         assert_eq!(json["skills"][0]["canonicalPath"], "~/.agents/skills/alpha");
         assert_eq!(json["skills"][0]["updatedAt"], "2026-02-03T04:05:06.000Z");
         assert_eq!(

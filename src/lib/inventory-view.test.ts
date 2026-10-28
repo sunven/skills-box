@@ -5,9 +5,12 @@ import {
   computeSourceOptions,
   computeStatusCounts,
   filterSkills,
+  formatEpochMs,
   formatUpdatedAt,
+  hasLocalModificationWarning,
   isAnomalyRow,
   selectVisibleSkills,
+  shortHash,
   sortSkills,
 } from "./inventory-view";
 import {
@@ -111,6 +114,35 @@ describe("inventory view model", () => {
     expect(isAnomalyRow(makeSkill({ name: "ok" }))).toBe(false);
   });
 
+  it("treats managed local modifications and unknowns as anomalies, but not unmanaged ones", () => {
+    const modified = makeSkill({
+      name: "modified",
+      localModification: "modified",
+    });
+    const unknown = makeSkill({
+      name: "unknown",
+      localModification: "unknown",
+    });
+    const unmanaged = makeSkill({
+      name: "unmanaged",
+      management: "unmanaged",
+      localModification: "unknown",
+    });
+    expect(hasLocalModificationWarning(modified)).toBe(true);
+    expect(hasLocalModificationWarning(unknown)).toBe(true);
+    expect(hasLocalModificationWarning(unmanaged)).toBe(false);
+    expect(isAnomalyRow(modified)).toBe(true);
+    expect(isAnomalyRow(unknown)).toBe(true);
+
+    const skills = [modified, unknown, unmanaged, makeSkill({ name: "ok" })];
+    expect(
+      filterSkills(skills, { ...defaults, status: "anomaly" }).map(
+        (skill) => skill.name,
+      ),
+    ).toEqual(["modified", "unknown", "unmanaged"]);
+    expect(computeStatusCounts(skills).anomaly).toBe(3);
+  });
+
   it("sorts by updatedAt desc by default with name as tie-breaker", () => {
     const skills = sampleSkills();
     expect(sortSkills(skills, "recent").map((s) => s.name)).toEqual([
@@ -162,5 +194,14 @@ describe("inventory view model", () => {
   it("formats the updated time and uses — when absent", () => {
     expect(formatUpdatedAt("2026-10-05T08:00:00.000Z")).toBe("2026-10-05");
     expect(formatUpdatedAt(null)).toBe("—");
+  });
+
+  it("formats directory mtimes and short hashes for the detail overview", () => {
+    expect(formatEpochMs(1793163988000)).toBe("2026-10-28");
+    expect(formatEpochMs(null)).toBe("—");
+    expect(shortHash("0123456789abcdef0123456789abcdef01234567")).toBe(
+      "0123456789ab…",
+    );
+    expect(shortHash("abc")).toBe("abc");
   });
 });

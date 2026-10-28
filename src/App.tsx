@@ -27,6 +27,7 @@ const EMPTY_ANOMALIES: AnomalySummary = {
   stale: { count: 0, examples: [] },
   unmanaged: { count: 0, examples: [] },
   broken: { count: 0, examples: [] },
+  modified: { count: 0, examples: [] },
 };
 
 function App() {

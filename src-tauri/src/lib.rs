@@ -1,11 +1,14 @@
 pub mod agents;
+pub mod baseline;
 pub mod commands;
+pub mod detail;
 pub mod env;
 pub mod error;
 pub mod inventory;
 pub mod lock;
 pub mod paths;
 pub mod process;
+pub mod security;
 
 use env::EnvironmentService;
 use paths::AppPaths;
@@ -32,7 +35,10 @@ pub fn run() {
         .manage(AppState::new(paths))
         .invoke_handler(tauri::generate_handler![
             commands::get_environment,
-            commands::get_inventory
+            commands::get_inventory,
+            commands::get_skill_detail,
+            commands::open_skill_folder,
+            commands::open_skill_md
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
