@@ -86,7 +86,7 @@ impl UpdateCache {
         let temp = self.dir.join(format!(
             ".tmp-{}-{}",
             std::process::id(),
-            fetched_at_epoch_ms
+            cache_key(source, reference)
         ));
         fs::write(&temp, serialized)?;
         if let Err(error) = fs::rename(&temp, &destination) {
@@ -185,5 +185,29 @@ mod tests {
         assert!(!is_fresh(1_000, 1_000 + TTL, TTL));
         assert!(!is_fresh(1_000, 1_000 + TTL + 1, TTL));
         assert!(is_fresh(1_000, 0, TTL));
+    }
+
+    #[test]
+    fn concurrent_stores_for_different_sources_keep_distinct_temp_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = UpdateCache::from_dir(tmp.path().join("cache"));
+        std::thread::scope(|scope| {
+            for index in 0..12 {
+                let cache = cache.clone();
+                scope.spawn(move || {
+                    cache
+                        .store(&format!("acme/repo-{index}"), Some("main"), &tree(), 1_000)
+                        .unwrap();
+                });
+            }
+        });
+        for index in 0..12 {
+            assert!(
+                cache
+                    .load(&format!("acme/repo-{index}"), Some("main"))
+                    .is_some(),
+                "cache entry {index} was lost"
+            );
+        }
     }
 }

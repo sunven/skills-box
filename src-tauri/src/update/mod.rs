@@ -311,14 +311,10 @@ impl UpdateService {
         }))
         .buffer_unordered(concurrency);
 
-        loop {
-            match tokio::time::timeout_at(deadline, stream.next()).await {
-                Ok(Some((key, outcome))) => {
-                    completed.insert(key);
-                    outcomes.push(outcome);
-                }
-                Ok(None) | Err(_) => break,
-            }
+        while let Ok(Some((key, outcome))) = tokio::time::timeout_at(deadline, stream.next()).await
+        {
+            completed.insert(key);
+            outcomes.push(outcome);
         }
 
         for (key, (group, cached)) in pending {

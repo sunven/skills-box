@@ -234,11 +234,23 @@ impl GitHubFetchError {
             Self::Http {
                 status: 404,
                 detail,
-            } => crate::error::AppError::network_error(format!(
-                "仓库不存在或不可公开访问（HTTP 404）：{detail}"
-            )),
+            } => {
+                let suffix = if detail.is_empty() {
+                    String::new()
+                } else {
+                    format!("：{detail}")
+                };
+                crate::error::AppError::network_error(format!(
+                    "仓库不存在或不可公开访问（HTTP 404）{suffix}"
+                ))
+            }
             Self::Http { status, detail } => {
-                crate::error::AppError::network_error(format!("HTTP {status}：{detail}"))
+                let suffix = if detail.is_empty() {
+                    String::new()
+                } else {
+                    format!("：{detail}")
+                };
+                crate::error::AppError::network_error(format!("HTTP {status}{suffix}"))
             }
             Self::Parse { detail } => crate::error::AppError::network_error(detail),
         }
@@ -395,10 +407,10 @@ impl GitHubTreeClient for ReqwestGitHubClient {
                 retry_after.as_deref(),
                 &body,
             );
-            if let GitHubFetchError::RateLimited { detail } = &mut error {
-                if let Some(reset) = reset {
-                    detail.push_str(&format!("；x-ratelimit-reset={reset}"));
-                }
+            if let GitHubFetchError::RateLimited { detail } = &mut error
+                && let Some(reset) = reset
+            {
+                detail.push_str(&format!("；x-ratelimit-reset={reset}"));
             }
             return Err(error);
         }
@@ -434,23 +446,16 @@ fn classify_http_error(
 ) -> GitHubFetchError {
     let limited = status == 429
         || status == 403 && (rate_limit_remaining == Some("0") || retry_after.is_some());
-    let detail = truncate_detail(body);
+    let body = truncate_detail(body);
     if limited {
-        let mut detail = format!("HTTP {status}");
-        if !detail.is_empty() && !body.trim().is_empty() {
-            detail.push_str("：");
-            detail.push_str(&truncate_detail(body));
-        }
-        return GitHubFetchError::rate_limited(detail);
-    }
-    GitHubFetchError::http(
-        status,
-        if body.trim().is_empty() {
+        let detail = if body.is_empty() {
             format!("HTTP {status}")
         } else {
-            format!("HTTP {status}：{detail}")
-        },
-    )
+            format!("HTTP {status}：{body}")
+        };
+        return GitHubFetchError::rate_limited(detail);
+    }
+    GitHubFetchError::http(status, body)
 }
 
 fn truncate_detail(body: &str) -> String {
