@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Loader2, PackageOpen, X } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
+import { useModalFocus } from "../hooks/use-modal-focus";
 import {
   asAppError,
   cancelTask,
@@ -334,35 +335,14 @@ export function InstallWizard({
     setInstallResult(null);
     lastInstallRef.current = null;
     agentsTouchedRef.current = false;
-    const previousFocus = document.activeElement as HTMLElement | null;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        closeWizard();
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const focusables = panelRef.current?.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), [href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])',
-      );
-      if (!focusables || focusables.length === 0) return;
-      const first = focusables[0]!;
-      const last = focusables[focusables.length - 1]!;
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    document.addEventListener("keydown", handleKeyDown);
-    closeRef.current?.focus();
-    return () => {
-      document.removeEventListener("keydown", handleKeyDown);
-      previousFocus?.focus();
-    };
-  }, [open, closeWizard]);
+  }, [open]);
+
+  useModalFocus({
+    open,
+    panelRef,
+    initialFocusRef: closeRef,
+    onClose: closeWizard,
+  });
 
   const manualNames = useMemo(() => parseManualNames(manualInput), [manualInput]);
   const inventoryByName = useMemo(() => {
@@ -724,7 +704,6 @@ export function InstallWizard({
                     if (event.key === "Enter") void handlePreview();
                   }}
                   disabled={previewRunning || installRunning}
-                  autoFocus
                 />
                 <Button
                   onClick={() => void handlePreview()}

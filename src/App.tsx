@@ -1,19 +1,28 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { AnomalyDialog } from "./components/anomaly-panel";
 import { AppHeader } from "./components/app-header";
 import { DetailPane } from "./components/detail-pane";
 import { EnvironmentBanner } from "./components/environment-banner";
 import { EnvironmentMetrics } from "./components/environment-metrics";
+import { ExitDialog } from "./components/exit-dialog";
 import { FilterSidebar } from "./components/filter-sidebar";
 import { InstallWizard } from "./components/install-wizard";
+import { InterruptedBanner } from "./components/interrupted-banner";
 import { LockErrorScreen } from "./components/lock-error-screen";
 import { SkillListPane } from "./components/skill-list-pane";
 import { UninstallDialog } from "./components/uninstall-dialog";
 import { UpdateDialog } from "./components/update-dialog";
-import { useEnvironmentQuery, useRecheckEnvironment } from "./hooks/use-environment";
+import { environmentQueryKey, useEnvironmentQuery, useRecheckEnvironment } from "./hooks/use-environment";
 import { useInventoryQuery } from "./hooks/use-inventory";
 import { useCheckUpdates, useUpdateReportQuery } from "./hooks/use-updates";
-import { asAppError } from "./lib/api";
+import {
+  asAppError,
+  dismissInterruptedMutation,
+  quitApp,
+  revealAppData,
+} from "./lib/api";
+import { listenForExitRequest } from "./lib/lifecycle";
 import {
   computeAgentOptions,
   computeSourceOptions,
@@ -30,7 +39,7 @@ import {
   withUpdateAnomalies,
   type UpdateViewSkill,
 } from "./lib/update-view";
-import type { AnomalySummary } from "./lib/types";
+import type { ActiveMutationInfo, AnomalySummary, EnvReport } from "./lib/types";
 
 const EMPTY_ANOMALIES: AnomalySummary = {
   total: 0,
@@ -41,6 +50,7 @@ const EMPTY_ANOMALIES: AnomalySummary = {
 };
 
 function App() {
+  const queryClient = useQueryClient();
   const environment = useEnvironmentQuery();
   const recheck = useRecheckEnvironment();
   const inventoryQuery = useInventoryQuery();
@@ -49,6 +59,12 @@ function App() {
   const report = environment.data;
   const snapshot = inventoryQuery.data;
   const updateData = updateReportQuery.data ?? null;
+
+  const [exitRequest, setExitRequest] = useState<ActiveMutationInfo | null>(
+    null,
+  );
+  const [quitting, setQuitting] = useState(false);
+  const [exitError, setExitError] = useState<string | null>(null);
 
   const [query, setQuery] = useState("");
   const [source, setSource] = useState("all");
@@ -109,6 +125,55 @@ function App() {
     }
   }, [visibleSkills, selectedName]);
 
+  // Rust vetoes window close / Cmd+Q while a mutation is running and emits
+  // this event with the active task so the renderer can explain the risk.
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listenForExitRequest((info) => {
+      if (disposed) return;
+      setExitError(null);
+      setExitRequest(info);
+    }).then((stop) => {
+      if (disposed) stop();
+      else unlisten = stop;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  const handleConfirmExit = async () => {
+    setQuitting(true);
+    setExitError(null);
+    try {
+      await quitApp();
+    } catch (error) {
+      setQuitting(false);
+      setExitError(
+        (asAppError(error) ?? { message: "无法退出应用。" }).message,
+      );
+    }
+  };
+
+  const handleDismissInterrupted = () => {
+    queryClient.setQueryData<EnvReport | undefined>(
+      environmentQueryKey,
+      (previous) =>
+        previous ? { ...previous, interrupted: null } : previous,
+    );
+    void dismissInterruptedMutation().catch(() => {
+      // The marker may already be gone; the next launch re-verifies.
+    });
+  };
+
+  const handleRevealBackups = () => {
+    void revealAppData("backups").catch(() => {
+      // Best effort; the banner still shows the snapshot paths.
+    });
+  };
+
   const inventoryError = asAppError(inventoryQuery.error);
   const updateError = asAppError(checkUpdates.error);
   const lockError =
@@ -158,6 +223,11 @@ function App() {
           setUpdateMode("all");
         }}
         updateCandidateCount={updateSummary.candidates.length}
+      />
+      <InterruptedBanner
+        report={report?.interrupted ?? null}
+        onDismiss={handleDismissInterrupted}
+        onRevealBackups={handleRevealBackups}
       />
       {lockError ? (
         <LockErrorScreen
@@ -245,6 +315,19 @@ function App() {
         inventorySkills={skills}
         agents={report?.agents ?? []}
         onClose={() => setInstallOpen(false)}
+      />
+      <ExitDialog
+        open={exitRequest !== null}
+        info={exitRequest}
+        pending={quitting}
+        error={exitError}
+        onCancel={() => {
+          if (!quitting) {
+            setExitRequest(null);
+            setExitError(null);
+          }
+        }}
+        onConfirm={() => void handleConfirmExit()}
       />
     </div>
   );

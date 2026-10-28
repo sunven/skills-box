@@ -1,8 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { openUrl } from "@tauri-apps/plugin-opener";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import App from "./App";
 import { createQueryClient } from "./lib/query-client";
 import type {
@@ -19,12 +18,6 @@ import {
   makeSkill,
   makeSnapshot,
 } from "./test/inventory-fixtures";
-
-vi.mock("@tauri-apps/plugin-opener", () => ({
-  openUrl: vi.fn(() => Promise.resolve()),
-}));
-
-const openUrlMock = vi.mocked(openUrl);
 
 interface Call {
   command: string;
@@ -113,6 +106,8 @@ function mockCommands(options: {
       case "open_skill_md":
         if (options.openError) throw options.openError;
         return null;
+      case "open_external_url":
+        return null;
       default:
         throw new Error(`unexpected command: ${command}`);
     }
@@ -145,10 +140,6 @@ async function selectAlpha() {
   await screen.findByText("概览");
   return target;
 }
-
-beforeEach(() => {
-  openUrlMock.mockClear();
-});
 
 afterEach(() => {
   clearMocks();
@@ -291,7 +282,7 @@ describe("skill detail panel", () => {
       "![架构图](https://example.com/diagram.png)",
       "![不安全图](http://example.com/bad.png)",
     ].join("\n");
-    mockCommands({
+    const calls = mockCommands({
       detail: baseDetail({
         skillMd: {
           status: "ok",
@@ -318,7 +309,15 @@ describe("skill detail panel", () => {
     const httpsLink = within(rendered).getByRole("link", { name: "HTTPS 文档" });
     expect(httpsLink).toHaveAttribute("href", "https://example.com/docs");
     fireEvent.click(httpsLink);
-    expect(openUrlMock).toHaveBeenCalledWith("https://example.com/docs");
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (call) =>
+            call.command === "open_external_url" &&
+            (call.payload as { url?: string }).url === "https://example.com/docs",
+        ),
+      ).toBe(true),
+    );
 
     // Non-https links render as plain text, never as openable links.
     expect(
@@ -334,8 +333,16 @@ describe("skill detail panel", () => {
     const imageLink = within(rendered).getByRole("link", { name: "打开图片" });
     expect(imageLink).toHaveAttribute("href", "https://example.com/diagram.png");
     fireEvent.click(imageLink);
-    expect(openUrlMock).toHaveBeenCalledWith("https://example.com/diagram.png");
-    expect(openUrlMock).toHaveBeenCalledTimes(2);
+    await waitFor(() =>
+      expect(
+        calls.filter(
+          (call) =>
+            call.command === "open_external_url" &&
+            (call.payload as { url?: string }).url ===
+              "https://example.com/diagram.png",
+        ),
+      ).toHaveLength(1),
+    );
     expect(rendered.querySelector("img")).toBeNull();
   });
 

@@ -4,6 +4,8 @@
 //! tells the environment banner whether the lock is missing (normal on a
 //! fresh machine), valid v3, corrupt, or an unsupported version.
 
+use std::path::Path;
+
 use serde::Serialize;
 
 use crate::error::AppError;
@@ -38,9 +40,14 @@ impl LockHealth {
 
 pub fn inspect(paths: &AppPaths) -> LockHealth {
     let path = paths.lock_path();
-    let display = paths.display(&path);
+    inspect_path(&path, &paths.display(&path))
+}
 
-    let raw = match std::fs::read_to_string(&path) {
+/// Same strict rules as [`inspect`] for callers that hold an explicit lock
+/// path (startup interruption verification, tests).
+pub fn inspect_path(path: &Path, display: &str) -> LockHealth {
+    let display = display.to_string();
+    let raw = match std::fs::read_to_string(path) {
         Ok(raw) => raw,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return LockHealth {

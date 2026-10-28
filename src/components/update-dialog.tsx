@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { TaskProgress } from "./install-wizard";
+import { useModalFocus } from "../hooks/use-modal-focus";
 import { asAppError, cancelTask, revealAppData, startUpdate } from "../lib/api";
 import type {
   InventoryAgent,
@@ -296,35 +297,15 @@ export function UpdateDialog({
     setTaskError(null);
     setStartError(null);
     setRevealError(null);
-    const previousFocus = document.activeElement as HTMLElement | null;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        if (!runningRef.current) onCloseRef.current();
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const focusables = panelRef.current?.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), [href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])',
-      );
-      if (!focusables || focusables.length === 0) return;
-      const first = focusables[0]!;
-      const last = focusables[focusables.length - 1]!;
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    document.addEventListener("keydown", handleKeyDown);
-    closeRef.current?.focus();
-    return () => {
-      document.removeEventListener("keydown", handleKeyDown);
-      previousFocus?.focus();
-    };
   }, [open, mode]);
+
+  useModalFocus({
+    open,
+    panelRef,
+    initialFocusRef: closeRef,
+    onClose,
+    canClose: () => !runningRef.current,
+  });
 
   const handleCancelTask = async () => {
     if (!taskId || cancelling) return;

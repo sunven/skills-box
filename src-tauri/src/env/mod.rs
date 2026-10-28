@@ -96,6 +96,10 @@ pub struct EnvReport {
     pub cli: CliStatus,
     pub agents: Vec<DetectedAgent>,
     pub lock: LockHealth,
+    /// Set when a previous mutation marker survived (crash or confirmed exit
+    /// while a write was in flight). The UI surfaces it and offers dismissal.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interrupted: Option<crate::interrupted::InterruptedReport>,
     pub issues: Vec<AppError>,
     pub warnings: Vec<String>,
     pub checked_at_epoch_ms: u64,

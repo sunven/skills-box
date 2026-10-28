@@ -105,7 +105,7 @@ pub struct EnvResolverConfig {
 impl EnvResolverConfig {
     pub fn from_process(paths: &AppPaths) -> Self {
         let parent_env = capture_process_env();
-        let max = Duration::from_secs(5);
+        let max = crate::timeouts::PROBE_TIMEOUT;
         Self {
             search: SearchEnv::from_values(paths.home(), &parent_env),
             node_override: node_override_from_env(&parent_env, cfg!(debug_assertions)),
@@ -113,7 +113,7 @@ impl EnvResolverConfig {
             pinned_cli_version: "1.7.4".to_string(),
             min_node_version: Version::new(22, 20, 0),
             probe_timeout: max,
-            login_shell_timeout: Duration::from_secs(3),
+            login_shell_timeout: crate::timeouts::LOGIN_SHELL_TIMEOUT,
         }
     }
 }
@@ -248,6 +248,7 @@ impl EnvResolver {
             cli,
             agents,
             lock,
+            interrupted: crate::interrupted::inspect(&self.paths),
             issues,
             warnings,
             checked_at_epoch_ms: epoch_ms(),

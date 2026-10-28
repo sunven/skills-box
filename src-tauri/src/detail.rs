@@ -802,4 +802,33 @@ mod tests {
         let detail = fixture.detail("alpha");
         assert_eq!(detail.skill_md.status, SkillMdStatus::Ok);
     }
+
+    #[test]
+    fn unreadable_skill_md_returns_a_degraded_detail_without_failing_other_skills() {
+        use std::os::unix::fs::PermissionsExt;
+        let fixture = Fixture::new();
+        let alpha = fixture.canonical_skill("alpha", "# Alpha\n");
+        fixture.canonical_skill("beta", "# Beta\n");
+        fixture.write_lock(&[("alpha", "0".repeat(40)), ("beta", "1".repeat(40))]);
+        let alpha_md = alpha.join("SKILL.md");
+        fs::set_permissions(&alpha_md, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let detail = fixture.detail("alpha");
+        fs::set_permissions(&alpha_md, fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert_eq!(detail.skill_md.status, SkillMdStatus::Unreadable);
+        assert!(detail.skill_md.content.is_none());
+        assert!(
+            detail
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("无法读取 SKILL.md")),
+            "{:?}",
+            detail.warnings
+        );
+
+        let beta = fixture.detail("beta");
+        assert_eq!(beta.skill_md.status, SkillMdStatus::Ok);
+        assert!(beta.warnings.is_empty());
+    }
 }

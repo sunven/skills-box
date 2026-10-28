@@ -1,5 +1,6 @@
 //! Production executor built on `tokio::process::Command`.
 
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
@@ -8,6 +9,70 @@ use tokio::io::AsyncReadExt;
 use tokio::process::{Child, Command};
 
 use super::{CancelToken, CommandSpec, ExecError, ExecOutput, ProcessExecutor};
+
+/// Debug-only fault injection hook. Release builds ignore
+/// `SKILLS_BOX_FAKE_CLI` because [`apply_fake_cli`] receives
+/// `cfg!(debug_assertions)` and returns the spec untouched when it is false.
+///
+/// Accepted values: `slow` (sleeps 30s), `slow:<seconds>`, `fail` (exit 1),
+/// `invalid-json` (non-JSON stdout) and `cancel` (hangs until cancelled).
+/// Only commands that actually invoke the pinned skills CLI are rewritten, so
+/// the fake never affects environment probes (`node --version`, `git`, ...).
+pub fn apply_fake_cli(spec: CommandSpec, raw: Option<&str>, debug: bool) -> CommandSpec {
+    let Some((program, args)) = fake_cli_override(&spec, raw, debug) else {
+        return spec;
+    };
+    CommandSpec {
+        program,
+        args,
+        ..spec
+    }
+}
+
+fn fake_cli_override(
+    spec: &CommandSpec,
+    raw: Option<&str>,
+    debug: bool,
+) -> Option<(PathBuf, Vec<String>)> {
+    if !debug {
+        return None;
+    }
+    let mode = raw?.trim();
+    if mode.is_empty() || !invokes_skills_cli(spec) {
+        return None;
+    }
+    let script = match mode {
+        "slow" => "sleep 30; printf 'fake skills CLI finished slowly\\n'; exit 0".to_string(),
+        "fail" => "echo 'fake skills CLI injected failure' >&2; exit 1".to_string(),
+        "invalid-json" => "printf 'fake skills output that is not json\\n'; exit 0".to_string(),
+        "cancel" => "while true; do sleep 1; done".to_string(),
+        other => {
+            let seconds = other.strip_prefix("slow:")?;
+            let seconds: u64 = seconds.parse().ok()?;
+            format!("sleep {seconds}; printf 'fake skills CLI finished slowly\\n'; exit 0")
+        }
+    };
+    Some((PathBuf::from("/bin/sh"), vec!["-c".to_string(), script]))
+}
+
+fn invokes_skills_cli(spec: &CommandSpec) -> bool {
+    let program = spec
+        .program
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    program == "npx"
+        || program == "skills"
+        || spec
+            .args
+            .iter()
+            .any(|arg| arg.starts_with("skills@") || arg == "skills")
+}
+
+fn inject_debug_fake_cli(spec: CommandSpec) -> CommandSpec {
+    let raw = std::env::var("SKILLS_BOX_FAKE_CLI").ok();
+    apply_fake_cli(spec, raw.as_deref(), cfg!(debug_assertions))
+}
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct TokioExecutor;
@@ -25,6 +90,7 @@ impl ProcessExecutor for TokioExecutor {
         if cancel.is_cancelled() {
             return Err(ExecError::Cancelled);
         }
+        let spec = inject_debug_fake_cli(spec);
         let started = Instant::now();
         let mut command = Command::new(&spec.program);
         command
@@ -365,5 +431,142 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(error, ExecError::Spawn { .. }));
+    }
+
+    fn npx_spec(timeout_ms: u64) -> CommandSpec {
+        spec(
+            "/fake/bin/npx",
+            &["-y", "skills@1.7.4", "add", "owner/repo", "-l", "-g"],
+            &[],
+            timeout_ms,
+        )
+    }
+
+    struct FakeCliEnv(Option<std::ffi::OsString>);
+
+    /// Process-global environment variables cannot be scoped per test; hold
+    /// this lock whenever a test sets `SKILLS_BOX_FAKE_CLI`.
+    async fn fake_env_lock() -> tokio::sync::MutexGuard<'static, ()> {
+        static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+        LOCK.lock().await
+    }
+
+    impl FakeCliEnv {
+        fn set(value: &str) -> Self {
+            let previous = std::env::var_os("SKILLS_BOX_FAKE_CLI");
+            // Safety: tests that invoke the real executor with a fake CLI are
+            // the only writers of this variable in the test process.
+            unsafe { std::env::set_var("SKILLS_BOX_FAKE_CLI", value) };
+            Self(previous)
+        }
+    }
+
+    impl Drop for FakeCliEnv {
+        fn drop(&mut self) {
+            // Safety: see `FakeCliEnv::set`.
+            unsafe {
+                match self.0.take() {
+                    Some(value) => std::env::set_var("SKILLS_BOX_FAKE_CLI", value),
+                    None => std::env::remove_var("SKILLS_BOX_FAKE_CLI"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fake_cli_only_rewrites_the_skills_cli_and_only_in_debug() {
+        let rewritten = apply_fake_cli(npx_spec(5_000), Some("fail"), true);
+        assert_eq!(rewritten.program, PathBuf::from("/bin/sh"));
+        assert_eq!(rewritten.args[0], "-c");
+        assert!(rewritten.args[1].contains("exit 1"));
+        assert_eq!(rewritten.timeout, Duration::from_secs(5));
+
+        // Release builds and non-CLI probes are never rewritten.
+        let original = npx_spec(5_000);
+        assert_eq!(
+            apply_fake_cli(original.clone(), Some("fail"), false),
+            original
+        );
+        let probe = spec("/fake/bin/node", &["--version"], &[], 5_000);
+        assert_eq!(apply_fake_cli(probe.clone(), Some("fail"), true), probe);
+
+        for (value, needle) in [
+            ("slow", "sleep 30"),
+            ("slow:2", "sleep 2"),
+            ("cancel", "while true"),
+            ("invalid-json", "not json"),
+        ] {
+            let rewritten = apply_fake_cli(npx_spec(5_000), Some(value), true);
+            assert!(
+                rewritten
+                    .args
+                    .get(1)
+                    .is_some_and(|arg| arg.contains(needle)),
+                "{value} should inject {needle}"
+            );
+        }
+        let untouched = npx_spec(5_000);
+        assert_eq!(
+            apply_fake_cli(untouched.clone(), Some("nonsense"), true),
+            untouched
+        );
+    }
+
+    #[tokio::test]
+    async fn debug_fake_cli_fail_runs_through_the_real_executor() {
+        let _lock = fake_env_lock().await;
+        let _guard = FakeCliEnv::set("fail");
+        let output = TokioExecutor
+            .run(npx_spec(5_000), CancelToken::new())
+            .await
+            .unwrap();
+        assert_eq!(output.code, Some(1));
+        assert!(output.stderr_trimmed().contains("injected failure"));
+    }
+
+    #[tokio::test]
+    async fn debug_fake_cli_slow_times_out_through_the_real_executor() {
+        let _lock = fake_env_lock().await;
+        let _guard = FakeCliEnv::set("slow:5");
+        let started = std::time::Instant::now();
+        let error = TokioExecutor
+            .run(npx_spec(150), CancelToken::new())
+            .await
+            .unwrap_err();
+        assert_eq!(error, ExecError::Timeout(Duration::from_millis(150)));
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the injected slow command must be killed by the executor timeout"
+        );
+    }
+
+    #[tokio::test]
+    async fn debug_fake_cli_invalid_json_runs_through_the_real_executor() {
+        let _lock = fake_env_lock().await;
+        let _guard = FakeCliEnv::set("invalid-json");
+        let output = TokioExecutor
+            .run(npx_spec(5_000), CancelToken::new())
+            .await
+            .unwrap();
+        assert!(output.success());
+        assert!(output.stdout_trimmed().contains("not json"));
+    }
+
+    #[tokio::test]
+    async fn debug_fake_cli_cancel_hangs_until_the_process_group_is_killed() {
+        let _lock = fake_env_lock().await;
+        let _guard = FakeCliEnv::set("cancel");
+        let cancel = CancelToken::new();
+        let task_cancel = cancel.clone();
+        let task =
+            tokio::spawn(async move { TokioExecutor.run(npx_spec(60_000), task_cancel).await });
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        cancel.cancel();
+        let error = tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("fake cancel should terminate promptly")
+            .expect("task should not panic")
+            .unwrap_err();
+        assert_eq!(error, ExecError::Cancelled);
     }
 }

@@ -80,7 +80,9 @@ function setup(options: SetupOptions = {}): MockState {
 
 async function openWizard(): Promise<HTMLElement> {
   await screen.findByText("环境正常");
-  fireEvent.click(screen.getByRole("button", { name: "安装 skill" }));
+  const opener = screen.getByRole("button", { name: "安装 skill" });
+  opener.focus();
+  fireEvent.click(opener);
   const dialog = await screen.findByRole("dialog");
   expect(dialog).toHaveAttribute("data-testid", "install-wizard");
   return dialog;
@@ -388,6 +390,9 @@ describe("install wizard steps 1-2", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await waitFor(() =>
       expect(state.cancelCalls).toEqual([{ taskId: "task-1" }]),
+    );
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "安装 skill" }),
     );
   });
 

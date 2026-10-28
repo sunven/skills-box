@@ -554,6 +554,7 @@ describe("manual update checking", () => {
     const updateAll = await header().findByRole("button", {
       name: /更新全部 \(1\)/,
     });
+    updateAll.focus();
     fireEvent.click(updateAll);
 
     const dialog = screen.getByRole("dialog", { name: "更新全部" });
@@ -584,6 +585,7 @@ describe("manual update checking", () => {
     expect(
       screen.queryByRole("dialog", { name: "更新全部" }),
     ).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(updateAll);
     // Only the read-only check ran; no execution command exists yet.
     expect(calls.every((call) => !call.command.startsWith("start_"))).toBe(true);
   });

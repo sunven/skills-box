@@ -28,7 +28,7 @@ use super::conflicts::find_conflicts;
 use super::manager::{TaskOverall, TaskSkillResult, TaskSkillStatus};
 use super::source::validate_source;
 
-pub const INSTALL_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+pub const INSTALL_TIMEOUT: Duration = crate::timeouts::WRITE_TIMEOUT;
 pub const UNIVERSAL_AGENT_ID: &str = "universal";
 
 #[derive(Debug, Clone, Deserialize)]
@@ -83,7 +83,9 @@ pub fn validate_request(
 }
 
 /// Reject the CLI flags and wildcard forms the app must never send, plus
-/// path-like or control-character names.
+/// path-like, control-character or shell-metacharacter names. The executor
+/// never uses a shell, so the metacharacter rule is defense in depth against a
+/// malicious repository controlling a skill folder name.
 pub fn validate_skill_names(raw: &[String]) -> Result<Vec<String>, AppError> {
     let mut seen = HashSet::new();
     let mut names = Vec::new();
@@ -97,7 +99,8 @@ pub fn validate_skill_names(raw: &[String]) -> Result<Vec<String>, AppError> {
             || name.starts_with('-')
             || name.starts_with('*')
             || name.contains(['/', '\\', '\0'])
-            || name.chars().any(char::is_control);
+            || name.chars().any(char::is_control)
+            || name.chars().any(is_shell_metacharacter);
         if invalid {
             return Err(AppError::skill_invalid_name(format!(
                 "无效的 skill 名：{value:?}"
@@ -111,6 +114,31 @@ pub fn validate_skill_names(raw: &[String]) -> Result<Vec<String>, AppError> {
         return Err(AppError::skill_invalid_name("至少需要一个 skill 名。"));
     }
     Ok(names)
+}
+
+fn is_shell_metacharacter(character: char) -> bool {
+    matches!(
+        character,
+        ';' | '|'
+            | '&'
+            | '$'
+            | '`'
+            | '<'
+            | '>'
+            | '"'
+            | '\''
+            | '('
+            | ')'
+            | '*'
+            | '?'
+            | '!'
+            | '{'
+            | '}'
+            | '['
+            | ']'
+            | '~'
+            | '#'
+    )
 }
 
 fn validate_agents(
@@ -742,7 +770,7 @@ mod tests {
         assert_eq!(spec.cwd, PathBuf::from("/app-data/cli-cwd"));
         assert_eq!(spec.env["CI"], "true");
         assert_eq!(spec.timeout, Duration::from_secs(900));
-        for forbidden in ["--all", "--copy", "*", "update", "check", "remove"] {
+        for forbidden in ["--all", "--copy", "*", "update", "check", "remove", "list"] {
             assert!(
                 !spec.args.iter().any(|arg| arg == forbidden),
                 "{forbidden} must never be part of install"
@@ -782,7 +810,10 @@ mod tests {
     #[test]
     fn validation_rejects_copy_all_wildcard_and_flag_like_names() {
         let (_tmp, paths) = fixture();
-        for forbidden in ["--copy", "--all", "*", "-s", "a/b", "..", ""] {
+        for forbidden in [
+            "--copy", "--all", "*", "-s", "a/b", "..", "", "alpha;rm", "$(id)", "`id`", "a|b",
+            "a&b", "a>b", "a<b", "a\"b", "a'b", "a(b)", "a*b", "a?b", "a{b}", "a[b]", "a~b", "a#b",
+        ] {
             let error = validate_request(&paths, &request("acme/skills", &[forbidden], &["qoder"]))
                 .unwrap_err();
             assert_eq!(error.code, codes::SKILL_INVALID_NAME, "{forbidden:?}");
@@ -794,7 +825,16 @@ mod tests {
     #[test]
     fn validation_rejects_unknown_wildcard_and_unsupported_agents() {
         let (_tmp, paths) = fixture();
-        for unknown in ["*", "--all", "not-an-agent", "-a"] {
+        for unknown in [
+            "*",
+            "--all",
+            "not-an-agent",
+            "-a",
+            "qoder;rm",
+            "../qoder",
+            "qoder/../../x",
+            "$(id)",
+        ] {
             let error = validate_request(&paths, &request("acme/skills", &["alpha"], &[unknown]))
                 .unwrap_err();
             assert_eq!(error.code, codes::AGENT_INVALID, "{unknown}");

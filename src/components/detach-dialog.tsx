@@ -1,6 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 import { HardDrive, ShieldAlert, Unlink, X } from "lucide-react";
 import { Button } from "./ui/button";
+import { useModalFocus } from "../hooks/use-modal-focus";
 import { ATTACHMENT_LABELS } from "../lib/inventory-view";
 import type { AgentAttachment } from "../lib/types";
 
@@ -45,37 +46,13 @@ export function DetachDialog({
   const pendingRef = useRef(pending);
   pendingRef.current = pending;
 
-  useEffect(() => {
-    if (!open) return;
-    const previousFocus = document.activeElement as HTMLElement | null;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        if (!pendingRef.current) onCloseRef.current();
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const focusables = panelRef.current?.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), [href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])',
-      );
-      if (!focusables || focusables.length === 0) return;
-      const first = focusables[0]!;
-      const last = focusables[focusables.length - 1]!;
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    document.addEventListener("keydown", handleKeyDown);
-    closeRef.current?.focus();
-    return () => {
-      document.removeEventListener("keydown", handleKeyDown);
-      previousFocus?.focus();
-    };
-  }, [open]);
+  useModalFocus({
+    open,
+    panelRef,
+    initialFocusRef: closeRef,
+    onClose,
+    canClose: () => !pendingRef.current,
+  });
 
   if (!open || !target) return null;
 

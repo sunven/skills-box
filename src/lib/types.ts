@@ -63,10 +63,37 @@ export interface EnvReport {
   cli: CliStatus;
   agents: DetectedAgent[];
   lock: LockHealth;
+  interrupted?: InterruptedReport | null;
   issues: AppError[];
   warnings: string[];
   checkedAtEpochMs: number;
   pinnedCliVersion: string;
+}
+
+export type MutationKind = "install" | "update" | "uninstall";
+
+/** Startup verification for a mutation whose process ended before finishing. */
+export interface InterruptedReport {
+  markerPath: string;
+  markerCorrupt: boolean;
+  markerError?: string;
+  taskId?: string;
+  kind?: MutationKind;
+  skills: string[];
+  startedAtEpochMs?: number;
+  snapshotPaths: string[];
+  snapshotsPresent: string[];
+  snapshotsMissing: string[];
+  lock: LockHealth;
+  detectedAtEpochMs: number;
+}
+
+export interface ActiveMutationInfo {
+  taskId: string;
+  kind: MutationKind;
+  skills: string[];
+  startedAtEpochMs: number;
+  snapshotPaths: string[];
 }
 
 export type ManagementState = "managed" | "copy_only" | "unmanaged";

@@ -1,6 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import type {
+  ActiveMutationInfo,
   AppDataKind,
   CancelAck,
   DetachResult,
@@ -39,12 +39,16 @@ export function openSkillMd(skillId: string): Promise<void> {
   return invoke<void>("open_skill_md", { skillId });
 }
 
-/** External links are https-only and leave the app through the opener. */
+/**
+ * External links are https-only. Rust re-validates the scheme and host, and no
+ * opener permission is exposed to the frontend: the only URL path is this
+ * typed command.
+ */
 export function openExternalUrl(url: string): Promise<void> {
   if (!/^https:\/\//i.test(url)) {
     return Promise.reject(new Error("只允许通过 opener 打开 https 链接。"));
   }
-  return openUrl(url);
+  return invoke<void>("open_external_url", { url });
 }
 
 /**
@@ -62,6 +66,24 @@ export function startPreview(
 
 export function cancelTask(taskId: string): Promise<CancelAck> {
   return invoke<CancelAck>("cancel_task", { taskId });
+}
+
+/** The single in-flight mutation; `null` means closing the window is safe. */
+export function getActiveMutation(): Promise<ActiveMutationInfo | null> {
+  return invoke<ActiveMutationInfo | null>("get_active_mutation");
+}
+
+/** Acknowledge the startup interruption warning; snapshots are retained. */
+export function dismissInterruptedMutation(): Promise<void> {
+  return invoke<void>("dismiss_interrupted_mutation");
+}
+
+/**
+ * Confirmed exit: Rust keeps the interruption marker, kills the CLI process
+ * group even in the sealed write phase, waits briefly, then exits.
+ */
+export function quitApp(): Promise<void> {
+  return invoke<void>("quit_app");
 }
 
 /**

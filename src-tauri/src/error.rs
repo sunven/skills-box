@@ -25,6 +25,7 @@ pub mod codes {
     pub const SKILL_INVALID_NAME: &str = "skill.invalid_name";
     pub const SKILL_INSTALL_FAILED: &str = "skill.install_failed";
     pub const SKILL_READ_FAILED: &str = "skill.read_failed";
+    pub const SKILL_READ_TIMEOUT: &str = "skill.read_timeout";
     pub const SKILL_UNMANAGED: &str = "skill.unmanaged";
     pub const SKILL_COPY_ONLY: &str = "skill.copy_only";
     pub const SKILL_SOURCE_UNRESOLVABLE: &str = "skill.source_unresolvable";
@@ -54,6 +55,7 @@ pub mod codes {
     pub const TASK_BUSY: &str = "task.busy";
     pub const TASK_NOT_FOUND: &str = "task.not_found";
     pub const TASK_CANNOT_CANCEL: &str = "task.cannot_cancel";
+    pub const TASK_SHUTTING_DOWN: &str = "task.shutting_down";
     pub const SKILL_CONFLICT: &str = "skill.conflict";
     pub const BACKUP_FAILED: &str = "backup.failed";
     pub const VERIFY_FAILED: &str = "verify.failed";
@@ -217,6 +219,15 @@ impl AppError {
             .retryable(true)
     }
 
+    pub fn skill_read_timeout(what: &str, timeout: std::time::Duration) -> Self {
+        Self::new(
+            codes::SKILL_READ_TIMEOUT,
+            format!("读取{what}超时（{} 秒）。", timeout.as_secs()),
+        )
+        .hint("请检查磁盘或网络状态，然后重新加载。")
+        .retryable(true)
+    }
+
     pub fn skill_unmanaged(name: &str) -> Self {
         Self::new(
             codes::SKILL_UNMANAGED,
@@ -277,6 +288,15 @@ impl AppError {
             .detail(detail)
             .hint("请检查系统默认应用与文件权限。")
             .retryable(true)
+    }
+
+    /// External links are restricted to absolute https URLs. Retrying the same
+    /// input cannot succeed, so this is not retryable.
+    pub fn open_url_rejected(detail: impl Into<String>) -> Self {
+        Self::new(codes::OPEN_FAILED, "仅允许通过 opener 打开 https 链接。")
+            .detail(detail)
+            .hint("http、file、javascript、data、ssh、mailto 与相对路径都会被拒绝。")
+            .retryable(false)
     }
 
     pub fn source_missing() -> Self {
@@ -385,6 +405,14 @@ impl AppError {
         Self::new(
             codes::TASK_CANNOT_CANCEL,
             "任务已结束或已进入不可取消阶段。",
+        )
+        .retryable(false)
+    }
+
+    pub fn task_shutting_down() -> Self {
+        Self::new(
+            codes::TASK_SHUTTING_DOWN,
+            "应用正在退出，无法开始新的任务。",
         )
         .retryable(false)
     }

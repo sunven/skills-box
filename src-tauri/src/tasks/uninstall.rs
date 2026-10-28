@@ -465,7 +465,9 @@ mod tests {
         assert_eq!(spec.cwd, PathBuf::from("/app-data/cli-cwd"));
         assert_eq!(spec.env["CI"], "true");
         assert_eq!(spec.timeout, Duration::from_secs(900));
-        for forbidden in ["--all", "--copy", "-a", "*", "update", "check", "--json"] {
+        for forbidden in [
+            "--all", "--copy", "-a", "*", "update", "check", "--json", "list",
+        ] {
             assert!(
                 !spec.args.iter().any(|arg| arg == forbidden),
                 "{forbidden} must never appear in uninstall argv"
@@ -1332,6 +1334,7 @@ mod execution_tests {
     #[tokio::test]
     async fn uninstall_is_cancellable_before_the_cli_spawns() {
         let fixture = ExecFixture::with_runtime(Arc::new(HangingRuntime));
+        let lock_before = fs::read(fixture.paths.lock_path()).unwrap();
         let (sink, mut receiver) = sink();
         let task_id = fixture
             .manager
@@ -1356,6 +1359,15 @@ mod execution_tests {
         assert_eq!(final_event.phase, TaskPhase::Cancelled);
         assert_eq!(fixture.executor.calls().len(), 0);
         assert!(fixture.canonical.is_dir());
+        assert_eq!(
+            fs::read(fixture.paths.lock_path()).unwrap(),
+            lock_before,
+            "cancelling before spawn must not touch the lock"
+        );
+        assert!(
+            !fixture.paths.interrupted_marker_path().exists(),
+            "cancel clears the interruption marker"
+        );
     }
 
     #[tokio::test]
