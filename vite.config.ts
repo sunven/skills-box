@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import process from "node:process";
@@ -34,5 +34,8 @@ export default defineConfig(() => ({
     setupFiles: ["./src/test/setup.ts"],
     css: false,
     clearMocks: true,
+    // Agent worktrees live under `.qoder/`; their copies of the test suite
+    // must never be picked up by the primary checkout's test run.
+    exclude: [...configDefaults.exclude, "**/.qoder/**"],
   },
 }));
