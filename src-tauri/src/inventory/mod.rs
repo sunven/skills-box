@@ -769,6 +769,14 @@ mod tests {
             .collect()
     }
 
+    fn detachable(skill: &InventorySkill) -> Vec<(String, bool)> {
+        skill
+            .attachments
+            .iter()
+            .map(|attachment| (attachment.agent_id.clone(), attachment.detachable))
+            .collect()
+    }
+
     #[test]
     fn classifies_managed_copy_only_unmanaged_agent_only_and_stale() {
         let fixture = Fixture::new();
@@ -816,6 +824,16 @@ mod tests {
                 ("codex".to_string(), AttachmentMode::Native),
             ]
         );
+        assert_eq!(
+            detachable(alpha),
+            vec![
+                ("claude-code".to_string(), true),
+                // Universal-by-catalog agents read canonical; an extra legacy
+                // link is not a detachable mount.
+                ("gemini-cli".to_string(), false),
+                ("codex".to_string(), false),
+            ]
+        );
 
         let beta = skill(&snapshot, "beta");
         assert_eq!(beta.management, ManagementState::CopyOnly);
@@ -824,6 +842,11 @@ mod tests {
         assert_eq!(
             modes(beta),
             vec![("claude-code".to_string(), AttachmentMode::Copy)]
+        );
+        assert_eq!(
+            detachable(beta),
+            vec![("claude-code".to_string(), false)],
+            "copy-only skills have no detach action"
         );
 
         let gamma = skill(&snapshot, "gamma");
@@ -842,6 +865,11 @@ mod tests {
         assert_eq!(
             modes(delta),
             vec![("claude-code".to_string(), AttachmentMode::Copy)]
+        );
+        assert_eq!(
+            detachable(delta),
+            vec![("claude-code".to_string(), false)],
+            "unmanaged agent-only skills have no detach action"
         );
 
         let epsilon = skill(&snapshot, "epsilon");

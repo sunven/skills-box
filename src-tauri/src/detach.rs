@@ -711,11 +711,11 @@ mod tests {
     #[test]
     fn copy_detach_with_a_cross_agent_symlink_dependency_is_blocked_without_changes() {
         let fixture = Fixture::new();
-        let canonical = fixture.managed_skill("alpha");
+        fixture.managed_skill("alpha");
         let copy = fixture.copy(&fixture.claude, "alpha");
         // Gemini reads Claude's copy through a relative symlink, like the real
         // HyperFrames layout; deleting the copy would dangle it.
-        fixture.link(&fixture.gemini, "alpha", &copy);
+        symlink("../../.claude/skills/alpha", fixture.gemini.join("alpha")).unwrap();
         let lock_before = fs::read(fixture.paths.lock_path()).unwrap();
         let copy_before = fs::read(copy.join("SKILL.md")).unwrap();
 
@@ -740,6 +740,149 @@ mod tests {
             lines[0]["error"]["code"],
             crate::error::codes::AGENT_DEPENDENCY_CONFLICT
         );
+        assert!(lines[0].get("backupPath").is_none());
+    }
+
+    #[test]
+    fn symlinks_to_canonical_are_not_copy_dependencies() {
+        let fixture = Fixture::without_shared_agent();
+        let canonical = fixture.managed_skill("alpha");
+        let copy = fixture.copy(&fixture.claude, "alpha");
+        fixture.link(&fixture.qoder, "alpha", &canonical);
+
+        let result = fixture.detach("alpha", "claude-code").unwrap();
+
+        assert_eq!(result.mode, AttachmentMode::Copy);
+        assert_eq!(result.remaining_agents, vec!["Qoder".to_string()]);
+        assert!(!copy.exists());
+        assert!(fixture.qoder.join("alpha").is_symlink());
+    }
+
+    #[test]
+    fn universal_native_broken_and_unattached_agents_are_rejected() {
+        let fixture = Fixture::new();
+        let canonical = fixture.managed_skill("alpha");
+        fixture.link(&fixture.claude, "alpha", &canonical);
+        // A universal agent may carry a legacy physical link; it still reads
+        // the canonical store and must not be offered a detach.
+        fixture.link(&fixture.gemini, "alpha", &canonical);
+        // A broken attachment is a read-only anomaly.
+        fixture.write_lock(&["alpha", "beta"]);
+        let beta = fixture.canonical_root.join("beta");
+        fs::create_dir_all(&beta).unwrap();
+        fs::write(beta.join("SKILL.md"), "# beta\n").unwrap();
+        symlink(
+            fixture.qoder.join("missing-target"),
+            fixture.qoder.join("beta"),
+        )
+        .unwrap();
+
+        let universal = fixture.detach("alpha", "gemini-cli").unwrap_err();
+        assert_eq!(universal.code, crate::error::codes::AGENT_NATIVE);
+        let shared = fixture.detach("alpha", "codex").unwrap_err();
+        assert_eq!(shared.code, crate::error::codes::AGENT_NATIVE);
+        let broken = fixture.detach("beta", "qoder").unwrap_err();
+        assert_eq!(broken.code, crate::error::codes::AGENT_BROKEN);
+        let not_attached = fixture.detach("alpha", "qoder").unwrap_err();
+        assert_eq!(
+            not_attached.code,
+            crate::error::codes::AGENT_NOT_ATTACHED
+        );
+        let unknown = fixture.detach("alpha", "not-an-agent").unwrap_err();
+        assert_eq!(unknown.code, crate::error::codes::AGENT_NOT_DETECTED);
+
+        // Nothing was removed or backed up.
+        assert!(fixture.claude.join("alpha").is_symlink());
+        assert!(fixture.gemini.join("alpha").is_symlink());
+        assert!(fs::symlink_metadata(fixture.qoder.join("beta")).is_ok());
+        assert!(fixture.backup_dirs().is_empty());
+    }
+
+    #[test]
+    fn copy_only_and_unmanaged_skills_are_rejected() {
+        let fixture = Fixture::without_shared_agent();
+        fixture.write_lock(&["beta"]);
+        let copy = fixture.copy(&fixture.claude, "beta");
+        let gamma = fixture.canonical_root.join("gamma");
+        fs::create_dir_all(&gamma).unwrap();
+        fs::write(gamma.join("SKILL.md"), "# gamma\n").unwrap();
+
+        let copy_only = fixture.detach("beta", "claude-code").unwrap_err();
+        assert_eq!(copy_only.code, crate::error::codes::SKILL_COPY_ONLY);
+        assert!(copy.join("SKILL.md").is_file());
+
+        let unmanaged = fixture.detach("gamma", "claude-code").unwrap_err();
+        assert_eq!(unmanaged.code, crate::error::codes::SKILL_UNMANAGED);
+        assert!(gamma.join("SKILL.md").is_file());
+
+        assert!(fixture.backup_dirs().is_empty());
+    }
+
+    #[test]
+    fn path_guards_reject_traversal_canonical_targets_and_symlinked_agent_roots() {
+        let fixture = Fixture::new();
+        let canonical = fixture.managed_skill("alpha");
+        fixture.link(&fixture.claude, "alpha", &canonical);
+
+        for skill in ["../alpha", "alpha/../../qoder/skills/alpha", "", ".hidden"] {
+            let error = fixture.detach(skill, "claude-code").unwrap_err();
+            assert_eq!(
+                error.code,
+                crate::error::codes::PATH_INVALID,
+                "skill id {skill:?}"
+            );
+        }
+        // A canonical target is rejected even when the agent root would make
+        // it look like a direct child.
+        let error = validate_target(&fixture.canonical_root, "alpha", &canonical).unwrap_err();
+        assert_eq!(error.code, crate::error::codes::PATH_INVALID);
+        assert!(error.detail.as_deref().unwrap().contains("canonical"));
+
+        // An agent skills root that is a symlink makes containment ambiguous.
+        let real = fixture._tmp.path().join("real-claude-skills");
+        fs::create_dir_all(real.join("alpha")).unwrap();
+        fs::write(real.join("alpha/SKILL.md"), "# copy\n").unwrap();
+        fs::remove_dir_all(&fixture.claude).unwrap();
+        symlink(&real, &fixture.claude).unwrap();
+        let error = fixture.detach("alpha", "claude-code").unwrap_err();
+        assert_eq!(error.code, crate::error::codes::PATH_INVALID);
+        assert!(error.detail.as_deref().unwrap().contains("符号链接"));
+        assert!(real.join("alpha/SKILL.md").is_file());
+    }
+
+    #[test]
+    fn corrupt_lock_blocks_detach_before_touching_the_attachment() {
+        let fixture = Fixture::new();
+        let canonical = fixture.managed_skill("alpha");
+        fixture.link(&fixture.claude, "alpha", &canonical);
+        fs::write(fixture.paths.lock_path(), "{not json").unwrap();
+
+        let error = fixture.detach("alpha", "claude-code").unwrap_err();
+
+        assert_eq!(error.code, crate::error::codes::LOCK_CORRUPT);
+        assert!(fixture.claude.join("alpha").is_symlink());
+        assert!(fixture.backup_dirs().is_empty());
+        assert!(fixture.log_lines().is_empty());
+    }
+
+    #[test]
+    fn backup_failure_aborts_copy_detach_before_deleting() {        let fixture = Fixture::without_shared_agent();
+        let canonical = fixture.managed_skill("alpha");
+        let copy = fixture.copy(&fixture.claude, "alpha");
+        let lock_before = fs::read(fixture.paths.lock_path()).unwrap();
+        fs::remove_dir_all(fixture.paths.backups_dir()).unwrap();
+        fs::write(fixture.paths.backups_dir(), b"not a directory").unwrap();
+
+        let error = fixture.detach("alpha", "claude-code").unwrap_err();
+
+        assert_eq!(error.code, crate::error::codes::BACKUP_FAILED);
+        assert!(copy.join("SKILL.md").is_file(), "copy must survive");
+        assert!(canonical.join("SKILL.md").is_file());
+        assert_eq!(fs::read(fixture.paths.lock_path()).unwrap(), lock_before);
+        let lines = fixture.log_lines();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0]["result"], "failed");
+        assert_eq!(lines[0]["error"]["code"], crate::error::codes::BACKUP_FAILED);
         assert!(lines[0].get("backupPath").is_none());
     }
 }

@@ -522,6 +522,10 @@ mod tests {
         assert!(detail.directory_mtime_epoch_ms.is_some());
         assert_eq!(detail.attachments.len(), 1);
         assert_eq!(detail.attachments[0].mode, inventory::AttachmentMode::Link);
+        assert!(
+            detail.attachments[0].detachable,
+            "managed canonical + non-universal link is detachable"
+        );
         assert_eq!(detail.skill_md.status, SkillMdStatus::Ok);
         assert_eq!(
             detail.skill_md.path.as_deref(),
