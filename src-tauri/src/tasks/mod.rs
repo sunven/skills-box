@@ -5,6 +5,7 @@ pub mod install;
 pub mod manager;
 pub mod parser;
 pub mod source;
+pub mod summary;
 pub mod uninstall;
 pub mod update;
 
@@ -12,12 +13,12 @@ pub use conflicts::{ConflictInfo, ConflictProvider, InventoryConflictProvider, f
 pub use install::{
     CliSkillResult, CliSkillStatus, INSTALL_TIMEOUT, InstallOutput, InstallPlan, InstallRequest,
     InstallTarget, InstallVerification, UNIVERSAL_AGENT_ID, install_command, parse_install_output,
-    snapshot_lock, validate_request, verify_install,
+    snapshot_lock, validate_request, validate_skill_name, validate_skill_names, verify_install,
 };
 pub use manager::{
     ActiveMutationInfo, CancelAck, EventSink, MutationPermit, PREVIEW_TIMEOUT, PreviewSkill,
-    PreviewSummary, ShutdownReport, TaskEvent, TaskId, TaskManager, TaskManagerConfig, TaskOverall,
-    TaskPhase, TaskResult, TaskSkillResult, TaskSkillStatus,
+    PreviewSummary, ShutdownReport, TaskAction, TaskEvent, TaskId, TaskManager, TaskManagerConfig,
+    TaskOverall, TaskPhase, TaskResult, TaskSkillResult, TaskSkillStatus,
 };
 pub use parser::{ParsedSkill, PreviewParseOutcome, parse_preview_output};
 pub use source::{SourceSpec, validate_source};
@@ -25,8 +26,8 @@ pub use uninstall::{
     UNINSTALL_TIMEOUT, UninstallPlan, plan_uninstall, uninstall_command, verify_uninstall,
 };
 pub use update::{
-    UPDATE_TIMEOUT, UpdateItem, UpdatePlan, UpdateSkip, UpdateVerification, overall_for_update,
-    plan_updates, retryable_names, update_command, verify_update,
+    UPDATE_TIMEOUT, UpdateItem, UpdatePlan, UpdateSkip, UpdateVerification, plan_updates,
+    retryable_names, update_command, verify_update,
 };
 
 #[cfg(test)]

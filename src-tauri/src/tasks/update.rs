@@ -28,7 +28,7 @@ use super::install::{
     INSTALL_TIMEOUT, InstallOutput, InstallPlan, InstallTarget, UNIVERSAL_AGENT_ID,
     install_command, parse_install_output, verify_install,
 };
-use super::manager::{TaskOverall, TaskSkillResult, TaskSkillStatus};
+use super::manager::{TaskSkillResult, TaskSkillStatus};
 use super::source::validate_source;
 
 #[derive(Debug, Clone)]
@@ -59,6 +59,7 @@ impl UpdateItem {
             skills: vec![self.name.clone()],
             agent_ids: self.agent_ids.clone(),
             targets: self.targets.clone(),
+            retry: false,
         }
     }
 
@@ -90,7 +91,6 @@ pub fn update_command(
     runtime: &crate::cli::CliRuntime,
     timeout: Duration,
 ) -> CommandSpec {
-    let _ = INSTALL_TIMEOUT;
     item.command(runtime, timeout)
 }
 
@@ -334,10 +334,7 @@ pub fn verify_update(
         }
         InstallOutput::Unrecognized(detail) => {
             return UpdateVerification {
-                result: Err(super::manager::classify_install_failure(
-                    &output.stderr,
-                    &detail,
-                )),
+                result: Err(AppError::cli_invalid_json(detail)),
                 warnings: Vec::new(),
             };
         }
@@ -398,39 +395,6 @@ pub fn verify_update(
     UpdateVerification {
         result,
         warnings: verification.warnings,
-    }
-}
-
-pub fn overall_for_update(results: &[TaskSkillResult], cancelled: bool) -> TaskOverall {
-    if cancelled {
-        return TaskOverall::Cancelled;
-    }
-    let updated = results
-        .iter()
-        .filter(|result| result.status == TaskSkillStatus::Updated)
-        .count();
-    if updated > 0 && updated == results.len() {
-        TaskOverall::Success
-    } else if updated > 0 {
-        TaskOverall::Partial
-    } else {
-        TaskOverall::Failed
-    }
-}
-
-pub fn summary_message(overall: TaskOverall, results: &[TaskSkillResult]) -> String {
-    let updated = results
-        .iter()
-        .filter(|result| result.status == TaskSkillStatus::Updated)
-        .count();
-    let unfinished = results.len().saturating_sub(updated);
-    match overall {
-        TaskOverall::Success => format!("更新完成：{updated} 个 skill 已更新。"),
-        TaskOverall::Partial => {
-            format!("部分更新完成：{updated} 个成功，{unfinished} 个未完成。")
-        }
-        TaskOverall::Failed => format!("更新失败：{unfinished} 个 skill 未完成。"),
-        TaskOverall::Cancelled => format!("更新已取消：{updated} 个已更新。"),
     }
 }
 
@@ -818,7 +782,10 @@ mod tests {
             },
         ];
         assert_eq!(retryable_names(&results), vec!["b".to_string()]);
-        assert_eq!(overall_for_update(&results, false), TaskOverall::Partial);
+        assert_eq!(
+            crate::tasks::summary::overall_for(&results, TaskSkillStatus::Updated),
+            crate::tasks::manager::TaskOverall::Partial
+        );
     }
 
     // ------------------------------------------------------------------

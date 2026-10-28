@@ -17,10 +17,12 @@ pub mod codes {
     pub const ENV_NPX_MISSING: &str = "env.npx_missing";
     pub const ENV_GIT_MISSING: &str = "env.git_missing";
     pub const ENV_CLI_MISSING: &str = "env.cli_missing";
+    pub const ENV_VERSION_UNSUPPORTED: &str = "env.version_unsupported";
     pub const LOCK_CORRUPT: &str = "lock.corrupt";
     pub const LOCK_UNSUPPORTED_VERSION: &str = "lock.unsupported_version";
     pub const LOCK_READ_FAILED: &str = "lock.read_failed";
     pub const SKILL_NOT_FOUND: &str = "skill.not_found";
+    pub const SKILL_AMBIGUOUS: &str = "skill.ambiguous";
     pub const SKILL_NOT_IN_SOURCE: &str = "skill.not_in_source";
     pub const SKILL_INVALID_NAME: &str = "skill.invalid_name";
     pub const SKILL_INSTALL_FAILED: &str = "skill.install_failed";
@@ -52,15 +54,27 @@ pub mod codes {
     pub const NETWORK_RATE_LIMITED: &str = "network.rate_limited";
     pub const NETWORK_ERROR: &str = "network.error";
     pub const CLI_FAILED: &str = "cli.failed";
+    pub const CLI_SPAWN_FAILED: &str = "cli.spawn_failed";
+    pub const CLI_TIMEOUT: &str = "cli.timeout";
+    pub const CLI_EXIT_NONZERO: &str = "cli.exit_nonzero";
+    pub const CLI_INVALID_JSON: &str = "cli.invalid_json";
+    pub const CLI_PARTIAL_FAILURE: &str = "cli.partial_failure";
+    pub const CLI_CANCELLED: &str = "cli.cancelled";
     pub const TASK_BUSY: &str = "task.busy";
     pub const TASK_NOT_FOUND: &str = "task.not_found";
     pub const TASK_CANNOT_CANCEL: &str = "task.cannot_cancel";
+    pub const TASK_CANCELLED: &str = "task.cancelled";
     pub const TASK_SHUTTING_DOWN: &str = "task.shutting_down";
+    pub const TASK_INTERNAL: &str = "task.internal";
     pub const SKILL_CONFLICT: &str = "skill.conflict";
     pub const BACKUP_FAILED: &str = "backup.failed";
+    pub const BASELINE_WRITE_FAILED: &str = "baseline.write_failed";
+    pub const BASELINE_CLEAR_FAILED: &str = "baseline.clear_failed";
+    pub const LOG_WRITE_FAILED: &str = "log.write_failed";
     pub const VERIFY_FAILED: &str = "verify.failed";
     pub const VERIFY_CANONICAL_MISSING: &str = "verify.canonical_missing";
     pub const VERIFY_LOCK_MISSING: &str = "verify.lock_missing";
+    pub const VERIFY_LOCK_MISMATCH: &str = "verify.lock_mismatch";
     pub const VERIFY_ATTACHMENT_MISSING: &str = "verify.attachment_missing";
     pub const VERIFY_ATTACHMENT_MODE: &str = "verify.attachment_mode";
     pub const VERIFY_COPY_FALLBACK: &str = "verify.copy_fallback";
@@ -177,6 +191,18 @@ impl AppError {
         .retryable(true)
     }
 
+    /// The pinned CLI answered with a different version than `skills@1.7.4`.
+    /// This is an environment incompatibility, not a transient network error.
+    pub fn env_version_unsupported(expected: &str, actual: &str) -> Self {
+        Self::new(
+            codes::ENV_VERSION_UNSUPPORTED,
+            format!("skills CLI 版本不受支持（期望 {expected}，实际 {actual}）。"),
+        )
+        .detail(format!("expected = {expected}, actual = {actual}"))
+        .hint("请确认 npx 解析到 skills@1.7.4；本应用固定使用该版本。")
+        .retryable(true)
+    }
+
     pub fn lock_corrupt(detail: impl Into<String>) -> Self {
         Self::new(codes::LOCK_CORRUPT, "Skill lock 文件损坏，无法解析。")
             .detail(detail)
@@ -210,6 +236,17 @@ impl AppError {
             format!("找不到 skill「{name}」的目录。"),
         )
         .hint("请刷新库存后重试；如果目录已被外部删除，列表会自动更新。")
+    }
+
+    /// The inventory id resolves to more than one physical location with
+    /// conflicting content, so no single folder can be chosen safely.
+    pub fn skill_ambiguous(name: &str, detail: impl Into<String>) -> Self {
+        Self::new(
+            codes::SKILL_AMBIGUOUS,
+            format!("skill「{name}」对应多个位置，无法安全判断操作目标。"),
+        )
+        .detail(detail)
+        .hint("请先手动整理该 skill 的 canonical 与 agent 副本，再刷新库存。")
     }
 
     pub fn skill_read_failed(detail: impl Into<String>) -> Self {
@@ -393,6 +430,43 @@ impl AppError {
             .retryable(true)
     }
 
+    pub fn cli_spawn_failed(detail: impl Into<String>) -> Self {
+        Self::new(codes::CLI_SPAWN_FAILED, "无法启动 skills CLI 进程。")
+            .detail(detail)
+            .hint("请检查 Node、npx 与 git 环境，然后重新检测。")
+            .retryable(true)
+    }
+
+    pub fn cli_timeout(what: &str, timeout: std::time::Duration) -> Self {
+        Self::new(
+            codes::CLI_TIMEOUT,
+            format!("{what}超时（{} 秒）。", timeout.as_secs()),
+        )
+        .hint("请检查网络或磁盘状态，然后重试。")
+        .retryable(true)
+    }
+
+    pub fn cli_exit_nonzero(detail: impl Into<String>) -> Self {
+        Self::new(codes::CLI_EXIT_NONZERO, "skills CLI 以非零退出码结束。")
+            .detail(detail)
+            .hint("请查看详细信息中的 CLI 输出，处理后重试。")
+            .retryable(true)
+    }
+
+    pub fn cli_invalid_json(detail: impl Into<String>) -> Self {
+        Self::new(codes::CLI_INVALID_JSON, "skills CLI 返回了无法解析的 JSON。")
+            .detail(detail)
+            .hint("CLI 输出格式可能已变化；请确认固定使用 skills@1.7.4 后重试。")
+            .retryable(true)
+    }
+
+    pub fn cli_partial_failure(detail: impl Into<String>) -> Self {
+        Self::new(codes::CLI_PARTIAL_FAILURE, "skills CLI 报告部分操作失败。")
+            .detail(detail)
+            .hint("请查看详细信息中的剩余文件或条目标识，处理后重试。")
+            .retryable(true)
+    }
+
     pub fn task_busy() -> Self {
         Self::new(codes::TASK_BUSY, "已有变更任务正在执行，请等待完成后再试。").retryable(true)
     }
@@ -407,6 +481,11 @@ impl AppError {
             "任务已结束或已进入不可取消阶段。",
         )
         .retryable(false)
+    }
+
+    /// Terminal marker for a task the user cancelled.
+    pub fn task_cancelled() -> Self {
+        Self::new(codes::TASK_CANCELLED, "任务已取消。").retryable(true)
     }
 
     pub fn task_shutting_down() -> Self {
@@ -556,6 +635,17 @@ impl AppError {
         .retryable(true)
     }
 
+    /// The CLI wrote a lock entry whose source differs from the requested one.
+    pub fn verify_lock_mismatch(name: &str, expected: &str, actual: &str) -> Self {
+        Self::new(
+            codes::VERIFY_LOCK_MISMATCH,
+            format!("skill「{name}」的 lock 来源与本次操作不一致。"),
+        )
+        .detail(format!("期望 {expected}，实际 {actual}"))
+        .hint("请检查 CLI 输出；确认来源无误后可重新安装以修正 lock。")
+        .retryable(true)
+    }
+
     pub fn verify_attachment_missing(name: &str, agent: &str, path: &std::path::Path) -> Self {
         Self::new(
             codes::VERIFY_ATTACHMENT_MISSING,
@@ -663,6 +753,40 @@ mod tests {
         assert_eq!(AppError::env_npx_missing("x").code, codes::ENV_NPX_MISSING);
         assert_eq!(AppError::env_git_missing("x").code, codes::ENV_GIT_MISSING);
         assert_eq!(AppError::env_cli_missing("x").code, codes::ENV_CLI_MISSING);
+        assert_eq!(
+            AppError::env_version_unsupported("1.7.4", "1.8.0").code,
+            codes::ENV_VERSION_UNSUPPORTED
+        );
+        assert_eq!(AppError::cli_failed("x").code, codes::CLI_FAILED);
+        assert_eq!(
+            AppError::cli_spawn_failed("x").code,
+            codes::CLI_SPAWN_FAILED
+        );
+        assert_eq!(
+            AppError::cli_timeout("安装", std::time::Duration::from_secs(9)).code,
+            codes::CLI_TIMEOUT
+        );
+        assert_eq!(
+            AppError::cli_exit_nonzero("x").code,
+            codes::CLI_EXIT_NONZERO
+        );
+        assert_eq!(
+            AppError::cli_invalid_json("x").code,
+            codes::CLI_INVALID_JSON
+        );
+        assert_eq!(
+            AppError::cli_partial_failure("x").code,
+            codes::CLI_PARTIAL_FAILURE
+        );
+        assert_eq!(AppError::task_cancelled().code, codes::TASK_CANCELLED);
+        assert_eq!(
+            AppError::skill_ambiguous("alpha", "x").code,
+            codes::SKILL_AMBIGUOUS
+        );
+        assert_eq!(
+            AppError::verify_lock_mismatch("alpha", "acme/skills", "other/repo").code,
+            codes::VERIFY_LOCK_MISMATCH
+        );
         assert_eq!(AppError::lock_corrupt("bad json").code, codes::LOCK_CORRUPT);
         assert_eq!(
             AppError::lock_unsupported_version(2).code,

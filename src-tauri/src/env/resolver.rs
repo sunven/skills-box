@@ -841,8 +841,8 @@ impl EnvResolver {
                 } else {
                     let detail = format!("期望 skills@{pinned}，实际输出 {version:?}");
                     (
-                        error_status(detail.clone()),
-                        Some(AppError::env_cli_missing(detail)),
+                        error_status(detail),
+                        Some(AppError::env_version_unsupported(&pinned, &version)),
                     )
                 }
             }
@@ -1568,6 +1568,46 @@ mod tests {
             .find(|issue| issue.code == codes::ENV_CLI_MISSING)
             .unwrap();
         assert!(issue.detail.as_deref().unwrap().contains("network down"));
+    }
+
+    #[tokio::test]
+    async fn cli_version_mismatch_maps_to_env_version_unsupported() {
+        let mut fixture = Fixture::new();
+        let node = make_node_bin(&fixture._tmp.path().join("fnm/aliases/default/bin"));
+        let git = make_git(&fixture._tmp.path().join("git-bin"));
+        fixture.search.fnm_bases = vec![fixture._tmp.path().join("fnm")];
+        fixture.search.git_candidates = vec![git.clone()];
+
+        let executor = Arc::new(
+            ScriptedExecutor::new()
+                .expect(
+                    &node.display().to_string(),
+                    &["--version"],
+                    ScriptedResponse::ok("v24.15.0\n"),
+                )
+                .expect(
+                    "npx",
+                    &["skills@1.7.4"],
+                    ScriptedResponse::ok("1.8.0\n"),
+                )
+                .expect("npx", &["--version"], ScriptedResponse::ok("11.12.1\n"))
+                .expect(
+                    "git",
+                    &["--version"],
+                    ScriptedResponse::ok("git version 2.54.0\n"),
+                ),
+        );
+        let report = fixture.resolver(executor).resolve().await.unwrap();
+
+        assert_eq!(report.cli.status, ToolState::Error);
+        assert!(!report.cli.available);
+        assert!(issue_codes(&report).contains(&codes::ENV_VERSION_UNSUPPORTED));
+        let issue = report
+            .issues
+            .iter()
+            .find(|issue| issue.code == codes::ENV_VERSION_UNSUPPORTED)
+            .unwrap();
+        assert!(issue.detail.as_deref().unwrap().contains("1.8.0"));
     }
 
     #[tokio::test]

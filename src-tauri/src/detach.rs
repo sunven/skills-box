@@ -42,7 +42,7 @@ pub struct DetachResult {
     /// Display names of the attachments that remain after this detach.
     pub remaining_agents: Vec<String>,
     /// True when no agent attachment remains; the skill is still managed.
-    pub unmounted: bool,
+    pub unattached: bool,
 }
 
 pub fn detach_agent(
@@ -52,6 +52,9 @@ pub fn detach_agent(
     agent_id: &str,
 ) -> Result<DetachResult, AppError> {
     security::validate_skill_id(skill_id)?;
+    // Same metacharacter rule as install/update; detach never spawns a shell,
+    // but a malicious on-disk folder name must not reach the log or argv paths.
+    super::tasks::install::validate_skill_name(skill_id)?;
     // A corrupt or non-v3 lock blocks every mutation, including detach.
     LockFile::read(&paths.lock_path())?;
 
@@ -110,7 +113,7 @@ pub fn detach_agent(
         canonical_path: paths.display(&canonical),
         backup_path: None,
         log_path,
-        unmounted: remaining_agents.is_empty(),
+        unattached: remaining_agents.is_empty(),
         remaining_agents,
     };
 
@@ -584,7 +587,7 @@ mod tests {
         );
         assert_eq!(result.canonical_path, fixture.paths.display(&canonical));
         assert!(result.backup_path.is_none());
-        assert!(!result.unmounted);
+        assert!(!result.unattached);
         assert_eq!(
             result.remaining_agents,
             vec!["Qoder".to_string(), "Codex".to_string()]
@@ -634,7 +637,7 @@ mod tests {
         let result = fixture.detach("alpha", "claude-code").unwrap();
 
         assert_eq!(result.mode, AttachmentMode::Copy);
-        assert!(result.unmounted, "no other agent is attached");
+        assert!(result.unattached, "no other agent is attached");
         assert!(result.remaining_agents.is_empty());
         assert!(
             fs::symlink_metadata(&copy).is_err(),
@@ -806,6 +809,14 @@ mod tests {
                 "skill id {skill:?}"
             );
         }
+        for skill in ["alpha;rm", "$(id)", "`id`", "a|b", "a*b"] {
+            let error = fixture.detach(skill, "claude-code").unwrap_err();
+            assert_eq!(
+                error.code,
+                crate::error::codes::SKILL_INVALID_NAME,
+                "skill id {skill:?}"
+            );
+        }
         // A canonical target is rejected even when the agent root would make
         // it look like a direct child.
         let error = validate_target(&fixture.canonical_root, "alpha", &canonical).unwrap_err();
@@ -825,14 +836,14 @@ mod tests {
     }
 
     #[test]
-    fn detaching_the_last_attachment_reports_unmounted_and_keeps_the_managed_skill() {
+    fn detaching_the_last_attachment_reports_unattached_and_keeps_the_managed_skill() {
         let fixture = Fixture::without_shared_agent();
         let canonical = fixture.managed_skill("alpha");
         fixture.link(&fixture.claude, "alpha", &canonical);
 
         let result = fixture.detach("alpha", "claude-code").unwrap();
 
-        assert!(result.unmounted);
+        assert!(result.unattached);
         assert!(result.remaining_agents.is_empty());
         let detail = crate::detail::read_with_agents(&fixture.paths, &fixture.agents, "alpha")
             .expect("detail after detach");

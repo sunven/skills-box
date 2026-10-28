@@ -15,7 +15,6 @@ const FORWARDED_VARS: &[&str] = &[
     "USER",
     "LOGNAME",
     "TMPDIR",
-    "SHELL",
     "XDG_CONFIG_HOME",
     "CLAUDE_CONFIG_DIR",
     "CODEX_HOME",
@@ -152,7 +151,6 @@ mod tests {
             "USER",
             "LOGNAME",
             "TMPDIR",
-            "SHELL",
             "LANG",
             "XDG_CONFIG_HOME",
             "CLAUDE_CONFIG_DIR",
@@ -162,6 +160,10 @@ mod tests {
                 "{forwarded} should be forwarded"
             );
         }
+        assert!(
+            !env.contains_key("SHELL"),
+            "SHELL must not be forwarded to the child"
+        );
         for excluded in [
             "GITHUB_TOKEN",
             "GH_TOKEN",

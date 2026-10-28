@@ -79,6 +79,28 @@ pub fn normalize_absolute(path: &Path) -> Option<PathBuf> {
     Some(normalized)
 }
 
+/// Turn an untrusted value (skill name, agent id, task id) into one safe path
+/// component. Separators, traversal, control and shell-relevant characters are
+/// replaced; the result is bounded in length and never empty, `.` or `..`.
+/// Shared by backup directory names and the pre-install lock snapshot.
+pub fn safe_component(value: &str) -> String {
+    let mut safe: String = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .take(80)
+        .collect();
+    if safe.is_empty() || safe == "." || safe == ".." {
+        safe = "skill".to_string();
+    }
+    safe
+}
+
 /// Verify `candidate` is inside one of the allowed roots.
 ///
 /// Both the lexical path and the resolved path (when it exists) must be inside
@@ -253,6 +275,25 @@ mod tests {
         symlink(&real, &root).unwrap();
         let roots = vec![AllowedRoot::canonical(root.clone())];
         ensure_allowed(&root.join("alpha"), &roots).unwrap();
+    }
+
+    #[test]
+    fn safe_component_keeps_plain_names_and_neutralizes_path_input() {
+        for (input, expected) in [
+            ("alpha", "alpha"),
+            ("skill_1.2", "skill_1.2"),
+            ("../evil", ".._evil"),
+            ("a/b", "a_b"),
+            ("a\\b", "a_b"),
+            ("a;rm -rf", "a_rm_-rf"),
+            ("", "skill"),
+            (".", "skill"),
+            ("..", "skill"),
+        ] {
+            assert_eq!(safe_component(input), expected, "{input:?}");
+        }
+        let long = "a".repeat(200);
+        assert_eq!(safe_component(&long).len(), 80);
     }
 
     #[test]

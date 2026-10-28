@@ -14,7 +14,7 @@ use crate::AppState;
 use crate::detach::DetachResult;
 use crate::detail::{self, OpenTarget, SkillDetail};
 use crate::env::EnvReport;
-use crate::error::AppError;
+use crate::error::{AppError, codes};
 use crate::inventory::InventorySnapshot;
 use crate::paths::AppPaths;
 use crate::tasks::{ActiveMutationInfo, CancelAck, EventSink, InstallRequest, TaskEvent, TaskId};
@@ -55,7 +55,7 @@ pub async fn get_inventory(state: State<'_, AppState>) -> Result<InventorySnapsh
         tauri::async_runtime::spawn_blocking(move || crate::inventory::read(&paths))
             .await
             .map_err(|error| {
-                AppError::new("skill.read_failed", "读取库存失败。")
+                AppError::new(codes::SKILL_READ_FAILED, "读取库存失败。")
                     .detail(error.to_string())
                     .retryable(true)
             })?
@@ -73,7 +73,7 @@ pub async fn get_skill_detail(
         tauri::async_runtime::spawn_blocking(move || crate::detail::read(&paths, &skill_id))
             .await
             .map_err(|error| {
-                AppError::new("skill.read_failed", "读取 skill 详情失败。")
+                AppError::new(codes::SKILL_READ_FAILED, "读取 skill 详情失败。")
                     .detail(error.to_string())
                     .retryable(true)
             })?
@@ -150,7 +150,7 @@ async fn open_target(
         })
         .await
         .map_err(|error| {
-            AppError::new("skill.read_failed", "解析 skill 路径失败。")
+            AppError::new(codes::SKILL_READ_FAILED, "解析 skill 路径失败。")
                 .detail(error.to_string())
                 .retryable(true)
         })?
