@@ -28,7 +28,7 @@ use super::conflicts::find_conflicts;
 use super::manager::{TaskOverall, TaskSkillResult, TaskSkillStatus};
 use super::source::validate_source;
 
-pub const INSTALL_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+pub const INSTALL_TIMEOUT: Duration = crate::timeouts::WRITE_TIMEOUT;
 pub const UNIVERSAL_AGENT_ID: &str = "universal";
 
 #[derive(Debug, Clone, Deserialize)]

@@ -28,3 +28,24 @@ pub use update::{
     UPDATE_TIMEOUT, UpdateItem, UpdatePlan, UpdateSkip, UpdateVerification, overall_for_update,
     plan_updates, retryable_names, update_command, verify_update,
 };
+
+#[cfg(test)]
+mod timeout_matrix_tests {
+    use super::*;
+    use crate::timeouts::{PREVIEW_TIMEOUT as SPEC_PREVIEW, WRITE_TIMEOUT as SPEC_WRITE};
+    use std::time::Duration;
+
+    #[test]
+    fn all_mutations_use_the_15_minute_write_cap() {
+        assert_eq!(INSTALL_TIMEOUT, Duration::from_secs(900));
+        assert_eq!(INSTALL_TIMEOUT, SPEC_WRITE);
+        assert_eq!(UPDATE_TIMEOUT, INSTALL_TIMEOUT);
+        assert_eq!(UNINSTALL_TIMEOUT, INSTALL_TIMEOUT);
+    }
+
+    #[test]
+    fn preview_uses_the_60_second_read_only_cap() {
+        assert_eq!(PREVIEW_TIMEOUT, Duration::from_secs(60));
+        assert_eq!(PREVIEW_TIMEOUT, SPEC_PREVIEW);
+    }
+}

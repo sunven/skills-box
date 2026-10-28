@@ -33,7 +33,7 @@ use super::update as update_task;
 pub type TaskId = String;
 pub type EventSink = Arc<dyn Fn(TaskEvent) + Send + Sync>;
 
-pub const PREVIEW_TIMEOUT: Duration = Duration::from_secs(60);
+pub const PREVIEW_TIMEOUT: Duration = crate::timeouts::PREVIEW_TIMEOUT;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]

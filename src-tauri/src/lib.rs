@@ -14,6 +14,7 @@ pub mod paths;
 pub mod process;
 pub mod security;
 pub mod tasks;
+pub mod timeouts;
 pub mod update;
 
 use std::sync::Arc;

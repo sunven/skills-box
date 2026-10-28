@@ -25,6 +25,7 @@ pub mod codes {
     pub const SKILL_INVALID_NAME: &str = "skill.invalid_name";
     pub const SKILL_INSTALL_FAILED: &str = "skill.install_failed";
     pub const SKILL_READ_FAILED: &str = "skill.read_failed";
+    pub const SKILL_READ_TIMEOUT: &str = "skill.read_timeout";
     pub const SKILL_UNMANAGED: &str = "skill.unmanaged";
     pub const SKILL_COPY_ONLY: &str = "skill.copy_only";
     pub const SKILL_SOURCE_UNRESOLVABLE: &str = "skill.source_unresolvable";
@@ -215,6 +216,15 @@ impl AppError {
             .detail(detail)
             .hint("请检查该 skill 目录的权限后重试。")
             .retryable(true)
+    }
+
+    pub fn skill_read_timeout(what: &str, timeout: std::time::Duration) -> Self {
+        Self::new(
+            codes::SKILL_READ_TIMEOUT,
+            format!("读取{what}超时（{} 秒）。", timeout.as_secs()),
+        )
+        .hint("请检查磁盘或网络状态，然后重新加载。")
+        .retryable(true)
     }
 
     pub fn skill_unmanaged(name: &str) -> Self {

@@ -25,7 +25,7 @@ use github::{GitHubTreeClient, RemoteTree, ReqwestGitHubClient};
 pub const UPDATE_CHECK_CACHE_TTL_MS: u64 = 6 * 60 * 60 * 1000;
 pub const UPDATE_CHECK_MAX_SOURCES: usize = 20;
 pub const UPDATE_CHECK_CONCURRENCY: usize = 4;
-pub const UPDATE_CHECK_DEADLINE_MS: u64 = 30_000;
+pub const UPDATE_CHECK_DEADLINE_MS: u64 = crate::timeouts::READ_TIMEOUT_MS;
 
 pub trait Clock: Send + Sync {
     fn now_epoch_ms(&self) -> u64;
