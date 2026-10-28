@@ -1,6 +1,12 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import type { EnvReport, InventorySnapshot, SkillDetail } from "./types";
+import type {
+  CancelAck,
+  EnvReport,
+  InventorySnapshot,
+  SkillDetail,
+  TaskEvent,
+} from "./types";
 
 /**
  * The single IPC gateway. Components never call `invoke` directly; keeping the
@@ -35,6 +41,23 @@ export function openExternalUrl(url: string): Promise<void> {
     return Promise.reject(new Error("只允许通过 opener 打开 https 链接。"));
   }
   return openUrl(url);
+}
+
+/**
+ * Start a read-only preview task. Events are ordered per task through a
+ * dedicated channel; invalid sources reject before a task exists.
+ */
+export function startPreview(
+  source: string,
+  onEvent: (event: TaskEvent) => void,
+): Promise<string> {
+  const channel = new Channel<TaskEvent>();
+  channel.onmessage = onEvent;
+  return invoke<string>("start_preview", { source, onEvent: channel });
+}
+
+export function cancelTask(taskId: string): Promise<CancelAck> {
+  return invoke<CancelAck>("cancel_task", { taskId });
 }
 
 /** Normalize a rejected Tauri command into an `AppError`-shaped object. */

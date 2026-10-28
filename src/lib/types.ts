@@ -79,6 +79,72 @@ export type UpdateState =
 export type AttachmentMode = "link" | "copy" | "native" | "broken";
 export type LocalModification = "clean" | "modified" | "unknown";
 
+export type TaskPhase =
+  | "preparing"
+  | "cloning"
+  | "running_cli"
+  | "verifying"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export type TaskOverall = "success" | "partial" | "failed" | "cancelled";
+
+export type TaskSkillStatus = "installed" | "skipped" | "failed";
+
+export interface TaskSkillResult {
+  name: string;
+  status: TaskSkillStatus;
+  error?: AppError;
+}
+
+export interface SkillConflict {
+  management: ManagementState;
+  source: string | null;
+}
+
+export interface PreviewSkill {
+  name: string;
+  description: string;
+  group?: string;
+  conflict?: SkillConflict;
+}
+
+export interface PreviewSummary {
+  source: string;
+  skills: PreviewSkill[];
+  rawOutput?: string;
+  parseFailed: boolean;
+  noSkills: boolean;
+}
+
+export interface TaskResult {
+  overall: TaskOverall;
+  skills: TaskSkillResult[];
+  warnings: AppError[];
+  backupPath?: string;
+  logPath?: string;
+  finishedAtEpochMs: number;
+  preview?: PreviewSummary;
+}
+
+export interface TaskEvent {
+  taskId: string;
+  phase: TaskPhase;
+  message: string;
+  skill?: string;
+  completed?: number;
+  total?: number;
+  result?: TaskResult;
+  error?: AppError;
+}
+
+export interface CancelAck {
+  taskId: string;
+  accepted: boolean;
+  message?: string;
+}
+
 export interface AgentAttachment {
   agentId: string;
   agentName: string;

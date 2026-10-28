@@ -1,5 +1,6 @@
 pub mod agents;
 pub mod baseline;
+pub mod cli;
 pub mod commands;
 pub mod detail;
 pub mod env;
@@ -9,20 +10,36 @@ pub mod lock;
 pub mod paths;
 pub mod process;
 pub mod security;
+pub mod tasks;
 
+use std::sync::Arc;
+
+use cli::CliRuntimeProvider;
 use env::EnvironmentService;
 use paths::AppPaths;
+use process::tokio_executor::TokioExecutor;
+use tasks::{InventoryConflictProvider, TaskManager, TaskManagerConfig};
 
 pub struct AppState {
     pub paths: AppPaths,
-    pub environment: EnvironmentService,
+    pub environment: Arc<EnvironmentService>,
+    pub tasks: TaskManager,
 }
 
 impl AppState {
     pub fn new(paths: AppPaths) -> Self {
+        let environment = Arc::new(EnvironmentService::from_process(paths.clone()));
+        let runtime: Arc<dyn CliRuntimeProvider> = environment.clone();
+        let tasks = TaskManager::new(
+            runtime,
+            Arc::new(TokioExecutor),
+            Arc::new(InventoryConflictProvider::new(paths.clone())),
+            TaskManagerConfig::default(),
+        );
         Self {
-            environment: EnvironmentService::from_process(paths.clone()),
             paths,
+            environment,
+            tasks,
         }
     }
 }
@@ -38,7 +55,9 @@ pub fn run() {
             commands::get_inventory,
             commands::get_skill_detail,
             commands::open_skill_folder,
-            commands::open_skill_md
+            commands::open_skill_md,
+            commands::start_preview,
+            commands::cancel_task
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

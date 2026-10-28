@@ -8,10 +8,14 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use semver::Version;
 
 use crate::agents::{DetectionContext, detect_agents};
+use crate::cli::CliRuntime;
 use crate::error::AppError;
 use crate::paths::AppPaths;
-use crate::process::{CommandSpec, ExecError, ProcessExecutor, tokio_executor::TokioExecutor};
+use crate::process::{
+    CancelToken, CommandSpec, ExecError, ProcessExecutor, tokio_executor::TokioExecutor,
+};
 
+use super::ResolvedEnvironment;
 use super::child_env::{ChildEnvParams, build_child_env};
 use super::lock_health::{self, LockStatus};
 use super::{CliStatus, EnvReport, PathSource, ToolState, ToolStatus};
@@ -139,6 +143,12 @@ impl EnvResolver {
     }
 
     pub async fn resolve(&self) -> Result<EnvReport, AppError> {
+        self.resolve_detailed()
+            .await
+            .map(|resolved| resolved.report)
+    }
+
+    pub async fn resolve_detailed(&self) -> Result<ResolvedEnvironment, AppError> {
         self.paths
             .ensure_dirs()
             .map_err(|error| AppError::path_app_data(error.to_string()))?;
@@ -204,7 +214,30 @@ impl EnvResolver {
         }
 
         let mutations_enabled = issues.is_empty();
-        Ok(EnvReport {
+        let cli_runtime = if cli.available {
+            match (&node_result.node, &node_result.npx) {
+                (Some(node), Some(npx)) => {
+                    let node_dir = node.path.parent().unwrap_or(Path::new("/")).to_path_buf();
+                    let git_dir = git
+                        .info
+                        .as_ref()
+                        .and_then(|info| info.path.parent().map(Path::to_path_buf));
+                    Some(CliRuntime {
+                        npx_path: npx.path.clone(),
+                        node_dir: node_dir.clone(),
+                        git_dir: git_dir.clone(),
+                        cwd: self.paths.cli_cwd(),
+                        home: self.paths.home().to_path_buf(),
+                        env: self.base_child_env(Some(&node_dir), git_dir.as_deref()),
+                        pinned_version: self.config.pinned_cli_version.clone(),
+                    })
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let report = EnvReport {
             ready: mutations_enabled,
             mutations_enabled,
             path_source: node_result.source.unwrap_or(PathSource::Unresolved),
@@ -219,6 +252,10 @@ impl EnvResolver {
             warnings,
             checked_at_epoch_ms: epoch_ms(),
             pinned_cli_version: self.config.pinned_cli_version.clone(),
+        };
+        Ok(ResolvedEnvironment {
+            report,
+            cli_runtime,
         })
     }
 
@@ -325,7 +362,7 @@ impl EnvResolver {
             self.config.login_shell_timeout,
         );
 
-        match self.executor.run(spec).await {
+        match self.executor.run(spec, CancelToken::new()).await {
             Ok(output) if output.success() => match parse_login_path(&output.stdout) {
                 Some(dirs) if !dirs.is_empty() => LoginShellOutcome {
                     dirs,
@@ -480,7 +517,7 @@ impl EnvResolver {
             self.base_child_env(None, None),
             self.config.probe_timeout,
         );
-        match self.executor.run(spec).await {
+        match self.executor.run(spec, CancelToken::new()).await {
             Ok(output) if output.success() => match parse_node_version(output.stdout_trimmed()) {
                 Some(version) if version >= self.config.min_node_version => {
                     NodeProbe::Ok(format!("v{version}"))
@@ -511,7 +548,7 @@ impl EnvResolver {
             self.base_child_env(Some(node_dir), None),
             self.config.probe_timeout,
         );
-        match self.executor.run(spec).await {
+        match self.executor.run(spec, CancelToken::new()).await {
             Ok(output) if output.success() => first_nonempty_line(&output.stdout)
                 .map(str::to_string)
                 .ok_or_else(|| "npx --version 输出为空".to_string()),
@@ -681,7 +718,7 @@ impl EnvResolver {
                 self.base_child_env(None, None),
                 self.config.probe_timeout,
             );
-            match self.executor.run(spec).await {
+            match self.executor.run(spec, CancelToken::new()).await {
                 Ok(output) if output.success() => {
                     let version = parse_git_version(output.stdout_trimmed())
                         .unwrap_or_else(|| output.stdout_trimmed().to_string());
@@ -784,7 +821,7 @@ impl EnvResolver {
             detail: Some(detail),
         };
 
-        match self.executor.run(spec).await {
+        match self.executor.run(spec, CancelToken::new()).await {
             Ok(output) if output.success() => {
                 let version = first_nonempty_line(&output.stdout)
                     .map(str::to_string)
@@ -1738,6 +1775,49 @@ mod tests {
         let refreshed = service.get(true).await.unwrap();
         assert_eq!(executor.call_count(), 8, "refresh must re-run every probe");
         assert_eq!(refreshed.node.version.as_deref(), Some("v24.15.0"));
+    }
+
+    #[tokio::test]
+    async fn detailed_resolution_exposes_absolute_cli_runtime() {
+        let mut fixture = Fixture::new();
+        let node = make_node_bin(&fixture._tmp.path().join("fnm/aliases/default/bin"));
+        let git = make_git(&fixture._tmp.path().join("git-bin"));
+        fixture.search.fnm_bases = vec![fixture._tmp.path().join("fnm")];
+        fixture.search.git_candidates = vec![git.clone()];
+
+        let executor = Arc::new(standard_executor(
+            &node, "v24.15.0", "11.12.1", "1.7.4", &git,
+        ));
+        let resolved = fixture.resolver(executor).resolve_detailed().await.unwrap();
+        let runtime = resolved.cli_runtime.expect("CLI runtime should be present");
+        let node_dir = node.parent().unwrap();
+
+        assert_eq!(runtime.npx_path, node_dir.join("npx"));
+        assert_eq!(runtime.node_dir, node_dir);
+        assert_eq!(runtime.git_dir.as_deref(), git.parent());
+        assert_eq!(runtime.cwd, fixture.paths.cli_cwd());
+        assert_eq!(runtime.home, fixture.paths.home());
+        assert_eq!(runtime.pinned_version, "1.7.4");
+        assert_eq!(runtime.env["CI"], "true");
+        assert!(
+            runtime.env["PATH"].starts_with(&format!("{}:", node_dir.display())),
+            "node bin must lead PATH"
+        );
+        assert_eq!(resolved.report.pinned_cli_version, "1.7.4");
+    }
+
+    #[tokio::test]
+    async fn cli_runtime_surfaces_the_environment_issue_when_unavailable() {
+        let fixture = Fixture::new();
+        let empty = fixture._tmp.path().join("empty");
+        fs::create_dir_all(&empty).unwrap();
+        let executor = Arc::new(login_rule(
+            ScriptedExecutor::new(),
+            &empty.display().to_string(),
+        ));
+        let service = super::super::EnvironmentService::new(fixture.resolver(executor));
+        let error = service.cli_runtime().await.unwrap_err();
+        assert_eq!(error.code, codes::ENV_NODE_MISSING);
     }
 
     #[test]

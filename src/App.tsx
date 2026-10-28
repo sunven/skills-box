@@ -5,6 +5,7 @@ import { DetailPane } from "./components/detail-pane";
 import { EnvironmentBanner } from "./components/environment-banner";
 import { EnvironmentMetrics } from "./components/environment-metrics";
 import { FilterSidebar } from "./components/filter-sidebar";
+import { InstallWizard } from "./components/install-wizard";
 import { LockErrorScreen } from "./components/lock-error-screen";
 import { SkillListPane } from "./components/skill-list-pane";
 import { useEnvironmentQuery, useRecheckEnvironment } from "./hooks/use-environment";
@@ -44,6 +45,7 @@ function App() {
   const [sort, setSort] = useState<SortKey>("recent");
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [anomaliesOpen, setAnomaliesOpen] = useState(false);
+  const [installOpen, setInstallOpen] = useState(false);
 
   const skills = useMemo(() => snapshot?.skills ?? [], [snapshot]);
   const filters = useMemo<InventoryFilters>(
@@ -106,6 +108,7 @@ function App() {
         mutationsEnabled={mutationsEnabled}
         rechecking={recheck.isPending}
         onRecheck={handleRecheck}
+        onInstall={() => setInstallOpen(true)}
       />
       {lockError ? (
         <LockErrorScreen
@@ -159,6 +162,11 @@ function App() {
         anomalies={snapshot?.anomalies ?? EMPTY_ANOMALIES}
         open={anomaliesOpen}
         onClose={() => setAnomaliesOpen(false)}
+      />
+      <InstallWizard
+        open={installOpen}
+        inventorySkills={skills}
+        onClose={() => setInstallOpen(false)}
       />
     </div>
   );
