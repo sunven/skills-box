@@ -65,8 +65,10 @@ pub fn run() {
             commands::open_skill_md,
             commands::start_preview,
             commands::start_install,
+            commands::start_update,
             commands::check_updates,
-            commands::cancel_task
+            commands::cancel_task,
+            commands::reveal_app_data
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
