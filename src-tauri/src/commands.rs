@@ -13,6 +13,7 @@ use crate::env::EnvReport;
 use crate::error::AppError;
 use crate::inventory::InventorySnapshot;
 use crate::tasks::{CancelAck, EventSink, TaskEvent, TaskId};
+use crate::update::UpdateCheckReport;
 
 #[tauri::command]
 pub async fn get_environment(
@@ -106,6 +107,16 @@ pub async fn start_preview(
         let _ = on_event.send(event);
     });
     state.tasks.start_preview(&source, sink).await
+}
+
+/// Read-only update check. Rust reads lock v3 and GitHub trees directly; no
+/// `skills check` / `skills update` process is ever spawned.
+#[tauri::command]
+pub async fn check_updates(
+    state: State<'_, AppState>,
+    skill_ids: Option<Vec<String>>,
+) -> Result<UpdateCheckReport, AppError> {
+    state.updates.check(skill_ids).await
 }
 
 #[tauri::command]

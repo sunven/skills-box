@@ -33,6 +33,9 @@ pub mod codes {
     pub const SOURCE_UNSUPPORTED_PROVIDER: &str = "source.unsupported_provider";
     pub const SOURCE_PREVIEW_FAILED: &str = "source.preview_failed";
     pub const NETWORK_FETCH_FAILED: &str = "network.fetch_failed";
+    pub const NETWORK_OFFLINE: &str = "network.offline";
+    pub const NETWORK_RATE_LIMITED: &str = "network.rate_limited";
+    pub const NETWORK_ERROR: &str = "network.error";
     pub const CLI_FAILED: &str = "cli.failed";
     pub const TASK_BUSY: &str = "task.busy";
     pub const TASK_NOT_FOUND: &str = "task.not_found";
@@ -266,6 +269,35 @@ impl AppError {
         .retryable(true)
     }
 
+    /// Update checks never degrade to "up to date": a failed source keeps its
+    /// previous result and surfaces this error instead.
+    pub fn network_offline(detail: impl Into<String>) -> Self {
+        Self::new(
+            codes::NETWORK_OFFLINE,
+            "无法连接 GitHub，已保留上次检查结果。",
+        )
+        .detail(detail)
+        .hint("请检查网络或代理设置，然后再次手动检查更新。")
+        .retryable(true)
+    }
+
+    pub fn network_rate_limited(detail: impl Into<String>) -> Self {
+        Self::new(
+            codes::NETWORK_RATE_LIMITED,
+            "GitHub 检查额度已用尽，已保留上次检查结果。",
+        )
+        .detail(detail)
+        .hint("请等待额度恢复后再次手动检查更新。")
+        .retryable(true)
+    }
+
+    pub fn network_error(detail: impl Into<String>) -> Self {
+        Self::new(codes::NETWORK_ERROR, "检查更新失败，已保留上次检查结果。")
+            .detail(detail)
+            .hint("请确认仓库仍公开可访问，然后再次手动检查更新。")
+            .retryable(true)
+    }
+
     pub fn cli_failed(detail: impl Into<String>) -> Self {
         Self::new(codes::CLI_FAILED, "skills CLI 执行失败。")
             .detail(detail)
@@ -365,6 +397,12 @@ mod tests {
             codes::PATH_OUTSIDE_ALLOWED_ROOT
         );
         assert_eq!(AppError::open_failed("x").code, codes::OPEN_FAILED);
+        assert_eq!(AppError::network_offline("x").code, codes::NETWORK_OFFLINE);
+        assert_eq!(
+            AppError::network_rate_limited("x").code,
+            codes::NETWORK_RATE_LIMITED
+        );
+        assert_eq!(AppError::network_error("x").code, codes::NETWORK_ERROR);
     }
 
     #[test]
