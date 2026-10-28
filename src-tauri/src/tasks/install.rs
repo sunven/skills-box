@@ -455,6 +455,7 @@ pub fn verify_install(
             name: name.clone(),
             status,
             error,
+            backup_path: None,
         });
     }
     verification
