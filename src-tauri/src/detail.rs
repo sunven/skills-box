@@ -185,6 +185,16 @@ pub fn read_with_agents(
             agent_name: attachment.agent_name.clone(),
             path: paths.display(&attachment.path),
             mode: attachment.mode,
+            detachable: inventory::attachment_is_detachable(
+                located.management,
+                located.canonical_path.is_some(),
+                agents
+                    .iter()
+                    .find(|agent| agent.id == attachment.agent_id)
+                    .map(|agent| agent.universal)
+                    .unwrap_or(false),
+                attachment.mode,
+            ),
         })
         .collect();
 
@@ -512,6 +522,10 @@ mod tests {
         assert!(detail.directory_mtime_epoch_ms.is_some());
         assert_eq!(detail.attachments.len(), 1);
         assert_eq!(detail.attachments[0].mode, inventory::AttachmentMode::Link);
+        assert!(
+            detail.attachments[0].detachable,
+            "managed canonical + non-universal link is detachable"
+        );
         assert_eq!(detail.skill_md.status, SkillMdStatus::Ok);
         assert_eq!(
             detail.skill_md.path.as_deref(),
@@ -535,6 +549,7 @@ mod tests {
         assert_eq!(json["ref"], "main");
         assert_eq!(json["skillMd"]["status"], "ok");
         assert_eq!(json["attachments"][0]["agentId"], "claude-code");
+        assert_eq!(json["attachments"][0]["detachable"], true);
         assert!(json["directoryMtimeEpochMs"].as_u64().unwrap() > 0);
     }
 

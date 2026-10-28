@@ -395,12 +395,31 @@ impl TaskManager {
         })
     }
 
+    /// Run a serialized native detach. The single-writer permit is acquired
+    /// before any filesystem scan, so detach cannot interleave with an
+    /// install/update/uninstall. No CLI process is ever spawned here.
+    pub async fn detach_agent(
+        &self,
+        skill_id: String,
+        agent_id: String,
+    ) -> Result<crate::detach::DetachResult, AppError> {
+        let permit = self.try_acquire_mutation()?;
+        let paths = self.inner.paths.clone();
+        tokio::task::spawn_blocking(move || {
+            // Keep the write slot for the whole scan + unlink/delete.
+            let _permit = permit;
+            let agents = crate::inventory::detected_agent_dirs(&paths);
+            crate::detach::detach_agent(&paths, &agents, &skill_id, &agent_id)
+        })
+        .await
+        .map_err(|error| AppError::agent_detach_failed(format!("断链任务失败：{error}")))?
+    }
+
     /// Plan and run a serialized update task. The selected ids are the
     /// frontend's update candidates; Rust independently re-checks management,
     /// canonical presence and lock source resolution. `skills update` and
     /// `skills check` are never spawned: every skill is rebuilt as `add`.
-    pub async fn start_update(
-        &self,
+    pub async fn start_update(        &self,
         skill_ids: Vec<String>,
         on_event: EventSink,
     ) -> Result<TaskId, AppError> {
@@ -2541,5 +2560,54 @@ mod tests {
             .await
             .expect("first install should finish");
         assert_eq!(final_event.phase, TaskPhase::Completed);
+    }
+
+    #[tokio::test]
+    async fn detach_is_serialized_and_never_spawns_a_cli() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        fs::create_dir_all(home.join(".qoder")).unwrap();
+        let paths = AppPaths::new(&home, tmp.path().join("app-data"));
+        paths.ensure_dirs().unwrap();
+        let canonical = paths.canonical_skills_dir().join("alpha");
+        fs::create_dir_all(&canonical).unwrap();
+        fs::write(canonical.join("SKILL.md"), "# alpha\n").unwrap();
+        let skills_dir = home.join(".qoder/skills");
+        fs::create_dir_all(&skills_dir).unwrap();
+        std::os::unix::fs::symlink(&canonical, skills_dir.join("alpha")).unwrap();
+        write_pre_lock(&paths, &["alpha"]);
+        let lock_before = fs::read(paths.lock_path()).unwrap();
+
+        // A hanging runtime proves detach never waits for Node/npx discovery.
+        let executor = Arc::new(ScriptedExecutor::new());
+        let manager = TaskManager::new(
+            Arc::new(HangingRuntime),
+            executor.clone(),
+            Arc::new(FakeConflicts::default()),
+            paths.clone(),
+            TaskManagerConfig::default(),
+        );
+
+        let permit = manager.try_acquire_mutation().unwrap();
+        let error = manager
+            .detach_agent("alpha".to_string(), "qoder".to_string())
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, codes::TASK_BUSY);
+        assert!(skills_dir.join("alpha").is_symlink());
+        drop(permit);
+
+        let result = manager
+            .detach_agent("alpha".to_string(), "qoder".to_string())
+            .await
+            .unwrap();
+        assert_eq!(result.skill_id, "alpha");
+        assert_eq!(result.agent_id, "qoder");
+        assert_eq!(result.agent_name, "Qoder");
+        assert_eq!(result.mode, crate::inventory::AttachmentMode::Link);
+        assert!(fs::symlink_metadata(skills_dir.join("alpha")).is_err());
+        assert!(canonical.join("SKILL.md").is_file());
+        assert_eq!(fs::read(paths.lock_path()).unwrap(), lock_before);
+        assert_eq!(executor.call_count(), 0, "detach must not spawn a CLI");
     }
 }

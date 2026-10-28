@@ -140,6 +140,7 @@ describe("inventory list", () => {
         agentName: agent.displayName,
         path: `~/.agent-${agent.id}/skills/many-mounts`,
         mode: "link" as const,
+        detachable: true,
       })),
     });
     mockCommands(makeSnapshot({ skills: [skill], agents }));

@@ -60,6 +60,24 @@ pub struct AgentAttachment {
     pub agent_name: String,
     pub path: String,
     pub mode: AttachmentMode,
+    /// True only when `detach_agent` can remove this attachment: managed skill
+    /// with a canonical folder, a non-universal agent, and a link/copy mount.
+    /// Native, broken, copy-only and unmanaged rows stay read-only.
+    pub detachable: bool,
+}
+
+/// Detach eligibility shared by the inventory and detail read models. The
+/// backend re-validates the same rules before touching the disk.
+pub fn attachment_is_detachable(
+    management: ManagementState,
+    has_canonical: bool,
+    universal: bool,
+    mode: AttachmentMode,
+) -> bool {
+    management == ManagementState::Managed
+        && has_canonical
+        && !universal
+        && matches!(mode, AttachmentMode::Link | AttachmentMode::Copy)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -166,6 +184,10 @@ pub fn read_with_agents(
 ) -> Result<InventorySnapshot, AppError> {
     let catalog = build_catalog(paths, agents)?;
     let baseline_store = BaselineStore::new(paths);
+    let universal_by_agent: BTreeMap<&str, bool> = agents
+        .iter()
+        .map(|agent| (agent.id.as_str(), agent.universal))
+        .collect();
     let mut skills = Vec::new();
     let mut stale = Vec::new();
 
@@ -225,6 +247,15 @@ pub fn read_with_agents(
                             agent_name: attachment.agent_name.clone(),
                             path: paths.display(&attachment.path),
                             mode: attachment.mode,
+                            detachable: attachment_is_detachable(
+                                management,
+                                canonical_path.is_some(),
+                                universal_by_agent
+                                    .get(attachment.agent_id.as_str())
+                                    .copied()
+                                    .unwrap_or(false),
+                                attachment.mode,
+                            ),
                         })
                         .collect()
                 })
@@ -738,6 +769,14 @@ mod tests {
             .collect()
     }
 
+    fn detachable(skill: &InventorySkill) -> Vec<(String, bool)> {
+        skill
+            .attachments
+            .iter()
+            .map(|attachment| (attachment.agent_id.clone(), attachment.detachable))
+            .collect()
+    }
+
     #[test]
     fn classifies_managed_copy_only_unmanaged_agent_only_and_stale() {
         let fixture = Fixture::new();
@@ -785,6 +824,16 @@ mod tests {
                 ("codex".to_string(), AttachmentMode::Native),
             ]
         );
+        assert_eq!(
+            detachable(alpha),
+            vec![
+                ("claude-code".to_string(), true),
+                // Universal-by-catalog agents read canonical; an extra legacy
+                // link is not a detachable mount.
+                ("gemini-cli".to_string(), false),
+                ("codex".to_string(), false),
+            ]
+        );
 
         let beta = skill(&snapshot, "beta");
         assert_eq!(beta.management, ManagementState::CopyOnly);
@@ -793,6 +842,11 @@ mod tests {
         assert_eq!(
             modes(beta),
             vec![("claude-code".to_string(), AttachmentMode::Copy)]
+        );
+        assert_eq!(
+            detachable(beta),
+            vec![("claude-code".to_string(), false)],
+            "copy-only skills have no detach action"
         );
 
         let gamma = skill(&snapshot, "gamma");
@@ -811,6 +865,11 @@ mod tests {
         assert_eq!(
             modes(delta),
             vec![("claude-code".to_string(), AttachmentMode::Copy)]
+        );
+        assert_eq!(
+            detachable(delta),
+            vec![("claude-code".to_string(), false)],
+            "unmanaged agent-only skills have no detach action"
         );
 
         let epsilon = skill(&snapshot, "epsilon");
@@ -930,6 +989,10 @@ mod tests {
             "claude-code"
         );
         assert_eq!(json["skills"][0]["attachments"][0]["mode"], "link");
+        assert_eq!(
+            json["skills"][0]["attachments"][0]["detachable"], true,
+            "managed link on a non-universal agent"
+        );
         assert_eq!(json["agents"][2]["shared"], true);
         assert!(json["anomalies"]["stale"]["count"].is_number());
         assert!(json["generatedAtEpochMs"].is_number());

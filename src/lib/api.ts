@@ -3,6 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import type {
   AppDataKind,
   CancelAck,
+  DetachResult,
   EnvReport,
   InstallRequest,
   InventorySnapshot,
@@ -100,6 +101,18 @@ export function startUpdate(
   const channel = new Channel<TaskEvent>();
   channel.onmessage = onEvent;
   return invoke<string>("start_update", { skillIds, onEvent: channel });
+}
+
+/**
+ * Detach one agent's attachment natively (no CLI). Rust re-validates the
+ * managed/canonical condition, rejects universal/native/broken rows, scans
+ * copy dependencies by realpath and backs up copy attachments before deletion.
+ */
+export function detachAgent(
+  skillId: string,
+  agentId: string,
+): Promise<DetachResult> {
+  return invoke<DetachResult>("detach_agent", { skillId, agentId });
 }
 
 /** Open a fixed app-data directory; the frontend never supplies a path. */

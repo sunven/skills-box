@@ -211,13 +211,17 @@ describe("skill detail panel", () => {
       pane.getByText("0123456789abcdef0123456789abcdef01234567"),
     ).toBeInTheDocument();
 
-    // Attachment rows are read-only: modes are shown, no detach action.
+    // Attachment rows expose detach only for detachable link/copy mounts;
+    // native/broken rows stay read-only.
     expect(pane.getAllByTestId("detail-agent-row")).toHaveLength(3);
     expect(pane.getByText("链接")).toBeInTheDocument();
     expect(pane.getByText("共享")).toBeInTheDocument();
     expect(pane.getByText("链接目标缺失；只读提示，不自动修复。")).toBeInTheDocument();
     expect(
-      pane.queryByRole("button", { name: /断开|^更新$|卸载/ }),
+      pane.getByRole("button", { name: "断开 Claude Code" }),
+    ).toBeInTheDocument();
+    expect(
+      pane.queryByRole("button", { name: /^更新$|卸载|断开 Codex|断开 Gemini/ }),
     ).toBeNull();
     expect(
       pane.getByRole("button", { name: "检查更新" }),
@@ -505,7 +509,7 @@ describe("skill detail panel", () => {
               : skillId === "beta"
                 ? "lock hash 与当前目录不一致；首次扫描已记录基线但尚未校验。"
                 : null,
-          attachments: [attachment("claude-code", "copy")],
+          attachments: [attachment("claude-code", "copy", undefined, false)],
           warnings: [],
         }),
     });

@@ -3,6 +3,7 @@ pub mod backup;
 pub mod baseline;
 pub mod cli;
 pub mod commands;
+pub mod detach;
 pub mod detail;
 pub mod env;
 pub mod error;
@@ -66,6 +67,7 @@ pub fn run() {
             commands::start_preview,
             commands::start_install,
             commands::start_update,
+            commands::detach_agent,
             commands::check_updates,
             commands::cancel_task,
             commands::reveal_app_data
