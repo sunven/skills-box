@@ -7,6 +7,7 @@ import type {
   InventorySnapshot,
   SkillDetail,
   TaskEvent,
+  UpdateCheckReport,
 } from "./types";
 
 /**
@@ -73,6 +74,17 @@ export function startInstall(
   const channel = new Channel<TaskEvent>();
   channel.onmessage = onEvent;
   return invoke<string>("start_install", { request, onEvent: channel });
+}
+
+/**
+ * Read-only update check. Rust reads the lock and GitHub trees directly; the
+ * skills CLI is never spawned for checking. No automatic/background callers —
+ * only explicit user actions may invoke this.
+ */
+export function checkUpdates(skillIds?: string[]): Promise<UpdateCheckReport> {
+  return invoke<UpdateCheckReport>("check_updates", {
+    skillIds: skillIds ?? null,
+  });
 }
 
 /** Normalize a rejected Tauri command into an `AppError`-shaped object. */

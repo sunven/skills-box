@@ -201,6 +201,50 @@ export interface InventorySnapshot {
   generatedAtEpochMs: number;
 }
 
+export type UpdateSourceStatus = "ok" | "cached" | "error" | "skipped";
+
+export interface UpdateSkillResult {
+  name: string;
+  source: string | null;
+  ref: string | null;
+  lockHash: string | null;
+  remoteHash: string | null;
+  state: UpdateState;
+  cached: boolean;
+  lastSuccessAtEpochMs: number | null;
+  previousState: UpdateState | null;
+  error: AppError | null;
+  note: string | null;
+}
+
+export interface UpdateSourceResult {
+  source: string;
+  ref: string | null;
+  status: UpdateSourceStatus;
+  skillCount: number;
+  cached: boolean;
+  truncated: boolean;
+  lastSuccessAtEpochMs: number | null;
+  error: AppError | null;
+  note: string | null;
+}
+
+export interface UpdateCheckReport {
+  skills: UpdateSkillResult[];
+  sources: UpdateSourceResult[];
+  checkedAtEpochMs: number;
+  lastSuccessAtEpochMs: number | null;
+  skippedSourceCount: number;
+  cachedSourceCount: number;
+  warnings: string[];
+}
+
+/** Anomaly summary extended with read-only update anomalies. */
+export interface AnomalyView extends AnomalySummary {
+  pathMissing: AnomalyGroup;
+  checkFailed: AnomalyGroup;
+}
+
 export type SkillMdStatus = "ok" | "missing" | "too_large" | "unreadable";
 
 export interface SkillMd {

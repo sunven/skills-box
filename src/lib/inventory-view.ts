@@ -101,7 +101,9 @@ export function isAnomalyRow(skill: InventorySkill): boolean {
   return (
     skill.management === "unmanaged" ||
     hasBrokenAttachment(skill) ||
-    hasLocalModificationWarning(skill)
+    hasLocalModificationWarning(skill) ||
+    skill.update === "path_missing" ||
+    skill.update === "error"
   );
 }
 
@@ -125,10 +127,10 @@ export function matchesStatus(
   }
 }
 
-export function filterSkills(
-  skills: InventorySkill[],
+export function filterSkills<T extends InventorySkill>(
+  skills: T[],
   filters: InventoryFilters,
-): InventorySkill[] {
+): T[] {
   const query = filters.query.trim().toLocaleLowerCase();
   return skills.filter((skill) => {
     if (
@@ -153,10 +155,10 @@ export function filterSkills(
   });
 }
 
-export function sortSkills(
-  skills: InventorySkill[],
+export function sortSkills<T extends InventorySkill>(
+  skills: T[],
   sort: SortKey,
-): InventorySkill[] {
+): T[] {
   return [...skills].sort((left, right) => {
     if (sort === "name") {
       return left.name.localeCompare(right.name);
@@ -179,11 +181,11 @@ export function sortSkills(
   });
 }
 
-export function selectVisibleSkills(
-  skills: InventorySkill[],
+export function selectVisibleSkills<T extends InventorySkill>(
+  skills: T[],
   filters: InventoryFilters,
   sort: SortKey = "recent",
-): InventorySkill[] {
+): T[] {
   return sortSkills(filterSkills(skills, filters), sort);
 }
 

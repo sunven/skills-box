@@ -11,6 +11,7 @@ pub mod paths;
 pub mod process;
 pub mod security;
 pub mod tasks;
+pub mod update;
 
 use std::sync::Arc;
 
@@ -19,11 +20,13 @@ use env::EnvironmentService;
 use paths::AppPaths;
 use process::tokio_executor::TokioExecutor;
 use tasks::{InventoryConflictProvider, TaskManager, TaskManagerConfig};
+use update::UpdateService;
 
 pub struct AppState {
     pub paths: AppPaths,
     pub environment: Arc<EnvironmentService>,
     pub tasks: TaskManager,
+    pub updates: UpdateService,
 }
 
 impl AppState {
@@ -38,6 +41,7 @@ impl AppState {
             TaskManagerConfig::default(),
         );
         Self {
+            updates: UpdateService::new(paths.clone()),
             paths,
             environment,
             tasks,
@@ -59,6 +63,7 @@ pub fn run() {
             commands::open_skill_md,
             commands::start_preview,
             commands::start_install,
+            commands::check_updates,
             commands::cancel_task
         ])
         .run(tauri::generate_context!())

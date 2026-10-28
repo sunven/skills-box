@@ -8,8 +8,10 @@ import { FilterSidebar } from "./components/filter-sidebar";
 import { InstallWizard } from "./components/install-wizard";
 import { LockErrorScreen } from "./components/lock-error-screen";
 import { SkillListPane } from "./components/skill-list-pane";
+import { UpdateAllDialog } from "./components/update-all-dialog";
 import { useEnvironmentQuery, useRecheckEnvironment } from "./hooks/use-environment";
 import { useInventoryQuery } from "./hooks/use-inventory";
+import { useCheckUpdates, useUpdateReportQuery } from "./hooks/use-updates";
 import { asAppError } from "./lib/api";
 import {
   computeAgentOptions,
@@ -21,6 +23,11 @@ import {
   type SortKey,
   type StatusFilter,
 } from "./lib/inventory-view";
+import {
+  applyUpdateReport,
+  computeUpdateSummary,
+  withUpdateAnomalies,
+} from "./lib/update-view";
 import type { AnomalySummary } from "./lib/types";
 
 const EMPTY_ANOMALIES: AnomalySummary = {
@@ -35,8 +42,11 @@ function App() {
   const environment = useEnvironmentQuery();
   const recheck = useRecheckEnvironment();
   const inventoryQuery = useInventoryQuery();
+  const updateReportQuery = useUpdateReportQuery();
+  const checkUpdates = useCheckUpdates();
   const report = environment.data;
   const snapshot = inventoryQuery.data;
+  const updateData = updateReportQuery.data ?? null;
 
   const [query, setQuery] = useState("");
   const [source, setSource] = useState("all");
@@ -46,8 +56,17 @@ function App() {
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [anomaliesOpen, setAnomaliesOpen] = useState(false);
   const [installOpen, setInstallOpen] = useState(false);
+  const [updateAllOpen, setUpdateAllOpen] = useState(false);
 
-  const skills = useMemo(() => snapshot?.skills ?? [], [snapshot]);
+  const skills = useMemo(
+    () => applyUpdateReport(snapshot?.skills ?? [], updateData),
+    [snapshot, updateData],
+  );
+  const anomalies = useMemo(
+    () => withUpdateAnomalies(snapshot?.anomalies ?? EMPTY_ANOMALIES, skills),
+    [snapshot, skills],
+  );
+  const updateSummary = useMemo(() => computeUpdateSummary(skills), [skills]);
   const filters = useMemo<InventoryFilters>(
     () => ({ query, source, agent, status }),
     [query, source, agent, status],
@@ -76,6 +95,7 @@ function App() {
   }, [visibleSkills, selectedName]);
 
   const inventoryError = asAppError(inventoryQuery.error);
+  const updateError = asAppError(checkUpdates.error);
   const lockError =
     inventoryError && inventoryError.code?.startsWith("lock.")
       ? inventoryError
@@ -84,6 +104,10 @@ function App() {
 
   const handleRecheck = () => {
     recheck.mutate();
+  };
+
+  const handleCheckUpdates = (skillIds?: string[]) => {
+    checkUpdates.mutate(skillIds);
   };
 
   const handleRetryInventory = () => {
@@ -109,6 +133,13 @@ function App() {
         rechecking={recheck.isPending}
         onRecheck={handleRecheck}
         onInstall={() => setInstallOpen(true)}
+        updateReport={updateData}
+        updateError={updateError}
+        checkingUpdates={checkUpdates.isPending}
+        updatesEnabled={!lockError}
+        onCheckUpdates={() => handleCheckUpdates()}
+        onUpdateAll={() => setUpdateAllOpen(true)}
+        updateCandidateCount={updateSummary.candidates.length}
       />
       {lockError ? (
         <LockErrorScreen
@@ -141,7 +172,7 @@ function App() {
             <SkillListPane
               totalSkills={skills.length}
               visibleSkills={visibleSkills}
-              anomalies={snapshot?.anomalies ?? EMPTY_ANOMALIES}
+              anomalies={anomalies}
               query={query}
               sort={sort}
               selectedName={selectedSkill?.name ?? null}
@@ -154,14 +185,24 @@ function App() {
               onOpenAnomalies={() => setAnomaliesOpen(true)}
               onRetry={handleRetryInventory}
             />
-            <DetailPane skill={selectedSkill} />
+            <DetailPane
+              skill={selectedSkill}
+              updateResult={selectedSkill?.updateResult}
+              checkingUpdates={checkUpdates.isPending}
+              onCheckUpdates={handleCheckUpdates}
+            />
           </main>
         </>
       )}
       <AnomalyDialog
-        anomalies={snapshot?.anomalies ?? EMPTY_ANOMALIES}
+        anomalies={anomalies}
         open={anomaliesOpen}
         onClose={() => setAnomaliesOpen(false)}
+      />
+      <UpdateAllDialog
+        open={updateAllOpen}
+        skills={skills}
+        onClose={() => setUpdateAllOpen(false)}
       />
       <InstallWizard
         open={installOpen}
