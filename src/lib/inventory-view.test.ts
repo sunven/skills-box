@@ -191,6 +191,36 @@ describe("inventory view model", () => {
     expect(skills.map((s) => s.name)).toEqual(before);
   });
 
+  it("filters and sorts a 100-skill inventory within the 50 ms budget", () => {
+    const skills = Array.from({ length: 100 }, (_, index) =>
+      makeSkill({
+        name: `perf-skill-${String(index).padStart(3, "0")}`,
+        description: `Performance fixture skill ${index}`,
+        source: `acme/source-${String(index % 20).padStart(2, "0")}`,
+        updatedAt: `2026-02-${String((index % 28) + 1).padStart(2, "0")}T04:05:06.000Z`,
+        attachments: [attachment("claude-code"), attachment("qoder")],
+      }),
+    );
+    const filters = {
+      ...defaults,
+      query: "perf-skill",
+      agent: "claude-code",
+    };
+    // Warm up the JIT before taking the median of seven runs.
+    expect(selectVisibleSkills(skills, filters, "name")).toHaveLength(100);
+    const samples: number[] = [];
+    for (let run = 0; run < 7; run += 1) {
+      const started = performance.now();
+      const visible = selectVisibleSkills(skills, filters, "name");
+      samples.push(performance.now() - started);
+      expect(visible).toHaveLength(100);
+    }
+    samples.sort((left, right) => left - right);
+    const median = samples[Math.floor(samples.length / 2)];
+    console.log(`100-skill filter/sort median: ${median.toFixed(2)}ms`);
+    expect(median).toBeLessThan(50);
+  });
+
   it("formats the updated time and uses — when absent", () => {
     expect(formatUpdatedAt("2026-10-05T08:00:00.000Z")).toBe("2026-10-05");
     expect(formatUpdatedAt(null)).toBe("—");
