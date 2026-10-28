@@ -845,8 +845,7 @@ mod tests {
         // Fixture lock hashes are not the real folder tree hashes, so managed
         // rows start as "本地改动?" until a verified baseline exists.
         assert_eq!(
-            snapshot.anomalies.modified.count,
-            4,
+            snapshot.anomalies.modified.count, 4,
             "{:?}",
             snapshot.anomalies.modified
         );
@@ -906,10 +905,7 @@ mod tests {
             LocalModification::Modified
         );
         assert_eq!(second.anomalies.modified.count, 1);
-        assert_eq!(
-            second.anomalies.modified.examples,
-            vec!["alpha · 本地改动"]
-        );
+        assert_eq!(second.anomalies.modified.examples, vec!["alpha · 本地改动"]);
     }
 
     #[test]

@@ -133,15 +133,14 @@ impl BaselineStore {
             verified,
             recorded_at_epoch_ms: epoch_ms(),
         };
-        let serialized = serde_json::to_string_pretty(&baseline)
-            .map_err(|error| AppError::new("baseline.write_failed", "无法序列化基线指纹。").detail(error.to_string()))?;
+        let serialized = serde_json::to_string_pretty(&baseline).map_err(|error| {
+            AppError::new("baseline.write_failed", "无法序列化基线指纹。").detail(error.to_string())
+        })?;
 
         let destination = self.baseline_path(name);
-        let temp = self.dir.join(format!(
-            ".tmp-{}-{}",
-            std::process::id(),
-            epoch_nanos()
-        ));
+        let temp = self
+            .dir
+            .join(format!(".tmp-{}-{}", std::process::id(), epoch_nanos()));
         fs::write(&temp, serialized).map_err(|error| {
             let _ = fs::remove_file(&temp);
             AppError::new("baseline.write_failed", "无法写入基线指纹。")
@@ -208,9 +207,7 @@ impl BaselineStore {
         };
 
         let path_key = path.to_string_lossy();
-        let existing = self
-            .load(name)
-            .filter(|baseline| baseline.path == path_key);
+        let existing = self.load(name).filter(|baseline| baseline.path == path_key);
 
         let lock_matches = compare_lock_hash(path, lock_hash);
         let mut baseline_created = false;
@@ -252,16 +249,12 @@ impl BaselineStore {
 
         let detail = match state {
             LocalModification::Clean => None,
-            LocalModification::Modified => {
-                Some("当前文件与基线指纹不一致。".to_string())
-            }
+            LocalModification::Modified => Some("当前文件与基线指纹不一致。".to_string()),
             LocalModification::Unknown => {
                 let reason = match lock_hash {
                     None => "没有 lock 条目可比对",
                     Some("") => "lock 未记录可比较的 hash",
-                    Some(hash) if is_git_tree_hash(hash) => {
-                        "lock hash 与当前目录不一致"
-                    }
+                    Some(hash) if is_git_tree_hash(hash) => "lock hash 与当前目录不一致",
                     Some(_) => "lock hash 不是 40 位 Git tree hash，无法可靠比对",
                 };
                 Some(format!(
@@ -459,8 +452,7 @@ pub fn is_git_tree_hash(hash: &str) -> bool {
 }
 
 fn read_sorted(dir: &Path) -> io::Result<Vec<fs::DirEntry>> {
-    let mut entries = fs::read_dir(dir)?
-        .collect::<Result<Vec<_>, io::Error>>()?;
+    let mut entries = fs::read_dir(dir)?.collect::<Result<Vec<_>, io::Error>>()?;
     entries.sort_by_key(|entry| entry.file_name());
     Ok(entries)
 }
@@ -469,7 +461,10 @@ fn read_sorted(dir: &Path) -> io::Result<Vec<fs::DirEntry>> {
 /// VCS/generated directories, and Finder noise.
 fn ignored_entry(name: &str, is_dir: bool) -> bool {
     if is_dir {
-        matches!(name, ".git" | "node_modules" | "__pycache__" | "__pypackages__")
+        matches!(
+            name,
+            ".git" | "node_modules" | "__pycache__" | "__pypackages__"
+        )
     } else {
         matches!(name, "metadata.json" | ".DS_Store")
     }
@@ -770,10 +765,7 @@ mod tests {
             let path = store.baseline_path(name);
             assert_eq!(path.parent().unwrap(), Path::new("/tmp/baselines"));
         }
-        assert_ne!(
-            store.baseline_path("a/b"),
-            store.baseline_path("a_b")
-        );
+        assert_ne!(store.baseline_path("a/b"), store.baseline_path("a_b"));
     }
 
     #[test]
@@ -787,9 +779,6 @@ mod tests {
     fn app_paths_store_uses_the_baselines_directory() {
         let (tmp, _store, _skill) = fixture();
         let paths = AppPaths::new(tmp.path().join("home"), tmp.path().join("app-data"));
-        assert_eq!(
-            BaselineStore::new(&paths).dir(),
-            paths.baselines_dir()
-        );
+        assert_eq!(BaselineStore::new(&paths).dir(), paths.baselines_dir());
     }
 }

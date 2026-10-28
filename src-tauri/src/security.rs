@@ -84,10 +84,7 @@ pub fn normalize_absolute(path: &Path) -> Option<PathBuf> {
 /// Both the lexical path and the resolved path (when it exists) must be inside
 /// an allowed root. An agent skills root that is a symlink is rejected before
 /// any containment check.
-pub fn ensure_allowed(
-    candidate: &Path,
-    roots: &[AllowedRoot],
-) -> Result<AllowedRoot, AppError> {
+pub fn ensure_allowed(candidate: &Path, roots: &[AllowedRoot]) -> Result<AllowedRoot, AppError> {
     let normalized = normalize_absolute(candidate)
         .ok_or_else(|| AppError::path_invalid("路径必须是绝对路径。"))?;
 
@@ -99,9 +96,7 @@ pub fn ensure_allowed(
                 .unwrap_or(false)
         })
         .cloned()
-        .ok_or_else(|| {
-            AppError::path_outside_allowed_root(candidate.display().to_string())
-        })?;
+        .ok_or_else(|| AppError::path_outside_allowed_root(candidate.display().to_string()))?;
 
     if root.kind == RootKind::Agent {
         let metadata = fs::symlink_metadata(&root.path).map_err(|error| {
@@ -120,10 +115,7 @@ pub fn ensure_allowed(
 
     if candidate.exists() {
         let resolved = fs::canonicalize(candidate).map_err(|error| {
-            AppError::path_invalid(format!(
-                "无法解析路径 {}：{error}",
-                candidate.display()
-            ))
+            AppError::path_invalid(format!("无法解析路径 {}：{error}", candidate.display()))
         })?;
         let physically_allowed = roots.iter().any(|root| {
             fs::canonicalize(&root.path)
@@ -160,12 +152,7 @@ mod tests {
     use super::*;
     use std::os::unix::fs::symlink;
 
-    fn setup() -> (
-        tempfile::TempDir,
-        PathBuf,
-        PathBuf,
-        Vec<AllowedRoot>,
-    ) {
+    fn setup() -> (tempfile::TempDir, PathBuf, PathBuf, Vec<AllowedRoot>) {
         let tmp = tempfile::tempdir().unwrap();
         let canonical = tmp.path().join("home/.agents/skills");
         let agent = tmp.path().join("home/.claude/skills");
@@ -183,7 +170,13 @@ mod tests {
     #[test]
     fn rejects_path_traversal_and_separators_in_skill_ids() {
         for id in [
-            "", ".", "..", "../alpha", "alpha/beta", "alpha\\beta", ".hidden",
+            "",
+            ".",
+            "..",
+            "../alpha",
+            "alpha/beta",
+            "alpha\\beta",
+            ".hidden",
             "alpha\0beta",
         ] {
             let error = validate_skill_id(id).unwrap_err();
@@ -198,7 +191,9 @@ mod tests {
     fn accepts_children_of_canonical_and_agent_roots() {
         let (_tmp, canonical, agent, roots) = setup();
         assert_eq!(
-            ensure_allowed(&canonical.join("alpha"), &roots).unwrap().kind,
+            ensure_allowed(&canonical.join("alpha"), &roots)
+                .unwrap()
+                .kind,
             RootKind::Canonical
         );
         assert_eq!(
@@ -213,17 +208,11 @@ mod tests {
     fn rejects_paths_outside_allowed_roots() {
         let (tmp, canonical, _agent, roots) = setup();
         let error = ensure_allowed(&tmp.path().join("elsewhere/alpha"), &roots).unwrap_err();
-        assert_eq!(
-            error.code,
-            crate::error::codes::PATH_OUTSIDE_ALLOWED_ROOT
-        );
+        assert_eq!(error.code, crate::error::codes::PATH_OUTSIDE_ALLOWED_ROOT);
 
         let traversal = canonical.join("../evil");
         let error = ensure_allowed(&traversal, &roots).unwrap_err();
-        assert_eq!(
-            error.code,
-            crate::error::codes::PATH_OUTSIDE_ALLOWED_ROOT
-        );
+        assert_eq!(error.code, crate::error::codes::PATH_OUTSIDE_ALLOWED_ROOT);
     }
 
     #[test]
@@ -251,10 +240,7 @@ mod tests {
         symlink(&outside, agent.join("escaped")).unwrap();
 
         let error = ensure_allowed(&agent.join("escaped"), &roots).unwrap_err();
-        assert_eq!(
-            error.code,
-            crate::error::codes::PATH_OUTSIDE_ALLOWED_ROOT
-        );
+        assert_eq!(error.code, crate::error::codes::PATH_OUTSIDE_ALLOWED_ROOT);
     }
 
     #[test]

@@ -4,11 +4,11 @@
 //! `SKILL.md` (1 MiB). The frontend never supplies a path: open commands resolve
 //! the skill folder on the server and pass it through path guards.
 
+use serde::Serialize;
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
-use serde::Serialize;
 
 use crate::baseline::{BaselineStore, LocalModification};
 use crate::error::AppError;
@@ -157,10 +157,7 @@ pub fn read_with_agents(
 
     for attachment in &located.attachments {
         if attachment.mode == inventory::AttachmentMode::Broken {
-            push_unique(
-                &mut warnings,
-                format!("断链：{}", attachment.agent_name),
-            );
+            push_unique(&mut warnings, format!("断链：{}", attachment.agent_name));
         }
     }
 
@@ -245,7 +242,8 @@ fn read_skill_md(directory: &Path, display_directory: Option<String>) -> SkillMd
                 );
             }
         };
-        let directory_resolved = fs::canonicalize(directory).unwrap_or_else(|_| directory.to_path_buf());
+        let directory_resolved =
+            fs::canonicalize(directory).unwrap_or_else(|_| directory.to_path_buf());
         if !resolved.starts_with(&directory_resolved) {
             return SkillMd::unreadable(
                 display_path,
@@ -279,15 +277,8 @@ fn read_skill_md(directory: &Path, display_directory: Option<String>) -> SkillMd
         }
     };
     let mut bytes = Vec::new();
-    if let Err(error) = file
-        .take(SKILL_MD_LIMIT_BYTES + 1)
-        .read_to_end(&mut bytes)
-    {
-        return SkillMd::unreadable(
-            display_path,
-            error.to_string(),
-            Some(metadata.len()),
-        );
+    if let Err(error) = file.take(SKILL_MD_LIMIT_BYTES + 1).read_to_end(&mut bytes) {
+        return SkillMd::unreadable(display_path, error.to_string(), Some(metadata.len()));
     }
     if bytes.len() as u64 > SKILL_MD_LIMIT_BYTES {
         return SkillMd::too_large(display_path, bytes.len() as u64);
@@ -497,12 +488,15 @@ mod tests {
         assert_eq!(detail.source.as_deref(), Some("acme/alpha"));
         assert_eq!(detail.source_type.as_deref(), Some("github"));
         assert_eq!(detail.reference.as_deref(), Some("main"));
+        assert_eq!(detail.skill_path.as_deref(), Some("skills/alpha/SKILL.md"));
         assert_eq!(
-            detail.skill_path.as_deref(),
-            Some("skills/alpha/SKILL.md")
+            detail.installed_at.as_deref(),
+            Some("2026-01-01T00:00:00.000Z")
         );
-        assert_eq!(detail.installed_at.as_deref(), Some("2026-01-01T00:00:00.000Z"));
-        assert_eq!(detail.updated_at.as_deref(), Some("2026-02-03T04:05:06.000Z"));
+        assert_eq!(
+            detail.updated_at.as_deref(),
+            Some("2026-02-03T04:05:06.000Z")
+        );
         assert_eq!(
             detail.canonical_path.as_deref(),
             Some("~/.agents/skills/alpha")
@@ -602,7 +596,10 @@ mod tests {
         assert!(detail.skill_md.content.is_none());
         assert!(detail.description.is_none());
         assert!(
-            detail.warnings.iter().any(|warning| warning.contains("未找到 SKILL.md")),
+            detail
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("未找到 SKILL.md")),
             "{:?}",
             detail.warnings
         );
@@ -709,13 +706,9 @@ mod tests {
         fixture.write_lock(&[("alpha", git_tree_hash(&dir).unwrap())]);
         fixture.link(&fixture.claude, "alpha", &dir);
 
-        let folder = resolve_open_target(
-            &fixture.paths,
-            &fixture.agents,
-            "alpha",
-            OpenTarget::Folder,
-        )
-        .unwrap();
+        let folder =
+            resolve_open_target(&fixture.paths, &fixture.agents, "alpha", OpenTarget::Folder)
+                .unwrap();
         assert_eq!(folder, dir);
         let md = resolve_open_target(
             &fixture.paths,
@@ -735,9 +728,13 @@ mod tests {
         .unwrap_err();
         assert_eq!(traversal.code, codes::PATH_INVALID);
 
-        let unknown =
-            resolve_open_target(&fixture.paths, &fixture.agents, "missing", OpenTarget::Folder)
-                .unwrap_err();
+        let unknown = resolve_open_target(
+            &fixture.paths,
+            &fixture.agents,
+            "missing",
+            OpenTarget::Folder,
+        )
+        .unwrap_err();
         assert_eq!(unknown.code, codes::SKILL_NOT_FOUND);
     }
 
@@ -749,13 +746,9 @@ mod tests {
         fs::write(copy.join("SKILL.md"), "---\nname: beta\n---\n").unwrap();
         fixture.write_lock(&[("beta", String::new())]);
 
-        let folder = resolve_open_target(
-            &fixture.paths,
-            &fixture.agents,
-            "beta",
-            OpenTarget::Folder,
-        )
-        .unwrap();
+        let folder =
+            resolve_open_target(&fixture.paths, &fixture.agents, "beta", OpenTarget::Folder)
+                .unwrap();
         assert_eq!(folder, copy);
     }
 
@@ -769,13 +762,9 @@ mod tests {
         symlink(&real, &fixture.claude).unwrap();
         fixture.write_lock(&[("beta", String::new())]);
 
-        let error = resolve_open_target(
-            &fixture.paths,
-            &fixture.agents,
-            "beta",
-            OpenTarget::Folder,
-        )
-        .unwrap_err();
+        let error =
+            resolve_open_target(&fixture.paths, &fixture.agents, "beta", OpenTarget::Folder)
+                .unwrap_err();
         assert_eq!(error.code, codes::PATH_INVALID);
     }
 
