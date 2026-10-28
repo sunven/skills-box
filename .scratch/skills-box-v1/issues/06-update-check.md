@@ -6,14 +6,19 @@
 
 **Blocked by:** 02（库存读取模型与平铺列表）、03（Skill 详情与 SKILL.md）
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] mock HTTP 下单测覆盖 current / update / unknown / path_missing / error 五态映射
-- [ ] 仅比较 40 位 tree hash；64 位、空 hash 判 unknown，不与 Git tree SHA 混比
-- [ ] 6 小时 per-source 缓存命中不发起请求；无启动/焦点自动请求（对齐 M19 / M24）
-- [ ] 并发上限 3–4、来源上限生效；20 个来源 30s 内完成或明确报错，UI 不冻结
-- [ ] 离线/限流/仓库不可达标「检查失败」并保留上次徽章；详情显示上次成功检查时间
-- [ ] 源路径缺失标红且不计为「可更新」；异常弹窗展示对应计数
-- [ ] 状态筛选（可更新 / 已是最新 / 未知 / 异常）与默认徽章联动正确
-- [ ] fake 日志断言未出现 `check`、`update` 命令
-- [ ] 检查失败后再次手动检查可恢复；缓存过期后按新结果刷新
+- [x] mock HTTP 下单测覆盖 current / update / unknown / path_missing / error 五态映射
+- [x] 仅比较 40 位 tree hash；64 位、空 hash 判 unknown，不与 Git tree SHA 混比
+- [x] 6 小时 per-source 缓存命中不发起请求；无启动/焦点自动请求（对齐 M19 / M24）
+- [ ] 并发上限 3–4、来源上限生效；20 个来源 30s 内完成或明确报错，UI 不冻结 — pending user sign-off (real 20-source network run deferred to v1.1; acceptance.md §5 M24、§7)
+- [x] 离线/限流/仓库不可达标「检查失败」并保留上次徽章；详情显示上次成功检查时间
+- [x] 源路径缺失标红且不计为「可更新」；异常弹窗展示对应计数
+- [x] 状态筛选（可更新 / 已是最新 / 未知 / 异常）与默认徽章联动正确
+- [x] fake 日志断言未出现 `check`、`update` 命令
+- [x] 检查失败后再次手动检查可恢复；缓存过期后按新结果刷新
+
+## Comments
+
+- 2026-10-28: Resolved on integration/skills-box-v1. All tickets merged; code-review fixes merged in 3e9d2ad.
+- Evidence: `update::tests::*`（五态映射、6h TTL、40 位 hash、并发上限、失败保留上次结果）与 `App.updates.test.tsx` 通过（acceptance.md §1、§5 M19/M24）；真实 GitHub 只读检查显示 `state=Current` 且 lock 字节不变（acceptance.md §2）。

@@ -6,14 +6,19 @@
 
 **Blocked by:** 02（库存读取模型与平铺列表）
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] `get_skill_detail` 返回元数据、attachments、SKILL.md 内容或读取错误；1 MiB 上限生效
-- [ ] Markdown 安全子集：`skipHtml` + sanitize；恶意 HTML 不执行；远程图片不加载；链接仅 https 经 opener（对齐 M04）
-- [ ] frontmatter 在渲染视图隐藏；原文视图完整；缺失/损坏 SKILL.md 有明确警告
-- [ ] `open_skill_folder` / `open_skill_md` 仅接受服务端解析的已知路径；路径守卫拒绝越界与 agent 目录自身为 symlink 的情况
-- [ ] Baseline fingerprint 在首次扫描写入 app data；modified / unknown 判定符合规格判定表
-- [ ] 本地改动警告同时出现在列表与详情；文案与后续危险动作一致
-- [ ] 详情动作按管理状态限制：unmanaged 只保留 Finder；copy-only 不提供更新/断开入口（卸载入口随 09 接入）；不内置编辑
-- [ ] 异常弹窗 v1 覆盖 stale / unmanaged / broken / modified，按类别显示计数与示例
-- [ ] 更新状态字段在本票据未接入 checker 时显示「未知」，不误报「已是最新」
+- [x] `get_skill_detail` 返回元数据、attachments、SKILL.md 内容或读取错误；1 MiB 上限生效
+- [x] Markdown 安全子集：`skipHtml` + sanitize；恶意 HTML 不执行；远程图片不加载；链接仅 https 经 opener（对齐 M04）
+- [x] frontmatter 在渲染视图隐藏；原文视图完整；缺失/损坏 SKILL.md 有明确警告
+- [x] `open_skill_folder` / `open_skill_md` 仅接受服务端解析的已知路径；路径守卫拒绝越界与 agent 目录自身为 symlink 的情况
+- [x] Baseline fingerprint 在首次扫描写入 app data；modified / unknown 判定符合规格判定表
+- [x] 本地改动警告同时出现在列表与详情；文案与后续危险动作一致
+- [x] 详情动作按管理状态限制：unmanaged 只保留 Finder；copy-only 不提供更新/断开入口（卸载入口随 09 接入）；不内置编辑
+- [x] 异常弹窗 v1 覆盖 stale / unmanaged / broken / modified，按类别显示计数与示例
+- [x] 更新状态字段在本票据未接入 checker 时显示「未知」，不误报「已是最新」
+
+## Comments
+
+- 2026-10-28: Resolved on integration/skills-box-v1. All tickets merged; code-review fixes merged in 3e9d2ad.
+- Evidence: `detail::tests::*`、`markdown.test.ts`、`App.detail.test.tsx` 通过（acceptance.md §1、§5 M04）；恶意 HTML/远程图片/opener 白名单由 `skipHtml` + `rehype-sanitize` + CSP 测试覆盖。

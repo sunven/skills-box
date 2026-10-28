@@ -6,14 +6,19 @@
 
 **Blocked by:** 05（安装执行与校验）、06（更新检查）
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] 单个更新：备份 snapshot 存在且完整，更新后 canonical/attachments/lock 校验通过，baseline 刷新（对齐 M08）
-- [ ] 更新全部：跳过 modified / unknown / path_missing / error，继续其余项，汇总失败并支持逐项重试（对齐 M09）
-- [ ] 本地改动/无法判断必须勾选确认；未勾选不能开始更新
-- [ ] copy 挂载更新有警告与备份，更新后 attachment 为 symlink，其他 agent 正确重链（对齐 M10）
-- [ ] 已 detach 的 agent 不被重挂；无挂载时仅 `-a universal`
-- [ ] 备份失败中止（`backup.failed`）；无自动回滚
-- [ ] 结果展示备份路径与日志路径；JSONL 含时间、动作、skill、agents、结果、备份路径、错误
-- [ ] fake 日志不含 `update`、`check`、`remove --all`、`--all`、`--copy`、`-a '*'`
-- [ ] 更新后 inventory/detail/updateReport 失效刷新；失败项重试后状态正确
+- [x] 单个更新：备份 snapshot 存在且完整，更新后 canonical/attachments/lock 校验通过，baseline 刷新（对齐 M08）
+- [x] 更新全部：跳过 modified / unknown / path_missing / error，继续其余项，汇总失败并支持逐项重试（对齐 M09）
+- [x] 本地改动/无法判断必须勾选确认；未勾选不能开始更新
+- [x] copy 挂载更新有警告与备份，更新后 attachment 为 symlink，其他 agent 正确重链（对齐 M10）
+- [x] 已 detach 的 agent 不被重挂；无挂载时仅 `-a universal`
+- [x] 备份失败中止（`backup.failed`）；无自动回滚
+- [x] 结果展示备份路径与日志路径；JSONL 含时间、动作、skill、agents、结果、备份路径、错误
+- [x] fake 日志不含 `update`、`check`、`remove --all`、`--all`、`--copy`、`-a '*'`
+- [x] 更新后 inventory/detail/updateReport 失效刷新；失败项重试后状态正确
+
+## Comments
+
+- 2026-10-28: Resolved on integration/skills-box-v1. All tickets merged; code-review fixes merged in 3e9d2ad.
+- Evidence: 真实 CLI sandbox 的 copy→symlink 更新保留 `installedAt`/`skillFolderHash`（acceptance.md §2 步骤 5、§5 M08–M10）；`tasks::update::*` 与 `App.update-exec.test.tsx` 覆盖备份、跳过、重试、取消矩阵（acceptance.md §1）。

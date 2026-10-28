@@ -6,16 +6,21 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] `get_environment` 返回 PATH 来源、Node/npx/git 版本、CLI 可用性、检测到的 agent 与 lock 健康；EnvReport 缓存
-- [ ] PATH 探测顺序与回退有单测（Volta / fnm / nvm / Homebrew / 系统 / 登录 shell）
-- [ ] Finder 启动语义成立：最小 PATH 下仍能解析 Node，并把 `<node_dir>` 注入子进程 PATH（npx shebang 与 npm exec 的二次查找）
-- [ ] Node 缺失、版本 < 22.20、npx 缺失、git 缺失分别显示明确环境横幅；界面不崩溃
-- [ ] 79-agent catalog 与 pinned 1.7.4 一致，含 ID、显示名、`globalSkillsDir`、universal 标志与检测规则
-- [ ] AppPaths 可注入；`SKILLS_BOX_ROOT` 仅 debug 生效，release 构建忽略
-- [ ] `AppError { code, message, detail?, hint?, retryable }` 与核心错误码映射有单测
-- [ ] 子进程环境：`env_clear` + 最小 allowlist、`DISABLE_TELEMETRY=1`、`DO_NOT_TRACK=1`、清理 agent 检测变量、stdin null、cwd 为 app data 临时目录
-- [ ] 前端为中文界面；三栏骨架与顶栏环境状态可见；无模板残留
-- [ ] `cargo test` 与 `pnpm test` 可运行；fake executor 可编排成功/失败/超时输出
-- [ ] CSP 非空且禁止远程资源；未启用 shell/fs 插件权限
+- [x] `get_environment` 返回 PATH 来源、Node/npx/git 版本、CLI 可用性、检测到的 agent 与 lock 健康；EnvReport 缓存
+- [x] PATH 探测顺序与回退有单测（Volta / fnm / nvm / Homebrew / 系统 / 登录 shell）
+- [x] Finder 启动语义成立：最小 PATH 下仍能解析 Node，并把 `<node_dir>` 注入子进程 PATH（npx shebang 与 npm exec 的二次查找）
+- [x] Node 缺失、版本 < 22.20、npx 缺失、git 缺失分别显示明确环境横幅；界面不崩溃
+- [x] 79-agent catalog 与 pinned 1.7.4 一致，含 ID、显示名、`globalSkillsDir`、universal 标志与检测规则
+- [x] AppPaths 可注入；`SKILLS_BOX_ROOT` 仅 debug 生效，release 构建忽略
+- [x] `AppError { code, message, detail?, hint?, retryable }` 与核心错误码映射有单测
+- [x] 子进程环境：`env_clear` + 最小 allowlist、`DISABLE_TELEMETRY=1`、`DO_NOT_TRACK=1`、清理 agent 检测变量、stdin null、cwd 为 app data 临时目录
+- [x] 前端为中文界面；三栏骨架与顶栏环境状态可见；无模板残留
+- [x] `cargo test` 与 `pnpm test` 可运行；fake executor 可编排成功/失败/超时输出
+- [x] CSP 非空且禁止远程资源；未启用 shell/fs 插件权限
+
+## Comments
+
+- 2026-10-28: Resolved on integration/skills-box-v1. All tickets merged; code-review fixes merged in 3e9d2ad.
+- Evidence: `cargo test` 303 passed / 2 ignored 与 `pnpm test` 107 passed（acceptance.md §1）；release `.app` 环境面板显示 PATH · nvm、Node/npx/git/skills 1.7.4、Agents 11、Lock v3（acceptance.md §4）。
