@@ -1,7 +1,25 @@
-# Tauri + React + Typescript
+# Skills Box
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+A macOS-first desktop app for managing globally installed Agent Skills across
+coding agents: inventory, install, update, detach, and uninstall.
 
-## Recommended IDE Setup
+## Development
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+```bash
+pnpm install
+pnpm tauri dev
+```
+
+## Checks
+
+```bash
+pnpm test        # Vitest + React Testing Library (mockIPC)
+pnpm build       # tsc + vite production build
+cd src-tauri && cargo test
+```
+
+## Context
+
+- Product spec: `.scratch/global-skill-manager/spec.md`
+- Domain glossary: `GLOSSARY.md`
+- Architecture decision: `docs/adr/0001-cli-mutations-native-reads.md`

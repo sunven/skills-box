@@ -231,8 +231,9 @@ Date: 2026-10-28
 ### 5.3 来源
 
 - 仅公开 GitHub 根仓库：`owner/repo` 或 `https://github.com/owner/repo`。
-- 只装默认分支；拒绝 subdir、`#ref`、GitLab、SSH、local、Notion。
+- 只装默认分支；新安装来源拒绝 subdir、`#ref`、GitLab、SSH、local、Notion。
 - 归一化后展示 `owner/repo`；非法输入明确报错。
+- 更新是唯一例外：更新来源由 lock 解析，lock 中已存在的 ref 会保留并仅用于重建 `skills add owner/repo#ref`（见 §7.2）；`#ref` 仍绝不能由新安装输入提供。
 
 ### 5.4 Agent
 
@@ -271,7 +272,7 @@ Date: 2026-10-28
 
 | 命令 | 输入 | 输出 |
 |---|---|---|
-| `get_environment` | — | `EnvReport` |
+| `get_environment` | `refresh?`（默认 false；true 跳过探测缓存） | `EnvReport` |
 | `get_inventory` | — | `InventorySnapshot` |
 | `get_skill_detail` | `skillId` | `SkillDetail` |
 | `start_preview` | `source`, `Channel<TaskEvent>` | `TaskId` |
@@ -281,14 +282,18 @@ Date: 2026-10-28
 | `detach_agent` | `skillId`, `agentId` | `DetachResult` |
 | `start_uninstall` | `skillId`, `Channel<TaskEvent>` | `TaskId` |
 | `cancel_task` | `taskId` | `CancelAck` |
+| `get_active_mutation` | — | `ActiveMutationInfo \| null` |
+| `dismiss_interrupted_mutation` | — | `()` |
 | `open_skill_folder` | `skillId` | `()` |
 | `open_skill_md` | `skillId` | `()` |
+| `open_external_url` | `url`（仅 https 且带主机名） | `()` |
 | `reveal_app_data` | `kind` | `()` |
+| `quit_app` | — | `()` |
 
 - 前端不传 path / argv / env / executable。
-- `InstallRequest = { source, skills[], agents[] }`；Rust 校验并追加 universal；不接受 copy / all / `*`。
+- `InstallRequest = { source, skills[], agents[], retry? }`；Rust 校验并追加 universal；不接受 copy / all / `*`。`retry` 只由结果页的显式重试按钮设置：允许覆盖同来源、上一次部分安装留下的 managed/stale 条目；普通安装仍拒绝一切同名冲突。
 - `TaskEvent` 推送阶段、message、skill、completed/total、result/error。
-- `TaskResult` 包含 overall、per-skill、backupPath、logPath、时间。
+- `TaskResult` 包含 `action`（preview/install/update/uninstall）、overall、per-skill、backupPath、logPath、`startedAt`/`finishedAtEpochMs`。
 
 ### 6.3 并发与取消
 
@@ -337,7 +342,7 @@ CLI stderr 放 `detail`；前端默认只显示归一化 message。部分失败�
 - 单个 / 全部；检查与执行分离；不调用 `update`/`check`。
 - 更新候选：update-available；更新全部跳过 modified/unknown/path-missing/error。
 - 本地改动：baseline + lock hash；有改动/无法判断需 checkbox + 备份。
-- 用 lock 构造 source；显式当前物理非 universal agents + universal；无挂载仅 `-a universal`。
+- 用 lock 构造 source；lock 中已记录的 `#ref`（tag/commit/SHA）会保留，仅用于更新（§5.3 对新安装来源的 `#ref` 禁令不变）；显式当前物理非 universal agents + universal；无挂载仅 `-a universal`。
 - copy 挂载转 symlink，警告 + 备份；copy-only 不更新。
 - 保留断链状态；更新后重建 baseline；逐项校验；不自动回滚。
 
@@ -441,6 +446,33 @@ Release `.app`，100 条 fixture，5 次中位数：
 - 搜索/筛选 < 50ms；详情 < 150ms；刷新 < 1s。
 - 任务首个事件 < 500ms；主线程单次卡顿 < 100ms。
 - 20 个来源更新检查 < 30s 或明确报错，UI 不冻结。
+
+### 10.5 v1 验收记录（2026-10-28，ticket 11）
+
+完整 M01–M24 逐条证据、待签项与已知问题见
+[`../skills-box-v1/acceptance.md`](../skills-box-v1/acceptance.md)。摘要：
+
+- 自动化：`cargo test` 303 passed / 2 ignored（两个 ignored 是真实网络测试：
+  `sandbox_real_cli` 的 CLI 闭环与只读更新检查）；`pnpm test` 107 passed；
+  `pnpm build`、`cargo clippy --all-targets` 通过。
+- 真实 CLI sandbox：临时 HOME + `XDG_STATE_HOME` + `npx -y skills@1.7.4` 对
+  `mattpocock/skills` 完成单/多安装、copy、copy→symlink 更新、断链、单/ copy-only
+  卸载；10 次 `list -g --json` 回归名称/路径一致，canonical/agent/lock v3 正确，
+  未受管目录保留，20 次 argv 无禁用形式。证据在
+  `src-tauri/target/sandbox-evidence/1793180808-90031/`（复跑 116.5s）。
+- 100-skill fixture（80 managed + 20 copy-only，20 来源、4 agent）：release 测试
+  cold 21.8ms、warm 9.8ms、详情 1.2ms（debug 分别为 71.2/18.3/2.5ms）；
+  前端 100 条筛选+排序中位数 0.09ms（同日早前复跑 0.02ms）。
+- 发布：`pnpm tauri build --bundles app` 产出
+  `src-tauri/target/release/bundle/macos/skills-box.app`（6.30 MiB，HEAD 重建）；
+  `Signature=adhoc`、`LSMinimumSystemVersion=12.0`、未公证（bundler 明确跳过）；
+  `codesign --verify --deep --strict` 通过。LaunchServices 启动进程 ~150ms、
+  窗口 ~367ms、~1.4s 截图完整 UI；环境探测 Node/npx/git/1.7.4、Lock v3 正确；
+  二次启动同 pid/单窗口。M17 的主线程卡顿与 Finder 双击、M22/M23 的真实
+  退出/键盘操作待用户签收。
+- 已知问题：`XDG_STATE_HOME` 非默认 lock 路径不检测（owner @sunven，v1.1）；
+  ad-hoc 未公证（发布范围，后续版本）；真实 20 来源公网检查未跑（fake 20 来源
+  已测，v1.1 复测）。P0 未发现数据丢失、权限越界或 CLI 生态回归。
 
 ---
 

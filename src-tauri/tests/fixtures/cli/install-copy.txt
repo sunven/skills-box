@@ -1,0 +1,16 @@
+[
+  {
+    "name": "find-skills",
+    "status": "installed",
+    "source": "vercel-labs/skills",
+    "ref": null,
+    "hash": "b146008599c31057cef1c145774cea5d5afb30e8f43fa802e47a4b461419aaaf",
+    "path": "/tmp/skills-box-sandbox-home3/.claude/skills/find-skills",
+    "scope": "global",
+    "agents": [
+      "Claude Code"
+    ],
+    "mode": "copy",
+    "security": null
+  }
+]

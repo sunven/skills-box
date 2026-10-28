@@ -1,0 +1,6 @@
+[
+  {
+    "status": "failed",
+    "error": "No valid skills found. Skills require a SKILL.md with name and description."
+  }
+]

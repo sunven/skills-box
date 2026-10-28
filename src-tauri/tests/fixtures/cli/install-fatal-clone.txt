@@ -1,0 +1,6 @@
+[
+  {
+    "status": "failed",
+    "error": "Failed to clone repository\nFailed to clone https://github.com/sunven-does-not-exist-xyz/nope-no-such-repo-999.git: Cloning into '/var/folders/38/s1qf24m11tn897xgx9khf2gm0000gn/T/skills-LDl0dX'...\nfatal: unable to get password from user\n"
+  }
+]

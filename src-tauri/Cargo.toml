@@ -1,8 +1,8 @@
 [package]
 name = "skills-box"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "Manage global Agent Skills across coding agents"
+authors = ["sunven"]
 edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -20,8 +20,22 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tokio = { version = "1", features = ["process", "time", "sync", "io-util", "macros", "rt"] }
+thiserror = "2"
+async-trait = "0.1"
+semver = "1"
+libc = "0.2"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+sha1 = "0.10"
+sha2 = "0.10"
+walkdir = "2"
+futures = "0.3"
+
+[dev-dependencies]
+tempfile = "3"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

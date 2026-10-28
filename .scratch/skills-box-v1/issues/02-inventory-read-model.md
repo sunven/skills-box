@@ -6,14 +6,19 @@
 
 **Blocked by:** 01（应用骨架与环境探测）
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] lock v3 严格读取；损坏或非 v3 返回 `lock.*` 错误、全屏错误态、变更禁用、不显示空列表
-- [ ] fixture 同时包含 managed / unmanaged / copy-only / broken / agent-only / stale；分类与附件模式判定正确
-- [ ] stale lock entry 只在异常弹窗出现；异常总包含 stale；未挂载只提示、不计异常
-- [ ] 挂载判定全部来自物理目录与 `lstat`；模拟 `list --json.agents` 高报不影响显示
-- [ ] 平铺列表的搜索、来源/agent/状态筛选、排序、结果计数、选中重置均正确（对齐 M03）
-- [ ] 描述来自 `SKILL.md` frontmatter；缺失显示「—」；单个 skill 读取失败只影响该行/详情，不拖垮列表
-- [ ] 未受管与仅副本进入主列表但动作受限；管理徽章正确
-- [ ] 空库存、无搜索结果、无选中分别为独立空态
-- [ ] 100 条 fixture 直接渲染滚动正常，无虚拟列表/分页
+- [x] lock v3 严格读取；损坏或非 v3 返回 `lock.*` 错误、全屏错误态、变更禁用、不显示空列表
+- [x] fixture 同时包含 managed / unmanaged / copy-only / broken / agent-only / stale；分类与附件模式判定正确
+- [x] stale lock entry 只在异常弹窗出现；异常总包含 stale；未挂载只提示、不计异常
+- [x] 挂载判定全部来自物理目录与 `lstat`；模拟 `list --json.agents` 高报不影响显示
+- [x] 平铺列表的搜索、来源/agent/状态筛选、排序、结果计数、选中重置均正确（对齐 M03）
+- [x] 描述来自 `SKILL.md` frontmatter；缺失显示「—」；单个 skill 读取失败只影响该行/详情，不拖垮列表
+- [x] 未受管与仅副本进入主列表但动作受限；管理徽章正确
+- [x] 空库存、无搜索结果、无选中分别为独立空态
+- [x] 100 条 fixture 直接渲染滚动正常，无虚拟列表/分页
+
+## Comments
+
+- 2026-10-28: Resolved on integration/skills-box-v1. All tickets merged; code-review fixes merged in 3e9d2ad.
+- Evidence: `cargo test` 的 inventory/lock/baseline 套件与 `pnpm test` 的 inventory-view 用例（搜索/来源/agent/状态/排序/计数/选中、异常分组）（acceptance.md §1、§5 M02/M03）；100-skill fixture 直接渲染与 <50ms 预算见 acceptance.md §3。

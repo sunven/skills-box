@@ -6,13 +6,18 @@
 
 **Blocked by:** 04（Mutation task 骨架与安装预览）、05（安装执行与校验）、07（备份与更新执行）
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] sandbox 中卸载 managed skill：canonical、agent 路径、lock key 全部消失，备份存在，`list -g --json` 不再识别（对齐 M13）
-- [ ] unmanaged 禁用卸载；copy-only 可卸载并备份（对齐 M14）
-- [ ] 跨 agent copy 依赖时阻止；无 `remove --all`
-- [ ] 备份失败中止；勾选解锁后才可执行
-- [ ] 校验失败返回 `verify.*`，不得宣称成功；exit 0 不足为凭
-- [ ] 结果包含备份/日志路径；JSONL 记录完整
-- [ ] 完成后 inventory/详情/异常计数刷新；未受管 skill 不受影响
-- [ ] fake 日志不含 `remove --all`、`--all`、`--copy`、`update`、`check`
+- [x] sandbox 中卸载 managed skill：canonical、agent 路径、lock key 全部消失，备份存在，`list -g --json` 不再识别（对齐 M13）
+- [x] unmanaged 禁用卸载；copy-only 可卸载并备份（对齐 M14）
+- [x] 跨 agent copy 依赖时阻止；无 `remove --all`
+- [x] 备份失败中止；勾选解锁后才可执行
+- [x] 校验失败返回 `verify.*`，不得宣称成功；exit 0 不足为凭
+- [x] 结果包含备份/日志路径；JSONL 记录完整
+- [x] 完成后 inventory/详情/异常计数刷新；未受管 skill 不受影响
+- [x] fake 日志不含 `remove --all`、`--all`、`--copy`、`update`、`check`
+
+## Comments
+
+- 2026-10-28: Resolved on integration/skills-box-v1. All tickets merged; code-review fixes merged in 3e9d2ad.
+- Evidence: 真实 CLI sandbox 卸载 managed 与 copy-only skill 后 canonical/agent 路径/lock key 均消失，未受管目录保留（acceptance.md §2 步骤 7–9、§5 M13/M14）；`uninstall::execution_tests::*` 覆盖备份、依赖阻止、exit 0 无变化判失败（acceptance.md §1）。
