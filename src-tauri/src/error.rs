@@ -623,6 +623,23 @@ mod tests {
             codes::PATH_OUTSIDE_ALLOWED_ROOT
         );
         assert_eq!(AppError::open_failed("x").code, codes::OPEN_FAILED);
+        assert_eq!(
+            AppError::agent_not_attached("Claude Code").code,
+            codes::AGENT_NOT_ATTACHED
+        );
+        assert_eq!(AppError::agent_native("Codex").code, codes::AGENT_NATIVE);
+        assert_eq!(
+            AppError::agent_broken("Gemini CLI", std::path::Path::new("/x")).code,
+            codes::AGENT_BROKEN
+        );
+        assert_eq!(
+            AppError::agent_dependency_conflict("alpha", "Gemini CLI").code,
+            codes::AGENT_DEPENDENCY_CONFLICT
+        );
+        assert_eq!(
+            AppError::agent_detach_failed("denied").code,
+            codes::AGENT_DETACH_FAILED
+        );
         assert_eq!(AppError::network_offline("x").code, codes::NETWORK_OFFLINE);
         assert_eq!(
             AppError::network_rate_limited("x").code,

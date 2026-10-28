@@ -989,6 +989,10 @@ mod tests {
             "claude-code"
         );
         assert_eq!(json["skills"][0]["attachments"][0]["mode"], "link");
+        assert_eq!(
+            json["skills"][0]["attachments"][0]["detachable"], true,
+            "managed link on a non-universal agent"
+        );
         assert_eq!(json["agents"][2]["shared"], true);
         assert!(json["anomalies"]["stale"]["count"].is_number());
         assert!(json["generatedAtEpochMs"].is_number());

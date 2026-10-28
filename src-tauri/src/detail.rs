@@ -549,6 +549,7 @@ mod tests {
         assert_eq!(json["ref"], "main");
         assert_eq!(json["skillMd"]["status"], "ok");
         assert_eq!(json["attachments"][0]["agentId"], "claude-code");
+        assert_eq!(json["attachments"][0]["detachable"], true);
         assert!(json["directoryMtimeEpochMs"].as_u64().unwrap() > 0);
     }
 

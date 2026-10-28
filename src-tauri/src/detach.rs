@@ -118,9 +118,8 @@ pub fn detach_agent(
     let metadata = match fs::symlink_metadata(&target) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(AppError::agent_not_attached(&agent.display_name).detail(
-                format!("{}（{error}）", target.display()),
-            ));
+            return Err(AppError::agent_not_attached(&agent.display_name)
+                .detail(format!("{}（{error}）", target.display())));
         }
         Err(error) => {
             let error =
@@ -184,11 +183,7 @@ pub fn detach_agent(
                 let list = dependents
                     .iter()
                     .map(|dependent| {
-                        format!(
-                            "{}（{}）",
-                            dependent.label,
-                            paths.display(&dependent.path)
-                        )
+                        format!("{}（{}）", dependent.label, paths.display(&dependent.path))
                     })
                     .collect::<Vec<_>>()
                     .join("、");
@@ -231,13 +226,7 @@ pub fn detach_agent(
                         "备份后无法读取 {}：{error}",
                         target.display()
                     ));
-                    log_failure(
-                        &log,
-                        skill_id,
-                        agent_id,
-                        Some(backup_display),
-                        &error,
-                    );
+                    log_failure(&log, skill_id, agent_id, Some(backup_display), &error);
                     return Err(error);
                 }
             };
@@ -262,17 +251,9 @@ pub fn detach_agent(
     }
 
     if fs::symlink_metadata(&target).is_ok() {
-        let error = AppError::agent_detach_failed(format!(
-            "删除后目标仍然存在：{}",
-            target.display()
-        ));
-        log_failure(
-            &log,
-            skill_id,
-            agent_id,
-            result.backup_path.clone(),
-            &error,
-        );
+        let error =
+            AppError::agent_detach_failed(format!("删除后目标仍然存在：{}", target.display()));
+        log_failure(&log, skill_id, agent_id, result.backup_path.clone(), &error);
         return Err(error);
     }
 
@@ -305,10 +286,7 @@ pub fn find_copy_dependents(
     target: &Path,
 ) -> Result<Vec<DependentLink>, AppError> {
     let target_real = fs::canonicalize(target).map_err(|error| {
-        AppError::agent_detach_failed(format!(
-            "无法解析 copy 目录 {}：{error}",
-            target.display()
-        ))
+        AppError::agent_detach_failed(format!("无法解析 copy 目录 {}：{error}", target.display()))
     })?;
 
     let mut roots: Vec<(String, PathBuf)> = Vec::new();
@@ -324,10 +302,12 @@ pub fn find_copy_dependents(
     let mut seen_links: BTreeSet<PathBuf> = BTreeSet::new();
     let mut dependents = Vec::new();
     for (label, root) in roots {
-        let Ok(metadata) = fs::symlink_metadata(&root) else {
+        // Read-only scan: follow a symlinked root because a link inside it can
+        // still depend on the copy. Deletion targets are guarded separately.
+        let Ok(metadata) = fs::metadata(&root) else {
             continue;
         };
-        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        if !metadata.is_dir() {
             continue;
         }
         let root_real = fs::canonicalize(&root).unwrap_or_else(|_| root.clone());
@@ -606,10 +586,7 @@ mod tests {
             result.attachment_path,
             fixture.paths.display(&fixture.claude.join("alpha"))
         );
-        assert_eq!(
-            result.canonical_path,
-            fixture.paths.display(&canonical)
-        );
+        assert_eq!(result.canonical_path, fixture.paths.display(&canonical));
         assert!(result.backup_path.is_none());
         assert!(!result.unmounted);
         assert_eq!(
@@ -663,7 +640,10 @@ mod tests {
         assert_eq!(result.mode, AttachmentMode::Copy);
         assert!(result.unmounted, "no other agent is attached");
         assert!(result.remaining_agents.is_empty());
-        assert!(fs::symlink_metadata(&copy).is_err(), "copy directory is gone");
+        assert!(
+            fs::symlink_metadata(&copy).is_err(),
+            "copy directory is gone"
+        );
         assert_eq!(
             fs::read(canonical.join("SKILL.md")).unwrap(),
             canonical_before
@@ -690,16 +670,14 @@ mod tests {
             !backup.join("canonical").exists(),
             "detach must not copy the canonical store"
         );
-        let manifest: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(backup.join("attachment-manifest.json")).unwrap())
-                .unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(backup.join("attachment-manifest.json")).unwrap(),
+        )
+        .unwrap();
         assert_eq!(manifest["action"], "detach");
         assert_eq!(manifest["skill"], "alpha");
         assert_eq!(manifest["canonicalPresent"], false);
-        assert_eq!(
-            manifest["agents"],
-            serde_json::json!(["claude-code"])
-        );
+        assert_eq!(manifest["agents"], serde_json::json!(["claude-code"]));
         assert_eq!(manifest["attachments"][0]["mode"], "copy");
         assert_eq!(manifest["attachments"][0]["backedUp"], true);
 
@@ -787,10 +765,7 @@ mod tests {
         let broken = fixture.detach("beta", "qoder").unwrap_err();
         assert_eq!(broken.code, crate::error::codes::AGENT_BROKEN);
         let not_attached = fixture.detach("alpha", "qoder").unwrap_err();
-        assert_eq!(
-            not_attached.code,
-            crate::error::codes::AGENT_NOT_ATTACHED
-        );
+        assert_eq!(not_attached.code, crate::error::codes::AGENT_NOT_ATTACHED);
         let unknown = fixture.detach("alpha", "not-an-agent").unwrap_err();
         assert_eq!(unknown.code, crate::error::codes::AGENT_NOT_DETECTED);
 
@@ -889,7 +864,8 @@ mod tests {
     }
 
     #[test]
-    fn backup_failure_aborts_copy_detach_before_deleting() {        let fixture = Fixture::without_shared_agent();
+    fn backup_failure_aborts_copy_detach_before_deleting() {
+        let fixture = Fixture::without_shared_agent();
         let canonical = fixture.managed_skill("alpha");
         let copy = fixture.copy(&fixture.claude, "alpha");
         let lock_before = fs::read(fixture.paths.lock_path()).unwrap();
@@ -905,7 +881,10 @@ mod tests {
         let lines = fixture.log_lines();
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0]["result"], "failed");
-        assert_eq!(lines[0]["error"]["code"], crate::error::codes::BACKUP_FAILED);
+        assert_eq!(
+            lines[0]["error"]["code"],
+            crate::error::codes::BACKUP_FAILED
+        );
         assert!(lines[0].get("backupPath").is_none());
     }
 }
