@@ -788,6 +788,19 @@ mod tests {
         }
     }
 
+    #[test]
+    fn task_event_json_matches_the_frontend_contract() {
+        let event = TaskEvent::progress("task-7", TaskPhase::Cloning, "正在克隆", 0, 3);
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(value["taskId"], "task-7");
+        assert_eq!(value["phase"], "cloning");
+        assert_eq!(value["message"], "正在克隆");
+        assert_eq!(value["completed"], 0);
+        assert_eq!(value["total"], 3);
+        assert!(value.get("result").is_none());
+        assert!(value.get("error").is_none());
+    }
+
     #[tokio::test]
     async fn preview_success_streams_phases_progress_and_conflicts() {
         let (manager, executor) = manager(
