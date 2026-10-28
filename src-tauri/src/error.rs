@@ -290,6 +290,15 @@ impl AppError {
             .retryable(true)
     }
 
+    /// External links are restricted to absolute https URLs. Retrying the same
+    /// input cannot succeed, so this is not retryable.
+    pub fn open_url_rejected(detail: impl Into<String>) -> Self {
+        Self::new(codes::OPEN_FAILED, "仅允许通过 opener 打开 https 链接。")
+            .detail(detail)
+            .hint("http、file、javascript、data、ssh、mailto 与相对路径都会被拒绝。")
+            .retryable(false)
+    }
+
     pub fn source_missing() -> Self {
         Self::new(
             codes::SOURCE_MISSING,

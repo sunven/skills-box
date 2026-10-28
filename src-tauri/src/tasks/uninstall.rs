@@ -465,7 +465,7 @@ mod tests {
         assert_eq!(spec.cwd, PathBuf::from("/app-data/cli-cwd"));
         assert_eq!(spec.env["CI"], "true");
         assert_eq!(spec.timeout, Duration::from_secs(900));
-        for forbidden in ["--all", "--copy", "-a", "*", "update", "check", "--json"] {
+        for forbidden in ["--all", "--copy", "-a", "*", "update", "check", "--json", "list"] {
             assert!(
                 !spec.args.iter().any(|arg| arg == forbidden),
                 "{forbidden} must never appear in uninstall argv"

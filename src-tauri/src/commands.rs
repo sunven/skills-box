@@ -99,6 +99,42 @@ pub async fn open_skill_md(
     open_target(app, state, &skill_id, OpenTarget::SkillMd).await
 }
 
+/// External links are the only URL surface. The frontend never gets the
+/// opener plugin permission; every link is re-validated here and must be an
+/// absolute https URL with a host. http, file, javascript, data, ssh, mailto
+/// and relative targets are rejected.
+pub fn validate_external_url(raw: &str) -> Result<(), AppError> {
+    if raw.is_empty() || raw.trim() != raw {
+        return Err(AppError::open_url_rejected("链接包含首尾空白或为空。"));
+    }
+    let parsed = reqwest::Url::parse(raw)
+        .map_err(|error| AppError::open_url_rejected(format!("无法解析链接：{error}")))?;
+    if parsed.scheme() != "https" {
+        return Err(AppError::open_url_rejected(format!(
+            "协议为 {}。",
+            parsed.scheme()
+        )));
+    }
+    if parsed.host_str().is_none() {
+        return Err(AppError::open_url_rejected("链接缺少主机名。"));
+    }
+    if raw
+        .split_once("://")
+        .is_some_and(|(_, rest)| rest.starts_with('/'))
+    {
+        return Err(AppError::open_url_rejected("链接缺少主机名。"));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn open_external_url(app: AppHandle, url: String) -> Result<(), AppError> {
+    validate_external_url(&url)?;
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|error| AppError::open_failed(error.to_string()))
+}
+
 async fn open_target(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -341,5 +377,38 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(error.code, codes::LOCK_CORRUPT);
+    }
+
+    #[test]
+    fn external_urls_are_https_only_and_absolute() {
+        for url in [
+            "https://example.com/docs",
+            "HTTPS://example.com",
+            "https://example.com",
+            "https://example.com/path?q=1#frag",
+        ] {
+            validate_external_url(url).unwrap_or_else(|error| panic!("{url}: {error:?}"));
+        }
+        for url in [
+            "",
+            " https://example.com",
+            "https://example.com ",
+            "http://example.com",
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "data:text/html,x",
+            "ssh://git@example.com/repo",
+            "mailto:a@example.com",
+            "tel:123",
+            "/relative/path",
+            "example.com",
+            "https://",
+            "https:///path",
+            "\nhttps://example.com",
+        ] {
+            let error = validate_external_url(url).unwrap_err();
+            assert_eq!(error.code, codes::OPEN_FAILED, "{url:?}");
+            assert!(!error.retryable);
+        }
     }
 }

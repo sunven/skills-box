@@ -742,7 +742,7 @@ mod tests {
         assert_eq!(spec.cwd, PathBuf::from("/app-data/cli-cwd"));
         assert_eq!(spec.env["CI"], "true");
         assert_eq!(spec.timeout, Duration::from_secs(900));
-        for forbidden in ["--all", "--copy", "*", "update", "check", "remove"] {
+        for forbidden in ["--all", "--copy", "*", "update", "check", "remove", "list"] {
             assert!(
                 !spec.args.iter().any(|arg| arg == forbidden),
                 "{forbidden} must never be part of install"

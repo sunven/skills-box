@@ -103,6 +103,7 @@ pub fn run() {
             commands::get_skill_detail,
             commands::open_skill_folder,
             commands::open_skill_md,
+            commands::open_external_url,
             commands::start_preview,
             commands::start_install,
             commands::start_update,

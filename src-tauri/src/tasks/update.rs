@@ -641,7 +641,7 @@ mod tests {
                 "--json"
             ]
         );
-        for forbidden in ["update", "check", "remove", "--all", "--copy", "*"] {
+        for forbidden in ["update", "check", "remove", "--all", "--copy", "*", "list"] {
             assert!(
                 !spec.args.iter().any(|arg| arg == forbidden),
                 "{forbidden} must never appear in update argv"
@@ -1183,7 +1183,7 @@ mod tests {
                 "--json"
             ]
         );
-        for forbidden in ["update", "check", "remove", "--all", "--copy", "*"] {
+        for forbidden in ["update", "check", "remove", "--all", "--copy", "*", "list"] {
             assert!(
                 !calls[0].args.iter().any(|arg| arg == forbidden),
                 "{forbidden} must never be spawned by update"

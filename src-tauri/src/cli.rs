@@ -90,7 +90,7 @@ mod tests {
         assert_eq!(spec.env["DISABLE_TELEMETRY"], "1");
         assert_eq!(spec.timeout, Duration::from_secs(60));
         for forbidden in [
-            "--all", "--copy", "--json", "--yes", "-a", "update", "check",
+            "--all", "--copy", "--json", "--yes", "-a", "update", "check", "list", "upgrade",
         ] {
             assert!(
                 !spec.args.iter().any(|arg| arg == forbidden),
