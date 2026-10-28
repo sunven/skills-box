@@ -86,6 +86,13 @@ function baseSnapshot(): InventorySnapshot {
         attachments: [attachment("claude-code", "copy")],
       }),
       makeSkill({
+        name: "unknown-local",
+        description: "无法确认本地改动",
+        source: "acme/skills",
+        localModification: "unknown",
+        attachments: [attachment("claude-code")],
+      }),
+      makeSkill({
         name: "failed-skill",
         description: "检查失败",
         source: "acme/skills",
@@ -122,6 +129,7 @@ function baseReport(): UpdateCheckReport {
       updateResult("alpha", "update"),
       updateResult("modified-skill", "update"),
       updateResult("copy-mount", "update"),
+      updateResult("unknown-local", "update"),
       updateResult("failed-skill", "error", {
         error: {
           code: "network.error",
@@ -433,8 +441,23 @@ describe("update execution", () => {
     );
   });
 
-  it("warns that copy attachments become symlinks before a single update", async () => {
+  it("requires confirmation when local modification cannot be determined", async () => {
     const state = setup();
+    await checkUpdates();
+    const dialog = await openSingleUpdate("unknown-local");
+
+    expect(within(dialog).getByTestId("update-local-warning")).toHaveTextContent(
+      "本地改动将被覆盖",
+    );
+    const start = within(dialog).getByRole("button", { name: "开始更新" });
+    expect(start).toBeDisabled();
+    fireEvent.click(within(dialog).getByLabelText("确认本地改动"));
+    expect(start).toBeEnabled();
+    expect(state.updateCalls).toHaveLength(0);
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+  });
+
+  it("warns that copy attachments become symlinks before a single update", async () => {    const state = setup();
     await checkUpdates();
     const dialog = await openSingleUpdate("copy-mount");
 

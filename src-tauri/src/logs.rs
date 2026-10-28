@@ -210,7 +210,7 @@ mod tests {
         assert_eq!(first["agents"], serde_json::json!(["qoder", "universal"]));
         assert_eq!(first["result"], "updated");
         assert_eq!(first["backupPath"], "/tmp/backups/1-update-alpha");
-        assert_eq!(first["timeEpochMs"].as_u64().unwrap() > 0, true);
+        assert!(first["timeEpochMs"].as_u64().unwrap() > 0);
         let time = first["time"].as_str().unwrap();
         assert!(time.ends_with('Z'));
         assert_eq!(&time[4..5], "-");

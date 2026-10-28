@@ -1298,14 +1298,16 @@ impl TaskManager {
             entry.state = TaskState::Finished;
             entry.cancel.is_cancelled()
         };
-        let outcome = if cancel_requested
-            && !matches!(
-                &outcome,
-                FinishOutcome::Completed(result, _)
-                    if result.overall == TaskOverall::Cancelled
-            )
-        {
-            FinishOutcome::Cancelled
+        let outcome = if cancel_requested {
+            match outcome {
+                // A cancellation that races with the final event keeps the
+                // per-skill results instead of discarding what already ran.
+                FinishOutcome::Completed(mut result, _) if !result.skills.is_empty() => {
+                    result.overall = TaskOverall::Cancelled;
+                    FinishOutcome::Completed(result, "操作已取消。".to_string())
+                }
+                _ => FinishOutcome::Cancelled,
+            }
         } else {
             outcome
         };

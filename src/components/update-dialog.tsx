@@ -12,6 +12,7 @@ import { Button } from "./ui/button";
 import { TaskProgress } from "./install-wizard";
 import { asAppError, cancelTask, revealAppData, startUpdate } from "../lib/api";
 import type {
+  InventoryAgent,
   TaskEvent,
   TaskPhase,
   TaskResult,
@@ -38,6 +39,7 @@ interface UpdateDialogProps {
   open: boolean;
   mode: UpdateMode;
   skills: UpdateViewSkill[];
+  agents?: InventoryAgent[];
   onClose: () => void;
 }
 
@@ -84,17 +86,27 @@ function overallHeading(overall: TaskResult["overall"]): string {
   }
 }
 
-function copyAgents(skill: UpdateViewSkill): string[] {
-  return skill.attachments
-    .filter((attachment) => attachment.mode === "copy")
-    .map((attachment) => attachment.agentName);
-}
-
-function affectedAgents(skill: UpdateViewSkill): string[] {
+function copyAgents(
+  skill: UpdateViewSkill,
+  universalIds: Set<string>,
+): string[] {
   return skill.attachments
     .filter(
       (attachment) =>
-        attachment.mode === "link" || attachment.mode === "copy",
+        attachment.mode === "copy" && !universalIds.has(attachment.agentId),
+    )
+    .map((attachment) => attachment.agentName);
+}
+
+function affectedAgents(
+  skill: UpdateViewSkill,
+  universalIds: Set<string>,
+): string[] {
+  return skill.attachments
+    .filter(
+      (attachment) =>
+        (attachment.mode === "link" || attachment.mode === "copy") &&
+        !universalIds.has(attachment.agentId),
     )
     .map((attachment) => attachment.agentName);
 }
@@ -109,6 +121,7 @@ export function UpdateDialog({
   open,
   mode,
   skills,
+  agents = [],
   onClose,
 }: UpdateDialogProps) {
   const queryClient = useQueryClient();
@@ -137,6 +150,15 @@ export function UpdateDialog({
   }, [running]);
 
   const singleSkill = mode === "single" ? skills[0] : undefined;
+  const universalIds = useMemo(
+    () =>
+      new Set(
+        agents
+          .filter((agent) => agent.universal)
+          .map((agent) => agent.id),
+      ),
+    [agents],
+  );
   const summary = useMemo(() => computeUpdateSummary(skills), [skills]);
   const singleEligible = manageableSingle(singleSkill);
   const singleNeedsConfirmation = Boolean(
@@ -144,8 +166,12 @@ export function UpdateDialog({
       (singleSkill.localModification === "modified" ||
         singleSkill.localModification === "unknown"),
   );
-  const singleCopyAgents = singleSkill ? copyAgents(singleSkill) : [];
-  const singleAffectedAgents = singleSkill ? affectedAgents(singleSkill) : [];
+  const singleCopyAgents = singleSkill
+    ? copyAgents(singleSkill, universalIds)
+    : [];
+  const singleAffectedAgents = singleSkill
+    ? affectedAgents(singleSkill, universalIds)
+    : [];
   const initialNames =
     mode === "single"
       ? singleEligible && singleSkill
@@ -343,7 +369,7 @@ export function UpdateDialog({
   const showInitial = !running && !result;
   const closeDisabled = running;
   const copyCandidateCount = summary.candidates.filter(
-    (skill) => copyAgents(skill).length > 0,
+    (skill) => copyAgents(skill, universalIds).length > 0,
   ).length;
 
   return (
@@ -559,7 +585,7 @@ export function UpdateDialog({
                             {shortHash(skill.updateResult.remoteHash, 8)}
                           </span>
                         ) : null}
-                        {copyAgents(skill).length > 0 ? (
+                        {copyAgents(skill, universalIds).length > 0 ? (
                           <span className="ml-1 rounded border border-warning/40 bg-warning-soft px-1 py-0.5 text-[9.5px] text-warning">
                             copy → symlink
                           </span>

@@ -218,6 +218,7 @@ function App() {
         open={updateMode !== null}
         mode={updateMode ?? "all"}
         skills={updateDialogSkills}
+        agents={snapshot?.agents ?? []}
         onClose={() => {
           setUpdateMode(null);
           setUpdateSkillName(null);
