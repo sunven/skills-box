@@ -851,6 +851,26 @@ mod tests {
     }
 
     #[test]
+    fn detaching_the_last_attachment_reports_unmounted_and_keeps_the_managed_skill() {
+        let fixture = Fixture::without_shared_agent();
+        let canonical = fixture.managed_skill("alpha");
+        fixture.link(&fixture.claude, "alpha", &canonical);
+
+        let result = fixture.detach("alpha", "claude-code").unwrap();
+
+        assert!(result.unmounted);
+        assert!(result.remaining_agents.is_empty());
+        let detail = crate::detail::read_with_agents(&fixture.paths, &fixture.agents, "alpha")
+            .expect("detail after detach");
+        assert_eq!(detail.management, ManagementState::Managed);
+        assert!(detail.attachments.is_empty(), "detail shows 未挂载");
+        assert_eq!(
+            detail.canonical_path.as_deref(),
+            Some(fixture.paths.display(&canonical).as_str())
+        );
+    }
+
+    #[test]
     fn corrupt_lock_blocks_detach_before_touching_the_attachment() {
         let fixture = Fixture::new();
         let canonical = fixture.managed_skill("alpha");

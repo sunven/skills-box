@@ -9,6 +9,7 @@ use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::AppState;
+use crate::detach::DetachResult;
 use crate::detail::{self, OpenTarget, SkillDetail};
 use crate::env::EnvReport;
 use crate::error::AppError;
@@ -159,6 +160,18 @@ pub async fn start_update(
         let _ = on_event.send(event);
     });
     state.tasks.start_update(skill_ids, sink).await
+}
+
+/// Native detach from one agent. Runs through the same single-writer slot as
+/// install/update/uninstall; no CLI is spawned. The frontend sends only the
+/// inventory skill id and a catalog agent id; every path is server-resolved.
+#[tauri::command]
+pub async fn detach_agent(
+    state: State<'_, AppState>,
+    skill_id: String,
+    agent_id: String,
+) -> Result<DetachResult, AppError> {
+    state.tasks.detach_agent(skill_id, agent_id).await
 }
 
 /// Open one of the app-data directories (backups / logs / cache / baselines).
