@@ -1059,6 +1059,14 @@ mod tests {
                 ZERO_HASH,
             ),
             LockSpec::github(
+                "iota",
+                "acme/skills",
+                Some("main"),
+                "skills/alpha/MISSING.md",
+                ALPHA_TREE,
+            ),
+            LockSpec::github("root", "acme/skills", Some("main"), "SKILL.md", ROOT),
+            LockSpec::github(
                 "eta",
                 "offline/repo",
                 None,
@@ -1086,6 +1094,8 @@ mod tests {
         assert_eq!(state_of(&report, "delta"), UpdateState::Unknown);
         assert_eq!(state_of(&report, "epsilon"), UpdateState::Unknown);
         assert_eq!(state_of(&report, "zeta"), UpdateState::PathMissing);
+        assert_eq!(state_of(&report, "iota"), UpdateState::PathMissing);
+        assert_eq!(state_of(&report, "root"), UpdateState::Current);
         assert_eq!(state_of(&report, "eta"), UpdateState::Error);
 
         assert_eq!(
@@ -1123,7 +1133,7 @@ mod tests {
             source_of(&report, "acme/skills").status,
             UpdateSourceStatus::Ok
         );
-        assert_eq!(source_of(&report, "acme/skills").skill_count, 4);
+        assert_eq!(source_of(&report, "acme/skills").skill_count, 6);
         assert_eq!(
             source_of(&report, "offline/repo").status,
             UpdateSourceStatus::Error
@@ -1143,6 +1153,53 @@ mod tests {
         assert_eq!(report.last_success_at_epoch_ms, Some(1_000_000));
         assert_eq!(report.skipped_source_count, 0);
         assert_eq!(report.cached_source_count, 0);
+    }
+
+    #[tokio::test]
+    async fn groups_by_source_and_ref_not_by_source_alone() {
+        let fixture = Fixture::new();
+        fixture.write_entries(&[
+            LockSpec::github(
+                "alpha",
+                "acme/skills",
+                Some("main"),
+                "skills/alpha/SKILL.md",
+                ALPHA_TREE,
+            ),
+            LockSpec::github(
+                "beta",
+                "acme/skills",
+                Some("dev"),
+                "skills/alpha/SKILL.md",
+                ALPHA_TREE,
+            ),
+        ]);
+        let mut dev_tree = fixture_tree();
+        dev_tree.truncated = true;
+        let client = Arc::new(
+            FakeGitHub::default()
+                .with_tree("acme/skills", Some("main"), fixture_tree())
+                .with_tree("acme/skills", Some("dev"), dev_tree),
+        );
+        let service = fixture.service(
+            Arc::clone(&client),
+            Arc::new(TestClock::new(1_000)),
+            UpdateCheckConfig::default(),
+        );
+
+        let report = service.check(None).await.unwrap();
+        assert_eq!(state_of(&report, "alpha"), UpdateState::Current);
+        assert_eq!(state_of(&report, "beta"), UpdateState::Unknown);
+        assert_eq!(client.calls().len(), 2);
+        let refs: BTreeSet<_> = report
+            .sources
+            .iter()
+            .map(|source| source.reference.clone())
+            .collect();
+        assert_eq!(
+            refs,
+            BTreeSet::from([Some("main".to_string()), Some("dev".to_string())])
+        );
     }
 
     #[tokio::test]
