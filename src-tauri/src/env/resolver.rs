@@ -1585,11 +1585,7 @@ mod tests {
                     &["--version"],
                     ScriptedResponse::ok("v24.15.0\n"),
                 )
-                .expect(
-                    "npx",
-                    &["skills@1.7.4"],
-                    ScriptedResponse::ok("1.8.0\n"),
-                )
+                .expect("npx", &["skills@1.7.4"], ScriptedResponse::ok("1.8.0\n"))
                 .expect("npx", &["--version"], ScriptedResponse::ok("11.12.1\n"))
                 .expect(
                     "git",

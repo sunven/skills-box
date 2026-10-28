@@ -134,7 +134,8 @@ impl BaselineStore {
             recorded_at_epoch_ms: epoch_ms(),
         };
         let serialized = serde_json::to_string_pretty(&baseline).map_err(|error| {
-            AppError::new(codes::BASELINE_WRITE_FAILED, "无法序列化基线指纹。").detail(error.to_string())
+            AppError::new(codes::BASELINE_WRITE_FAILED, "无法序列化基线指纹。")
+                .detail(error.to_string())
         })?;
 
         let destination = self.baseline_path(name);
@@ -149,9 +150,11 @@ impl BaselineStore {
         })?;
         if let Err(error) = fs::rename(&temp, &destination) {
             let _ = fs::remove_file(&temp);
-            return Err(AppError::new(codes::BASELINE_WRITE_FAILED, "无法保存基线指纹。")
-                .detail(error.to_string())
-                .hint("请检查应用数据目录的权限与磁盘空间。"));
+            return Err(
+                AppError::new(codes::BASELINE_WRITE_FAILED, "无法保存基线指纹。")
+                    .detail(error.to_string())
+                    .hint("请检查应用数据目录的权限与磁盘空间。"),
+            );
         }
         Ok(baseline)
     }

@@ -33,11 +33,7 @@ pub fn overall_for(results: &[TaskSkillResult], success: TaskSkillStatus) -> Tas
 
 /// One summary sentence per action and overall state. Uninstall keeps its
 /// single-skill wording; install/update use the per-skill counts.
-pub fn message(
-    action: TaskAction,
-    overall: TaskOverall,
-    results: &[TaskSkillResult],
-) -> String {
+pub fn message(action: TaskAction, overall: TaskOverall, results: &[TaskSkillResult]) -> String {
     let success = match action {
         TaskAction::Install => TaskSkillStatus::Installed,
         TaskAction::Update => TaskSkillStatus::Updated,
@@ -98,9 +94,15 @@ mod tests {
 
     #[test]
     fn overall_rolls_up_per_action_and_never_treats_empty_as_success() {
-        assert_eq!(overall_for(&[], TaskSkillStatus::Installed), TaskOverall::Failed);
         assert_eq!(
-            overall_for(&[row("a", TaskSkillStatus::Installed)], TaskSkillStatus::Installed),
+            overall_for(&[], TaskSkillStatus::Installed),
+            TaskOverall::Failed
+        );
+        assert_eq!(
+            overall_for(
+                &[row("a", TaskSkillStatus::Installed)],
+                TaskSkillStatus::Installed
+            ),
             TaskOverall::Success
         );
         assert_eq!(
@@ -114,7 +116,10 @@ mod tests {
             TaskOverall::Partial
         );
         assert_eq!(
-            overall_for(&[row("a", TaskSkillStatus::Failed)], TaskSkillStatus::Installed),
+            overall_for(
+                &[row("a", TaskSkillStatus::Failed)],
+                TaskSkillStatus::Installed
+            ),
             TaskOverall::Failed
         );
         assert_eq!(
@@ -125,7 +130,10 @@ mod tests {
             TaskOverall::Success
         );
         assert_eq!(
-            overall_for(&[row("a", TaskSkillStatus::Removed)], TaskSkillStatus::Removed),
+            overall_for(
+                &[row("a", TaskSkillStatus::Removed)],
+                TaskSkillStatus::Removed
+            ),
             TaskOverall::Success
         );
     }

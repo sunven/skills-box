@@ -11,11 +11,10 @@ import {
 import { Button } from "./ui/button";
 import { TaskProgress } from "./install-wizard";
 import { useModalFocus } from "../hooks/use-modal-focus";
-import { asAppError, cancelTask, revealAppData, startUpdate } from "../lib/api";
+import { asAppError, revealAppData, startUpdate } from "../lib/api";
 import type {
   InventoryAgent,
   TaskEvent,
-  TaskPhase,
   TaskResult,
   UpdateCheckReport,
 } from "../lib/types";
@@ -33,6 +32,11 @@ import {
   shortHash,
 } from "../lib/inventory-view";
 import { updateReportQueryKey } from "../hooks/use-updates";
+import {
+  TASK_SKILL_STATUS_LABELS,
+  taskOverallHeading,
+  useTaskRunner,
+} from "../lib/task-runner";
 
 type UpdateMode = "single" | "all";
 
@@ -44,13 +48,6 @@ interface UpdateDialogProps {
   onClose: () => void;
 }
 
-interface DialogError {
-  code?: string;
-  message: string;
-  detail?: string;
-  hint?: string;
-}
-
 const REASON_ORDER: UpdateSkipReason[] = [
   "local_modified",
   "local_unknown",
@@ -60,34 +57,6 @@ const REASON_ORDER: UpdateSkipReason[] = [
   "error",
   "copy_only",
 ];
-
-function statusLabel(status: TaskResult["skills"][number]["status"]): string {
-  switch (status) {
-    case "updated":
-      return "已更新";
-    case "removed":
-      return "已卸载";
-    case "installed":
-      return "已安装";
-    case "skipped":
-      return "跳过";
-    case "failed":
-      return "失败";
-  }
-}
-
-function overallHeading(overall: TaskResult["overall"]): string {
-  switch (overall) {
-    case "success":
-      return "更新完成";
-    case "partial":
-      return "更新部分失败";
-    case "failed":
-      return "更新失败";
-    case "cancelled":
-      return "更新已取消";
-  }
-}
 
 function copyAgents(
   skill: UpdateViewSkill,
@@ -132,25 +101,68 @@ export function UpdateDialog({
   const closeRef = useRef<HTMLButtonElement>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
-  const runSeq = useRef(0);
-  const runningRef = useRef(false);
 
-  const [taskId, setTaskId] = useState<string | null>(null);
-  const [running, setRunning] = useState(false);
-  const [phase, setPhase] = useState<TaskPhase | null>(null);
-  const [completed, setCompleted] = useState(0);
-  const [total, setTotal] = useState(1);
-  const [message, setMessage] = useState("");
-  const [cancelling, setCancelling] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
-  const [result, setResult] = useState<TaskResult | null>(null);
-  const [taskError, setTaskError] = useState<DialogError | null>(null);
-  const [startError, setStartError] = useState<DialogError | null>(null);
-  const [revealError, setRevealError] = useState<string | null>(null);
 
-  useEffect(() => {
-    runningRef.current = running;
-  }, [running]);
+  const invalidateQueries = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ["inventory"] });
+    void queryClient.invalidateQueries({ queryKey: ["skill"] });
+    void queryClient.invalidateQueries({ queryKey: ["updateReport"] });
+  }, [queryClient]);
+
+  const applyResultToReport = useCallback(
+    (taskResult: TaskResult) => {
+      const updatedNames = taskResult.skills
+        .filter((skill) => skill.status === "updated")
+        .map((skill) => skill.name);
+      if (updatedNames.length > 0) {
+        queryClient.setQueryData<UpdateCheckReport | undefined>(
+          updateReportQueryKey,
+          (previous) => markSkillsCurrent(previous, updatedNames),
+        );
+      }
+    },
+    [queryClient],
+  );
+
+  // The shared runner owns progress, cancellation and result transitions; this
+  // callback only reconciles the report/inventory caches.
+  const handleTaskEvent = useCallback(
+    (event: TaskEvent) => {
+      if (event.phase === "completed" || event.phase === "cancelled") {
+        if (event.result) applyResultToReport(event.result);
+        invalidateQueries();
+        return;
+      }
+      if (event.phase === "failed") invalidateQueries();
+    },
+    [applyResultToReport, invalidateQueries],
+  );
+
+  const {
+    state: {
+      taskId,
+      running,
+      phase,
+      completed,
+      total,
+      message,
+      cancelling,
+      result,
+      taskError,
+      startError,
+      revealError,
+    },
+    stateRef,
+    start,
+    cancel,
+    reset,
+    setRevealError,
+  } = useTaskRunner({
+    fallbackFailure: "更新失败，请重试。",
+    fallbackStart: "无法开始更新，请稍后重试。",
+    onEvent: handleTaskEvent,
+  });
 
   const singleSkill = mode === "single" ? skills[0] : undefined;
   const universalIds = useMemo(
@@ -186,90 +198,16 @@ export function UpdateDialog({
     initialNames.length > 0 &&
     (!singleNeedsConfirmation || confirmed);
 
-  const invalidateQueries = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: ["inventory"] });
-    void queryClient.invalidateQueries({ queryKey: ["skill"] });
-    void queryClient.invalidateQueries({ queryKey: ["updateReport"] });
-  }, [queryClient]);
-
-  const applyResultToReport = useCallback(
-    (taskResult: TaskResult) => {
-      const updatedNames = taskResult.skills
-        .filter((skill) => skill.status === "updated")
-        .map((skill) => skill.name);
-      if (updatedNames.length > 0) {
-        queryClient.setQueryData<UpdateCheckReport | undefined>(
-          updateReportQueryKey,
-          (previous) => markSkillsCurrent(previous, updatedNames),
-        );
-      }
-    },
-    [queryClient],
-  );
-
-  const handleTaskEvent = useCallback(
-    (event: TaskEvent) => {
-      setPhase(event.phase);
-      if (event.completed !== undefined) setCompleted(event.completed);
-      if (event.total !== undefined) setTotal(event.total);
-      if (event.message) setMessage(event.message);
-
-      if (event.phase === "completed" || event.phase === "cancelled") {
-        setRunning(false);
-        setCancelling(false);
-        const taskResult = event.result ?? null;
-        setResult(taskResult);
-        if (taskResult) applyResultToReport(taskResult);
-        invalidateQueries();
-        return;
-      }
-      if (event.phase === "failed") {
-        setRunning(false);
-        setCancelling(false);
-        setTaskError(event.error ?? { message: "更新失败，请重试。" });
-        invalidateQueries();
-      }
-    },
-    [applyResultToReport, invalidateQueries],
-  );
-
   const launch = useCallback(
-    async (names: string[]) => {
-      if (names.length === 0 || runningRef.current) return;
-      const seq = ++runSeq.current;
-      setTaskError(null);
-      setStartError(null);
-      setRevealError(null);
-      setResult(null);
-      setRunning(true);
-      setCancelling(false);
-      setTaskId(null);
-      setPhase("preparing");
-      setCompleted(0);
-      setTotal(names.length);
-      setMessage("正在准备更新…");
-      try {
-        const id = await startUpdate(names, (event) => {
-          if (runSeq.current !== seq) return;
-          handleTaskEvent(event);
-        });
-        if (runSeq.current !== seq) {
-          void cancelTask(id).catch(() => {
-            // The dialog was closed while the invoke was in flight.
-          });
-          return;
-        }
-        setTaskId(id);
-      } catch (error) {
-        if (runSeq.current !== seq) return;
-        setStartError(
-          asAppError(error) ?? { message: "无法开始更新，请稍后重试。" },
-        );
-        setPhase(null);
-        setRunning(false);
-      }
+    (names: string[]) => {
+      if (names.length === 0 || stateRef.current.running) return;
+      start({
+        total: names.length,
+        message: "正在准备更新…",
+        launch: (onEvent) => startUpdate(names, onEvent),
+      });
     },
-    [handleTaskEvent],
+    [start, stateRef],
   );
 
   const retryNames =
@@ -279,47 +217,20 @@ export function UpdateDialog({
 
   useEffect(() => {
     if (!open) return;
-    runSeq.current += 1;
-    setTaskId(null);
-    setRunning(false);
-    setPhase(null);
-    setCompleted(0);
-    setTotal(1);
-    setMessage("");
-    setCancelling(false);
+    reset();
     setConfirmed(false);
-    setResult(null);
-    setTaskError(null);
-    setStartError(null);
-    setRevealError(null);
-  }, [open, mode]);
+  }, [open, mode, reset]);
 
   useModalFocus({
     open,
     panelRef,
     initialFocusRef: closeRef,
     onClose,
-    canClose: () => !runningRef.current,
+    canClose: () => !stateRef.current.running,
   });
 
-  const handleCancelTask = async () => {
-    if (!taskId || cancelling) return;
-    setCancelling(true);
-    try {
-      const ack = await cancelTask(taskId);
-      if (!ack.accepted) {
-        setTaskError({
-          message: ack.message ?? "当前 skill 正在写入，无法取消。",
-        });
-      }
-    } catch (error) {
-      setTaskError(
-        asAppError(error) ?? { message: "无法取消更新任务。" },
-      );
-    } finally {
-      setCancelling(false);
-    }
-  };
+  const handleCancelTask = () =>
+    cancel("当前 skill 正在写入，无法取消。");
 
   const doReveal = async (kind: "backups" | "logs") => {
     setRevealError(null);
@@ -702,7 +613,7 @@ export function UpdateDialog({
                       aria-hidden="true"
                     />
                   ) : null}
-                  {overallHeading(result.overall)}
+                  {taskOverallHeading("update", result.overall)}
                 </h3>
                 <span className="text-[11px] text-muted-foreground">
                   {message}
@@ -732,7 +643,7 @@ export function UpdateDialog({
                               : "rounded border border-warning/30 bg-warning-soft px-1.5 py-0.5 text-[10px] text-warning"
                         }
                       >
-                        {statusLabel(skill.status)}
+                        {TASK_SKILL_STATUS_LABELS[skill.status]}
                       </span>
                       {skill.status === "failed" ? (
                         <Button

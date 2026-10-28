@@ -554,7 +554,9 @@ impl TaskManager {
             Ok::<InstallPlan, AppError>(plan)
         })
         .await
-        .map_err(|error| AppError::new(codes::TASK_INTERNAL, format!("校验安装请求失败：{error}")))??;
+        .map_err(|error| {
+            AppError::new(codes::TASK_INTERNAL, format!("校验安装请求失败：{error}"))
+        })??;
 
         // The permit is taken after validation so invalid requests do not
         // briefly occupy the write slot, and held for the whole task.
@@ -653,7 +655,10 @@ impl TaskManager {
             Ok(Ok(plan)) => plan,
             Ok(Err(error)) => return Err(error),
             Err(error) => {
-                return Err(AppError::new(codes::TASK_INTERNAL, format!("校验更新请求失败：{error}")));
+                return Err(AppError::new(
+                    codes::TASK_INTERNAL,
+                    format!("校验更新请求失败：{error}"),
+                ));
             }
         };
 
@@ -715,7 +720,10 @@ impl TaskManager {
             Ok(Ok(plan)) => plan,
             Ok(Err(error)) => return Err(error),
             Err(error) => {
-                return Err(AppError::new(codes::TASK_INTERNAL, format!("校验卸载请求失败：{error}")));
+                return Err(AppError::new(
+                    codes::TASK_INTERNAL,
+                    format!("校验卸载请求失败：{error}"),
+                ));
             }
         };
 
@@ -1214,11 +1222,10 @@ impl TaskManager {
             {
                 Ok(Ok(_)) => {}
                 Ok(Err(error)) => warnings.push(baseline_write_warning(error)),
-                Err(error) => warnings.push(baseline_write_warning(AppError::new(
-                    codes::BASELINE_WRITE_FAILED,
-                    "无法刷新本地基线指纹。",
-                )
-                .detail(error.to_string()))),
+                Err(error) => warnings.push(baseline_write_warning(
+                    AppError::new(codes::BASELINE_WRITE_FAILED, "无法刷新本地基线指纹。")
+                        .detail(error.to_string()),
+                )),
             }
         }
 
@@ -1358,7 +1365,8 @@ impl TaskManager {
                 Ok(Ok(backup)) => backup,
                 Ok(Err(error)) => {
                     // A backup failure aborts the operation: no CLI runs.
-                    let error = log_backup_failure(&log, "update", &item.name, &item.agent_ids, error);
+                    let error =
+                        log_backup_failure(&log, "update", &item.name, &item.agent_ids, error);
                     self.finish(&task_id, &sink, FinishOutcome::Failed(error));
                     return;
                 }
@@ -1436,8 +1444,7 @@ impl TaskManager {
                     break;
                 }
                 Err(ExecError::Timeout(timeout)) => {
-                    let error =
-                        AppError::cli_timeout("更新", timeout);
+                    let error = AppError::cli_timeout("更新", timeout);
                     results.push(failed_update_result(
                         &log,
                         item,
@@ -1455,7 +1462,8 @@ impl TaskManager {
                     continue;
                 }
                 Err(ExecError::Spawn { program, message }) => {
-                    let error = AppError::cli_spawn_failed(format!("无法启动 {program}: {message}"));
+                    let error =
+                        AppError::cli_spawn_failed(format!("无法启动 {program}: {message}"));
                     results.push(failed_update_result(
                         &log,
                         item,
@@ -1550,11 +1558,13 @@ impl TaskManager {
                 {
                     Ok(Ok(_)) => {}
                     Ok(Err(error)) => warnings.push(baseline_write_warning(error)),
-                    Err(error) => warnings.push(baseline_write_warning(AppError::new(
-                        codes::BASELINE_WRITE_FAILED,
-                        "更新成功，但无法刷新本地基线指纹。",
-                    )
-                    .detail(error.to_string()))),
+                    Err(error) => warnings.push(baseline_write_warning(
+                        AppError::new(
+                            codes::BASELINE_WRITE_FAILED,
+                            "更新成功，但无法刷新本地基线指纹。",
+                        )
+                        .detail(error.to_string()),
+                    )),
                 }
             }
 
@@ -1851,11 +1861,6 @@ impl TaskManager {
             );
         }
 
-        let overall = if status == TaskSkillStatus::Removed {
-            TaskOverall::Success
-        } else {
-            TaskOverall::Failed
-        };
         let log_result = if status == TaskSkillStatus::Removed {
             "removed"
         } else {
@@ -1875,8 +1880,16 @@ impl TaskManager {
             error,
             backup_path: Some(backup_display.clone()),
         };
-        let message =
-            summary::message(TaskAction::Uninstall, overall, std::slice::from_ref(&skill_result));
+        // Same roll-up helper as install/update, even for the single row.
+        let overall = summary::overall_for(
+            std::slice::from_ref(&skill_result),
+            TaskSkillStatus::Removed,
+        );
+        let message = summary::message(
+            TaskAction::Uninstall,
+            overall,
+            std::slice::from_ref(&skill_result),
+        );
         let result = TaskResult {
             action: TaskAction::Uninstall,
             overall,
@@ -2473,6 +2486,23 @@ mod tests {
 
         assert_eq!(event.phase, TaskPhase::Failed);
         assert_eq!(event.error.unwrap().code, codes::CLI_TIMEOUT);
+    }
+
+    #[tokio::test]
+    async fn preview_spawn_failure_maps_to_cli_spawn_failed() {
+        let (manager, _) = manager(
+            ScriptedExecutor::new().expect_any(ScriptedResponse::spawn_error("npx not found")),
+            HashMap::new(),
+            Duration::from_secs(60),
+        );
+        let (sink, mut receiver) = sink();
+        manager.start_preview("owner/repo", sink).await.unwrap();
+        let event = tokio::time::timeout(Duration::from_secs(2), final_event(&mut receiver))
+            .await
+            .expect("spawn failure should finish the task");
+
+        assert_eq!(event.phase, TaskPhase::Failed);
+        assert_eq!(event.error.unwrap().code, codes::CLI_SPAWN_FAILED);
     }
 
     #[tokio::test]
@@ -3136,7 +3166,11 @@ mod tests {
             .start_install(install_request(&["find-skills"], &["qoder"]), sink)
             .await
             .unwrap_err();
-        assert_eq!(error.code, codes::SKILL_CONFLICT, "plain duplicate rejected");
+        assert_eq!(
+            error.code,
+            codes::SKILL_CONFLICT,
+            "plain duplicate rejected"
+        );
         assert_eq!(executor.call_count(), 0);
 
         let mut retry = install_request(&["find-skills"], &["qoder"]);

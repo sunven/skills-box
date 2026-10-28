@@ -454,10 +454,13 @@ impl AppError {
     }
 
     pub fn cli_invalid_json(detail: impl Into<String>) -> Self {
-        Self::new(codes::CLI_INVALID_JSON, "skills CLI 返回了无法解析的 JSON。")
-            .detail(detail)
-            .hint("CLI 输出格式可能已变化；请确认固定使用 skills@1.7.4 后重试。")
-            .retryable(true)
+        Self::new(
+            codes::CLI_INVALID_JSON,
+            "skills CLI 返回了无法解析的 JSON。",
+        )
+        .detail(detail)
+        .hint("CLI 输出格式可能已变化；请确认固定使用 skills@1.7.4 后重试。")
+        .retryable(true)
     }
 
     pub fn cli_partial_failure(detail: impl Into<String>) -> Self {

@@ -1237,7 +1237,10 @@ mod tests {
         };
         assert_eq!(line_for("alpha")["result"], "updated");
         assert_eq!(line_for("beta")["result"], "failed");
-        assert_eq!(line_for("beta")["error"]["code"], "skill.install_failed");
+        assert_eq!(
+            line_for("beta")["error"]["code"],
+            crate::error::codes::SKILL_INSTALL_FAILED
+        );
         assert_eq!(line_for("copy-only")["result"], "skipped");
         assert!(line_for("copy-only").get("backupPath").is_none());
     }
@@ -1277,7 +1280,10 @@ mod tests {
         let lines = log_lines(&fixture);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0]["result"], "failed");
-        assert_eq!(lines[0]["error"]["code"], "backup.failed");
+        assert_eq!(
+            lines[0]["error"]["code"],
+            crate::error::codes::BACKUP_FAILED
+        );
     }
 
     #[tokio::test]

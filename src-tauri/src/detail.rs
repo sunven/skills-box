@@ -341,7 +341,9 @@ pub fn resolve_open_target(
         if copies.len() > 1 {
             let paths = copies
                 .iter()
-                .map(|attachment| format!("{}（{}）", attachment.path.display(), attachment.agent_name))
+                .map(|attachment| {
+                    format!("{}（{}）", attachment.path.display(), attachment.agent_name)
+                })
                 .collect::<Vec<_>>()
                 .join("、");
             return Err(AppError::skill_ambiguous(skill_id, paths));
@@ -804,8 +806,8 @@ mod tests {
             skills_dir: gemini_root,
         });
 
-        let error = resolve_open_target(&fixture.paths, &agents, "beta", OpenTarget::Folder)
-            .unwrap_err();
+        let error =
+            resolve_open_target(&fixture.paths, &agents, "beta", OpenTarget::Folder).unwrap_err();
         assert_eq!(error.code, codes::SKILL_AMBIGUOUS);
         assert!(error.detail.unwrap().contains("Gemini CLI"));
     }

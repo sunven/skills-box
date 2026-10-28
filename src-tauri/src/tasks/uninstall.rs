@@ -268,9 +268,7 @@ pub fn classify_remove_output(output: &ExecOutput) -> Option<AppError> {
             Some(AppError::cli_exit_nonzero(detail))
         }
     } else if detail.is_empty() {
-        Some(AppError::cli_invalid_json(
-            "skills remove 未返回任何输出。",
-        ))
+        Some(AppError::cli_invalid_json("skills remove 未返回任何输出。"))
     } else {
         Some(AppError::cli_partial_failure(detail))
     }
@@ -1056,10 +1054,7 @@ mod execution_tests {
         assert_eq!(final_event.total, Some(1));
 
         let result = final_event.result.expect("uninstall result");
-        assert_eq!(
-            result.action,
-            crate::tasks::manager::TaskAction::Uninstall
-        );
+        assert_eq!(result.action, crate::tasks::manager::TaskAction::Uninstall);
         assert!(result.started_at > 0, "startedAt is populated");
         assert_eq!(result.overall, TaskOverall::Success);
         assert_eq!(result.skills.len(), 1);

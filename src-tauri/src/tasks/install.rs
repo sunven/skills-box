@@ -428,13 +428,11 @@ pub fn parse_install_output(raw: &str) -> InstallOutput {
 /// before the CLI runs. A missing lock is a normal fresh-machine state and is
 /// recorded as absent.
 pub fn snapshot_lock(paths: &AppPaths, task_id: &str) -> Result<PathBuf, AppError> {
-    let directory = paths
-        .backups_dir()
-        .join(format!(
-            "{}-install-{}",
-            now_ms(),
-            security::safe_component(task_id)
-        ));
+    let directory = paths.backups_dir().join(format!(
+        "{}-install-{}",
+        now_ms(),
+        security::safe_component(task_id)
+    ));
     fs::create_dir_all(&directory)
         .map_err(|error| AppError::backup_failed(format!("{}：{error}", directory.display())))?;
     let source = paths.lock_path();

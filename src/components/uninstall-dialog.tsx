@@ -9,55 +9,20 @@ import {
 import { Button } from "./ui/button";
 import { TaskProgress } from "./install-wizard";
 import { useModalFocus } from "../hooks/use-modal-focus";
-import { asAppError, cancelTask, revealAppData, startUninstall } from "../lib/api";
-import type {
-  TaskEvent,
-  TaskPhase,
-  TaskResult,
-  TaskSkillStatus,
-} from "../lib/types";
+import { asAppError, revealAppData, startUninstall } from "../lib/api";
+import type { TaskEvent } from "../lib/types";
 import type { UpdateViewSkill } from "../lib/update-view";
 import { ATTACHMENT_LABELS } from "../lib/inventory-view";
+import {
+  TASK_SKILL_STATUS_LABELS,
+  taskOverallHeading,
+  useTaskRunner,
+} from "../lib/task-runner";
 
 interface UninstallDialogProps {
   open: boolean;
   skill: UpdateViewSkill | null;
   onClose: () => void;
-}
-
-interface DialogError {
-  code?: string;
-  message: string;
-  detail?: string;
-  hint?: string;
-}
-
-function overallHeading(overall: TaskResult["overall"]): string {
-  switch (overall) {
-    case "success":
-      return "卸载完成";
-    case "partial":
-      return "卸载部分完成";
-    case "failed":
-      return "卸载失败";
-    case "cancelled":
-      return "卸载已取消";
-  }
-}
-
-function statusLabel(status: TaskSkillStatus): string {
-  switch (status) {
-    case "removed":
-      return "已卸载";
-    case "failed":
-      return "失败";
-    case "installed":
-      return "已安装";
-    case "updated":
-      return "已更新";
-    case "skipped":
-      return "跳过";
-  }
 }
 
 export function UninstallDialog({
@@ -70,25 +35,8 @@ export function UninstallDialog({
   const closeRef = useRef<HTMLButtonElement>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
-  const runSeq = useRef(0);
-  const runningRef = useRef(false);
 
-  const [taskId, setTaskId] = useState<string | null>(null);
-  const [running, setRunning] = useState(false);
-  const [phase, setPhase] = useState<TaskPhase | null>(null);
-  const [completed, setCompleted] = useState(0);
-  const [total, setTotal] = useState(1);
-  const [message, setMessage] = useState("");
-  const [cancelling, setCancelling] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
-  const [result, setResult] = useState<TaskResult | null>(null);
-  const [taskError, setTaskError] = useState<DialogError | null>(null);
-  const [startError, setStartError] = useState<DialogError | null>(null);
-  const [revealError, setRevealError] = useState<string | null>(null);
-
-  useEffect(() => {
-    runningRef.current = running;
-  }, [running]);
 
   const invalidateQueries = useCallback(() => {
     // Inventory carries anomaly counts; detail is invalidated because the
@@ -100,105 +48,66 @@ export function UninstallDialog({
 
   const handleTaskEvent = useCallback(
     (event: TaskEvent) => {
-      setPhase(event.phase);
-      if (event.completed !== undefined) setCompleted(event.completed);
-      if (event.total !== undefined) setTotal(event.total);
-      if (event.message) setMessage(event.message);
-
-      if (event.phase === "completed" || event.phase === "cancelled") {
-        setRunning(false);
-        setCancelling(false);
-        setResult(event.result ?? null);
-        invalidateQueries();
-        return;
-      }
-      if (event.phase === "failed") {
-        setRunning(false);
-        setCancelling(false);
-        setTaskError(event.error ?? { message: "卸载失败，请重试。" });
+      if (
+        event.phase === "completed" ||
+        event.phase === "cancelled" ||
+        event.phase === "failed"
+      ) {
         invalidateQueries();
       }
     },
     [invalidateQueries],
   );
 
-  const launch = useCallback(async () => {
-    if (!skill || runningRef.current) return;
-    const seq = ++runSeq.current;
-    setTaskError(null);
-    setStartError(null);
-    setRevealError(null);
-    setResult(null);
-    setRunning(true);
-    setCancelling(false);
-    setTaskId(null);
-    setPhase("preparing");
-    setCompleted(0);
-    setTotal(1);
-    setMessage("正在准备卸载…");
-    try {
-      const id = await startUninstall(skill.name, (event) => {
-        if (runSeq.current !== seq) return;
-        handleTaskEvent(event);
-      });
-      if (runSeq.current !== seq) {
-        void cancelTask(id).catch(() => {
-          // The dialog was closed while the invoke was in flight.
-        });
-        return;
-      }
-      setTaskId(id);
-    } catch (error) {
-      if (runSeq.current !== seq) return;
-      setStartError(
-        asAppError(error) ?? { message: "无法开始卸载，请稍后重试。" },
-      );
-      setPhase(null);
-      setRunning(false);
-    }
-  }, [skill, handleTaskEvent]);
+  const {
+    state: {
+      taskId,
+      running,
+      phase,
+      completed,
+      total,
+      message,
+      cancelling,
+      result,
+      taskError,
+      startError,
+      revealError,
+    },
+    stateRef,
+    start,
+    cancel,
+    reset,
+    setRevealError,
+  } = useTaskRunner({
+    fallbackFailure: "卸载失败，请重试。",
+    fallbackStart: "无法开始卸载，请稍后重试。",
+    onEvent: handleTaskEvent,
+  });
+
+  const launch = useCallback(() => {
+    if (!skill || stateRef.current.running) return;
+    start({
+      total: 1,
+      message: "正在准备卸载…",
+      launch: (onEvent) => startUninstall(skill.name, onEvent),
+    });
+  }, [skill, start, stateRef]);
 
   useEffect(() => {
     if (!open) return;
-    runSeq.current += 1;
-    setTaskId(null);
-    setRunning(false);
-    setPhase(null);
-    setCompleted(0);
-    setTotal(1);
-    setMessage("");
-    setCancelling(false);
+    reset();
     setConfirmed(false);
-    setResult(null);
-    setTaskError(null);
-    setStartError(null);
-    setRevealError(null);
-  }, [open, skill?.name]);
+  }, [open, skill?.name, reset]);
 
   useModalFocus({
     open,
     panelRef,
     initialFocusRef: closeRef,
     onClose,
-    canClose: () => !runningRef.current,
+    canClose: () => !stateRef.current.running,
   });
 
-  const handleCancelTask = async () => {
-    if (!taskId || cancelling) return;
-    setCancelling(true);
-    try {
-      const ack = await cancelTask(taskId);
-      if (!ack.accepted) {
-        setTaskError({
-          message: ack.message ?? "当前操作正在写入，无法取消。",
-        });
-      }
-    } catch (error) {
-      setTaskError(asAppError(error) ?? { message: "无法取消卸载任务。" });
-    } finally {
-      setCancelling(false);
-    }
-  };
+  const handleCancelTask = () => cancel("当前操作正在写入，无法取消。");
 
   const doReveal = async (kind: "backups" | "logs") => {
     setRevealError(null);
@@ -436,7 +345,7 @@ export function UninstallDialog({
                       aria-hidden="true"
                     />
                   ) : null}
-                  {overallHeading(result.overall)}
+                  {taskOverallHeading("uninstall", result.overall)}
                 </h3>
                 <span className="text-[11px] text-muted-foreground">
                   {message}
@@ -468,7 +377,7 @@ export function UninstallDialog({
                               : "rounded border border-warning/30 bg-warning-soft px-1.5 py-0.5 text-[10px] text-warning"
                         }
                       >
-                        {statusLabel(skillResult.status)}
+                        {TASK_SKILL_STATUS_LABELS[skillResult.status]}
                       </span>
                     </div>
                     {skillResult.error ? (

@@ -51,7 +51,7 @@ Blocked by: 01, 04
 
 | 命令 | 输入 | 输出 | 说明 |
 |---|---|---|---|
-| `get_environment` | — | `EnvReport` | 只读；Node/npx/git/CLI/agent/PATH/lock health |
+| `get_environment` | `refresh?`（默认 false） | `EnvReport` | 只读；Node/npx/git/CLI/agent/PATH/lock health；`refresh=true` 跳过探测缓存 |
 | `get_inventory` | — | `InventorySnapshot` | 只读；lock 损坏/非 v3 时返回 `lock.*` 错误 |
 | `get_skill_detail` | `skillId` | `SkillDetail` | 只读；按需读 SKILL.md，限制 1 MiB |
 | `start_preview` | `source`, `Channel<TaskEvent>` | `TaskId` | 只读任务；可取消；60s 超时；解析 `add -l`，失败返回 raw text |
@@ -61,12 +61,16 @@ Blocked by: 01, 04
 | `detach_agent` | `skillId`, `agentId` | `DetachResult` | 变更；快速；走单写者队列；copy 也先备份 |
 | `start_uninstall` | `skillId`, `Channel<TaskEvent>` | `TaskId` | 变更任务；备份后调 `remove -g -s` |
 | `cancel_task` | `taskId` | `CancelAck` | preview 随时；install/uninstall 仅 spawn 前；update 另允许 skill 之间 |
+| `get_active_mutation` | — | `ActiveMutationInfo \| null` | 退出确认；`null` 表示没有进行中的变更 |
+| `dismiss_interrupted_mutation` | — | `()` | 确认启动时的中断警告；保留 backup 快照 |
 | `open_skill_folder` | `skillId` | `()` | 仅打开服务端解析的已知路径 |
 | `open_skill_md` | `skillId` | `()` | 默认编辑器打开 SKILL.md |
+| `open_external_url` | `url` | `()` | 仅绝对 https 且带主机名；Rust 重新校验 |
 | `reveal_app_data` | `kind: backups \| logs \| cache \| baselines` | `()` | 打开 app data 子目录 |
+| `quit_app` | — | `()` | 确认退出；保留中断标记并杀掉 CLI 进程组 |
 
-- `InstallRequest = { source, skills[], agents[] }`；Rust 校验来源/名称/agent，后台始终追加 `-a universal`，不接受 `--copy`、`--all`、`-a '*'`。
-- `TaskEvent = { taskId, phase, message, skill?, completed?, total?, result?, error? }`；`TaskResult = { action, overall: success | partial | failed | cancelled, skills[], backupPath?, logPath, startedAt, finishedAt }`。
+- `InstallRequest = { source, skills[], agents[], retry? }`；Rust 校验来源/名称/agent，后台始终追加 `-a universal`，不接受 `--copy`、`--all`、`-a '*'`。`retry` 只由结果页的显式重试按钮设置，允许覆盖同来源、上一次部分安装留下的 managed/stale 条目；普通安装仍拒绝同名冲突。
+- `TaskEvent = { taskId, phase, message, skill?, completed?, total?, result?, error? }`；`TaskResult = { action, overall: success | partial | failed | cancelled, skills[], backupPath?, logPath?, startedAt, finishedAtEpochMs }`。`action` 为 `preview | install | update | uninstall`；`startedAt` 在任务注册时写入。
 - 任务阶段：preview `preparing → cloning → parsing → done`；install `preparing → running_cli → verifying → done`；update/uninstall `preparing → backup → running_cli → verifying → done`。CLI 不暴露克隆/写入边界，因此 install 的取消窗口是 spawn 前；preview 是独立只读任务，可取消。**这是对「安装向导」票据中“克隆阶段可取消”的架构细化：安装 CLI 一旦启动不可取消。**
 - 任务返回 TaskId 后通过 Channel 推送事件；前端在完成/失败后 invalidation inventory/detail。单写者队列 `Semaphore(1)`；single-instance 插件防双开；变更期间允许读，但界面标注任务进行中。
 

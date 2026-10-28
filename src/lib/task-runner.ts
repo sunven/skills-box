@@ -1,3 +1,4 @@
+import { useCallback, useReducer, useRef } from "react";
 import type { MutableRefObject } from "react";
 import { asAppError, cancelTask } from "./api";
 import type {
@@ -60,6 +61,8 @@ export type TaskRunAction =
   | { type: "cancelRejected"; message: string }
   | { type: "cancelFailed"; error: TaskRunnerError }
   | { type: "startFailed"; error: TaskRunnerError }
+  | { type: "startError"; error: TaskRunnerError | null }
+  | { type: "taskError"; error: TaskRunnerError | null }
   | { type: "revealError"; message: string | null }
   | { type: "reset" };
 
@@ -125,6 +128,10 @@ export function taskRunReducer(
         phase: null,
         startError: action.error,
       };
+    case "startError":
+      return { ...state, startError: action.error };
+    case "taskError":
+      return { ...state, taskError: action.error };
     case "revealError":
       return { ...state, revealError: action.message };
     case "reset":
@@ -169,6 +176,141 @@ export async function launchTask(options: {
     );
   }
 }
+
+export interface TaskRunnerStart {
+  total: number;
+  message: string;
+  launch: (onEvent: (event: TaskEvent) => void) => Promise<string>;
+}
+
+export interface TaskRunnerOptions {
+  /** Shown when a terminal event arrives without a backend error. */
+  fallbackFailure: string;
+  /** Shown when the invoke itself rejects without a backend error. */
+  fallbackStart: string;
+  /** Dialog-specific side effects for the current task generation. */
+  onEvent?: (event: TaskEvent) => void;
+}
+
+export interface TaskRunner {
+  state: TaskRunState;
+  /** Latest state for one-time callbacks (focus traps, close handlers). */
+  stateRef: MutableRefObject<TaskRunState>;
+  start: (start: TaskRunnerStart) => void;
+  cancel: (fallbackMessage?: string) => Promise<void>;
+  reset: () => void;
+  setRevealError: (message: string | null) => void;
+  setTaskError: (error: TaskRunnerError | null) => void;
+  setStartError: (error: TaskRunnerError | null) => void;
+}
+
+/**
+ * Reducer + launch/cancel controller shared by every mutation dialog. It owns
+ * the event-generation guard so a late invoke or event can never leak into a
+ * restarted or closed dialog.
+ */
+export function useTaskRunner(options: TaskRunnerOptions): TaskRunner {
+  const [state, dispatch] = useReducer(
+    taskRunReducer,
+    undefined,
+    initialTaskRunState,
+  );
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const runSeq = useRef(0);
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
+
+  const handleEvent = useCallback((event: TaskEvent) => {
+    const current = optionsRef.current;
+    dispatch({
+      type: "event",
+      event,
+      fallbackFailure: current.fallbackFailure,
+    });
+    current.onEvent?.(event);
+  }, []);
+
+  const start = useCallback(
+    ({ total, message, launch }: TaskRunnerStart) => {
+      dispatch({ type: "start", total, message });
+      void launchTask({
+        runSeq,
+        launch,
+        onEvent: handleEvent,
+        onTaskId: (taskId) => dispatch({ type: "taskId", taskId }),
+        onStartError: (error) => dispatch({ type: "startFailed", error }),
+        fallbackMessage: optionsRef.current.fallbackStart,
+      });
+    },
+    [handleEvent],
+  );
+
+  const cancel = useCallback(
+    async (fallbackMessage = "无法取消任务。") => {
+      const current = stateRef.current;
+      if (!current.taskId || current.cancelling) return;
+      dispatch({ type: "cancelling", value: true });
+      try {
+        const ack = await cancelTask(current.taskId);
+        if (!ack.accepted) {
+          dispatch({
+            type: "cancelRejected",
+            message: ack.message ?? fallbackMessage,
+          });
+        }
+      } catch (error) {
+        dispatch({
+          type: "cancelFailed",
+          error: asAppError(error) ?? { message: fallbackMessage },
+        });
+      } finally {
+        dispatch({ type: "cancelling", value: false });
+      }
+    },
+    [],
+  );
+
+  const reset = useCallback(() => {
+    // Invalidate any in-flight invoke/event from the previous dialog session.
+    runSeq.current += 1;
+    dispatch({ type: "reset" });
+  }, []);
+
+  const setRevealError = useCallback((message: string | null) => {
+    dispatch({ type: "revealError", message });
+  }, []);
+
+  const setTaskError = useCallback((error: TaskRunnerError | null) => {
+    dispatch({ type: "taskError", error });
+  }, []);
+
+  const setStartError = useCallback((error: TaskRunnerError | null) => {
+    dispatch({ type: "startError", error });
+  }, []);
+
+  return {
+    state,
+    stateRef,
+    start,
+    cancel,
+    reset,
+    setRevealError,
+    setTaskError,
+    setStartError,
+  };
+}
+
+export const TASK_PHASE_LABELS: Record<TaskPhase, string> = {
+  preparing: "准备中",
+  cloning: "正在克隆仓库",
+  backup: "正在备份",
+  running_cli: "正在执行 CLI",
+  verifying: "正在校验结果",
+  completed: "已完成",
+  failed: "失败",
+  cancelled: "已取消",
+};
 
 export const TASK_SKILL_STATUS_LABELS: Record<TaskSkillStatus, string> = {
   installed: "已安装",

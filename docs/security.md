@@ -45,7 +45,11 @@ object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'
   dedicated process group so cancel/timeout can `SIGTERM` then `SIGKILL` the
   whole npx → npm → git tree.
 - Sources, skill names, agent ids, `skillId` and app-data kinds are validated
-  server-side. Paths never cross IPC.
+  server-side. The renderer sends only semantic values (`source`, skill ids,
+  agent ids, `taskId`, app-data `kind`, an https URL); **paths never cross IPC
+  as inputs**. Results may echo display paths for the UI, but no command
+  accepts a path, argv, env, executable or URL other than the re-validated
+  external-link command.
 - `skills list -g --json` is diagnostic-only and is not implemented as a data
   source. The app never spawns `skills list`, `skills update`, `skills check`,
   `remove -a`, `remove --all`, `add --all`, `-a '*'` or `--copy`.
@@ -62,3 +66,11 @@ in debug builds:
   (`slow[:seconds]`, `fail`, `invalid-json`, `cancel`) inside the real
   `TokioExecutor`, preserving timeout and process-group cancellation. Release
   builds compile the check out (`cfg!(debug_assertions)` is false).
+- **`/bin/sh` exception:** the fake-CLI rewrite is the only place a shell is
+  spawned (`/bin/sh -c <fixed script>`), and it exists solely in debug builds
+  and only for the pinned `skills@1.7.4` invocation. Node/git probes, every
+  production mutation and every other command are never shell-wrapped. The
+  script text is a fixed constant selected by the env value; no user, source,
+  skill name or path is interpolated into it. Release builds cannot reach
+  `apply_fake_cli` with `debug = false`, so the release binary has no shell
+  execution path.
