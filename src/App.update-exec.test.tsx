@@ -72,7 +72,13 @@ function baseSnapshot(): InventorySnapshot {
         name: "alpha",
         description: "Alpha 描述",
         source: "acme/skills",
-        attachments: [attachment("claude-code")],
+        // Universal agents can be physically mounted too; they are always
+        // covered by `-a universal` and must not appear as affected agents.
+        attachments: [
+          attachment("claude-code"),
+          attachment("gemini-cli"),
+          attachment("codex", "native"),
+        ],
       }),
       makeSkill({
         name: "modified-skill",
@@ -85,7 +91,10 @@ function baseSnapshot(): InventorySnapshot {
         name: "copy-mount",
         description: "copy 挂载",
         source: "acme/skills",
-        attachments: [attachment("claude-code", "copy")],
+        attachments: [
+          attachment("claude-code", "copy"),
+          attachment("gemini-cli", "copy"),
+        ],
       }),
       makeSkill({
         name: "unknown-local",
@@ -341,6 +350,15 @@ describe("update execution", () => {
     expect(within(dialog).getByTestId("update-single-confirm")).toHaveTextContent(
       "Claude Code",
     );
+    // Universal-catalog agents are covered by `-a universal`, not listed as
+    // affected agents or as copy-conversion targets.
+    expect(within(dialog).getByTestId("update-single-confirm")).not.toHaveTextContent(
+      "Gemini CLI",
+    );
+    expect(within(dialog).getByTestId("update-single-confirm")).not.toHaveTextContent(
+      "Codex",
+    );
+    expect(within(dialog).queryByTestId("update-copy-warning")).not.toBeInTheDocument();
     expect(within(dialog).getByTestId("update-single-confirm")).toHaveTextContent(
       "干净",
     );
@@ -478,6 +496,9 @@ describe("update execution", () => {
     expect(within(dialog).getByTestId("update-copy-warning")).toHaveTextContent(
       "Claude Code",
     );
+    expect(within(dialog).getByTestId("update-copy-warning")).not.toHaveTextContent(
+      "Gemini CLI",
+    );
     expect(within(dialog).getByTestId("update-copy-warning")).toHaveTextContent(
       "备份",
     );
@@ -485,6 +506,45 @@ describe("update execution", () => {
     expect(start).toBeEnabled();
     fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
     expect(state.updateCalls).toHaveLength(0);
+  });
+
+  it("keeps completed skill results when a between-skill cancel arrives", async () => {
+    const state = setup();
+    await checkUpdates();
+    const dialog = await openSingleUpdate("alpha");
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "开始更新" }));
+    await waitFor(() => expect(state.updateCalls).toHaveLength(1));
+
+    emitOn(
+      state,
+      state.channels[0],
+      taskEvent("cancelled", {
+        message: "操作已取消。",
+        completed: 1,
+        total: 2,
+        result: updateTaskResult("cancelled", [
+          skillResult("alpha", "updated", {
+            backupPath: "/tmp/backups/1-update-alpha",
+          }),
+        ]),
+      }),
+    );
+
+    const result = await within(dialog).findByTestId("update-result");
+    expect(result).toHaveAttribute("data-overall", "cancelled");
+    expect(result).toHaveTextContent("更新已取消");
+    expect(within(dialog).getByTestId("update-skill-result")).toHaveAttribute(
+      "data-skill-status",
+      "updated",
+    );
+    expect(within(dialog).queryByRole("button", { name: "重试失败项" })).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "关闭" })).toBeInTheDocument();
+    // A cancelled task still reconciles inventory/detail; the patched report
+    // keeps the completed row current without an automatic check.
+    await waitFor(() => expect(state.inventoryCalls).toBeGreaterThanOrEqual(2));
+    expect(state.checkCalls).toBe(1);
+    fireEvent.click(within(dialog).getByRole("button", { name: "关闭" }));
   });
 
   it("updates only update-available candidates, skips the rest and retries failures", async () => {

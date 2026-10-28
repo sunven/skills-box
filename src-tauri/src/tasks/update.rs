@@ -658,6 +658,39 @@ mod tests {
     }
 
     #[test]
+    fn universal_copy_attachments_are_backed_up_but_not_reinstalled() {
+        let fixture = Fixture::new(&[("alpha", "acme/skills", None)]);
+        // Gemini is universal-by-catalog and mounted as a real copy. It must
+        // stay out of the explicit `-a` list and out of the copy-conversion
+        // warning while still appearing in the backup manifest.
+        fs::remove_file(fixture.gemini.join("alpha")).unwrap();
+        fs::create_dir_all(fixture.gemini.join("alpha")).unwrap();
+        fs::write(fixture.gemini.join("alpha/SKILL.md"), "# gemini copy\n").unwrap();
+
+        let item = &plan(&fixture, &["alpha"]).items[0];
+        assert_eq!(
+            item.agent_ids,
+            vec![
+                "claude-code".to_string(),
+                "qoder".to_string(),
+                "universal".to_string()
+            ],
+            "universal agents must only be covered by `-a universal`"
+        );
+        assert_eq!(
+            item.copy_agents,
+            vec!["Claude Code".to_string()],
+            "a universal copy must not be advertised as a copy conversion"
+        );
+        let gemini = item
+            .attachments
+            .iter()
+            .find(|attachment| attachment.agent_id == "gemini-cli")
+            .expect("universal physical attachment in the backup manifest");
+        assert_eq!(gemini.mode, AttachmentMode::Copy);
+    }
+
+    #[test]
     fn detached_agents_are_not_reattached_and_no_attachment_means_universal_only() {
         let fixture = Fixture::new(&[("alpha", "acme/skills", None)]);
         fs::remove_file(fixture.qoder.join("alpha")).unwrap();
