@@ -161,6 +161,24 @@ pub async fn start_update(
     state.tasks.start_update(skill_ids, sink).await
 }
 
+/// Serialized destructive uninstall. Only managed and copy-only skills are
+/// accepted; Rust backs up lock/canonical/copies, runs `skills remove -g -s
+/// <name> -y` without `-a`/`--all`, then verifies canonical, every attachment
+/// path and the lock key on disk. Exit code 0 alone is never success.
+#[tauri::command]
+pub async fn start_uninstall(
+    state: State<'_, AppState>,
+    skill_id: String,
+    on_event: Channel<TaskEvent>,
+) -> Result<TaskId, AppError> {
+    let sink: EventSink = Arc::new(move |event| {
+        // A closed window must not abort a mutation that may already be
+        // writing; the task still finishes and its result is discarded.
+        let _ = on_event.send(event);
+    });
+    state.tasks.start_uninstall(skill_id, sink).await
+}
+
 /// Open one of the app-data directories (backups / logs / cache / baselines).
 /// The frontend sends a fixed kind, never a path.
 #[tauri::command]
