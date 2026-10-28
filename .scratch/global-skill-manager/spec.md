@@ -454,12 +454,12 @@ Release `.app`，100 条 fixture，5 次中位数：
   `mattpocock/skills` 完成单/多安装、copy、copy→symlink 更新、断链、单/ copy-only
   卸载；10 次 `list -g --json` 回归名称/路径一致，canonical/agent/lock v3 正确，
   未受管目录保留，20 次 argv 无禁用形式。证据在
-  `src-tauri/target/sandbox-evidence/1793180624-82047/`。
+  `src-tauri/target/sandbox-evidence/1793180808-90031/`（复跑 116.5s）。
 - 100-skill fixture（80 managed + 20 copy-only，20 来源、4 agent）：release 测试
-  cold 25.1ms、warm 9.1ms、详情 1.2ms（debug 分别为 32.8/17.6/2.3ms）；
-  前端 100 条筛选+排序中位数 0.02ms。
+  cold 21.8ms、warm 9.8ms、详情 1.2ms（debug 分别为 71.2/18.3/2.5ms）；
+  前端 100 条筛选+排序中位数 0.09ms（同日早前复跑 0.02ms）。
 - 发布：`pnpm tauri build --bundles app` 产出
-  `src-tauri/target/release/bundle/macos/skills-box.app`（6.3 MiB）；
+  `src-tauri/target/release/bundle/macos/skills-box.app`（6.30 MiB，HEAD 重建）；
   `Signature=adhoc`、`LSMinimumSystemVersion=12.0`、未公证（bundler 明确跳过）；
   `codesign --verify --deep --strict` 通过。LaunchServices 启动进程 ~150ms、
   窗口 ~367ms、~1.4s 截图完整 UI；环境探测 Node/npx/git/1.7.4、Lock v3 正确；

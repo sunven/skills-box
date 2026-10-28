@@ -1,6 +1,6 @@
 # Skills Box v1 验收记录（ticket 11）
 
-- 日期：2026-10-28（UTC）
+- 日期：2026-10-28（UTC；最终复跑与 release 重建同日完成）
 - 分支：`worktree-agent-general-purpose-207e32c3`（基于 integration `52bfb05`）
 - 环境：macOS 27.2 / arm64；Node v24.15.0；npx 11.12.1；git 2.54.0；Rust 1.98.1；pnpm 11.10.0
 - 发布门槛来源：[`../global-skill-manager/issues/10-acceptance.md`](../global-skill-manager/issues/10-acceptance.md) M01–M24、P0/P1、阈值与回归配方
@@ -32,7 +32,7 @@ cargo test --test sandbox_real_cli -- --ignored --nocapture
 
 仓库：`mattpocock/skills`（38 个 Markdown skill，公开、小型）。
 sandbox：临时 `HOME` + `XDG_STATE_HOME`，npm 缓存也在 sandbox 内；真实 `~` 未写入。
-证据目录：`src-tauri/target/sandbox-evidence/1793180624-82047/`（`commands.log`、每一步的 JSON/stdout/stderr、lock 快照、`summary.txt`）。
+证据目录：`src-tauri/target/sandbox-evidence/1793180808-90031/`（`commands.log`、每一步的 JSON/stdout/stderr、lock 快照、`summary.txt`；2026-10-28 复跑，临时目录已清理）。
 
 流程与结果（每次变更后都执行 `list -g --json` 回归）：
 
@@ -51,7 +51,7 @@ sandbox：临时 `HOME` + `XDG_STATE_HOME`，npm 缓存也在 sandbox 内；真�
 - 20 次真实 CLI 调用（`--version` + 5 add + 3 remove + 11 list），`commands.log` 中无 `update`、`check`、`remove --all`、`--all`、`--copy`、`-a '*'`。
 - lock 始终为 `version: 3`，key 集合与预期完全一致，hash 为 40 位 hex。
 - 所有安装名（`code-review`、`implement`、`grill-with-docs`、`ask-matt`、`diagnosing-bugs`）都通过 ticket 10 的 `validate_skill_names`（真实名称不被元字符规则误杀）。
-- 总耗时 111 s（含 sandbox 内 npm 包冷安装 13 s）。
+- 本次复跑总耗时 116.5 s（20 次 npx 调用，含 sandbox 内 npm 包首次解析）。
 
 更新检查只读证据（`real_update_check_is_read_only`）：真实 GitHub tree API 返回
 `state=Current`、`remote_hash=fee7bb…ac05`，lock 文件字节不变、未创建 canonical，6h 缓存写入 app-data。
@@ -63,18 +63,18 @@ sandbox：临时 `HOME` + `XDG_STATE_HOME`，npm 缓存也在 sandbox 内；真�
 
 | 指标 | 阈值（release .app） | debug 测试 | release 测试 |
 |---|---|---|---|
-| Cold inventory | < 1500 ms | 32.8 ms | 25.1 ms |
-| Warm inventory（5 次中位数） | < 500 ms | 17.6 ms | 9.1 ms |
-| 详情读取（5 次中位数） | < 150 ms | 2.3 ms | 1.2 ms |
-| 100 条搜索 + 筛选 + 排序（Vitest，7 次中位数） | < 50 ms | 0.02 ms | 同左（JS 测试） |
+| Cold inventory | < 1500 ms | 71.2 ms | 21.8 ms |
+| Warm inventory（5 次中位数） | < 500 ms | 18.3 ms | 9.8 ms |
+| 详情读取（5 次中位数） | < 150 ms | 2.5 ms | 1.2 ms |
+| 100 条搜索 + 筛选 + 排序（Vitest，7 次中位数） | < 50 ms | 0.09 ms（本次复跑；此前 0.02 ms） | 同左（JS 测试） |
 
-方法说明：Rust 测试在刚生成的 fixture 上取第一次读取为 cold、后续 5 次中位数为 warm；基线指纹首次写入计入 cold。release 数字用
+方法说明：Rust 测试在刚生成的 fixture 上取第一次读取为 cold、后续 5 次中位数为 warm；基线指纹首次写入计入 cold。表内为 2026-10-28 最终复跑值（同日早前一轮为 debug 32.8/17.6/2.3 ms、release 25.1/9.1/1.2 ms，波动来自机器负载）。release 数字用
 `cargo test --release --test performance_fixture --config 'profile.release.panic="unwind"'`
 复跑（产品 release profile 仍是 `panic=abort`，覆盖仅用于测试 harness）。合成 lock hash 与真实 git tree hash 不匹配，因此 fixture 首次扫描把 100 行标为「本地改动未知」——这正好覆盖异常分组路径，但不用于验证改动语义。前端数字是纯函数耗时，不含 React 渲染；启动到可交互与主线程卡顿需 release `.app` 人工确认（见 §4、§7）。
 
 ## 4. Release `.app`（M01 / M17 / M22 部分）
 
-- 产物：`src-tauri/target/release/bundle/macos/skills-box.app`（6.3 MiB）
+- 产物：`src-tauri/target/release/bundle/macos/skills-box.app`（6.30 MiB，2026-10-28 于 ticket 11 HEAD 重新构建）
 - 构建：`pnpm tauri build --bundles app`，构建前清空 `APPLE_*` 凭据；bundler 明确打印
   `skipping app notarization`。
 - 签名：`codesign -dv` → `Signature=adhoc`、`flags=0x10002(adhoc,runtime)`；
@@ -112,14 +112,14 @@ sandbox：临时 `HOME` + `XDG_STATE_HOME`，npm 缓存也在 sandbox 内；真�
 | M14 | P0 | 卸载边界 | 自动 | sandbox copy-only 安装/卸载；`cross_agent_copy_dependencies_block_*`、`uninstall_command` 无 `--all` |
 | M15 | P0 | 安全 | 自动 | `security::tests::*`、`source::rejects_shell_metacharacters_*`、`install::validation_rejects_*`、`security_audit.rs`、CSP 测试 |
 | M16 | P0 | 回归 | 自动 | sandbox 10 次 `list -g --json` 对比 + canonical/agent/lock v3/未受管目录 + 20 次 argv 扫描 |
-| M17 | P0 | 性能 | 自动+待签 | 100-skill fixture 数字见 §3；release 启动截图 ~1.4 s 可交互；主线程卡顿待签 |
+| M17 | P0 | 性能 | 自动+待签 | 100-skill fixture 数字见 §3；release 启动截图 ~1.4 s 显示完整 UI（可交互性未仪器测量）；主线程卡顿待签 |
 | M18 | P1 | CLI 缺失 | 自动+待签 | `resolver`/`App.test` 环境错误横幅、变更禁用；真实隐藏 Node/CLI 视觉待签 |
 | M19 | P1 | 网络失败 | 自动 | `update::tests::maps_rate_limits_*`、`failures_keep_the_previous_result_*`、`App.updates.test.tsx` |
 | M20 | P1 | 取消与部分失败 | 自动 | `manager` cancel/partial/timeout 用例、`App.install/update` 取消与重试用例 |
 | M21 | P1 | CLI 版本 | 自动 | `cli::preview_command_is_pinned_and_read_only`、`resolver` pinned/缺失用例；sandbox 固定 `skills@1.7.4` |
 | M22 | P1 | 单实例 / 退出 | 自动+待签 | `open` 二次启动同 pid、1 窗口；`App.exit.test.tsx` + 静态审计；真实退出弹窗待签 |
 | M23 | P1 | 键盘 / 焦点 | 自动+待签 | `use-modal-focus.test.tsx`、install Escape/焦点用例；真实键盘待签 |
-| M24 | P1 | 更新检查成本 | 自动+部分 | `update::tests::concurrency_is_capped_and_excess_sources_are_reported_as_skipped`、6h TTL、1 个真实来源只读检查；未对 20 个真实来源跑公网（限流），UI 不冻结由组件测试覆盖 |
+| M24 | P1 | 更新检查成本 | 自动+部分 | `update::tests::concurrency_is_capped_and_excess_sources_are_reported_as_skipped`、6h TTL、1 个真实来源只读检查；未对 20 个真实来源跑公网（限流），UI 不冻结仅由组件级 pending 状态测试覆盖，未在真实网络下验证 |
 
 ## 6. 命令记录
 
@@ -166,7 +166,7 @@ P2（不阻塞）：`prefers-reduced-motion`、长文本截断、空态插画、
 
 ## 8. 签收状态
 
-- P0 自动化证据：17/17 覆盖（M01、M17 的 GUI 部分待用户确认）。
+- P0：17/17 有自动化或脚本化证据；M01 的 Finder 双击与 M17 的主线程卡顿属于用户签收项，未代签。
 - P1：7/7 有自动化或已记录限制（M24 的真实 20 来源部分列为测试缺口）。
 - 未发现 P0 数据丢失、权限越界或 CLI 生态回归；sandbox 未触碰真实 HOME。
 - 待用户签收：Finder 双击 release `.app` 主流程、视觉状态（M02/M04/M07）、主线程卡顿、退出保护与真实键盘操作。
