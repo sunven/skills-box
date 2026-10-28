@@ -486,7 +486,8 @@ describe("update execution", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
   });
 
-  it("warns that copy attachments become symlinks before a single update", async () => {    const state = setup();
+  it("warns that copy attachments become symlinks before a single update", async () => {
+    const state = setup();
     await checkUpdates();
     const dialog = await openSingleUpdate("copy-mount");
 
