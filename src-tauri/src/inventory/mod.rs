@@ -1046,6 +1046,64 @@ mod tests {
     }
 
     #[test]
+    fn unreadable_skill_md_degrades_only_that_row() {
+        use std::os::unix::fs::PermissionsExt;
+        let fixture = Fixture::new();
+        let alpha = fixture.canonical_skill("alpha", "Alpha description");
+        fixture.canonical_skill("beta", "Beta description");
+        fixture.write_lock(&["alpha", "beta"]);
+        let alpha_md = alpha.join("SKILL.md");
+        fs::set_permissions(&alpha_md, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let snapshot = fixture.read();
+        fs::set_permissions(&alpha_md, fs::Permissions::from_mode(0o644)).unwrap();
+
+        let alpha = snapshot
+            .skills
+            .iter()
+            .find(|skill| skill.name == "alpha")
+            .expect("alpha row must survive a permission error");
+        assert!(alpha.description.is_none());
+        assert!(
+            alpha.warnings.iter().any(|warning| warning.contains("无法读取")),
+            "{:?}",
+            alpha.warnings
+        );
+        let beta = snapshot
+            .skills
+            .iter()
+            .find(|skill| skill.name == "beta")
+            .expect("beta row stays readable");
+        assert_eq!(beta.description.as_deref(), Some("Beta description"));
+        assert!(beta.warnings.is_empty());
+    }
+
+    #[test]
+    fn unreadable_agent_dir_degrades_to_a_warning_and_other_rows_survive() {
+        use std::os::unix::fs::PermissionsExt;
+        let fixture = Fixture::new();
+        fixture.canonical_skill("alpha", "Alpha description");
+        fixture.write_lock(&["alpha"]);
+        fs::set_permissions(&fixture.claude, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let snapshot = fixture.read();
+        fs::set_permissions(&fixture.claude, fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(
+            snapshot
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("Claude Code") && warning.contains("无法读取")),
+            "{:?}",
+            snapshot.warnings
+        );
+        assert!(
+            snapshot.skills.iter().any(|skill| skill.name == "alpha"),
+            "the canonical row must still be listed"
+        );
+    }
+
+    #[test]
     fn missing_lock_reads_unmanaged_skills_without_errors() {
         let fixture = Fixture::new();
         fixture.canonical_skill("alpha", "alpha");

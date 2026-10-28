@@ -3054,6 +3054,7 @@ mod tests {
         }
         let ack = manager.cancel_task(&task_id).unwrap();
         assert!(ack.accepted);
+        assert!(paths.interrupted_marker_path().exists());
         let final_event = tokio::time::timeout(Duration::from_secs(2), final_event(&mut receiver))
             .await
             .expect("cancel should finish the task");
@@ -3061,6 +3062,10 @@ mod tests {
         assert_eq!(final_event.result.unwrap().overall, TaskOverall::Cancelled);
         assert_eq!(executor.call_count(), 0);
         assert_eq!(fs::read_to_string(paths.lock_path()).unwrap(), before);
+        assert!(
+            !paths.interrupted_marker_path().exists(),
+            "a pre-spawn cancel clears the interruption marker"
+        );
     }
 
     #[tokio::test]

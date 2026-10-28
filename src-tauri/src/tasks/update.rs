@@ -868,6 +868,7 @@ mod tests {
     struct UpdateResponse {
         output: ExecOutput,
         post: Option<Box<dyn FnOnce() + Send>>,
+        delay: Duration,
     }
 
     impl UpdateResponse {
@@ -886,6 +887,7 @@ mod tests {
                     duration: Duration::ZERO,
                 },
                 post: None,
+                delay: Duration::ZERO,
             }
         }
 
@@ -904,11 +906,17 @@ mod tests {
                     duration: Duration::ZERO,
                 },
                 post: None,
+                delay: Duration::ZERO,
             }
         }
 
         fn with_post(mut self, post: impl FnOnce() + Send + 'static) -> Self {
             self.post = Some(Box::new(post));
+            self
+        }
+
+        fn delayed(mut self, delay: Duration) -> Self {
+            self.delay = delay;
             self
         }
     }
@@ -949,6 +957,9 @@ mod tests {
                 .unwrap()
                 .pop_front()
                 .expect("one scripted update response per CLI call");
+            if !response.delay.is_zero() {
+                tokio::time::sleep(response.delay).await;
+            }
             if let Some(post) = response.post {
                 post();
             }
@@ -1323,6 +1334,45 @@ mod tests {
         assert_eq!(result.skills[0].status, TaskSkillStatus::Updated);
         assert!(result.log_path.is_some());
         assert_eq!(executor.calls().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn update_cannot_be_cancelled_while_the_cli_is_writing_a_skill() {
+        let fixture = Fixture::new(&[("alpha", "acme/skills", None)]);
+        let executor = Arc::new(UpdateExecutor::new(vec![
+            UpdateResponse::installed("alpha").delayed(Duration::from_millis(150)),
+        ]));
+        let manager = update_manager(&fixture.paths, executor.clone());
+        let (sink, mut receiver) = sink();
+        let task_id = manager
+            .start_update(vec!["alpha".to_string()], sink)
+            .await
+            .unwrap();
+        loop {
+            let event = receiver.recv().await.unwrap();
+            if event.phase == TaskPhase::RunningCli {
+                break;
+            }
+        }
+        let error = manager.cancel_task(&task_id).unwrap_err();
+        assert_eq!(error.code, codes::TASK_CANNOT_CANCEL);
+
+        let final_event = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let event = receiver.recv().await.unwrap();
+                if event.phase.is_final() {
+                    return event;
+                }
+            }
+        })
+        .await
+        .expect("update should finish");
+        assert_eq!(final_event.phase, TaskPhase::Completed);
+        assert_eq!(executor.calls().len(), 1);
+        assert!(
+            !fixture.paths.interrupted_marker_path().exists(),
+            "normal completion clears the interruption marker"
+        );
     }
 
     #[tokio::test]

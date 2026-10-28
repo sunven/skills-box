@@ -9,7 +9,7 @@ import type {
   InventorySkill,
   InventorySnapshot,
 } from "./lib/types";
-import { healthyReport } from "./test/fixtures";
+import { healthyReport, cliMissingReport } from "./test/fixtures";
 import { detailForSkill } from "./test/detail-fixtures";
 import {
   attachment,
@@ -406,6 +406,21 @@ describe("corrupt lock", () => {
 });
 
 describe("inventory source of truth", () => {
+  it("keeps the read-only inventory when the CLI is missing and disables mutations", async () => {
+    mockCommands(sampleSnapshot(), { env: cliMissingReport() });
+    renderApp();
+
+    // Rows still render from the native read model; only mutations are off.
+    expect(await screen.findByText("beta")).toBeInTheDocument();
+    expect(rowNames()).toContain("alpha");
+    expect(
+      screen.getByRole("button", { name: "安装 skill" }),
+    ).toBeDisabled();
+    expect(
+      screen.getAllByText(/skills CLI 不可用/).length,
+    ).toBeGreaterThan(0);
+  });
+
   it("does not trust cli over-reporting: agent filter counts physical attachments", async () => {
     // Gemini is catalog-universal, but only alpha exists physically in its dir.
     const snapshot = makeSnapshot({

@@ -449,9 +449,9 @@ mod tests {
 
     /// Process-global environment variables cannot be scoped per test; hold
     /// this lock whenever a test sets `SKILLS_BOX_FAKE_CLI`.
-    fn fake_env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    async fn fake_env_lock() -> tokio::sync::MutexGuard<'static, ()> {
+        static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+        LOCK.lock().await
     }
 
     impl FakeCliEnv {
@@ -508,7 +508,7 @@ mod tests {
 
     #[tokio::test]
     async fn debug_fake_cli_fail_runs_through_the_real_executor() {
-        let _lock = fake_env_lock();
+        let _lock = fake_env_lock().await;
         let _guard = FakeCliEnv::set("fail");
         let output = TokioExecutor
             .run(npx_spec(5_000), CancelToken::new())
@@ -520,7 +520,7 @@ mod tests {
 
     #[tokio::test]
     async fn debug_fake_cli_invalid_json_runs_through_the_real_executor() {
-        let _lock = fake_env_lock();
+        let _lock = fake_env_lock().await;
         let _guard = FakeCliEnv::set("invalid-json");
         let output = TokioExecutor
             .run(npx_spec(5_000), CancelToken::new())
@@ -532,7 +532,7 @@ mod tests {
 
     #[tokio::test]
     async fn debug_fake_cli_cancel_hangs_until_the_process_group_is_killed() {
-        let _lock = fake_env_lock();
+        let _lock = fake_env_lock().await;
         let _guard = FakeCliEnv::set("cancel");
         let cancel = CancelToken::new();
         let task_cancel = cancel.clone();
