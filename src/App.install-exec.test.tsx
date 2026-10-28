@@ -290,7 +290,8 @@ describe("install wizard steps 3-5", () => {
     expect(confirm).toHaveTextContent("acme/skills");
     expect(confirm).toHaveTextContent("1 个 · alpha");
     expect(confirm).toHaveTextContent("Claude Code");
-    expect(confirm).toHaveTextContent("共享 canonical（Codex）");
+    expect(confirm).toHaveTextContent("Universal（共享 canonical）");
+    expect(confirm).toHaveTextContent("Codex");
     expect(confirm).toHaveTextContent("~/.agents/skills");
     expect(confirm).toHaveTextContent("~/.claude/skills");
     expect(within(dialog).getByTestId("writing-warning")).toHaveTextContent(

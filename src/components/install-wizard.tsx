@@ -233,6 +233,7 @@ export function InstallWizard({
   const taskIdRef = useRef<string | null>(null);
   const phaseRef = useRef<TaskPhase | null>(null);
   const installRunningRef = useRef(false);
+  const agentsTouchedRef = useRef(false);
   const lastInstallRef = useRef<{ skills: string[]; agents: string[] } | null>(
     null,
   );
@@ -270,6 +271,13 @@ export function InstallWizard({
   useEffect(() => {
     installRunningRef.current = installRunning;
   }, [installRunning]);
+
+  // Compute agent defaults when the step is first shown. Recompute if the
+  // inventory arrives late, but never overwrite an explicit user choice.
+  useEffect(() => {
+    if (!open || step !== 3 || agentsTouchedRef.current) return;
+    setSelectedAgents(defaultAgentSelection(agents, inventorySkills));
+  }, [open, step, agents, inventorySkills]);
 
   const invalidateMutationQueries = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ["inventory"] });
@@ -320,6 +328,7 @@ export function InstallWizard({
     setSelectedAgents(new Set());
     setInstallResult(null);
     lastInstallRef.current = null;
+    agentsTouchedRef.current = false;
     const previousFocus = document.activeElement as HTMLElement | null;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -413,7 +422,6 @@ export function InstallWizard({
           (skill) => !skill.conflict,
         );
         setSelected(new Set(installable.map((skill) => skill.name)));
-        setSelectedAgents(defaultAgentSelection(agents, inventorySkills));
         if (
           !resultPreview.parseFailed &&
           resultPreview.skills.length === 1 &&
@@ -467,6 +475,7 @@ export function InstallWizard({
     setSelectedAgents(new Set());
     setInstallResult(null);
     lastInstallRef.current = null;
+    agentsTouchedRef.current = false;
     setManualInput("");
     setStep(1);
     setPreviewRunning(true);
@@ -609,6 +618,7 @@ export function InstallWizard({
   };
 
   const toggleAgent = (id: string) => {
+    agentsTouchedRef.current = true;
     setSelectedAgents((current) => {
       const next = new Set(current);
       if (next.has(id)) next.delete(id);
@@ -629,13 +639,11 @@ export function InstallWizard({
       .filter((skill) => skill.status !== "installed")
       .map((skill) => skill.name) ?? [];
   const lastInstall = lastInstallRef.current;
-  const agentSummary =
-    [
-      ...selectedAgentObjects.map((agent) => agent.displayName),
-      ...(sharedAgents.length > 0
-        ? [`共享 canonical（${sharedAgents.map((agent) => agent.displayName).join("、")}）`]
-        : []),
-    ].join("、") || "仅共享 canonical";
+  const agentSummary = [
+    ...selectedAgentObjects.map((agent) => agent.displayName),
+    ...sharedAgents.map((agent) => agent.displayName),
+    "Universal（共享 canonical）",
+  ].join("、");
   const targetPaths = [
     { label: "共享 canonical", path: "~/.agents/skills" },
     ...selectedAgentObjects.map((agent) => ({
@@ -989,18 +997,21 @@ export function InstallWizard({
                 })}
               </ul>
 
-              {sharedAgents.length > 0 ? (
-                <div
-                  data-testid="shared-agents"
-                  className="mt-3 rounded-lg border border-border bg-muted/40 px-3 py-2 text-[11px]"
-                >
-                  <p className="font-medium">共享 canonical</p>
-                  <p className="mt-1 leading-relaxed text-muted-foreground">
+              <div
+                data-testid="shared-agents"
+                className="mt-3 rounded-lg border border-border bg-muted/40 px-3 py-2 text-[11px]"
+              >
+                <p className="font-medium">共享 canonical</p>
+                <p className="mt-1 leading-relaxed text-muted-foreground">
+                  Universal · ~/.agents/skills（共享目录）
+                </p>
+                {sharedAgents.length > 0 ? (
+                  <p className="mt-0.5 leading-relaxed text-muted-foreground">
                     {sharedAgents.map((agent) => agent.displayName).join("、")}
-                    {" · 直接读取 ~/.agents/skills，无需单独挂载"}
+                    {" · 直接读取共享目录，无需单独挂载"}
                   </p>
-                </div>
-              ) : null}
+                ) : null}
+              </div>
 
               {agents.length === 0 ? (
                 <p className="mt-3 rounded-md border border-border bg-muted/50 px-2.5 py-1.5 text-[11px] text-muted-foreground">
