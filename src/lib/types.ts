@@ -68,3 +68,59 @@ export interface EnvReport {
   checkedAtEpochMs: number;
   pinnedCliVersion: string;
 }
+
+export type ManagementState = "managed" | "copy_only" | "unmanaged";
+export type UpdateState =
+  | "current"
+  | "update"
+  | "unknown"
+  | "error"
+  | "path_missing";
+export type AttachmentMode = "link" | "copy" | "native" | "broken";
+
+export interface AgentAttachment {
+  agentId: string;
+  agentName: string;
+  path: string;
+  mode: AttachmentMode;
+}
+
+export interface InventorySkill {
+  name: string;
+  description: string | null;
+  source: string | null;
+  management: ManagementState;
+  update: UpdateState;
+  updatedAt: string | null;
+  canonicalPath: string | null;
+  attachments: AgentAttachment[];
+  warnings: string[];
+}
+
+export interface InventoryAgent {
+  id: string;
+  displayName: string;
+  universal: boolean;
+  shared: boolean;
+  globalSkillsDir: string | null;
+}
+
+export interface AnomalyGroup {
+  count: number;
+  examples: string[];
+}
+
+export interface AnomalySummary {
+  total: number;
+  stale: AnomalyGroup;
+  unmanaged: AnomalyGroup;
+  broken: AnomalyGroup;
+}
+
+export interface InventorySnapshot {
+  skills: InventorySkill[];
+  agents: InventoryAgent[];
+  anomalies: AnomalySummary;
+  warnings: string[];
+  generatedAtEpochMs: number;
+}

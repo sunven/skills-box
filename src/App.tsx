@@ -1,19 +1,99 @@
+import { useEffect, useMemo, useState } from "react";
+import { AnomalyDialog } from "./components/anomaly-panel";
 import { AppHeader } from "./components/app-header";
 import { DetailPane } from "./components/detail-pane";
 import { EnvironmentBanner } from "./components/environment-banner";
 import { EnvironmentMetrics } from "./components/environment-metrics";
 import { FilterSidebar } from "./components/filter-sidebar";
+import { LockErrorScreen } from "./components/lock-error-screen";
 import { SkillListPane } from "./components/skill-list-pane";
 import { useEnvironmentQuery, useRecheckEnvironment } from "./hooks/use-environment";
+import { useInventoryQuery } from "./hooks/use-inventory";
+import { asAppError } from "./lib/api";
+import {
+  computeAgentOptions,
+  computeSourceOptions,
+  computeStatusCounts,
+  defaultFilters,
+  selectVisibleSkills,
+  type InventoryFilters,
+  type SortKey,
+  type StatusFilter,
+} from "./lib/inventory-view";
+import type { AnomalySummary } from "./lib/types";
+
+const EMPTY_ANOMALIES: AnomalySummary = {
+  total: 0,
+  stale: { count: 0, examples: [] },
+  unmanaged: { count: 0, examples: [] },
+  broken: { count: 0, examples: [] },
+};
 
 function App() {
   const environment = useEnvironmentQuery();
   const recheck = useRecheckEnvironment();
+  const inventoryQuery = useInventoryQuery();
   const report = environment.data;
-  const mutationsEnabled = report?.mutationsEnabled ?? false;
+  const snapshot = inventoryQuery.data;
+
+  const [query, setQuery] = useState("");
+  const [source, setSource] = useState("all");
+  const [agent, setAgent] = useState("all");
+  const [status, setStatus] = useState<StatusFilter>("all");
+  const [sort, setSort] = useState<SortKey>("recent");
+  const [selectedName, setSelectedName] = useState<string | null>(null);
+  const [anomaliesOpen, setAnomaliesOpen] = useState(false);
+
+  const skills = useMemo(() => snapshot?.skills ?? [], [snapshot]);
+  const filters = useMemo<InventoryFilters>(
+    () => ({ query, source, agent, status }),
+    [query, source, agent, status],
+  );
+  const visibleSkills = useMemo(
+    () => selectVisibleSkills(skills, filters, sort),
+    [skills, filters, sort],
+  );
+  const statusCounts = useMemo(() => computeStatusCounts(skills), [skills]);
+  const sourceOptions = useMemo(() => computeSourceOptions(skills), [skills]);
+  const agentOptions = useMemo(
+    () => computeAgentOptions(skills, snapshot?.agents ?? []),
+    [skills, snapshot],
+  );
+  const selectedSkill = useMemo(
+    () =>
+      visibleSkills.find((skill) => skill.name === selectedName) ?? null,
+    [visibleSkills, selectedName],
+  );
+
+  useEffect(() => {
+    if (selectedName === null) return;
+    if (!visibleSkills.some((skill) => skill.name === selectedName)) {
+      setSelectedName(visibleSkills[0]?.name ?? null);
+    }
+  }, [visibleSkills, selectedName]);
+
+  const inventoryError = asAppError(inventoryQuery.error);
+  const lockError =
+    inventoryError && inventoryError.code?.startsWith("lock.")
+      ? inventoryError
+      : null;
+  const mutationsEnabled = (report?.mutationsEnabled ?? false) && !lockError;
 
   const handleRecheck = () => {
     recheck.mutate();
+  };
+
+  const handleRetryInventory = () => {
+    recheck.mutate();
+    void inventoryQuery.refetch();
+  };
+
+  const handleClearFilters = () => {
+    const defaults = defaultFilters();
+    setQuery(defaults.query);
+    setSource(defaults.source);
+    setAgent(defaults.agent);
+    setStatus(defaults.status);
   };
 
   return (
@@ -26,19 +106,59 @@ function App() {
         rechecking={recheck.isPending}
         onRecheck={handleRecheck}
       />
-      <EnvironmentMetrics report={report} />
-      <EnvironmentBanner
-        report={report}
-        isLoading={environment.isPending}
-        error={environment.error}
-        rechecking={recheck.isPending}
-        onRecheck={handleRecheck}
+      {lockError ? (
+        <LockErrorScreen
+          error={lockError}
+          onRetry={handleRetryInventory}
+          retrying={recheck.isPending || inventoryQuery.isFetching}
+        />
+      ) : (
+        <>
+          <EnvironmentMetrics report={report} />
+          <EnvironmentBanner
+            report={report}
+            isLoading={environment.isPending}
+            error={environment.error}
+            rechecking={recheck.isPending}
+            onRecheck={handleRecheck}
+          />
+          <main className="grid min-h-0 flex-1 grid-cols-[220px_minmax(0,1fr)_340px]">
+            <FilterSidebar
+              sources={sourceOptions}
+              agents={agentOptions}
+              statusCounts={statusCounts}
+              activeSource={source}
+              activeAgent={agent}
+              activeStatus={status}
+              onSourceChange={setSource}
+              onAgentChange={setAgent}
+              onStatusChange={setStatus}
+            />
+            <SkillListPane
+              totalSkills={skills.length}
+              visibleSkills={visibleSkills}
+              anomalies={snapshot?.anomalies ?? EMPTY_ANOMALIES}
+              query={query}
+              sort={sort}
+              selectedName={selectedSkill?.name ?? null}
+              isLoading={inventoryQuery.isPending}
+              error={inventoryQuery.error}
+              onQueryChange={setQuery}
+              onSortChange={setSort}
+              onSelect={setSelectedName}
+              onClearFilters={handleClearFilters}
+              onOpenAnomalies={() => setAnomaliesOpen(true)}
+              onRetry={handleRetryInventory}
+            />
+            <DetailPane skill={selectedSkill} />
+          </main>
+        </>
+      )}
+      <AnomalyDialog
+        anomalies={snapshot?.anomalies ?? EMPTY_ANOMALIES}
+        open={anomaliesOpen}
+        onClose={() => setAnomaliesOpen(false)}
       />
-      <main className="grid min-h-0 flex-1 grid-cols-[220px_minmax(0,1fr)_340px]">
-        <FilterSidebar agents={report?.agents ?? []} />
-        <SkillListPane />
-        <DetailPane />
-      </main>
     </div>
   );
 }

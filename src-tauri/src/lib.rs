@@ -2,6 +2,8 @@ pub mod agents;
 pub mod commands;
 pub mod env;
 pub mod error;
+pub mod inventory;
+pub mod lock;
 pub mod paths;
 pub mod process;
 
@@ -28,7 +30,10 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::new(paths))
-        .invoke_handler(tauri::generate_handler![commands::get_environment])
+        .invoke_handler(tauri::generate_handler![
+            commands::get_environment,
+            commands::get_inventory
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
