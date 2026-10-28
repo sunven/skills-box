@@ -5,13 +5,14 @@ import {
   FolderOpen,
   Loader2,
   MousePointerClick,
+  RefreshCw,
 } from "lucide-react";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { SkillMarkdown } from "./skill-markdown";
 import { asAppError, openSkillFolder, openSkillMd } from "../lib/api";
 import { agentColor, agentInitials } from "../lib/agent-style";
-import type { InventorySkill, SkillDetail } from "../lib/types";
+import type { SkillDetail, UpdateSkillResult } from "../lib/types";
 import {
   ATTACHMENT_LABELS,
   LOCAL_MODIFICATION_LABELS,
@@ -22,11 +23,20 @@ import {
   hasLocalModificationWarning,
   shortHash,
 } from "../lib/inventory-view";
+import {
+  formatEpochDateTime,
+  updateBadgeTitle,
+  updateBadgeVariant,
+  type UpdateViewSkill,
+} from "../lib/update-view";
 import { useSkillDetailQuery } from "../hooks/use-skill-detail";
 import { cn } from "../lib/utils";
 
 interface DetailPaneProps {
-  skill?: InventorySkill | null;
+  skill?: UpdateViewSkill | null;
+  updateResult?: UpdateSkillResult | null;
+  checkingUpdates?: boolean;
+  onCheckUpdates?: (skillIds: string[]) => void;
 }
 
 type DetailView = "rendered" | "raw";
@@ -132,7 +142,12 @@ function AgentAttachmentRow({
   );
 }
 
-export function DetailPane({ skill }: DetailPaneProps) {
+export function DetailPane({
+  skill,
+  updateResult,
+  checkingUpdates = false,
+  onCheckUpdates,
+}: DetailPaneProps) {
   const skillId = skill?.name ?? null;
   const query = useSkillDetailQuery(skillId);
   const detail = query.data ?? null;
@@ -184,7 +199,8 @@ export function DetailPane({ skill }: DetailPaneProps) {
 
   const current = detail ?? skill;
   const management = current.management;
-  const update = current.update;
+  const update = skill.update;
+  const updateInfo = updateResult ?? skill.updateResult ?? null;
   const localModification = current.localModification;
   const attachments = current.attachments;
   const warnings = detail?.warnings ?? [];
@@ -246,7 +262,13 @@ export function DetailPane({ skill }: DetailPaneProps) {
           <h3 className="text-lg font-semibold tracking-tight">
             {detail?.name ?? skill.name}
           </h3>
-          <Badge variant="muted">{UPDATE_LABELS[update]}</Badge>
+          <Badge
+            data-testid="detail-update-badge"
+            variant={updateBadgeVariant(update)}
+            title={updateBadgeTitle({ ...skill, updateResult: updateInfo ?? undefined })}
+          >
+            {UPDATE_LABELS[update]}
+          </Badge>
           {management === "copy_only" ? (
             <Badge variant="outline">仅副本</Badge>
           ) : null}
@@ -306,6 +328,22 @@ export function DetailPane({ skill }: DetailPaneProps) {
               默认编辑器打开
             </Button>
           ) : null}
+          {management === "managed" && onCheckUpdates ? (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={checkingUpdates}
+              aria-busy={checkingUpdates}
+              onClick={() => onCheckUpdates([skill.name])}
+              title="只读检查该 skill 的来源；不会运行 skills check"
+            >
+              <RefreshCw
+                className={checkingUpdates ? "size-3.5 animate-spin" : "size-3.5"}
+                aria-hidden="true"
+              />
+              检查更新
+            </Button>
+          ) : null}
         </div>
 
         {actionError ? (
@@ -346,6 +384,50 @@ export function DetailPane({ skill }: DetailPaneProps) {
             {detail?.localModificationDetail
               ? ` ${detail.localModificationDetail}`
               : ""}
+          </div>
+        ) : null}
+
+        {updateInfo?.error ? (
+          <div
+            role="alert"
+            data-testid="update-check-error"
+            className="mt-2 rounded-md border border-destructive/20 bg-red-50 px-2.5 py-2 text-[10.5px] leading-relaxed text-destructive"
+          >
+            <p className="font-medium">检查失败：{updateInfo.error.message}</p>
+            {updateInfo.error.detail ? (
+              <p className="mt-0.5 break-all text-destructive/80">
+                {updateInfo.error.detail}
+              </p>
+            ) : null}
+            {updateInfo.error.hint ? (
+              <p className="mt-0.5">{updateInfo.error.hint}</p>
+            ) : null}
+            <p className="mt-0.5">
+              {updateInfo.lastSuccessAtEpochMs
+                ? `上次成功检查：${formatEpochDateTime(updateInfo.lastSuccessAtEpochMs)}${
+                    updateInfo.previousState &&
+                    updateInfo.previousState !== "current"
+                      ? ` · 上次结果：${UPDATE_LABELS[updateInfo.previousState]}`
+                      : ""
+                  }`
+                : "尚未成功检查过该来源；不会显示为已是最新。"}
+            </p>
+          </div>
+        ) : null}
+
+        {update === "path_missing" ? (
+          <div
+            data-testid="update-path-missing"
+            className="mt-2 rounded-md border border-destructive/20 bg-red-50 px-2.5 py-1.5 text-[10.5px] leading-relaxed text-destructive"
+          >
+            {updateInfo?.note ??
+              "来源中已找不到该 skill，可能已被删除或移动；更新已禁用。"}
+          </div>
+        ) : null}
+
+        {updateInfo && !updateInfo.error && update !== "path_missing" && updateInfo.note ? (
+          <div className="mt-2 rounded-md border border-border bg-muted/50 px-2.5 py-1.5 text-[10.5px] leading-relaxed text-muted-foreground">
+            {updateInfo.note}
           </div>
         ) : null}
 
@@ -428,6 +510,31 @@ export function DetailPane({ skill }: DetailPaneProps) {
                 <MetaRow label="版本指纹" mono>
                   {detail.hash ? <HashValue hash={detail.hash} /> : "—"}
                 </MetaRow>
+                <MetaRow label="远端 tree SHA" mono>
+                  {updateInfo?.remoteHash ? (
+                    <span title={updateInfo.remoteHash}>
+                      {shortHash(updateInfo.remoteHash)}
+                    </span>
+                  ) : (
+                    "—"
+                  )}
+                </MetaRow>
+                <MetaRow label="上次检查">
+                  <span
+                    data-testid="detail-last-update-check"
+                    title={
+                      updateInfo?.error?.message ??
+                      updateInfo?.note ??
+                      undefined
+                    }
+                  >
+                    {updateInfo?.lastSuccessAtEpochMs
+                      ? `${formatEpochDateTime(updateInfo.lastSuccessAtEpochMs)}${
+                          updateInfo.cached ? "（缓存）" : ""
+                        }`
+                      : "尚未检查"}
+                  </span>
+                </MetaRow>
                 <MetaRow label="本地改动">
                   {management === "unmanaged"
                     ? "—"
@@ -435,7 +542,7 @@ export function DetailPane({ skill }: DetailPaneProps) {
                       ? "未检测到改动"
                       : LOCAL_MODIFICATION_LABELS[localModification]}
                 </MetaRow>
-                <MetaRow label="更新状态">{UPDATE_LABELS[detail.update]}</MetaRow>
+                <MetaRow label="更新状态">{UPDATE_LABELS[update]}</MetaRow>
                 <MetaRow label="管理状态">
                   {management === "managed"
                     ? "受管"

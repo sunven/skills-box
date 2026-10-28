@@ -1,10 +1,10 @@
 import { useEffect, useRef } from "react";
 import { AlertTriangle, X } from "lucide-react";
 import { Button } from "./ui/button";
-import type { AnomalyGroup, AnomalySummary } from "../lib/types";
+import type { AnomalyGroup, AnomalyView } from "../lib/types";
 
 interface AnomalyBannerProps {
-  anomalies: AnomalySummary;
+  anomalies: AnomalyView;
   onOpen: () => void;
 }
 
@@ -24,7 +24,8 @@ export function AnomalyBanner({ anomalies, onOpen }: AnomalyBannerProps) {
         <span className="text-warning/90">
           {anomalies.stale.count} 条 stale lock · {anomalies.unmanaged.count}{" "}
           个未受管 · {anomalies.broken.count} 个断链 ·{" "}
-          {anomalies.modified.count} 个本地改动
+          {anomalies.modified.count} 个本地改动 · {anomalies.pathMissing.count}{" "}
+          个源路径缺失 · {anomalies.checkFailed.count} 个检查失败
         </span>
       </span>
       <span className="shrink-0 pt-3 text-[10.5px] underline underline-offset-2">
@@ -35,15 +36,15 @@ export function AnomalyBanner({ anomalies, onOpen }: AnomalyBannerProps) {
 }
 
 interface AnomalyDialogProps {
-  anomalies: AnomalySummary;
+  anomalies: AnomalyView;
   open: boolean;
   onClose: () => void;
 }
 
 const CATEGORIES: Array<{
   key: keyof Pick<
-    AnomalySummary,
-    "stale" | "unmanaged" | "broken" | "modified"
+    AnomalyView,
+    "stale" | "unmanaged" | "broken" | "modified" | "pathMissing" | "checkFailed"
   >;
   label: string;
   description: string;
@@ -68,6 +69,18 @@ const CATEGORIES: Array<{
     label: "本地改动",
     description:
       "当前文件与基线或 lock hash 不一致；「本地改动?」表示首次扫描无法确认，更新前需确认并备份。",
+  },
+  {
+    key: "pathMissing",
+    label: "源路径缺失",
+    description:
+      "上游仓库仍存在，但 lock 记录的 skillPath 已找不到；不计为可更新，更新禁用。",
+  },
+  {
+    key: "checkFailed",
+    label: "检查失败",
+    description:
+      "网络、限流或仓库不可达；保留上次成功结果，绝不显示为已是最新。",
   },
 ];
 
