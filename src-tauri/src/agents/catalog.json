@@ -1,0 +1,1298 @@
+{
+  "source": "skills@1.7.4",
+  "sourcePackage": "npm skills@1.7.4",
+  "sourceRepository": "https://github.com/vercel-labs/skills",
+  "sourceCommit": "a80e4c9d12d607631249d4d7d059f835d4b2f13a",
+  "agents": [
+    {
+      "id": "aider-desk",
+      "displayName": "AiderDesk",
+      "globalSkillsDir": "~/.aider-desk/skills",
+      "universal": false,
+      "skillsDir": ".aider-desk/skills",
+      "installDir": "~/.aider-desk/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.aider-desk"
+      ]
+    },
+    {
+      "id": "amp",
+      "displayName": "Amp",
+      "globalSkillsDir": "~/.config/agents/skills",
+      "universal": true,
+      "skillsDir": ".agents/skills",
+      "installDir": "~/.agents/skills",
+      "globalSkillsDirEnv": "XDG_CONFIG_HOME",
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "$XDG_CONFIG_HOME/amp",
+        "~/.config/amp"
+      ]
+    },
+    {
+      "id": "antigravity",
+      "displayName": "Antigravity",
+      "globalSkillsDir": "~/.gemini/antigravity/skills",
+      "universal": true,
+      "skillsDir": ".agents/skills",
+      "installDir": "~/.agents/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": false,
+      "detectPaths": [
+        "~/.gemini/antigravity"
+      ]
+    },
+    {
+      "id": "antigravity-cli",
+      "displayName": "Antigravity CLI",
+      "globalSkillsDir": "~/.gemini/antigravity-cli/skills",
+      "universal": true,
+      "skillsDir": ".agents/skills",
+      "installDir": "~/.agents/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": false,
+      "detectPaths": [
+        "~/.gemini/antigravity-cli"
+      ]
+    },
+    {
+      "id": "astrbot",
+      "displayName": "AstrBot",
+      "globalSkillsDir": "~/.astrbot/data/skills",
+      "universal": false,
+      "skillsDir": "data/skills",
+      "installDir": "~/.astrbot/data/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "<cwd>/data/skills",
+        "~/.astrbot"
+      ]
+    },
+    {
+      "id": "autohand-code",
+      "displayName": "Autohand Code CLI",
+      "globalSkillsDir": "~/.autohand/skills",
+      "universal": false,
+      "skillsDir": ".autohand/skills",
+      "installDir": "~/.autohand/skills",
+      "globalSkillsDirEnv": "AUTOHAND_HOME",
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "$AUTOHAND_HOME",
+        "~/.autohand"
+      ]
+    },
+    {
+      "id": "augment",
+      "displayName": "Augment",
+      "globalSkillsDir": "~/.augment/skills",
+      "universal": false,
+      "skillsDir": ".augment/skills",
+      "installDir": "~/.augment/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.augment"
+      ]
+    },
+    {
+      "id": "bob",
+      "displayName": "IBM Bob",
+      "globalSkillsDir": "~/.bob/skills",
+      "universal": false,
+      "skillsDir": ".bob/skills",
+      "installDir": "~/.bob/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.bob"
+      ]
+    },
+    {
+      "id": "claude-code",
+      "displayName": "Claude Code",
+      "globalSkillsDir": "~/.claude/skills",
+      "universal": false,
+      "skillsDir": ".claude/skills",
+      "installDir": "~/.claude/skills",
+      "globalSkillsDirEnv": "CLAUDE_CONFIG_DIR",
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "$CLAUDE_CONFIG_DIR",
+        "~/.claude"
+      ]
+    },
+    {
+      "id": "openclaw",
+      "displayName": "OpenClaw",
+      "globalSkillsDir": "~/.openclaw/skills",
+      "universal": false,
+      "skillsDir": "skills",
+      "installDir": "~/.openclaw/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": true,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.openclaw",
+        "~/.clawdbot",
+        "~/.moltbot"
+      ]
+    },
+    {
+      "id": "cline",
+      "displayName": "Cline",
+      "globalSkillsDir": "~/.agents/skills",
+      "universal": true,
+      "skillsDir": ".agents/skills",
+      "installDir": "~/.agents/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": true,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.cline"
+      ]
+    },
+    {
+      "id": "codearts-agent",
+      "displayName": "CodeArts Agent",
+      "globalSkillsDir": "~/.codeartsdoer/skills",
+      "universal": false,
+      "skillsDir": ".codeartsdoer/skills",
+      "installDir": "~/.codeartsdoer/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.codeartsdoer"
+      ]
+    },
+    {
+      "id": "codebuddy",
+      "displayName": "CodeBuddy",
+      "globalSkillsDir": "~/.codebuddy/skills",
+      "universal": false,
+      "skillsDir": ".codebuddy/skills",
+      "installDir": "~/.codebuddy/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "<cwd>/.codebuddy",
+        "~/.codebuddy"
+      ]
+    },
+    {
+      "id": "codemaker",
+      "displayName": "Codemaker",
+      "globalSkillsDir": "~/.codemaker/skills",
+      "universal": false,
+      "skillsDir": ".codemaker/skills",
+      "installDir": "~/.codemaker/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.codemaker"
+      ]
+    },
+    {
+      "id": "codestudio",
+      "displayName": "Code Studio",
+      "globalSkillsDir": "~/.codestudio/skills",
+      "universal": false,
+      "skillsDir": ".codestudio/skills",
+      "installDir": "~/.codestudio/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.codestudio"
+      ]
+    },
+    {
+      "id": "codex",
+      "displayName": "Codex",
+      "globalSkillsDir": "~/.agents/skills",
+      "universal": true,
+      "skillsDir": ".agents/skills",
+      "installDir": "~/.agents/skills",
+      "globalSkillsDirEnv": "CODEX_HOME",
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": true,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "$CODEX_HOME",
+        "~/.codex",
+        "/etc/codex"
+      ]
+    },
+    {
+      "id": "command-code",
+      "displayName": "Command Code",
+      "globalSkillsDir": "~/.commandcode/skills",
+      "universal": false,
+      "skillsDir": ".commandcode/skills",
+      "installDir": "~/.commandcode/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.commandcode"
+      ]
+    },
+    {
+      "id": "continue",
+      "displayName": "Continue",
+      "globalSkillsDir": "~/.continue/skills",
+      "universal": false,
+      "skillsDir": ".continue/skills",
+      "installDir": "~/.continue/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "<cwd>/.continue",
+        "~/.continue"
+      ]
+    },
+    {
+      "id": "cortex",
+      "displayName": "Cortex Code",
+      "globalSkillsDir": "~/.snowflake/cortex/skills",
+      "universal": false,
+      "skillsDir": ".cortex/skills",
+      "installDir": "~/.snowflake/cortex/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.snowflake/cortex"
+      ]
+    },
+    {
+      "id": "crush",
+      "displayName": "Crush",
+      "globalSkillsDir": "~/.config/crush/skills",
+      "universal": false,
+      "skillsDir": ".crush/skills",
+      "installDir": "~/.config/crush/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.config/crush"
+      ]
+    },
+    {
+      "id": "cursor",
+      "displayName": "Cursor",
+      "globalSkillsDir": "~/.cursor/skills",
+      "universal": true,
+      "skillsDir": ".agents/skills",
+      "installDir": "~/.agents/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.cursor"
+      ]
+    },
+    {
+      "id": "deepagents",
+      "displayName": "Deep Agents",
+      "globalSkillsDir": "~/.deepagents/agent/skills",
+      "universal": true,
+      "skillsDir": ".agents/skills",
+      "installDir": "~/.agents/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": false,
+      "detectPaths": [
+        "~/.deepagents"
+      ]
+    },
+    {
+      "id": "devin",
+      "displayName": "Devin for Terminal",
+      "globalSkillsDir": "~/.config/devin/skills",
+      "universal": false,
+      "skillsDir": ".devin/skills",
+      "installDir": "~/.config/devin/skills",
+      "globalSkillsDirEnv": "XDG_CONFIG_HOME",
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "$XDG_CONFIG_HOME/devin",
+        "~/.config/devin"
+      ]
+    },
+    {
+      "id": "dexto",
+      "displayName": "Dexto",
+      "globalSkillsDir": "~/.agents/skills",
+      "universal": true,
+      "skillsDir": ".agents/skills",
+      "installDir": "~/.agents/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": true,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": false,
+      "detectPaths": [
+        "~/.dexto"
+      ]
+    },
+    {
+      "id": "droid",
+      "displayName": "Droid",
+      "globalSkillsDir": "~/.factory/skills",
+      "universal": true,
+      "skillsDir": ".agents/skills",
+      "installDir": "~/.agents/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.factory"
+      ]
+    },
+    {
+      "id": "eve",
+      "displayName": "Eve",
+      "globalSkillsDir": null,
+      "universal": false,
+      "skillsDir": "agent/skills",
+      "installDir": null,
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "<cwd>/agent",
+        "<cwd>/package.json#dependencies.eve"
+      ]
+    },
+    {
+      "id": "firebender",
+      "displayName": "Firebender",
+      "globalSkillsDir": "~/.firebender/skills",
+      "universal": true,
+      "skillsDir": ".agents/skills",
+      "installDir": "~/.agents/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": false,
+      "detectPaths": [
+        "~/.firebender"
+      ]
+    },
+    {
+      "id": "forgecode",
+      "displayName": "ForgeCode",
+      "globalSkillsDir": "~/.forge/skills",
+      "universal": false,
+      "skillsDir": ".forge/skills",
+      "installDir": "~/.forge/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.forge"
+      ]
+    },
+    {
+      "id": "fx",
+      "displayName": "fx",
+      "globalSkillsDir": "~/.agents/skills",
+      "universal": true,
+      "skillsDir": ".agents/skills",
+      "installDir": "~/.agents/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": true,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.fx"
+      ]
+    },
+    {
+      "id": "gemini-cli",
+      "displayName": "Gemini CLI",
+      "globalSkillsDir": "~/.gemini/skills",
+      "universal": true,
+      "skillsDir": ".agents/skills",
+      "installDir": "~/.agents/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.gemini"
+      ]
+    },
+    {
+      "id": "github-copilot",
+      "displayName": "GitHub Copilot",
+      "globalSkillsDir": "~/.copilot/skills",
+      "universal": true,
+      "skillsDir": ".agents/skills",
+      "installDir": "~/.agents/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.copilot"
+      ]
+    },
+    {
+      "id": "goose",
+      "displayName": "Goose",
+      "globalSkillsDir": "~/.config/goose/skills",
+      "universal": false,
+      "skillsDir": ".goose/skills",
+      "installDir": "~/.config/goose/skills",
+      "globalSkillsDirEnv": "XDG_CONFIG_HOME",
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "$XDG_CONFIG_HOME/goose",
+        "~/.config/goose"
+      ]
+    },
+    {
+      "id": "grok",
+      "displayName": "Grok Build",
+      "globalSkillsDir": "~/.grok/skills",
+      "universal": false,
+      "skillsDir": ".grok/skills",
+      "installDir": "~/.grok/skills",
+      "globalSkillsDirEnv": "GROK_HOME",
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "$GROK_HOME",
+        "~/.grok"
+      ]
+    },
+    {
+      "id": "hermes-agent",
+      "displayName": "Hermes Agent",
+      "globalSkillsDir": "~/.hermes/skills",
+      "universal": false,
+      "skillsDir": ".hermes/skills",
+      "installDir": "~/.hermes/skills",
+      "globalSkillsDirEnv": "HERMES_HOME",
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "$HERMES_HOME",
+        "~/.hermes"
+      ]
+    },
+    {
+      "id": "inference-sh",
+      "displayName": "inference.sh",
+      "globalSkillsDir": "~/.inferencesh/skills",
+      "universal": false,
+      "skillsDir": ".inferencesh/skills",
+      "installDir": "~/.inferencesh/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.inferencesh"
+      ]
+    },
+    {
+      "id": "jazz",
+      "displayName": "Jazz",
+      "globalSkillsDir": "~/.jazz/skills",
+      "universal": false,
+      "skillsDir": ".jazz/skills",
+      "installDir": "~/.jazz/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.jazz",
+        "<cwd>/.jazz"
+      ]
+    },
+    {
+      "id": "junie",
+      "displayName": "Junie",
+      "globalSkillsDir": "~/.junie/skills",
+      "universal": false,
+      "skillsDir": ".junie/skills",
+      "installDir": "~/.junie/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.junie"
+      ]
+    },
+    {
+      "id": "iflow-cli",
+      "displayName": "iFlow CLI",
+      "globalSkillsDir": "~/.iflow/skills",
+      "universal": false,
+      "skillsDir": ".iflow/skills",
+      "installDir": "~/.iflow/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.iflow"
+      ]
+    },
+    {
+      "id": "kilo",
+      "displayName": "Kilo Code",
+      "globalSkillsDir": "~/.kilo/skills",
+      "universal": true,
+      "skillsDir": ".agents/skills",
+      "installDir": "~/.agents/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.kilo",
+        "~/.kilocode"
+      ]
+    },
+    {
+      "id": "kimchi",
+      "displayName": "Kimchi",
+      "globalSkillsDir": "~/.config/kimchi/harness/skills",
+      "universal": false,
+      "skillsDir": ".kimchi/skills",
+      "installDir": "~/.config/kimchi/harness/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.config/kimchi"
+      ]
+    },
+    {
+      "id": "kimi-code-cli",
+      "displayName": "Kimi Code CLI",
+      "globalSkillsDir": "~/.agents/skills",
+      "universal": true,
+      "skillsDir": ".agents/skills",
+      "installDir": "~/.agents/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": true,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.kimi-code",
+        "~/.kimi"
+      ]
+    },
+    {
+      "id": "kiro-cli",
+      "displayName": "Kiro CLI",
+      "globalSkillsDir": "~/.kiro/skills",
+      "universal": false,
+      "skillsDir": ".kiro/skills",
+      "installDir": "~/.kiro/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.kiro"
+      ]
+    },
+    {
+      "id": "kode",
+      "displayName": "Kode",
+      "globalSkillsDir": "~/.kode/skills",
+      "universal": false,
+      "skillsDir": ".kode/skills",
+      "installDir": "~/.kode/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.kode"
+      ]
+    },
+    {
+      "id": "lingma",
+      "displayName": "Lingma",
+      "globalSkillsDir": "~/.lingma/skills",
+      "universal": false,
+      "skillsDir": ".lingma/skills",
+      "installDir": "~/.lingma/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.lingma"
+      ]
+    },
+    {
+      "id": "loaf",
+      "displayName": "Loaf",
+      "globalSkillsDir": "~/.agents/skills",
+      "universal": true,
+      "skillsDir": ".agents/skills",
+      "installDir": "~/.agents/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": true,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": false,
+      "detectPaths": [
+        "~/.loaf"
+      ]
+    },
+    {
+      "id": "mcpjam",
+      "displayName": "MCPJam",
+      "globalSkillsDir": "~/.mcpjam/skills",
+      "universal": false,
+      "skillsDir": ".mcpjam/skills",
+      "installDir": "~/.mcpjam/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.mcpjam"
+      ]
+    },
+    {
+      "id": "minimax-code",
+      "displayName": "MiniMax Code",
+      "globalSkillsDir": "~/.minimax/skills",
+      "universal": false,
+      "skillsDir": ".minimax/skills",
+      "installDir": "~/.minimax/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.minimax",
+        "/Applications/MiniMax Code.app"
+      ]
+    },
+    {
+      "id": "mistral-vibe",
+      "displayName": "Mistral Vibe",
+      "globalSkillsDir": "~/.vibe/skills",
+      "universal": false,
+      "skillsDir": ".vibe/skills",
+      "installDir": "~/.vibe/skills",
+      "globalSkillsDirEnv": "VIBE_HOME",
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "$VIBE_HOME",
+        "~/.vibe"
+      ]
+    },
+    {
+      "id": "moxby",
+      "displayName": "Moxby",
+      "globalSkillsDir": "~/.moxby/skills",
+      "universal": false,
+      "skillsDir": ".moxby/skills",
+      "installDir": "~/.moxby/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.moxby"
+      ]
+    },
+    {
+      "id": "mux",
+      "displayName": "Mux",
+      "globalSkillsDir": "~/.mux/skills",
+      "universal": false,
+      "skillsDir": ".mux/skills",
+      "installDir": "~/.mux/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.mux"
+      ]
+    },
+    {
+      "id": "opencode",
+      "displayName": "OpenCode",
+      "globalSkillsDir": "~/.config/opencode/skills",
+      "universal": true,
+      "skillsDir": ".agents/skills",
+      "installDir": "~/.agents/skills",
+      "globalSkillsDirEnv": "XDG_CONFIG_HOME",
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "$XDG_CONFIG_HOME/opencode",
+        "~/.config/opencode"
+      ]
+    },
+    {
+      "id": "openhands",
+      "displayName": "OpenHands",
+      "globalSkillsDir": "~/.openhands/skills",
+      "universal": false,
+      "skillsDir": ".openhands/skills",
+      "installDir": "~/.openhands/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.openhands"
+      ]
+    },
+    {
+      "id": "ona",
+      "displayName": "Ona",
+      "globalSkillsDir": "~/.ona/skills",
+      "universal": false,
+      "skillsDir": ".ona/skills",
+      "installDir": "~/.ona/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.ona"
+      ]
+    },
+    {
+      "id": "pi",
+      "displayName": "Pi",
+      "globalSkillsDir": "~/.agents/skills",
+      "universal": true,
+      "skillsDir": ".agents/skills",
+      "installDir": "~/.agents/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": true,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.pi/agent"
+      ]
+    },
+    {
+      "id": "posit-assistant",
+      "displayName": "Posit Assistant",
+      "globalSkillsDir": "~/.posit/assistant/skills",
+      "universal": false,
+      "skillsDir": ".posit/assistant/skills",
+      "installDir": "~/.posit/assistant/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.posit/assistant",
+        "~/.positai"
+      ]
+    },
+    {
+      "id": "qoder",
+      "displayName": "Qoder",
+      "globalSkillsDir": "~/.qoder/skills",
+      "universal": false,
+      "skillsDir": ".qoder/skills",
+      "installDir": "~/.qoder/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.qoder"
+      ]
+    },
+    {
+      "id": "qoder-cn",
+      "displayName": "Qoder CN",
+      "globalSkillsDir": "~/.qoder-cn/skills",
+      "universal": false,
+      "skillsDir": ".qoder/skills",
+      "installDir": "~/.qoder-cn/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.qoder-cn"
+      ]
+    },
+    {
+      "id": "qwen-code",
+      "displayName": "Qwen Code",
+      "globalSkillsDir": "~/.qwen/skills",
+      "universal": false,
+      "skillsDir": ".qwen/skills",
+      "installDir": "~/.qwen/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.qwen"
+      ]
+    },
+    {
+      "id": "replit",
+      "displayName": "Replit",
+      "globalSkillsDir": "~/.config/agents/skills",
+      "universal": true,
+      "skillsDir": ".agents/skills",
+      "installDir": "~/.agents/skills",
+      "globalSkillsDirEnv": "XDG_CONFIG_HOME",
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": false,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "<cwd>/.replit"
+      ]
+    },
+    {
+      "id": "reasonix",
+      "displayName": "Reasonix",
+      "globalSkillsDir": "~/.reasonix/skills",
+      "universal": false,
+      "skillsDir": ".reasonix/skills",
+      "installDir": "~/.reasonix/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.reasonix"
+      ]
+    },
+    {
+      "id": "rovodev",
+      "displayName": "Rovo Dev",
+      "globalSkillsDir": "~/.rovodev/skills",
+      "universal": false,
+      "skillsDir": ".rovodev/skills",
+      "installDir": "~/.rovodev/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.rovodev"
+      ]
+    },
+    {
+      "id": "roo",
+      "displayName": "Roo Code",
+      "globalSkillsDir": "~/.roo/skills",
+      "universal": false,
+      "skillsDir": ".roo/skills",
+      "installDir": "~/.roo/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.roo"
+      ]
+    },
+    {
+      "id": "sarvam-code",
+      "displayName": "Sarvam Code",
+      "globalSkillsDir": "~/.agents/skills",
+      "universal": true,
+      "skillsDir": ".agents/skills",
+      "installDir": "~/.agents/skills",
+      "globalSkillsDirEnv": "SARVAM_HOME",
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": true,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": false,
+      "detectPaths": [
+        "$SARVAM_HOME",
+        "~/.sarvam"
+      ]
+    },
+    {
+      "id": "tabnine-cli",
+      "displayName": "Tabnine CLI",
+      "globalSkillsDir": "~/.tabnine/agent/skills",
+      "universal": false,
+      "skillsDir": ".tabnine/agent/skills",
+      "installDir": "~/.tabnine/agent/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.tabnine"
+      ]
+    },
+    {
+      "id": "terramind",
+      "displayName": "Terramind",
+      "globalSkillsDir": "~/.terramind/skills",
+      "universal": false,
+      "skillsDir": ".terramind/skills",
+      "installDir": "~/.terramind/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.terramind"
+      ]
+    },
+    {
+      "id": "tinycloud",
+      "displayName": "Tinycloud",
+      "globalSkillsDir": "~/.tinycloud/skills",
+      "universal": false,
+      "skillsDir": ".tinycloud/skills",
+      "installDir": "~/.tinycloud/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.tinycloud"
+      ]
+    },
+    {
+      "id": "trae",
+      "displayName": "Trae",
+      "globalSkillsDir": "~/.trae/skills",
+      "universal": false,
+      "skillsDir": ".trae/skills",
+      "installDir": "~/.trae/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.trae"
+      ]
+    },
+    {
+      "id": "trae-cn",
+      "displayName": "Trae CN",
+      "globalSkillsDir": "~/.trae-cn/skills",
+      "universal": false,
+      "skillsDir": ".trae/skills",
+      "installDir": "~/.trae-cn/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.trae-cn"
+      ]
+    },
+    {
+      "id": "warp",
+      "displayName": "Warp",
+      "globalSkillsDir": "~/.agents/skills",
+      "universal": true,
+      "skillsDir": ".agents/skills",
+      "installDir": "~/.agents/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": true,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.warp"
+      ]
+    },
+    {
+      "id": "windsurf",
+      "displayName": "Windsurf",
+      "globalSkillsDir": "~/.codeium/windsurf/skills",
+      "universal": false,
+      "skillsDir": ".windsurf/skills",
+      "installDir": "~/.codeium/windsurf/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.codeium/windsurf"
+      ]
+    },
+    {
+      "id": "zed",
+      "displayName": "Zed",
+      "globalSkillsDir": "~/.agents/skills",
+      "universal": true,
+      "skillsDir": ".agents/skills",
+      "installDir": "~/.agents/skills",
+      "globalSkillsDirEnv": "XDG_CONFIG_HOME / APPDATA / FLATPAK_XDG_CONFIG_HOME",
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": true,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "$XDG_CONFIG_HOME/zed",
+        "~/.config/zed",
+        "$APPDATA/Zed",
+        "$FLATPAK_XDG_CONFIG_HOME/zed"
+      ]
+    },
+    {
+      "id": "zcode",
+      "displayName": "ZCode",
+      "globalSkillsDir": "~/.zcode/skills",
+      "universal": false,
+      "skillsDir": ".zcode/skills",
+      "installDir": "~/.zcode/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.zcode",
+        "/Applications/ZCode.app"
+      ]
+    },
+    {
+      "id": "zencoder",
+      "displayName": "Zencoder",
+      "globalSkillsDir": "~/.zencoder/skills",
+      "universal": false,
+      "skillsDir": ".zencoder/skills",
+      "installDir": "~/.zencoder/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.zencoder"
+      ]
+    },
+    {
+      "id": "zenflow",
+      "displayName": "Zenflow",
+      "globalSkillsDir": "~/.zencoder/skills",
+      "universal": false,
+      "skillsDir": ".zencoder/skills",
+      "installDir": "~/.zencoder/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.zencoder"
+      ]
+    },
+    {
+      "id": "neovate",
+      "displayName": "Neovate",
+      "globalSkillsDir": "~/.neovate/skills",
+      "universal": false,
+      "skillsDir": ".neovate/skills",
+      "installDir": "~/.neovate/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.neovate"
+      ]
+    },
+    {
+      "id": "pochi",
+      "displayName": "Pochi",
+      "globalSkillsDir": "~/.pochi/skills",
+      "universal": false,
+      "skillsDir": ".pochi/skills",
+      "installDir": "~/.pochi/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.pochi"
+      ]
+    },
+    {
+      "id": "promptscript",
+      "displayName": "PromptScript",
+      "globalSkillsDir": null,
+      "universal": true,
+      "skillsDir": ".agents/skills",
+      "installDir": null,
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": false,
+      "detectPaths": [
+        "<cwd>/.promptscript",
+        "<cwd>/promptscript.yaml"
+      ]
+    },
+    {
+      "id": "adal",
+      "displayName": "AdaL",
+      "globalSkillsDir": "~/.adal/skills",
+      "universal": false,
+      "skillsDir": ".adal/skills",
+      "installDir": "~/.adal/skills",
+      "globalSkillsDirEnv": null,
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": true,
+      "showInUniversalPrompt": true,
+      "detectPaths": [
+        "~/.adal"
+      ]
+    },
+    {
+      "id": "universal",
+      "displayName": "Universal",
+      "globalSkillsDir": "~/.config/agents/skills",
+      "universal": true,
+      "skillsDir": ".agents/skills",
+      "installDir": "~/.agents/skills",
+      "globalSkillsDirEnv": "XDG_CONFIG_HOME",
+      "dynamicGlobalDir": false,
+      "sharedGlobalDir": false,
+      "showInUniversalList": false,
+      "showInUniversalPrompt": true,
+      "detectPaths": []
+    }
+  ]
+}

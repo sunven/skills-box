@@ -1,50 +1,45 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
-import "./App.css";
+import { AppHeader } from "./components/app-header";
+import { DetailPane } from "./components/detail-pane";
+import { EnvironmentBanner } from "./components/environment-banner";
+import { EnvironmentMetrics } from "./components/environment-metrics";
+import { FilterSidebar } from "./components/filter-sidebar";
+import { SkillListPane } from "./components/skill-list-pane";
+import { useEnvironmentQuery, useRecheckEnvironment } from "./hooks/use-environment";
 
 function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+  const environment = useEnvironmentQuery();
+  const recheck = useRecheckEnvironment();
+  const report = environment.data;
+  const mutationsEnabled = report?.mutationsEnabled ?? false;
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
+  const handleRecheck = () => {
+    recheck.mutate();
+  };
 
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
-
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
-    </main>
+    <div className="flex h-screen min-w-[1080px] flex-col overflow-hidden bg-background text-foreground">
+      <AppHeader
+        report={report}
+        isLoading={environment.isPending}
+        isError={environment.isError}
+        mutationsEnabled={mutationsEnabled}
+        rechecking={recheck.isPending}
+        onRecheck={handleRecheck}
+      />
+      <EnvironmentMetrics report={report} />
+      <EnvironmentBanner
+        report={report}
+        isLoading={environment.isPending}
+        error={environment.error}
+        rechecking={recheck.isPending}
+        onRecheck={handleRecheck}
+      />
+      <main className="grid min-h-0 flex-1 grid-cols-[220px_minmax(0,1fr)_340px]">
+        <FilterSidebar agents={report?.agents ?? []} />
+        <SkillListPane />
+        <DetailPane />
+      </main>
+    </div>
   );
 }
 
