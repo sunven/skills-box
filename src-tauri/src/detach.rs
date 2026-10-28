@@ -287,16 +287,19 @@ pub fn detach_agent(
     Ok(result)
 }
 
-#[derive(Debug)]
-struct DependentLink {
-    label: String,
-    path: PathBuf,
+/// A symlink whose realpath is a copy directory. Shared with the uninstall
+/// flow so both destructive actions use the same cross-agent dependency scan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DependentLink {
+    /// Agent display name, or `canonical` for the shared store.
+    pub label: String,
+    pub path: PathBuf,
 }
 
 /// Find every symlink (inside any detected agent skills directory or the
 /// canonical store) whose realpath is the copy directory being removed.
 /// Dangling symlinks cannot resolve and are ignored.
-fn find_copy_dependents(
+pub fn find_copy_dependents(
     agents: &[AgentDir],
     canonical_dir: &Path,
     target: &Path,
