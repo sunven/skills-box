@@ -1,0 +1,14 @@
+[?25l│
+◇  Found 1 unique installed skill(s)
+[?25h[?25l│
+│
+▲  Could not remove skill from Claude Code: EACCES: permission denied, unlink '/tmp/skills-box-sandbox-home2/.claude/skills/find-skills'
+◇  Removal process complete
+[?25h│
+■  [31mFailed to remove 1 skill(s)[39m
+│
+│    [31m✗[39m find-skills: EACCES: permission denied, rmdir '/tmp/skills-box-sandbox-home2/.agents/skills/find-skills'
+
+│
+└  [32mDone![39m
+

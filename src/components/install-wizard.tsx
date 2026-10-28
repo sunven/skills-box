@@ -125,6 +125,8 @@ function skillStatusLabel(status: TaskResult["skills"][number]["status"]): strin
       return "已安装";
     case "updated":
       return "已更新";
+    case "removed":
+      return "已卸载";
     case "skipped":
       return "未找到";
     case "failed":

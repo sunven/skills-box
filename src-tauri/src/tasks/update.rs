@@ -438,6 +438,7 @@ pub fn status_label(status: TaskSkillStatus) -> &'static str {
     match status {
         TaskSkillStatus::Installed => "installed",
         TaskSkillStatus::Updated => "updated",
+        TaskSkillStatus::Removed => "removed",
         TaskSkillStatus::Skipped => "skipped",
         TaskSkillStatus::Failed => "failed",
     }
@@ -1265,7 +1266,9 @@ mod tests {
     async fn corrupt_lock_rejects_the_update_before_a_task_starts() {
         let fixture = Fixture::new(&[("alpha", "acme/skills", None)]);
         fs::write(fixture.paths.lock_path(), "{not json").unwrap();
-        let executor = Arc::new(UpdateExecutor::new(vec![UpdateResponse::installed("alpha")]));
+        let executor = Arc::new(UpdateExecutor::new(vec![UpdateResponse::installed(
+            "alpha",
+        )]));
         let manager = update_manager(&fixture.paths, executor.clone());
         let (sink, _receiver) = sink();
         let error = manager

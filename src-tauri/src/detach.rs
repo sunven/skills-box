@@ -185,12 +185,8 @@ pub fn detach_agent(
                     .map(|dependent| {
                         format!("{}（{}）", dependent.label, paths.display(&dependent.path))
                     })
-                    .collect::<Vec<_>>()
-                    .join("、");
-                let error = AppError::agent_dependency_conflict(
-                    skill_id,
-                    format!("依赖此 copy 目录的符号链接：{list}"),
-                );
+                    .collect::<Vec<_>>();
+                let error = AppError::agent_dependency_conflict(&agent.display_name, &list);
                 log_failure(&log, skill_id, agent_id, None, &error);
                 return Err(error);
             }

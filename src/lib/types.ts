@@ -91,7 +91,12 @@ export type TaskPhase =
 
 export type TaskOverall = "success" | "partial" | "failed" | "cancelled";
 
-export type TaskSkillStatus = "installed" | "updated" | "skipped" | "failed";
+export type TaskSkillStatus =
+  | "installed"
+  | "updated"
+  | "removed"
+  | "skipped"
+  | "failed";
 
 export interface TaskSkillResult {
   name: string;

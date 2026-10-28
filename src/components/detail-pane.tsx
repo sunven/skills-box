@@ -8,6 +8,7 @@ import {
   Loader2,
   MousePointerClick,
   RefreshCw,
+  Trash2,
   Unlink,
 } from "lucide-react";
 import { Badge } from "./ui/badge";
@@ -47,6 +48,7 @@ interface DetailPaneProps {
   checkingUpdates?: boolean;
   onCheckUpdates?: (skillIds: string[]) => void;
   onUpdate?: (skillName: string) => void;
+  onUninstall?: (skillName: string) => void;
 }
 
 type DetailView = "rendered" | "raw";
@@ -172,6 +174,7 @@ export function DetailPane({
   checkingUpdates = false,
   onCheckUpdates,
   onUpdate,
+  onUninstall,
 }: DetailPaneProps) {
   const skillId = skill?.name ?? null;
   const query = useSkillDetailQuery(skillId);
@@ -415,6 +418,17 @@ export function DetailPane({
               更新
             </Button>
           ) : null}
+          {management !== "unmanaged" && onUninstall ? (
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => onUninstall(skill.name)}
+              title="删除 canonical、所有 agent 挂载、lock 条目与基线；先备份，不自动回滚"
+            >
+              <Trash2 className="size-3.5" aria-hidden="true" />
+              彻底卸载
+            </Button>
+          ) : null}
         </div>
 
         {actionError ? (
@@ -457,7 +471,7 @@ export function DetailPane({
         ) : null}
         {management === "copy_only" ? (
           <div className="mt-2 rounded-md border border-border bg-muted/50 px-2.5 py-1.5 text-[10.5px] leading-relaxed text-muted-foreground">
-            仅副本：没有 canonical 目录；不可更新或断开。卸载入口将在后续版本接入。
+            仅副本：没有 canonical 目录；不可更新或断开，可彻底卸载。
           </div>
         ) : null}
         {localModification === "modified" ? (

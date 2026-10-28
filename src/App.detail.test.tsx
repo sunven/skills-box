@@ -221,10 +221,14 @@ describe("skill detail panel", () => {
       pane.getByRole("button", { name: "断开 Claude Code" }),
     ).toBeInTheDocument();
     expect(
-      pane.queryByRole("button", { name: /^更新$|卸载|断开 Codex|断开 Gemini/ }),
+      pane.queryByRole("button", { name: /^更新$|断开 Codex|断开 Gemini/ }),
     ).toBeNull();
     expect(
       pane.getByRole("button", { name: "检查更新" }),
+    ).toBeInTheDocument();
+    // Managed rows expose the destructive uninstall action from ticket 09.
+    expect(
+      pane.getByRole("button", { name: "彻底卸载" }),
     ).toBeInTheDocument();
 
     // Rendered SKILL.md hides frontmatter and renders Markdown.
@@ -544,18 +548,24 @@ describe("skill detail panel", () => {
     expect(detailPane().queryByText("本地改动?")).toBeNull();
     expect(detailPane().getByText("~/.claude/skills/gamma")).toBeInTheDocument();
     expect(detailPane().getByText("canonical 路径")).toBeInTheDocument();
+    // Unmanaged rows stay read-only: no uninstall action.
+    expect(detailPane().queryByRole("button", { name: "彻底卸载" })).toBeNull();
 
     fireEvent.click(row("delta"));
     await waitFor(() => {
       expect(detailPane().getByText(/仅副本：没有 canonical 目录/)).toBeInTheDocument();
     });
     expect(detailPane().getByRole("button", { name: "在 Finder 中查看" })).toBeInTheDocument();
-    // copy-only keeps Finder only until uninstall lands in ticket 09.
+    // Copy-only exposes Finder and uninstall, but no editor/update/detach.
     expect(detailPane().queryByRole("button", { name: "默认编辑器打开" })).toBeNull();
     expect(detailPane().getByText("agent 路径")).toBeInTheDocument();
     expect(
-      detailPane().queryByRole("button", { name: /检查更新|^更新$|卸载|断开/ }),
+      detailPane().queryByRole("button", { name: /检查更新|^更新$|断开/ }),
     ).toBeNull();
+    // Copy-only rows can be uninstalled even though they cannot update/detach.
+    expect(
+      detailPane().getByRole("button", { name: "彻底卸载" }),
+    ).toBeInTheDocument();
 
     // The anomaly filter includes modified and unknown local changes.
     fireEvent.click(screen.getByRole("button", { name: /^异常/ }));

@@ -68,6 +68,7 @@ pub fn run() {
             commands::start_install,
             commands::start_update,
             commands::detach_agent,
+            commands::start_uninstall,
             commands::check_updates,
             commands::cancel_task,
             commands::reveal_app_data

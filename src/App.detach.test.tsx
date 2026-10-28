@@ -157,7 +157,12 @@ describe("detach from one agent", () => {
     expect(
       pane.queryByRole("button", { name: /断开 Codex|断开 Gemini CLI/ }),
     ).toBeNull();
-    expect(pane.queryByRole("button", { name: /卸载|修复/ })).toBeNull();
+    // Ticket 09 adds a deliberate uninstall action; detach still stays scoped
+    // to the agent rows and never introduces a repair action.
+    expect(pane.queryByRole("button", { name: /修复/ })).toBeNull();
+    expect(
+      pane.getByRole("button", { name: "彻底卸载" }),
+    ).toBeInTheDocument();
 
     fireEvent.click(pane.getByRole("button", { name: "断开 Claude Code" }));
 

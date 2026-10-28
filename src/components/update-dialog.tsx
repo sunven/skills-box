@@ -64,6 +64,8 @@ function statusLabel(status: TaskResult["skills"][number]["status"]): string {
   switch (status) {
     case "updated":
       return "已更新";
+    case "removed":
+      return "已卸载";
     case "installed":
       return "已安装";
     case "skipped":

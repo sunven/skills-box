@@ -8,6 +8,7 @@ import { FilterSidebar } from "./components/filter-sidebar";
 import { InstallWizard } from "./components/install-wizard";
 import { LockErrorScreen } from "./components/lock-error-screen";
 import { SkillListPane } from "./components/skill-list-pane";
+import { UninstallDialog } from "./components/uninstall-dialog";
 import { UpdateDialog } from "./components/update-dialog";
 import { useEnvironmentQuery, useRecheckEnvironment } from "./hooks/use-environment";
 import { useInventoryQuery } from "./hooks/use-inventory";
@@ -27,6 +28,7 @@ import {
   applyUpdateReport,
   computeUpdateSummary,
   withUpdateAnomalies,
+  type UpdateViewSkill,
 } from "./lib/update-view";
 import type { AnomalySummary } from "./lib/types";
 
@@ -58,6 +60,11 @@ function App() {
   const [installOpen, setInstallOpen] = useState(false);
   const [updateMode, setUpdateMode] = useState<"single" | "all" | null>(null);
   const [updateSkillName, setUpdateSkillName] = useState<string | null>(null);
+  // Keep the uninstall target stable across the inventory refresh that follows
+  // a successful removal; the row itself may already be gone from `skills`.
+  const [uninstallSkill, setUninstallSkill] = useState<UpdateViewSkill | null>(
+    null,
+  );
 
   const skills = useMemo(
     () => applyUpdateReport(snapshot?.skills ?? [], updateData),
@@ -205,6 +212,10 @@ function App() {
                 setUpdateSkillName(name);
                 setUpdateMode("single");
               }}
+              onUninstall={(name) => {
+                const target = skills.find((entry) => entry.name === name);
+                if (target) setUninstallSkill(target);
+              }}
             />
           </main>
         </>
@@ -223,6 +234,11 @@ function App() {
           setUpdateMode(null);
           setUpdateSkillName(null);
         }}
+      />
+      <UninstallDialog
+        open={uninstallSkill !== null}
+        skill={uninstallSkill}
+        onClose={() => setUninstallSkill(null)}
       />
       <InstallWizard
         open={installOpen}

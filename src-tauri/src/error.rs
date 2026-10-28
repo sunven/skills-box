@@ -62,6 +62,9 @@ pub mod codes {
     pub const VERIFY_ATTACHMENT_MISSING: &str = "verify.attachment_missing";
     pub const VERIFY_ATTACHMENT_MODE: &str = "verify.attachment_mode";
     pub const VERIFY_COPY_FALLBACK: &str = "verify.copy_fallback";
+    pub const VERIFY_CANONICAL_PRESENT: &str = "verify.canonical_present";
+    pub const VERIFY_ATTACHMENT_PRESENT: &str = "verify.attachment_present";
+    pub const VERIFY_LOCK_PRESENT: &str = "verify.lock_present";
     pub const UPDATE_LOCAL_MODIFIED: &str = "update.local_modified";
     pub const UPDATE_COPY_TO_SYMLINK: &str = "update.copy_to_symlink";
 }
@@ -217,7 +220,7 @@ impl AppError {
     pub fn skill_unmanaged(name: &str) -> Self {
         Self::new(
             codes::SKILL_UNMANAGED,
-            format!("skill「{name}」没有 lock 条目，不可更新或断开。"),
+            format!("skill「{name}」没有 lock 条目，不可更新或卸载（断开亦不可用）。"),
         )
         .hint("未受管 skill 只能只读展示或手动处理，请刷新库存确认状态。")
     }
@@ -473,13 +476,16 @@ impl AppError {
         .hint("v1 不修复或清理断链；请手动检查该 agent 目录。")
     }
 
-    pub fn agent_dependency_conflict(name: &str, detail: impl Into<String>) -> Self {
+    /// A copy attachment is referenced by another agent's symlink, so removing
+    /// it would leave dangling links. Shared by detach and uninstall: both
+    /// block instead of rewriting other agents' attachments.
+    pub fn agent_dependency_conflict(agent: &str, dependents: &[String]) -> Self {
         Self::new(
             codes::AGENT_DEPENDENCY_CONFLICT,
-            format!("skill「{name}」的 copy 挂载仍被其他 agent 的符号链接引用，已阻止断开。"),
+            format!("agent「{agent}」上的 copy 副本仍被其他 agent 的符号链接引用，已阻止操作。"),
         )
-        .detail(detail)
-        .hint("v1 不会自动改指；请先处理这些 agent 的链接，或改用「彻底卸载」。")
+        .detail(format!("引用该副本的挂载：{}", dependents.join("；")))
+        .hint("请先在相关 agent 中断开这些挂载，再重试。")
     }
 
     pub fn agent_detach_failed(detail: impl Into<String>) -> Self {
@@ -554,6 +560,36 @@ impl AppError {
         )
         .detail(path.display().to_string())
         .hint("CLI 可能静默回退为 copy；建议检查该 agent 目录的写权限。")
+    }
+
+    /// Post-uninstall verification: the CLI exited but the shared folder is
+    /// still on disk. Never reported as success.
+    pub fn verify_canonical_present(name: &str, path: &std::path::Path) -> Self {
+        Self::new(
+            codes::VERIFY_CANONICAL_PRESENT,
+            format!("卸载后 canonical 目录仍然存在（{name}）。"),
+        )
+        .detail(path.display().to_string())
+        .hint("CLI 退出成功但未删除共享目录；请手动检查后重试。")
+    }
+
+    /// Post-uninstall verification: an agent attachment still exists.
+    pub fn verify_attachment_present(name: &str, agent: &str, path: &std::path::Path) -> Self {
+        Self::new(
+            codes::VERIFY_ATTACHMENT_PRESENT,
+            format!("卸载后 agent「{agent}」的挂载仍然存在（{name}）。"),
+        )
+        .detail(path.display().to_string())
+        .hint("CLI 可能未能删除该挂载；请检查目录权限后重试。")
+    }
+
+    /// Post-uninstall verification: the lock key survived the removal.
+    pub fn verify_lock_present(name: &str) -> Self {
+        Self::new(
+            codes::VERIFY_LOCK_PRESENT,
+            format!("卸载后 lock 中仍保留 skill「{name}」。"),
+        )
+        .hint("CLI 可能未清理 lock 条目；请检查后再重试。")
     }
 }
 
@@ -633,7 +669,7 @@ mod tests {
             codes::AGENT_BROKEN
         );
         assert_eq!(
-            AppError::agent_dependency_conflict("alpha", "Gemini CLI").code,
+            AppError::agent_dependency_conflict("Claude Code", &["Gemini CLI".to_string()]).code,
             codes::AGENT_DEPENDENCY_CONFLICT
         );
         assert_eq!(
@@ -646,6 +682,22 @@ mod tests {
             codes::NETWORK_RATE_LIMITED
         );
         assert_eq!(AppError::network_error("x").code, codes::NETWORK_ERROR);
+        assert_eq!(
+            AppError::agent_dependency_conflict("Claude Code", &["Qoder".to_string()]).code,
+            codes::AGENT_DEPENDENCY_CONFLICT
+        );
+        assert_eq!(
+            AppError::verify_canonical_present("alpha", std::path::Path::new("/a")).code,
+            codes::VERIFY_CANONICAL_PRESENT
+        );
+        assert_eq!(
+            AppError::verify_attachment_present("alpha", "Qoder", std::path::Path::new("/a")).code,
+            codes::VERIFY_ATTACHMENT_PRESENT
+        );
+        assert_eq!(
+            AppError::verify_lock_present("alpha").code,
+            codes::VERIFY_LOCK_PRESENT
+        );
     }
 
     #[test]
