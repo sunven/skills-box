@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# Agent worktrees
+.qoder/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
