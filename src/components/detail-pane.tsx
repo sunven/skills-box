@@ -198,7 +198,9 @@ export function DetailPane({ skill }: DetailPaneProps) {
     management,
     localModification,
   });
-  const canOpenEditor = management !== "unmanaged";
+  // Managed skills only: unmanaged and copy-only rows are Finder-only in v1.
+  const canOpenEditor = management === "managed";
+  const directoryLabel = management === "copy_only" ? "agent 路径" : "canonical 路径";
 
   const runAction = async (kind: ActionKind) => {
     setActionError(null);
@@ -417,7 +419,7 @@ export function DetailPane({ skill }: DetailPaneProps) {
                     {formatUpdatedAt(detail.updatedAt)}
                   </span>
                 </MetaRow>
-                <MetaRow label="目录" mono>
+                <MetaRow label={directoryLabel} mono>
                   {detail.directoryPath ?? "—"}
                 </MetaRow>
                 <MetaRow label="目录修改时间">

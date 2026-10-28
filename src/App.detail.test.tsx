@@ -194,6 +194,7 @@ describe("skill detail panel", () => {
     expect(pane.getByText("· 公开 GitHub")).toBeInTheDocument();
     expect(pane.getByText("main")).toBeInTheDocument();
     expect(pane.getByText("skills/alpha/SKILL.md")).toBeInTheDocument();
+    expect(pane.getByText("canonical 路径")).toBeInTheDocument();
     expect(pane.getByText("2026-01-01")).toBeInTheDocument();
     expect(pane.getByText("2026-02-03")).toBeInTheDocument();
     expect(pane.getAllByText("~/.agents/skills/alpha").length).toBeGreaterThan(
@@ -519,6 +520,12 @@ describe("skill detail panel", () => {
       await detailPane().findByText(/检测到本地改动：共享副本与基线记录不一致/),
     ).toBeInTheDocument();
 
+    fireEvent.click(row("beta"));
+    expect(
+      await detailPane().findByText(/无法确认本地改动/),
+    ).toBeInTheDocument();
+    expect(detailPane().getAllByText("本地改动?").length).toBeGreaterThan(0);
+
     fireEvent.click(row("gamma"));
     await waitFor(() => {
       expect(
@@ -529,13 +536,16 @@ describe("skill detail panel", () => {
     expect(detailPane().queryByRole("button", { name: "默认编辑器打开" })).toBeNull();
     expect(detailPane().queryByText("本地改动?")).toBeNull();
     expect(detailPane().getByText("~/.claude/skills/gamma")).toBeInTheDocument();
+    expect(detailPane().getByText("canonical 路径")).toBeInTheDocument();
 
     fireEvent.click(row("delta"));
     await waitFor(() => {
       expect(detailPane().getByText(/仅副本：没有 canonical 目录/)).toBeInTheDocument();
     });
     expect(detailPane().getByRole("button", { name: "在 Finder 中查看" })).toBeInTheDocument();
-    expect(detailPane().getByRole("button", { name: "默认编辑器打开" })).toBeInTheDocument();
+    // copy-only keeps Finder only until uninstall lands in ticket 09.
+    expect(detailPane().queryByRole("button", { name: "默认编辑器打开" })).toBeNull();
+    expect(detailPane().getByText("agent 路径")).toBeInTheDocument();
     expect(
       detailPane().queryByRole("button", { name: /检查更新|^更新$|卸载|断开/ }),
     ).toBeNull();
