@@ -155,6 +155,35 @@ impl Sandbox {
     }
 
     fn cli(&mut self, args: &[&str], label: &str) -> CommandResult {
+        self.cli_retry(args, label, 1)
+    }
+
+    /// Retries are only used for idempotent commands (version/list) because
+    /// the sandbox npm cache may need a network fetch on a cold run.
+    fn cli_retry(&mut self, args: &[&str], label: &str, attempts: usize) -> CommandResult {
+        for attempt in 0..attempts {
+            let attempt_label = if attempt == 0 {
+                label.to_string()
+            } else {
+                format!("{label}-retry{attempt}")
+            };
+            match self.try_cli(args, &attempt_label) {
+                Ok(result) => return result,
+                Err(message) if attempt + 1 < attempts => {
+                    eprintln!(
+                        "transient sandbox failure (attempt {}/{}): {message}; retrying",
+                        attempt + 1,
+                        attempts
+                    );
+                    std::thread::sleep(Duration::from_secs(2));
+                }
+                Err(message) => panic!("{message}"),
+            }
+        }
+        unreachable!("attempts is at least one")
+    }
+
+    fn try_cli(&mut self, args: &[&str], label: &str) -> Result<CommandResult, String> {
         if let Some(reason) = forbidden_argv(args) {
             panic!("refusing to run a forbidden CLI form ({reason}): {args:?}");
         }
@@ -186,20 +215,20 @@ impl Sandbox {
         append(&self.evidence.join("commands.log"), &log_line);
 
         if !result.status.success() {
-            panic!(
+            return Err(format!(
                 "`{display}` failed with {:?}\nstderr tail:\n{}",
                 result.status.code(),
                 tail(&result.stderr, 40)
-            );
+            ));
         }
-        CommandResult {
+        Ok(CommandResult {
             stdout: result.stdout,
             stderr: result.stderr,
-        }
+        })
     }
 
     fn list(&mut self, label: &str) -> Vec<Value> {
-        let result = self.cli(&["list", "-g", "--json"], label);
+        let result = self.cli_retry(&["list", "-g", "--json"], label, 3);
         let rows: Vec<Value> = serde_json::from_str(&result.stdout)
             .unwrap_or_else(|error| panic!("list output is not JSON ({error}): {}", result.stdout));
         for row in &rows {
@@ -545,7 +574,7 @@ fn real_cli_sandbox_install_update_detach_uninstall_and_regression() {
 
     // Probe the pinned CLI once so the sandbox npm cache is warm; this also
     // proves npx resolves the pinned package inside the temp HOME.
-    let version = sbx.cli(&["--version"], "version");
+    let version = sbx.cli_retry(&["--version"], "version", 3);
     assert_eq!(version.stdout.trim(), "1.7.4");
 
     // Baseline: only the two unmanaged fixtures exist.

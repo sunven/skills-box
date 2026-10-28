@@ -198,8 +198,13 @@ fn one_hundred_skill_fixture_meets_the_inventory_budget() {
     }
     let detail = median(&detail_samples);
 
+    let profile = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
     println!(
-        "100-skill fixture (debug): cold={:.1}ms warm_median={:.1}ms detail_median={:.1}ms managed={managed} copy_only={copy_only} agents={}",
+        "100-skill fixture ({profile}): cold={:.1}ms warm_median={:.1}ms detail_median={:.1}ms managed={managed} copy_only={copy_only} agents={}",
         millis(cold),
         millis(warm),
         millis(detail),
