@@ -197,6 +197,31 @@ fn debug_environment_hooks_are_gated_in_debug_builds() {
 }
 
 #[test]
+fn macos_release_bundle_is_ad_hoc_signed_and_not_notarized() {
+    let config: serde_json::Value =
+        serde_json::from_str(&read(manifest_dir().join("tauri.conf.json"))).unwrap();
+    let bundle = &config["bundle"];
+    assert_eq!(bundle["active"], serde_json::Value::Bool(true));
+    let macos = &bundle["macOS"];
+    assert_eq!(
+        macos["minimumSystemVersion"], "12.0",
+        "v1 supports macOS 12+"
+    );
+    assert_eq!(
+        macos["signingIdentity"], "-",
+        "release builds use ad-hoc signing (no developer certificate required)"
+    );
+    assert!(
+        macos.get("notarize").is_none(),
+        "notarization is intentionally out of scope and must not be configured"
+    );
+    // Tauri notarizes only when Apple credentials are present in the build
+    // environment; the acceptance script asserts they are unset before
+    // `pnpm tauri build --bundles app`.
+    assert!(config["app"]["security"]["csp"].is_string());
+}
+
+#[test]
 fn command_builders_only_use_the_approved_skills_flags() {
     // Strip `#[cfg(test)]` blocks so the forbidden-flag assertions maintained
     // by unit tests do not count as product usage.
