@@ -42,6 +42,7 @@ const FINAL_PHASES: ReadonlySet<TaskPhase> = new Set([
 const PHASE_LABELS: Record<TaskPhase, string> = {
   preparing: "准备中",
   cloning: "正在克隆仓库",
+  backup: "正在备份",
   running_cli: "正在执行 CLI",
   verifying: "正在校验结果",
   completed: "已完成",
@@ -122,6 +123,8 @@ function skillStatusLabel(status: TaskResult["skills"][number]["status"]): strin
   switch (status) {
     case "installed":
       return "已安装";
+    case "updated":
+      return "已更新";
     case "skipped":
       return "未找到";
     case "failed":
@@ -161,7 +164,7 @@ function StepBars({ step }: { step: Step }) {
   );
 }
 
-function TaskProgress({
+export function TaskProgress({
   phase,
   message,
   completed,

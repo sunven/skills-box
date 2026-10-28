@@ -82,6 +82,7 @@ export type LocalModification = "clean" | "modified" | "unknown";
 export type TaskPhase =
   | "preparing"
   | "cloning"
+  | "backup"
   | "running_cli"
   | "verifying"
   | "completed"
@@ -90,12 +91,13 @@ export type TaskPhase =
 
 export type TaskOverall = "success" | "partial" | "failed" | "cancelled";
 
-export type TaskSkillStatus = "installed" | "skipped" | "failed";
+export type TaskSkillStatus = "installed" | "updated" | "skipped" | "failed";
 
 export interface TaskSkillResult {
   name: string;
   status: TaskSkillStatus;
   error?: AppError;
+  backupPath?: string;
 }
 
 export interface SkillConflict {
@@ -144,6 +146,8 @@ export interface CancelAck {
   accepted: boolean;
   message?: string;
 }
+
+export type AppDataKind = "backups" | "logs" | "cache" | "baselines";
 
 /** The frontend sends only semantic values; Rust validates and appends universal. */
 export interface InstallRequest {

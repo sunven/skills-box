@@ -133,6 +133,35 @@ function maxNullable(
   return Math.max(left, right);
 }
 
+/**
+ * After an update task succeeds, mark the patched skills as current without
+ * an automatic network check. Failed/skipped rows keep their previous state so
+ * a retry still sees them as candidates.
+ */
+export function markSkillsCurrent(
+  report: UpdateCheckReport | undefined,
+  updatedNames: string[],
+): UpdateCheckReport | undefined {
+  if (!report || updatedNames.length === 0) return report;
+  const names = new Set(updatedNames);
+  return {
+    ...report,
+    skills: report.skills.map((skill) =>
+      names.has(skill.name)
+        ? {
+            ...skill,
+            state: "current",
+            lockHash: skill.remoteHash ?? skill.lockHash,
+            previousState: null,
+            error: null,
+            note: null,
+            cached: false,
+          }
+        : skill,
+    ),
+  };
+}
+
 export function updateBadgeVariant(state: UpdateState): UpdateBadgeVariant {
   switch (state) {
     case "current":
