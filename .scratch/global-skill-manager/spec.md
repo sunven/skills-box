@@ -442,6 +442,33 @@ Release `.app`，100 条 fixture，5 次中位数：
 - 任务首个事件 < 500ms；主线程单次卡顿 < 100ms。
 - 20 个来源更新检查 < 30s 或明确报错，UI 不冻结。
 
+### 10.5 v1 验收记录（2026-10-28，ticket 11）
+
+完整 M01–M24 逐条证据、待签项与已知问题见
+[`../skills-box-v1/acceptance.md`](../skills-box-v1/acceptance.md)。摘要：
+
+- 自动化：`cargo test` 303 passed / 2 ignored（两个 ignored 是真实网络测试：
+  `sandbox_real_cli` 的 CLI 闭环与只读更新检查）；`pnpm test` 107 passed；
+  `pnpm build`、`cargo clippy --all-targets` 通过。
+- 真实 CLI sandbox：临时 HOME + `XDG_STATE_HOME` + `npx -y skills@1.7.4` 对
+  `mattpocock/skills` 完成单/多安装、copy、copy→symlink 更新、断链、单/ copy-only
+  卸载；10 次 `list -g --json` 回归名称/路径一致，canonical/agent/lock v3 正确，
+  未受管目录保留，20 次 argv 无禁用形式。证据在
+  `src-tauri/target/sandbox-evidence/1793180808-90031/`（复跑 116.5s）。
+- 100-skill fixture（80 managed + 20 copy-only，20 来源、4 agent）：release 测试
+  cold 21.8ms、warm 9.8ms、详情 1.2ms（debug 分别为 71.2/18.3/2.5ms）；
+  前端 100 条筛选+排序中位数 0.09ms（同日早前复跑 0.02ms）。
+- 发布：`pnpm tauri build --bundles app` 产出
+  `src-tauri/target/release/bundle/macos/skills-box.app`（6.30 MiB，HEAD 重建）；
+  `Signature=adhoc`、`LSMinimumSystemVersion=12.0`、未公证（bundler 明确跳过）；
+  `codesign --verify --deep --strict` 通过。LaunchServices 启动进程 ~150ms、
+  窗口 ~367ms、~1.4s 截图完整 UI；环境探测 Node/npx/git/1.7.4、Lock v3 正确；
+  二次启动同 pid/单窗口。M17 的主线程卡顿与 Finder 双击、M22/M23 的真实
+  退出/键盘操作待用户签收。
+- 已知问题：`XDG_STATE_HOME` 非默认 lock 路径不检测（owner @sunven，v1.1）；
+  ad-hoc 未公证（发布范围，后续版本）；真实 20 来源公网检查未跑（fake 20 来源
+  已测，v1.1 复测）。P0 未发现数据丢失、权限越界或 CLI 生态回归。
+
 ---
 
 ## 11. 实现顺序与里程碑
