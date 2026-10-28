@@ -52,10 +52,7 @@ fn fake_cli_override(
             format!("sleep {seconds}; printf 'fake skills CLI finished slowly\\n'; exit 0")
         }
     };
-    Some((
-        PathBuf::from("/bin/sh"),
-        vec!["-c".to_string(), script],
-    ))
+    Some((PathBuf::from("/bin/sh"), vec!["-c".to_string(), script]))
 }
 
 fn invokes_skills_cli(spec: &CommandSpec) -> bool {
@@ -486,7 +483,10 @@ mod tests {
 
         // Release builds and non-CLI probes are never rewritten.
         let original = npx_spec(5_000);
-        assert_eq!(apply_fake_cli(original.clone(), Some("fail"), false), original);
+        assert_eq!(
+            apply_fake_cli(original.clone(), Some("fail"), false),
+            original
+        );
         let probe = spec("/fake/bin/node", &["--version"], &[], 5_000);
         assert_eq!(apply_fake_cli(probe.clone(), Some("fail"), true), probe);
 
@@ -498,12 +498,18 @@ mod tests {
         ] {
             let rewritten = apply_fake_cli(npx_spec(5_000), Some(value), true);
             assert!(
-                rewritten.args.get(1).is_some_and(|arg| arg.contains(needle)),
+                rewritten
+                    .args
+                    .get(1)
+                    .is_some_and(|arg| arg.contains(needle)),
                 "{value} should inject {needle}"
             );
         }
         let untouched = npx_spec(5_000);
-        assert_eq!(apply_fake_cli(untouched.clone(), Some("nonsense"), true), untouched);
+        assert_eq!(
+            apply_fake_cli(untouched.clone(), Some("nonsense"), true),
+            untouched
+        );
     }
 
     #[tokio::test]
@@ -516,6 +522,22 @@ mod tests {
             .unwrap();
         assert_eq!(output.code, Some(1));
         assert!(output.stderr_trimmed().contains("injected failure"));
+    }
+
+    #[tokio::test]
+    async fn debug_fake_cli_slow_times_out_through_the_real_executor() {
+        let _lock = fake_env_lock().await;
+        let _guard = FakeCliEnv::set("slow:5");
+        let started = std::time::Instant::now();
+        let error = TokioExecutor
+            .run(npx_spec(150), CancelToken::new())
+            .await
+            .unwrap_err();
+        assert_eq!(error, ExecError::Timeout(Duration::from_millis(150)));
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the injected slow command must be killed by the executor timeout"
+        );
     }
 
     #[tokio::test]
@@ -536,11 +558,8 @@ mod tests {
         let _guard = FakeCliEnv::set("cancel");
         let cancel = CancelToken::new();
         let task_cancel = cancel.clone();
-        let task = tokio::spawn(async move {
-            TokioExecutor
-                .run(npx_spec(60_000), task_cancel)
-                .await
-        });
+        let task =
+            tokio::spawn(async move { TokioExecutor.run(npx_spec(60_000), task_cancel).await });
         tokio::time::sleep(Duration::from_millis(120)).await;
         cancel.cancel();
         let error = tokio::time::timeout(Duration::from_secs(5), task)

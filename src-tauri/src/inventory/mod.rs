@@ -1065,7 +1065,10 @@ mod tests {
             .expect("alpha row must survive a permission error");
         assert!(alpha.description.is_none());
         assert!(
-            alpha.warnings.iter().any(|warning| warning.contains("无法读取")),
+            alpha
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("无法读取")),
             "{:?}",
             alpha.warnings
         );

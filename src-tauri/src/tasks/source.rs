@@ -281,4 +281,23 @@ mod tests {
         assert_eq!(code("owner/-repo"), codes::SOURCE_INVALID);
         assert_eq!(code("owner/re po"), codes::SOURCE_INVALID);
     }
+
+    #[test]
+    fn rejects_shell_metacharacters_instead_of_letting_them_reach_a_process() {
+        for input in [
+            "owner/repo;rm -rf /",
+            "owner/repo && echo pwned",
+            "owner/repo | cat",
+            "owner/repo$(id)",
+            "owner/`id`",
+            "owner/repo\nrm -rf /",
+            "owner/repo\t--force",
+            "owner/repo\0",
+            "https://github.com/owner/repo;id",
+            "https://github.com/owner/repo`id`",
+        ] {
+            let error = validate_source(input).unwrap_err();
+            assert_eq!(error.code, codes::SOURCE_INVALID, "{input:?}");
+        }
+    }
 }

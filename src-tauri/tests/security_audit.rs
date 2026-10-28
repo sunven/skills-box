@@ -36,13 +36,14 @@ fn capabilities_expose_only_core_default() {
     let mut files = 0;
     for entry in fs::read_dir(&capabilities).unwrap() {
         let path = entry.unwrap().path();
-        if path.extension().is_some_and(|extension| extension == "json") {
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "json")
+        {
             files += 1;
             let json: serde_json::Value =
                 serde_json::from_str(&read(&path)).expect("capability JSON parses");
-            let permissions = json["permissions"]
-                .as_array()
-                .expect("permissions array");
+            let permissions = json["permissions"].as_array().expect("permissions array");
             assert_eq!(
                 permissions,
                 &vec![serde_json::Value::String("core:default".to_string())],
@@ -59,8 +60,15 @@ fn cargo_manifest_has_no_shell_or_fs_plugins_but_keeps_single_instance() {
     let cargo = read(manifest_dir().join("Cargo.toml"));
     assert!(cargo.contains("tauri-plugin-single-instance"));
     assert!(cargo.contains("tauri-plugin-opener"));
-    for forbidden in ["tauri-plugin-shell", "tauri-plugin-fs", "tauri-plugin-dialog"] {
-        assert!(!cargo.contains(forbidden), "{forbidden} must not be a dependency");
+    for forbidden in [
+        "tauri-plugin-shell",
+        "tauri-plugin-fs",
+        "tauri-plugin-dialog",
+    ] {
+        assert!(
+            !cargo.contains(forbidden),
+            "{forbidden} must not be a dependency"
+        );
     }
     // The single-instance dependency is not optional: a release build must
     // always prevent a second writer process.
@@ -158,8 +166,8 @@ fn no_shell_is_used_outside_the_debug_fake_cli() {
             .next()
             .expect("source has a prefix");
         let is_fake_executor = path.ends_with("process/tokio_executor.rs");
-        let shell_mentions = product.matches("/bin/sh").count()
-            + product.matches("Command::new(\"sh\")").count();
+        let shell_mentions =
+            product.matches("/bin/sh").count() + product.matches("Command::new(\"sh\")").count();
         if shell_mentions > 0 {
             assert!(
                 is_fake_executor,

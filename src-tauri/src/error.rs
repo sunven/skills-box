@@ -410,8 +410,11 @@ impl AppError {
     }
 
     pub fn task_shutting_down() -> Self {
-        Self::new(codes::TASK_SHUTTING_DOWN, "应用正在退出，无法开始新的任务。")
-            .retryable(false)
+        Self::new(
+            codes::TASK_SHUTTING_DOWN,
+            "应用正在退出，无法开始新的任务。",
+        )
+        .retryable(false)
     }
 
     pub fn skill_conflict(name: &str, detail: impl Into<String>) -> Self {

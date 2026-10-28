@@ -16,8 +16,8 @@ pub use install::{
 };
 pub use manager::{
     ActiveMutationInfo, CancelAck, EventSink, MutationPermit, PREVIEW_TIMEOUT, PreviewSkill,
-    PreviewSummary, ShutdownReport, TaskEvent, TaskId, TaskManager, TaskManagerConfig,
-    TaskOverall, TaskPhase, TaskResult, TaskSkillResult, TaskSkillStatus,
+    PreviewSummary, ShutdownReport, TaskEvent, TaskId, TaskManager, TaskManagerConfig, TaskOverall,
+    TaskPhase, TaskResult, TaskSkillResult, TaskSkillStatus,
 };
 pub use parser::{ParsedSkill, PreviewParseOutcome, parse_preview_output};
 pub use source::{SourceSpec, validate_source};

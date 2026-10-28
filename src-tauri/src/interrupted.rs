@@ -135,7 +135,9 @@ impl MarkerStore {
     pub fn read(&self) -> MarkerRead {
         let raw = match fs::read_to_string(&self.path) {
             Ok(raw) => raw,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return MarkerRead::Absent,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return MarkerRead::Absent;
+            }
             Err(error) => return MarkerRead::Corrupt(error.to_string()),
         };
         match serde_json::from_str::<InterruptedMutation>(&raw) {
@@ -150,10 +152,9 @@ impl MarkerStore {
             MarkerRead::Absent => return None,
             MarkerRead::Corrupt(detail) => (true, None, Some(detail)),
             MarkerRead::Present(mutation) => (false, Some(mutation), None),
-        };        let lock = lock_health::inspect_path(
-            &self.lock_path,
-            &self.lock_path.display().to_string(),
-        );
+        };
+        let lock =
+            lock_health::inspect_path(&self.lock_path, &self.lock_path.display().to_string());
 
         let mut snapshots_present = Vec::new();
         let mut snapshots_missing = Vec::new();

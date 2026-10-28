@@ -360,16 +360,13 @@ impl TaskManager {
             if entry.state != TaskState::Running {
                 return None;
             }
-            entry
-                .mutation
-                .as_ref()
-                .map(|mutation| ActiveMutationInfo {
-                    task_id: task_id.clone(),
-                    kind: mutation.kind,
-                    skills: mutation.skills.clone(),
-                    started_at_epoch_ms: mutation.started_at_epoch_ms,
-                    snapshot_paths: mutation.snapshot_paths.clone(),
-                })
+            entry.mutation.as_ref().map(|mutation| ActiveMutationInfo {
+                task_id: task_id.clone(),
+                kind: mutation.kind,
+                skills: mutation.skills.clone(),
+                started_at_epoch_ms: mutation.started_at_epoch_ms,
+                snapshot_paths: mutation.snapshot_paths.clone(),
+            })
         })
     }
 
@@ -3217,7 +3214,13 @@ mod tests {
     // Interrupted-mutation marker and exit protection (ticket 10)
     // ------------------------------------------------------------------
 
-    fn hanging_install_fixture() -> (tempfile::TempDir, PathBuf, AppPaths, Arc<ScriptedExecutor>, TaskManager) {
+    fn hanging_install_fixture() -> (
+        tempfile::TempDir,
+        PathBuf,
+        AppPaths,
+        Arc<ScriptedExecutor>,
+        TaskManager,
+    ) {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home");
         fs::create_dir_all(home.join(".qoder")).unwrap();
@@ -3237,7 +3240,10 @@ mod tests {
         (tmp, home, paths, executor, manager)
     }
 
-    async fn wait_for_phase(receiver: &mut tokio::sync::mpsc::UnboundedReceiver<TaskEvent>, phase: TaskPhase) {
+    async fn wait_for_phase(
+        receiver: &mut tokio::sync::mpsc::UnboundedReceiver<TaskEvent>,
+        phase: TaskPhase,
+    ) {
         loop {
             let event = receiver.recv().await.unwrap();
             if event.phase == phase {
@@ -3356,7 +3362,10 @@ mod tests {
             Duration::from_secs(60),
         );
         let (event_sink, mut receiver) = sink();
-        let task_id = manager.start_preview("owner/repo", event_sink).await.unwrap();
+        let task_id = manager
+            .start_preview("owner/repo", event_sink)
+            .await
+            .unwrap();
         wait_for_phase(&mut receiver, TaskPhase::Cloning).await;
         manager.cancel_task(&task_id).unwrap();
         let final_event = tokio::time::timeout(Duration::from_secs(2), final_event(&mut receiver))

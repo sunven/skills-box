@@ -809,10 +809,7 @@ mod tests {
         let fixture = Fixture::new();
         let alpha = fixture.canonical_skill("alpha", "# Alpha\n");
         fixture.canonical_skill("beta", "# Beta\n");
-        fixture.write_lock(&[
-            ("alpha", "0".repeat(40)),
-            ("beta", "1".repeat(40)),
-        ]);
+        fixture.write_lock(&[("alpha", "0".repeat(40)), ("beta", "1".repeat(40))]);
         let alpha_md = alpha.join("SKILL.md");
         fs::set_permissions(&alpha_md, fs::Permissions::from_mode(0o000)).unwrap();
 

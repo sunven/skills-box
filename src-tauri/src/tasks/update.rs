@@ -1423,5 +1423,16 @@ mod tests {
         assert_eq!(result.skills[0].name, "alpha");
         assert_eq!(result.skills[0].status, TaskSkillStatus::Updated);
         assert_eq!(executor.calls().len(), 1);
+
+        // Cancelling between skills never leaves a half-written lock: the
+        // completed skill's lock entry and the untouched one both survive.
+        let lock = LockFile::read(&fixture.paths.lock_path())
+            .expect("lock must stay parseable after a between-skills cancel");
+        assert!(lock.contains("alpha"));
+        assert!(lock.contains("beta"));
+        assert!(
+            !fixture.paths.interrupted_marker_path().exists(),
+            "a user cancel clears the interruption marker"
+        );
     }
 }
