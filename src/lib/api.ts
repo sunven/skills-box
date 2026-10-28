@@ -102,6 +102,21 @@ export function startUpdate(
   return invoke<string>("start_update", { skillIds, onEvent: channel });
 }
 
+/**
+ * Start a serialized uninstall. Rust re-validates that the skill is managed or
+ * copy-only, rejects cross-agent copy dependencies, backs up first, runs
+ * `skills remove -g -s <name> -y` (never `-a` / `--all`) and verifies that the
+ * canonical folder, every attachment and the lock key are gone.
+ */
+export function startUninstall(
+  skillId: string,
+  onEvent: (event: TaskEvent) => void,
+): Promise<string> {
+  const channel = new Channel<TaskEvent>();
+  channel.onmessage = onEvent;
+  return invoke<string>("start_uninstall", { skillId, onEvent: channel });
+}
+
 /** Open a fixed app-data directory; the frontend never supplies a path. */
 export function revealAppData(kind: AppDataKind): Promise<void> {
   return invoke<void>("reveal_app_data", { kind });
