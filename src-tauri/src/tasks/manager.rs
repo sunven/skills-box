@@ -1430,7 +1430,7 @@ impl TaskManager {
                         item.agent_ids.clone(),
                         "cancelled",
                         Some(backup_display.clone()),
-                        None,
+                        Some(AppError::cli_cancelled()),
                     ));
                     cancelled = true;
                     break;
@@ -1756,7 +1756,7 @@ impl TaskManager {
                     plan.agent_ids.clone(),
                     "cancelled",
                     Some(backup_display.clone()),
-                    None,
+                    Some(AppError::cli_cancelled()),
                 ));
                 self.finish(&task_id, &sink, FinishOutcome::Cancelled);
                 return;
@@ -2141,8 +2141,10 @@ pub(super) fn classify_install_failure(detail: &str, stderr: &str) -> AppError {
         || lower.contains("network is unreachable")
     {
         AppError::network_fetch_failed(detail)
+    } else if detail.is_empty() {
+        AppError::cli_exit_nonzero("skills CLI 以非零退出码结束且未输出详情。")
     } else {
-        AppError::cli_failed(detail)
+        AppError::cli_exit_nonzero(detail)
     }
 }
 
@@ -2166,10 +2168,8 @@ fn classify_cli_failure(stdout: &str, stderr: &str) -> AppError {
         AppError::network_fetch_failed(detail)
     } else if lower.contains("authentication failed") {
         AppError::source_preview_failed(format!("仓库不存在或无法公开访问：{detail}"))
-    } else if detail.is_empty() {
-        AppError::source_preview_failed("skills CLI 未返回预览输出。")
     } else {
-        AppError::source_preview_failed(detail)
+        AppError::cli_exit_nonzero(detail)
     }
 }
 
@@ -3363,6 +3363,26 @@ mod tests {
         assert_eq!(executor.call_count(), 0, "detach must not spawn a CLI");
     }
 
+    #[tokio::test]
+    async fn detach_is_rejected_while_the_app_is_shutting_down() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(tmp.path().join("home"), tmp.path().join("app-data"));
+        paths.ensure_dirs().unwrap();
+        let manager = TaskManager::new(
+            Arc::new(FakeRuntime::ok()),
+            Arc::new(ScriptedExecutor::new()),
+            Arc::new(FakeConflicts::default()),
+            paths,
+            TaskManagerConfig::default(),
+        );
+        manager.shutdown_mutations().await;
+        let error = manager
+            .detach_agent("alpha".to_string(), "qoder".to_string())
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, codes::TASK_SHUTTING_DOWN);
+    }
+
     // ------------------------------------------------------------------
     // Interrupted-mutation marker and exit protection (ticket 10)
     // ------------------------------------------------------------------
@@ -3505,6 +3525,25 @@ mod tests {
         manager.dismiss_interrupted_marker();
         assert!(manager.interrupted_report().is_none());
         assert!(Path::new(&startup.snapshots_present[0]).exists());
+    }
+
+    #[test]
+    fn task_result_serializes_action_and_started_at_for_the_frontend() {
+        let result = TaskResult {
+            action: TaskAction::Uninstall,
+            overall: TaskOverall::Success,
+            skills: Vec::new(),
+            warnings: Vec::new(),
+            backup_path: None,
+            log_path: None,
+            started_at: 1_793_163_988_000,
+            finished_at_epoch_ms: 1_793_163_989_000,
+            preview: None,
+        };
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["action"], "uninstall");
+        assert_eq!(json["startedAt"], 1_793_163_988_000u64);
+        assert_eq!(json["finishedAtEpochMs"], 1_793_163_989_000u64);
     }
 
     #[tokio::test]

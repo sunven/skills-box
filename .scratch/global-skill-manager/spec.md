@@ -231,8 +231,9 @@ Date: 2026-10-28
 ### 5.3 来源
 
 - 仅公开 GitHub 根仓库：`owner/repo` 或 `https://github.com/owner/repo`。
-- 只装默认分支；拒绝 subdir、`#ref`、GitLab、SSH、local、Notion。
+- 只装默认分支；新安装来源拒绝 subdir、`#ref`、GitLab、SSH、local、Notion。
 - 归一化后展示 `owner/repo`；非法输入明确报错。
+- 更新是唯一例外：更新来源由 lock 解析，lock 中已存在的 ref 会保留并仅用于重建 `skills add owner/repo#ref`（见 §7.2）；`#ref` 仍绝不能由新安装输入提供。
 
 ### 5.4 Agent
 
@@ -271,7 +272,7 @@ Date: 2026-10-28
 
 | 命令 | 输入 | 输出 |
 |---|---|---|
-| `get_environment` | — | `EnvReport` |
+| `get_environment` | `refresh?`（默认 false；true 跳过探测缓存） | `EnvReport` |
 | `get_inventory` | — | `InventorySnapshot` |
 | `get_skill_detail` | `skillId` | `SkillDetail` |
 | `start_preview` | `source`, `Channel<TaskEvent>` | `TaskId` |
@@ -281,14 +282,18 @@ Date: 2026-10-28
 | `detach_agent` | `skillId`, `agentId` | `DetachResult` |
 | `start_uninstall` | `skillId`, `Channel<TaskEvent>` | `TaskId` |
 | `cancel_task` | `taskId` | `CancelAck` |
+| `get_active_mutation` | — | `ActiveMutationInfo \| null` |
+| `dismiss_interrupted_mutation` | — | `()` |
 | `open_skill_folder` | `skillId` | `()` |
 | `open_skill_md` | `skillId` | `()` |
+| `open_external_url` | `url`（仅 https 且带主机名） | `()` |
 | `reveal_app_data` | `kind` | `()` |
+| `quit_app` | — | `()` |
 
 - 前端不传 path / argv / env / executable。
-- `InstallRequest = { source, skills[], agents[] }`；Rust 校验并追加 universal；不接受 copy / all / `*`。
+- `InstallRequest = { source, skills[], agents[], retry? }`；Rust 校验并追加 universal；不接受 copy / all / `*`。`retry` 只由结果页的显式重试按钮设置：允许覆盖同来源、上一次部分安装留下的 managed/stale 条目；普通安装仍拒绝一切同名冲突。
 - `TaskEvent` 推送阶段、message、skill、completed/total、result/error。
-- `TaskResult` 包含 overall、per-skill、backupPath、logPath、时间。
+- `TaskResult` 包含 `action`（preview/install/update/uninstall）、overall、per-skill、backupPath、logPath、`startedAt`/`finishedAtEpochMs`。
 
 ### 6.3 并发与取消
 
@@ -337,7 +342,7 @@ CLI stderr 放 `detail`；前端默认只显示归一化 message。部分失败�
 - 单个 / 全部；检查与执行分离；不调用 `update`/`check`。
 - 更新候选：update-available；更新全部跳过 modified/unknown/path-missing/error。
 - 本地改动：baseline + lock hash；有改动/无法判断需 checkbox + 备份。
-- 用 lock 构造 source；显式当前物理非 universal agents + universal；无挂载仅 `-a universal`。
+- 用 lock 构造 source；lock 中已记录的 `#ref`（tag/commit/SHA）会保留，仅用于更新（§5.3 对新安装来源的 `#ref` 禁令不变）；显式当前物理非 universal agents + universal；无挂载仅 `-a universal`。
 - copy 挂载转 symlink，警告 + 备份；copy-only 不更新。
 - 保留断链状态；更新后重建 baseline；逐项校验；不自动回滚。
 

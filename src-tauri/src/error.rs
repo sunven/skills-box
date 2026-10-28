@@ -467,6 +467,14 @@ impl AppError {
             .retryable(true)
     }
 
+    /// The CLI process group was terminated because the task was cancelled or
+    /// the application is shutting down. Task-level results still use
+    /// `task.cancelled`; this code is what the operation log records for the
+    /// interrupted CLI row.
+    pub fn cli_cancelled() -> Self {
+        Self::new(codes::CLI_CANCELLED, "skills CLI 进程已取消。").retryable(true)
+    }
+
     pub fn task_busy() -> Self {
         Self::new(codes::TASK_BUSY, "已有变更任务正在执行，请等待完成后再试。").retryable(true)
     }
@@ -779,6 +787,7 @@ mod tests {
             codes::CLI_PARTIAL_FAILURE
         );
         assert_eq!(AppError::task_cancelled().code, codes::TASK_CANCELLED);
+        assert_eq!(AppError::cli_cancelled().code, codes::CLI_CANCELLED);
         assert_eq!(
             AppError::skill_ambiguous("alpha", "x").code,
             codes::SKILL_AMBIGUOUS
@@ -854,9 +863,9 @@ mod tests {
 
     #[test]
     fn serializes_camel_case_and_omits_absent_optional_fields() {
-        let err = AppError::new("env.node_missing", "未找到 Node.js");
+        let err = AppError::new(codes::ENV_NODE_MISSING, "未找到 Node.js");
         let json = serde_json::to_value(&err).unwrap();
-        assert_eq!(json["code"], "env.node_missing");
+        assert_eq!(json["code"], codes::ENV_NODE_MISSING);
         assert_eq!(json["message"], "未找到 Node.js");
         assert_eq!(json["retryable"], false);
         assert!(json.get("detail").is_none());
