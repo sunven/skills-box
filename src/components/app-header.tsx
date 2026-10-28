@@ -10,6 +10,7 @@ interface AppHeaderProps {
   mutationsEnabled: boolean;
   rechecking: boolean;
   onRecheck: () => void;
+  onInstall: () => void;
 }
 
 export function AppHeader({
@@ -19,6 +20,7 @@ export function AppHeader({
   mutationsEnabled,
   rechecking,
   onRecheck,
+  onInstall,
 }: AppHeaderProps) {
   return (
     <header className="flex items-center justify-between gap-4 border-b border-border bg-card px-5 py-3">
@@ -69,6 +71,7 @@ export function AppHeader({
         <Button
           size="sm"
           disabled={!mutationsEnabled}
+          onClick={onInstall}
           title={
             mutationsEnabled
               ? "安装 skill"

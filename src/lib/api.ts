@@ -1,5 +1,10 @@
-import { invoke } from "@tauri-apps/api/core";
-import type { EnvReport, InventorySnapshot } from "./types";
+import { Channel, invoke } from "@tauri-apps/api/core";
+import type {
+  CancelAck,
+  EnvReport,
+  InventorySnapshot,
+  TaskEvent,
+} from "./types";
 
 /**
  * The single IPC gateway. Components never call `invoke` directly; keeping the
@@ -11,6 +16,23 @@ export function getEnvironment(refresh = false): Promise<EnvReport> {
 
 export function getInventory(): Promise<InventorySnapshot> {
   return invoke<InventorySnapshot>("get_inventory");
+}
+
+/**
+ * Start a read-only preview task. Events are ordered per task through a
+ * dedicated channel; invalid sources reject before a task exists.
+ */
+export function startPreview(
+  source: string,
+  onEvent: (event: TaskEvent) => void,
+): Promise<string> {
+  const channel = new Channel<TaskEvent>();
+  channel.onmessage = onEvent;
+  return invoke<string>("start_preview", { source, onEvent: channel });
+}
+
+export function cancelTask(taskId: string): Promise<CancelAck> {
+  return invoke<CancelAck>("cancel_task", { taskId });
 }
 
 /** Normalize a rejected Tauri command into an `AppError`-shaped object. */

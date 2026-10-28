@@ -21,6 +21,18 @@ pub mod codes {
     pub const LOCK_UNSUPPORTED_VERSION: &str = "lock.unsupported_version";
     pub const LOCK_READ_FAILED: &str = "lock.read_failed";
     pub const PATH_APP_DATA: &str = "path.app_data";
+    pub const SOURCE_MISSING: &str = "source.missing";
+    pub const SOURCE_INVALID: &str = "source.invalid";
+    pub const SOURCE_UNSUPPORTED_SUBDIR: &str = "source.unsupported_subdir";
+    pub const SOURCE_UNSUPPORTED_REF: &str = "source.unsupported_ref";
+    pub const SOURCE_UNSUPPORTED_PROVIDER: &str = "source.unsupported_provider";
+    pub const SOURCE_PREVIEW_FAILED: &str = "source.preview_failed";
+    pub const NETWORK_FETCH_FAILED: &str = "network.fetch_failed";
+    pub const CLI_FAILED: &str = "cli.failed";
+    pub const TASK_BUSY: &str = "task.busy";
+    pub const TASK_NOT_FOUND: &str = "task.not_found";
+    pub const TASK_CANNOT_CANCEL: &str = "task.cannot_cancel";
+    pub const SKILL_CONFLICT: &str = "skill.conflict";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -154,6 +166,96 @@ impl AppError {
         Self::new(codes::PATH_APP_DATA, "无法创建应用数据目录。")
             .detail(detail)
             .hint("请检查磁盘空间与目录权限，然后重新检测。")
+    }
+
+    pub fn source_missing() -> Self {
+        Self::new(
+            codes::SOURCE_MISSING,
+            "请输入公开 GitHub 仓库，例如 owner/repo。",
+        )
+        .hint("示例：vercel-labs/skills 或 https://github.com/vercel-labs/skills")
+    }
+
+    pub fn source_invalid(detail: impl Into<String>) -> Self {
+        Self::new(
+            codes::SOURCE_INVALID,
+            "来源格式无效。仅支持 owner/repo 或 https://github.com/owner/repo。",
+        )
+        .detail(detail)
+        .hint("只接受公开 GitHub 根仓库，且只安装默认分支。")
+    }
+
+    pub fn source_unsupported_subdir() -> Self {
+        Self::new(
+            codes::SOURCE_UNSUPPORTED_SUBDIR,
+            "仅支持公开 GitHub 根仓库，不支持子目录。",
+        )
+        .hint("请去掉仓库后面的子目录，例如 owner/repo。")
+    }
+
+    pub fn source_unsupported_ref() -> Self {
+        Self::new(
+            codes::SOURCE_UNSUPPORTED_REF,
+            "仅安装默认分支，不支持 #ref（分支、标签或提交）。",
+        )
+        .hint("请去掉 #ref 后再预览。")
+    }
+
+    pub fn source_unsupported_provider(provider: &str) -> Self {
+        Self::new(
+            codes::SOURCE_UNSUPPORTED_PROVIDER,
+            format!("不支持该来源（{provider}），仅支持公开 GitHub 仓库。"),
+        )
+        .hint("请使用 owner/repo 或 https://github.com/owner/repo。")
+    }
+
+    pub fn source_preview_failed(detail: impl Into<String>) -> Self {
+        Self::new(codes::SOURCE_PREVIEW_FAILED, "无法解析仓库预览。")
+            .detail(detail)
+            .hint("可手动输入 skill 名，或重试预览。")
+            .retryable(true)
+    }
+
+    pub fn network_fetch_failed(detail: impl Into<String>) -> Self {
+        Self::new(
+            codes::NETWORK_FETCH_FAILED,
+            "无法访问仓库，请检查网络后重试。",
+        )
+        .detail(detail)
+        .hint("确认仓库存在且可公开访问，然后重试预览。")
+        .retryable(true)
+    }
+
+    pub fn cli_failed(detail: impl Into<String>) -> Self {
+        Self::new(codes::CLI_FAILED, "skills CLI 执行失败。")
+            .detail(detail)
+            .hint("请检查 Node、npx 与 git 环境，然后重试。")
+            .retryable(true)
+    }
+
+    pub fn task_busy() -> Self {
+        Self::new(codes::TASK_BUSY, "已有变更任务正在执行，请等待完成后再试。").retryable(true)
+    }
+
+    pub fn task_not_found() -> Self {
+        Self::new(codes::TASK_NOT_FOUND, "任务不存在或已结束。").retryable(false)
+    }
+
+    pub fn task_cannot_cancel() -> Self {
+        Self::new(
+            codes::TASK_CANNOT_CANCEL,
+            "任务已结束或已进入不可取消阶段。",
+        )
+        .retryable(false)
+    }
+
+    pub fn skill_conflict(name: &str, detail: impl Into<String>) -> Self {
+        Self::new(
+            codes::SKILL_CONFLICT,
+            format!("同名 skill「{name}」已存在，无法安装。"),
+        )
+        .detail(detail)
+        .hint("请先卸载或重命名现有 skill，再重新安装。")
     }
 }
 

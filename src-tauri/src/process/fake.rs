@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
-use super::{CommandSpec, ExecError, ExecOutput, ProcessExecutor};
+use super::{CancelToken, CommandSpec, ExecError, ExecOutput, ProcessExecutor};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScriptedResponse {
@@ -22,6 +22,8 @@ pub enum ScriptedResponse {
         stderr: String,
     },
     Timeout,
+    /// Wait until cancelled; if the spec timeout elapses first, report it.
+    Hang,
     SpawnError(String),
 }
 
@@ -44,6 +46,10 @@ impl ScriptedResponse {
 
     pub fn timeout() -> Self {
         Self::Timeout
+    }
+
+    pub fn hang() -> Self {
+        Self::Hang
     }
 
     pub fn spawn_error(message: impl Into<String>) -> Self {
@@ -124,7 +130,7 @@ impl ScriptedExecutor {
 
 #[async_trait]
 impl ProcessExecutor for ScriptedExecutor {
-    async fn run(&self, spec: CommandSpec) -> Result<ExecOutput, ExecError> {
+    async fn run(&self, spec: CommandSpec, cancel: CancelToken) -> Result<ExecOutput, ExecError> {
         self.calls.lock().expect("calls mutex").push(spec.clone());
         let response = {
             let mut rules = self.rules.lock().expect("rules mutex");
@@ -137,6 +143,9 @@ impl ProcessExecutor for ScriptedExecutor {
                 message: "no scripted response".to_string(),
             });
         };
+        if cancel.is_cancelled() {
+            return Err(ExecError::Cancelled);
+        }
         match rule.response {
             ScriptedResponse::Output {
                 code,
@@ -150,6 +159,10 @@ impl ProcessExecutor for ScriptedExecutor {
                 duration: Duration::ZERO,
             }),
             ScriptedResponse::Timeout => Err(ExecError::Timeout(spec.timeout)),
+            ScriptedResponse::Hang => tokio::select! {
+                _ = cancel.cancelled() => Err(ExecError::Cancelled),
+                _ = tokio::time::sleep(spec.timeout) => Err(ExecError::Timeout(spec.timeout)),
+            },
             ScriptedResponse::SpawnError(message) => Err(ExecError::Spawn {
                 program: spec.program.display().to_string(),
                 message,
@@ -182,26 +195,29 @@ mod tests {
             .expect("zsh", &["-ilc"], ScriptedResponse::spawn_error("boom"));
 
         let node = executor
-            .run(spec("/fake/bin/node", &["--version"]))
+            .run(spec("/fake/bin/node", &["--version"]), CancelToken::new())
             .await
             .unwrap();
         assert_eq!(node.stdout_trimmed(), "v24.15.0");
 
         let git = executor
-            .run(spec("/usr/bin/git", &["--version"]))
+            .run(spec("/usr/bin/git", &["--version"]), CancelToken::new())
             .await
             .unwrap();
         assert_eq!(git.code, Some(1));
         assert_eq!(git.stderr_trimmed(), "no git");
 
         let npx = executor
-            .run(spec("/fake/bin/npx", &["-y", "skills@1.7.4", "--version"]))
+            .run(
+                spec("/fake/bin/npx", &["-y", "skills@1.7.4", "--version"]),
+                CancelToken::new(),
+            )
             .await
             .unwrap_err();
         assert!(matches!(npx, ExecError::Timeout(_)));
 
         let shell = executor
-            .run(spec("/bin/zsh", &["-ilc", "printf x"]))
+            .run(spec("/bin/zsh", &["-ilc", "printf x"]), CancelToken::new())
             .await
             .unwrap_err();
         assert!(matches!(shell, ExecError::Spawn { .. }));
@@ -210,12 +226,69 @@ mod tests {
     #[tokio::test]
     async fn records_calls_and_rejects_unscripted_commands() {
         let executor = ScriptedExecutor::new().expect_any(ScriptedResponse::ok("x"));
-        executor.run(spec("/bin/echo", &["hi"])).await.unwrap();
+        executor
+            .run(spec("/bin/echo", &["hi"]), CancelToken::new())
+            .await
+            .unwrap();
         assert_eq!(executor.call_count(), 1);
         assert_eq!(executor.calls()[0].program, Path::new("/bin/echo"));
 
         let empty = ScriptedExecutor::new();
-        let error = empty.run(spec("/bin/echo", &[])).await.unwrap_err();
+        let error = empty
+            .run(spec("/bin/echo", &[]), CancelToken::new())
+            .await
+            .unwrap_err();
         assert!(matches!(error, ExecError::Spawn { .. }));
+    }
+
+    #[tokio::test]
+    async fn hang_is_cancellable_and_honors_the_spec_timeout() {
+        let executor =
+            std::sync::Arc::new(ScriptedExecutor::new().expect_any(ScriptedResponse::hang()));
+        let cancel = CancelToken::new();
+        let waiter = tokio::spawn({
+            let cancel = cancel.clone();
+            async move {
+                cancel.cancelled().await;
+            }
+        });
+        let task = tokio::spawn({
+            let executor = std::sync::Arc::clone(&executor);
+            let cancel = cancel.clone();
+            async move {
+                executor
+                    .run(
+                        CommandSpec::new(
+                            "/fake/npx",
+                            vec!["add".to_string()],
+                            "/tmp",
+                            BTreeMap::new(),
+                            Duration::from_secs(30),
+                        ),
+                        cancel,
+                    )
+                    .await
+            }
+        });
+        cancel.cancel();
+        waiter.await.unwrap();
+        let error = task.await.unwrap().unwrap_err();
+        assert_eq!(error, ExecError::Cancelled);
+
+        let executor = ScriptedExecutor::new().expect_any(ScriptedResponse::hang());
+        let error = executor
+            .run(
+                CommandSpec::new(
+                    "/fake/npx",
+                    vec!["add".to_string()],
+                    "/tmp",
+                    BTreeMap::new(),
+                    Duration::from_millis(20),
+                ),
+                CancelToken::new(),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ExecError::Timeout(_)));
     }
 }

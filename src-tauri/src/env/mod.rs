@@ -8,6 +8,7 @@ mod resolver;
 use serde::Serialize;
 
 use crate::agents::DetectedAgent;
+use crate::cli::{CliRuntime, CliRuntimeProvider};
 use crate::error::AppError;
 use crate::paths::AppPaths;
 
@@ -101,11 +102,20 @@ pub struct EnvReport {
     pub pinned_cli_version: String,
 }
 
+/// Environment report plus the absolute CLI runtime captured during the same
+/// probe. The runtime is intentionally not serialized: the frontend never sees
+/// executables, argv, env or cwd.
+#[derive(Debug, Clone)]
+pub struct ResolvedEnvironment {
+    pub report: EnvReport,
+    pub cli_runtime: Option<CliRuntime>,
+}
+
 /// Session cache around `EnvResolver`. A refresh explicitly re-runs all probes;
-/// otherwise the first report is reused for the lifetime of the app session.
+/// otherwise the first resolution is reused for the lifetime of the app session.
 pub struct EnvironmentService {
     resolver: EnvResolver,
-    cache: tokio::sync::Mutex<Option<EnvReport>>,
+    cache: tokio::sync::Mutex<Option<ResolvedEnvironment>>,
 }
 
 impl EnvironmentService {
@@ -120,13 +130,49 @@ impl EnvironmentService {
         Self::new(EnvResolver::from_process(paths))
     }
 
-    pub async fn get(&self, refresh: bool) -> Result<EnvReport, AppError> {
+    pub async fn resolved(&self, refresh: bool) -> Result<ResolvedEnvironment, AppError> {
         let mut cache = self.cache.lock().await;
-        if !refresh && let Some(report) = cache.as_ref() {
-            return Ok(report.clone());
+        if !refresh && let Some(resolved) = cache.as_ref() {
+            return Ok(resolved.clone());
         }
-        let report = self.resolver.resolve().await?;
-        *cache = Some(report.clone());
-        Ok(report)
+        let resolved = self.resolver.resolve_detailed().await?;
+        *cache = Some(resolved.clone());
+        Ok(resolved)
+    }
+
+    pub async fn get(&self, refresh: bool) -> Result<EnvReport, AppError> {
+        self.resolved(refresh).await.map(|resolved| resolved.report)
+    }
+
+    pub async fn cli_runtime(&self) -> Result<CliRuntime, AppError> {
+        let resolved = self.resolved(false).await?;
+        if let Some(runtime) = resolved.cli_runtime {
+            return Ok(runtime);
+        }
+        // Preview/install can tolerate a broken lock (it is read-only for the
+        // lock snapshot), but not a missing toolchain.
+        if let Some(issue) = resolved
+            .report
+            .issues
+            .iter()
+            .find(|issue| issue.code.starts_with("env."))
+        {
+            return Err(issue.clone());
+        }
+        Err(AppError::env_cli_missing(
+            resolved
+                .report
+                .cli
+                .detail
+                .clone()
+                .unwrap_or_else(|| "skills CLI 未就绪".to_string()),
+        ))
+    }
+}
+
+#[async_trait::async_trait]
+impl CliRuntimeProvider for EnvironmentService {
+    async fn cli_runtime(&self) -> Result<CliRuntime, AppError> {
+        EnvironmentService::cli_runtime(self).await
     }
 }
