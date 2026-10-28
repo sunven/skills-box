@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import App from "./App";
 import { createQueryClient } from "./lib/query-client";
 import type { EnvReport } from "./lib/types";
+import { emptySnapshot } from "./test/inventory-fixtures";
 import {
   cliMissingReport,
   gitMissingReport,
@@ -28,6 +29,9 @@ function mockEnvironment(report: EnvReport | (() => EnvReport)) {
   mockIPC((command) => {
     if (command === "get_environment") {
       return typeof report === "function" ? report() : report;
+    }
+    if (command === "get_inventory") {
+      return emptySnapshot();
     }
     throw new Error(`unexpected command: ${command}`);
   });
