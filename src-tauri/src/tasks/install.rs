@@ -125,9 +125,9 @@ fn validate_agents(
             || id.len() > 64
             || id == "*"
             || id.starts_with('-')
-            || !id
-                .chars()
-                .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.'));
+            || !id.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+            });
         if invalid {
             return Err(AppError::agent_invalid(format!(
                 "无效的 agent 标识：{value:?}"
@@ -211,10 +211,7 @@ pub fn resolve_agent_dirs(paths: &AppPaths, ids: &[String]) -> Vec<AgentDir> {
 
 /// Reject same-name managed/copy-only/unmanaged skills before spawning. The
 /// CLI would otherwise overwrite them silently.
-pub fn conflicts_for(
-    paths: &AppPaths,
-    skills: &[String],
-) -> Result<Option<AppError>, AppError> {
+pub fn conflicts_for(paths: &AppPaths, skills: &[String]) -> Result<Option<AppError>, AppError> {
     let conflicts = find_conflicts(paths, skills)?;
     for name in skills {
         if let Some(conflict) = conflicts.get(name) {
@@ -234,11 +231,7 @@ pub fn conflicts_for(
 }
 
 /// `npx -y skills@1.7.4 add <source> -g -s <names> -a <ids> -a universal -y --json`
-pub fn install_command(
-    runtime: &CliRuntime,
-    plan: &InstallPlan,
-    timeout: Duration,
-) -> CommandSpec {
+pub fn install_command(runtime: &CliRuntime, plan: &InstallPlan, timeout: Duration) -> CommandSpec {
     let mut args = vec![
         "-y".to_string(),
         format!("skills@{}", runtime.pinned_version),
@@ -328,9 +321,7 @@ pub fn parse_install_output(raw: &str) -> InstallOutput {
         match status {
             "installed" => {
                 if name.is_none() {
-                    return InstallOutput::Unrecognized(
-                        "installed 结果缺少 name。".to_string(),
-                    );
+                    return InstallOutput::Unrecognized("installed 结果缺少 name。".to_string());
                 }
                 results.push(CliSkillResult {
                     name,
@@ -341,9 +332,7 @@ pub fn parse_install_output(raw: &str) -> InstallOutput {
             }
             "skipped" => {
                 if name.is_none() {
-                    return InstallOutput::Unrecognized(
-                        "skipped 结果缺少 name。".to_string(),
-                    );
+                    return InstallOutput::Unrecognized("skipped 结果缺少 name。".to_string());
                 }
                 results.push(CliSkillResult {
                     name,
@@ -354,9 +343,11 @@ pub fn parse_install_output(raw: &str) -> InstallOutput {
             }
             "failed" => {
                 if name.is_none() {
-                    return InstallOutput::Fatal(error.unwrap_or_else(|| {
-                        "skills CLI 预检失败（未提供错误信息）。".to_string()
-                    }));
+                    return InstallOutput::Fatal(
+                        error.unwrap_or_else(|| {
+                            "skills CLI 预检失败（未提供错误信息）。".to_string()
+                        }),
+                    );
                 }
                 results.push(CliSkillResult {
                     name,
@@ -366,9 +357,7 @@ pub fn parse_install_output(raw: &str) -> InstallOutput {
                 });
             }
             other => {
-                return InstallOutput::Unrecognized(format!(
-                    "CLI 返回了未知状态：{other}"
-                ));
+                return InstallOutput::Unrecognized(format!("CLI 返回了未知状态：{other}"));
             }
         }
     }
@@ -382,9 +371,8 @@ pub fn snapshot_lock(paths: &AppPaths, task_id: &str) -> Result<PathBuf, AppErro
     let directory = paths
         .backups_dir()
         .join(format!("{}-install-{}", now_ms(), sanitize(task_id)));
-    fs::create_dir_all(&directory).map_err(|error| {
-        AppError::backup_failed(format!("{}：{error}", directory.display()))
-    })?;
+    fs::create_dir_all(&directory)
+        .map_err(|error| AppError::backup_failed(format!("{}：{error}", directory.display())))?;
     let source = paths.lock_path();
     let target = directory.join("skill-lock.json");
     match fs::copy(&source, &target) {
@@ -436,13 +424,9 @@ pub fn verify_install(
                 "CLI 未返回 skill「{name}」的结果。"
             ))),
             Some(result) => match result.status {
-                CliSkillStatus::Installed => verify_installed(
-                    paths,
-                    plan,
-                    &lock,
-                    name,
-                    &mut verification.warnings,
-                ),
+                CliSkillStatus::Installed => {
+                    verify_installed(paths, plan, &lock, name, &mut verification.warnings)
+                }
                 CliSkillStatus::Skipped => Err(AppError::skill_not_in_source(
                     name,
                     result
@@ -787,22 +771,21 @@ mod tests {
         assert_eq!(plan.skills, vec!["alpha", "beta"]);
         assert_eq!(plan.agent_ids, vec!["qoder", "universal"]);
         assert_eq!(plan.targets.len(), 1);
-        assert_eq!(plan.targets[0].skills_dir, paths.home().join(".qoder/skills"));
+        assert_eq!(
+            plan.targets[0].skills_dir,
+            paths.home().join(".qoder/skills")
+        );
     }
 
     #[test]
     fn validation_rejects_copy_all_wildcard_and_flag_like_names() {
         let (_tmp, paths) = fixture();
         for forbidden in ["--copy", "--all", "*", "-s", "a/b", "..", ""] {
-            let error = validate_request(
-                &paths,
-                &request("acme/skills", &[forbidden], &["qoder"]),
-            )
-            .unwrap_err();
+            let error = validate_request(&paths, &request("acme/skills", &[forbidden], &["qoder"]))
+                .unwrap_err();
             assert_eq!(error.code, codes::SKILL_INVALID_NAME, "{forbidden:?}");
         }
-        let error = validate_request(&paths, &request("acme/skills", &[], &["qoder"]))
-            .unwrap_err();
+        let error = validate_request(&paths, &request("acme/skills", &[], &["qoder"])).unwrap_err();
         assert_eq!(error.code, codes::SKILL_INVALID_NAME);
     }
 
@@ -810,11 +793,8 @@ mod tests {
     fn validation_rejects_unknown_wildcard_and_unsupported_agents() {
         let (_tmp, paths) = fixture();
         for unknown in ["*", "--all", "not-an-agent", "-a"] {
-            let error = validate_request(
-                &paths,
-                &request("acme/skills", &["alpha"], &[unknown]),
-            )
-            .unwrap_err();
+            let error = validate_request(&paths, &request("acme/skills", &["alpha"], &[unknown]))
+                .unwrap_err();
             assert_eq!(error.code, codes::AGENT_INVALID, "{unknown}");
         }
         let error = validate_request(
@@ -823,11 +803,8 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.code, codes::AGENT_UNSUPPORTED_GLOBAL);
-        let error = validate_request(
-            &paths,
-            &request("acme/skills", &["alpha"], &["eve"]),
-        )
-        .unwrap_err();
+        let error =
+            validate_request(&paths, &request("acme/skills", &["alpha"], &["eve"])).unwrap_err();
         assert_eq!(error.code, codes::AGENT_UNSUPPORTED_GLOBAL);
     }
 
@@ -854,7 +831,13 @@ mod tests {
             panic!("per-skill failure must parse");
         };
         assert_eq!(results[0].status, CliSkillStatus::Failed);
-        assert!(results[0].error.as_deref().unwrap().contains("PromptScript"));
+        assert!(
+            results[0]
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("PromptScript")
+        );
 
         let InstallOutput::Fatal(error) = parse_install_output(FATAL_CLONE) else {
             panic!("fatal clone failure must be fatal");

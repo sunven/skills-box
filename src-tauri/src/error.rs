@@ -384,11 +384,7 @@ impl AppError {
         .retryable(true)
     }
 
-    pub fn verify_attachment_missing(
-        name: &str,
-        agent: &str,
-        path: &std::path::Path,
-    ) -> Self {
+    pub fn verify_attachment_missing(name: &str, agent: &str, path: &std::path::Path) -> Self {
         Self::new(
             codes::VERIFY_ATTACHMENT_MISSING,
             format!("agent「{agent}」缺少 skill「{name}」的挂载。"),
@@ -413,11 +409,7 @@ impl AppError {
         .retryable(true)
     }
 
-    pub fn verify_copy_fallback(
-        name: &str,
-        agent: &str,
-        path: &std::path::Path,
-    ) -> Self {
+    pub fn verify_copy_fallback(name: &str, agent: &str, path: &std::path::Path) -> Self {
         Self::new(
             codes::VERIFY_COPY_FALLBACK,
             format!("「{name}」在 agent「{agent}」上是副本而非符号链接。"),

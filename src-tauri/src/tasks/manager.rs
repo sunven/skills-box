@@ -19,8 +19,8 @@ use crate::process::{CancelToken, ExecError, ProcessExecutor};
 use super::conflicts::{ConflictInfo, ConflictProvider};
 use super::install::{
     self, INSTALL_TIMEOUT, InstallOutput, InstallPlan, InstallRequest,
-    install_command as build_install_command, parse_install_output, snapshot_lock,
-    summary_message, validate_request, verify_install,
+    install_command as build_install_command, parse_install_output, snapshot_lock, summary_message,
+    validate_request, verify_install,
 };
 use super::parser::{ParsedSkill, PreviewParseOutcome, parse_preview_output};
 use super::source::{SourceSpec, validate_source};
@@ -341,9 +341,7 @@ impl TaskManager {
             Ok::<InstallPlan, AppError>(plan)
         })
         .await
-        .map_err(|error| {
-            AppError::cli_failed(format!("校验安装请求失败：{error}"))
-        })??;
+        .map_err(|error| AppError::cli_failed(format!("校验安装请求失败：{error}")))??;
 
         // The permit is taken after validation so invalid requests do not
         // briefly occupy the write slot, and held for the whole task.
@@ -626,13 +624,7 @@ impl TaskManager {
         let total = plan.total();
         emit(
             &sink,
-            TaskEvent::progress(
-                &task_id,
-                TaskPhase::Preparing,
-                "正在准备安装…",
-                0,
-                total,
-            ),
+            TaskEvent::progress(&task_id, TaskPhase::Preparing, "正在准备安装…", 0, total),
         );
         if cancel.is_cancelled() {
             self.finish(&task_id, &sink, FinishOutcome::Cancelled);
@@ -864,9 +856,7 @@ impl TaskManager {
                     .preview
                     .as_ref()
                     .map(|preview| preview.skills.len().max(1) as u32)
-                    .or_else(|| {
-                        (!result.skills.is_empty()).then(|| result.skills.len() as u32)
-                    })
+                    .or_else(|| (!result.skills.is_empty()).then_some(result.skills.len() as u32))
                     .unwrap_or(1);
                 TaskEvent::finished(
                     task_id,
@@ -947,7 +937,8 @@ fn classify_install_failure(detail: &str, stderr: &str) -> AppError {
     }
 }
 
-fn classify_cli_failure(stdout: &str, stderr: &str) -> AppError {    let detail = if stderr.trim().is_empty() {
+fn classify_cli_failure(stdout: &str, stderr: &str) -> AppError {
+    let detail = if stderr.trim().is_empty() {
         stdout.trim().to_string()
     } else if stdout.trim().is_empty() {
         stderr.trim().to_string()
@@ -1601,10 +1592,7 @@ mod tests {
         }
     }
 
-    fn post_state(
-        home: PathBuf,
-        skills: Vec<PostSkill>,
-    ) -> impl FnOnce() + Send + 'static {
+    fn post_state(home: PathBuf, skills: Vec<PostSkill>) -> impl FnOnce() + Send + 'static {
         move || {
             let agents_root = home.join(".agents");
             let canonical_root = agents_root.join("skills");
@@ -1613,8 +1601,7 @@ mod tests {
                 if skill.canonical {
                     let canonical = canonical_root.join(skill.name);
                     fs::create_dir_all(&canonical).unwrap();
-                    fs::write(canonical.join("SKILL.md"), format!("# {}\n", skill.name))
-                        .unwrap();
+                    fs::write(canonical.join("SKILL.md"), format!("# {}\n", skill.name)).unwrap();
                 }
                 if let Some(relative) = skill.agent_dir {
                     let agent_dir = home.join(relative);
@@ -1624,11 +1611,8 @@ mod tests {
                         fs::create_dir_all(&attachment).unwrap();
                     } else {
                         #[cfg(unix)]
-                        std::os::unix::fs::symlink(
-                            canonical_root.join(skill.name),
-                            &attachment,
-                        )
-                        .unwrap();
+                        std::os::unix::fs::symlink(canonical_root.join(skill.name), &attachment)
+                            .unwrap();
                     }
                 }
                 if skill.lock {
@@ -1743,7 +1727,10 @@ mod tests {
         paths.ensure_dirs().unwrap();
         let executor = Arc::new(InstallExecutor::new(InstallResponse::success(
             INSTALL_PARTIAL,
-            post_state(home.clone(), vec![PostSkill::installed("find-skills", ".qoder/skills")]),
+            post_state(
+                home.clone(),
+                vec![PostSkill::installed("find-skills", ".qoder/skills")],
+            ),
         )));
         let manager = TaskManager::new(
             Arc::new(FakeRuntime::ok()),
@@ -1785,7 +1772,10 @@ mod tests {
         paths.ensure_dirs().unwrap();
         let executor = Arc::new(InstallExecutor::new(InstallResponse::success(
             INSTALL_SUCCESS,
-            post_state(home.clone(), vec![PostSkill::copy("find-skills", ".qoder/skills")]),
+            post_state(
+                home.clone(),
+                vec![PostSkill::copy("find-skills", ".qoder/skills")],
+            ),
         )));
         let manager = TaskManager::new(
             Arc::new(FakeRuntime::ok()),
@@ -1844,8 +1834,11 @@ mod tests {
     #[tokio::test]
     async fn unparseable_json_is_fatal_even_with_exit_zero() {
         let fixture = install_fixture(InstallResponse::output(0, "garbage", ""));
-        let (_phases, final_event) =
-            run_install_task(&fixture.manager, install_request(&["find-skills"], &["qoder"])).await;
+        let (_phases, final_event) = run_install_task(
+            &fixture.manager,
+            install_request(&["find-skills"], &["qoder"]),
+        )
+        .await;
         assert_eq!(final_event.phase, TaskPhase::Failed);
         assert_eq!(final_event.error.unwrap().code, codes::CLI_FAILED);
         assert_eq!(fixture.executor.call_count(), 1);
@@ -1854,8 +1847,11 @@ mod tests {
     #[tokio::test]
     async fn fatal_clone_failure_maps_to_network_error() {
         let fixture = install_fixture(InstallResponse::output(1, INSTALL_FATAL_CLONE, ""));
-        let (_phases, final_event) =
-            run_install_task(&fixture.manager, install_request(&["find-skills"], &["qoder"])).await;
+        let (_phases, final_event) = run_install_task(
+            &fixture.manager,
+            install_request(&["find-skills"], &["qoder"]),
+        )
+        .await;
         assert_eq!(final_event.phase, TaskPhase::Failed);
         assert_eq!(final_event.error.unwrap().code, codes::NETWORK_FETCH_FAILED);
     }
@@ -1952,7 +1948,10 @@ mod tests {
         let executor = Arc::new(InstallExecutor::new(
             InstallResponse::success(
                 INSTALL_SUCCESS,
-                post_state(home.clone(), vec![PostSkill::installed("find-skills", ".qoder/skills")]),
+                post_state(
+                    home.clone(),
+                    vec![PostSkill::installed("find-skills", ".qoder/skills")],
+                ),
             )
             .delayed(Duration::from_millis(120)),
         ));
@@ -1997,7 +1996,10 @@ mod tests {
         let executor = Arc::new(InstallExecutor::new(
             InstallResponse::success(
                 INSTALL_SUCCESS,
-                post_state(home.clone(), vec![PostSkill::installed("find-skills", ".qoder/skills")]),
+                post_state(
+                    home.clone(),
+                    vec![PostSkill::installed("find-skills", ".qoder/skills")],
+                ),
             )
             .delayed(Duration::from_millis(150)),
         ));
