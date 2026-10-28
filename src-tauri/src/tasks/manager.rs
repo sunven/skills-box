@@ -1558,6 +1558,10 @@ impl TaskManager {
                 }
             }
 
+            // This skill is fully written, verified and re-baselined, so the
+            // next cancellation check is a genuine "between skills" point.
+            self.set_task_cancellable(&task_id, true);
+
             let result_status = update_task::status_label(status);
             let _ = log.append(&OperationEntry::new(
                 "update",
@@ -2887,11 +2891,19 @@ mod tests {
         assert_eq!(final_event.total, Some(1));
 
         let result = final_event.result.expect("install result");
+        assert_eq!(result.action, TaskAction::Install);
+        assert!(result.started_at > 0, "startedAt is populated");
         assert_eq!(result.overall, TaskOverall::Success);
         assert_eq!(result.skills.len(), 1);
         assert_eq!(result.skills[0].name, "find-skills");
         assert_eq!(result.skills[0].status, TaskSkillStatus::Installed);
         assert!(result.warnings.is_empty());
+        // The verified folder becomes the known-good baseline so later local
+        // modifications are detected (spec §3.6).
+        let baseline = BaselineStore::new(&paths)
+            .load("find-skills")
+            .expect("baseline recorded after a verified install");
+        assert!(baseline.verified);
         let backup = result.backup_path.expect("lock snapshot path");
         let snapshot = PathBuf::from(&backup).join("skill-lock.json");
         assert!(snapshot.is_file(), "snapshot at {snapshot:?}");
@@ -3085,6 +3097,56 @@ mod tests {
         assert_eq!(fixture.executor.call_count(), 0);
         assert!(receiver.try_recv().is_err());
         assert!(taken.join("SKILL.md").is_file(), "no overwrite");
+    }
+
+    #[tokio::test]
+    async fn explicit_retry_may_overwrite_a_same_source_partial_install() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(home.join(".qoder")).unwrap();
+        let paths = AppPaths::new(&home, tmp.path().join("app-data"));
+        paths.ensure_dirs().unwrap();
+        let executor = Arc::new(InstallExecutor::new(InstallResponse::success(
+            INSTALL_SUCCESS,
+            post_state(
+                home.clone(),
+                vec![PostSkill::installed("find-skills", ".qoder/skills")],
+            ),
+        )));
+        let manager = TaskManager::new(
+            Arc::new(FakeRuntime::ok()),
+            executor.clone(),
+            Arc::new(FakeConflicts::default()),
+            paths.clone(),
+            TaskManagerConfig {
+                preview_timeout: Duration::from_secs(60),
+                install_timeout: Duration::from_secs(5),
+            },
+        );
+        // A previous attempt partially wrote the same source: managed lock
+        // entry plus canonical folder, but the agent attachment is missing.
+        write_pre_lock(&paths, &["find-skills"]);
+        let canonical = home.join(".agents/skills/find-skills");
+        fs::create_dir_all(&canonical).unwrap();
+        fs::write(canonical.join("SKILL.md"), "# old attempt\n").unwrap();
+
+        let (sink, _receiver) = sink();
+        let error = manager
+            .start_install(install_request(&["find-skills"], &["qoder"]), sink)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, codes::SKILL_CONFLICT, "plain duplicate rejected");
+        assert_eq!(executor.call_count(), 0);
+
+        let mut retry = install_request(&["find-skills"], &["qoder"]);
+        retry.retry = true;
+        let (_phases, final_event) = run_install_task(&manager, retry).await;
+        assert_eq!(final_event.phase, TaskPhase::Completed);
+        let result = final_event.result.expect("retry result");
+        assert_eq!(result.overall, TaskOverall::Success);
+        assert_eq!(result.skills[0].status, TaskSkillStatus::Installed);
+        assert_eq!(executor.call_count(), 1);
     }
 
     #[tokio::test]

@@ -1058,6 +1058,8 @@ mod tests {
         assert_eq!(final_event.total, Some(1));
 
         let result = final_event.result.expect("update result");
+        assert_eq!(result.action, crate::tasks::manager::TaskAction::Update);
+        assert!(result.started_at > 0, "startedAt is populated");
         assert_eq!(result.overall, TaskOverall::Success);
         assert_eq!(result.skills.len(), 1);
         assert_eq!(result.skills[0].name, "alpha");
@@ -1340,6 +1342,47 @@ mod tests {
             !fixture.paths.interrupted_marker_path().exists(),
             "normal completion clears the interruption marker"
         );
+    }
+
+    #[tokio::test]
+    async fn update_cannot_be_cancelled_during_verification_or_baseline() {
+        let fixture = Fixture::new(&[("alpha", "acme/skills", None)]);
+        let executor = Arc::new(UpdateExecutor::new(vec![
+            UpdateResponse::installed("alpha").with_post(simulate_update(
+                fixture.canonical.clone(),
+                fixture.qoder.clone(),
+                fixture.claude.clone(),
+                fixture.paths.lock_path(),
+                "alpha",
+            )),
+        ]));
+        let manager = update_manager(&fixture.paths, executor.clone());
+        let (sink, mut receiver) = sink();
+        let task_id = manager
+            .start_update(vec!["alpha".to_string()], sink)
+            .await
+            .unwrap();
+        loop {
+            let event = receiver.recv().await.unwrap();
+            if event.phase == TaskPhase::Verifying && event.completed == Some(0) {
+                let error = manager.cancel_task(&task_id).unwrap_err();
+                assert_eq!(error.code, codes::TASK_CANNOT_CANCEL);
+                break;
+            }
+        }
+        let final_event = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let event = receiver.recv().await.unwrap();
+                if event.phase.is_final() {
+                    return event;
+                }
+            }
+        })
+        .await
+        .expect("update should finish");
+        assert_eq!(final_event.phase, TaskPhase::Completed);
+        assert_eq!(final_event.result.unwrap().overall, TaskOverall::Success);
+        assert_eq!(executor.calls().len(), 1);
     }
 
     #[tokio::test]

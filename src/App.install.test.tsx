@@ -129,9 +129,11 @@ function completed(
     completed: Math.max(1, preview.skills.length),
     total: Math.max(1, preview.skills.length),
     result: {
+      action: "preview",
       overall: "success",
       skills: [],
       warnings: [],
+      startedAt: 0,
       finishedAtEpochMs: 1,
       preview,
     },

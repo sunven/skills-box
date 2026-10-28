@@ -149,20 +149,28 @@ describe("app shell", () => {
     expect(screen.getByRole("button", { name: "安装 skill" })).toBeDisabled();
   });
 
-  it("rechecks the environment through the single api gateway", async () => {
+  it("rechecks the environment and refetches the inventory through the single api gateway", async () => {
     const payloads: Array<{ refresh?: boolean }> = [];
-    let calls = 0;
+    let envCalls = 0;
+    let inventoryCalls = 0;
     mockIPC((command, payload) => {
-      if (command !== "get_environment") {
-        throw new Error(`unexpected command: ${command}`);
+      if (command === "get_environment") {
+        payloads.push(payload as { refresh?: boolean });
+        envCalls += 1;
+        return envCalls === 1 ? cliMissingReport() : healthyReport();
       }
-      payloads.push(payload as { refresh?: boolean });
-      calls += 1;
-      return calls === 1 ? cliMissingReport() : healthyReport();
+      if (command === "get_inventory") {
+        inventoryCalls += 1;
+        return emptySnapshot();
+      }
+      throw new Error(`unexpected command: ${command}`);
     });
 
     renderApp();
     const banner = await screen.findByRole("alert");
+    await screen.findByText("暂无 skill");
+    expect(inventoryCalls).toBe(1);
+
     fireEvent.click(
       within(banner).getByRole("button", { name: "重新检测" }),
     );
@@ -171,5 +179,8 @@ describe("app shell", () => {
     expect(payloads).toHaveLength(2);
     expect(payloads[0]?.refresh).toBe(false);
     expect(payloads[1]?.refresh).toBe(true);
+    // One refresh recovers both the environment report and the read model;
+    // stale detail/update caches are invalidated by the same handler.
+    expect(inventoryCalls).toBe(2);
   });
 });

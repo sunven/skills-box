@@ -115,12 +115,7 @@ export function UninstallDialog({
       if (event.phase === "failed") {
         setRunning(false);
         setCancelling(false);
-        setTaskError(
-          event.error ?? {
-            code: "cli.failed",
-            message: "卸载失败，请重试。",
-          },
-        );
+        setTaskError(event.error ?? { message: "卸载失败，请重试。" });
         invalidateQueries();
       }
     },

@@ -167,9 +167,11 @@ function previewCompleted(summary: PreviewSummary): TaskEvent {
     completed: Math.max(1, summary.skills.length),
     total: Math.max(1, summary.skills.length),
     result: {
+      action: "preview",
       overall: "success",
       skills: [],
       warnings: [],
+      startedAt: 0,
       finishedAtEpochMs: 1,
       preview: summary,
     },
@@ -196,9 +198,11 @@ function installResult(
   warnings: TaskResult["warnings"] = [],
 ): TaskResult {
   return {
+    action: "install",
     overall,
     skills,
     warnings,
+    startedAt: 1,
     finishedAtEpochMs: 2,
     backupPath: "/tmp/backups/1-install-task-2",
   };
@@ -304,6 +308,7 @@ describe("install wizard steps 3-5", () => {
       source: "acme/skills",
       skills: ["alpha"],
       agents: ["claude-code"],
+      retry: false,
     });
 
     emitInstall(
@@ -422,10 +427,13 @@ describe("install wizard steps 3-5", () => {
 
     fireEvent.click(within(rows[1]!).getByRole("button", { name: "重试" }));
     await waitFor(() => expect(state.installCalls).toHaveLength(2));
+    // Only the explicit retry button may ask Rust to overwrite a same-source
+    // managed/stale entry left by the failed attempt.
     expect(state.installCalls[1]!.request).toEqual({
       source: "acme/skills",
       skills: ["beta"],
       agents: ["claude-code"],
+      retry: true,
     });
 
     emitInstall(
@@ -508,8 +516,9 @@ describe("install wizard steps 3-5", () => {
     ).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("button", { name: "重试" }));
     await waitFor(() => expect(state.installCalls).toHaveLength(2));
-    expect(state.installCalls[1]!.request).toEqual(
-      state.installCalls[0]!.request,
-    );
+    expect(state.installCalls[1]!.request).toEqual({
+      ...state.installCalls[0]!.request,
+      retry: true,
+    });
   });
 });

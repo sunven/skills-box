@@ -1056,6 +1056,11 @@ mod execution_tests {
         assert_eq!(final_event.total, Some(1));
 
         let result = final_event.result.expect("uninstall result");
+        assert_eq!(
+            result.action,
+            crate::tasks::manager::TaskAction::Uninstall
+        );
+        assert!(result.started_at > 0, "startedAt is populated");
         assert_eq!(result.overall, TaskOverall::Success);
         assert_eq!(result.skills.len(), 1);
         assert_eq!(result.skills[0].name, "alpha");

@@ -183,6 +183,7 @@ function uninstallResult(
   overrides: Partial<TaskResult> = {},
 ): TaskResult {
   return {
+    action: "uninstall",
     overall,
     skills: [
       {
@@ -204,6 +205,7 @@ function uninstallResult(
     warnings: [],
     backupPath: "/tmp/backups/1-uninstall-alpha",
     logPath: "/tmp/logs/operations.jsonl",
+    startedAt: 1,
     finishedAtEpochMs: 2,
     ...overrides,
   };

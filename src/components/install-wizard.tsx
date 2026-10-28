@@ -424,12 +424,8 @@ export function InstallWizard({
     if (event.phase === "failed") {
       setPreviewRunning(false);
       setCancelling(false);
-      setTaskError(
-        event.error ?? {
-          code: "source.preview_failed",
-          message: "预览失败，请重试。",
-        },
-      );
+      // Backend errors always carry a code; do not invent one on the client.
+      setTaskError(event.error ?? { message: "预览失败，请重试。" });
       setStep(1);
       return;
     }
@@ -446,7 +442,6 @@ export function InstallWizard({
     const source = sourceInput.trim();
     if (!source) {
       setStartError({
-        code: "source.missing",
         message: "请输入公开 GitHub 仓库，例如 owner/repo。",
       });
       return;
@@ -510,12 +505,7 @@ export function InstallWizard({
     if (event.phase === "failed") {
       setInstallRunning(false);
       setCancelling(false);
-      setTaskError(
-        event.error ?? {
-          code: "cli.failed",
-          message: "安装失败，请重试。",
-        },
-      );
+      setTaskError(event.error ?? { message: "安装失败，请重试。" });
       invalidateMutationQueries();
       return;
     }
@@ -526,7 +516,7 @@ export function InstallWizard({
     }
   };
 
-  const handleStartInstall = async (names: string[]) => {
+  const handleStartInstall = async (names: string[], retry = false) => {
     if (!preview || installRunning || previewRunning || names.length === 0) {
       return;
     }
@@ -546,8 +536,10 @@ export function InstallWizard({
     setLastMessage("正在准备安装…");
 
     try {
+      // `retry` is only set by the explicit retry buttons. A plain install
+      // still rejects every same-name managed/stale/copy-only row.
       const id = await startInstall(
-        { source: preview.source, skills: names, agents: requestAgents },
+        { source: preview.source, skills: names, agents: requestAgents, retry },
         (event) => {
           if (runSeq.current !== seq) return;
           handleInstallEvent(event);
@@ -1153,7 +1145,9 @@ export function InstallWizard({
                               size="sm"
                               className="ml-auto h-7"
                               disabled={installRunning}
-                              onClick={() => void handleStartInstall([skill.name])}
+                              onClick={() =>
+                                void handleStartInstall([skill.name], true)
+                              }
                             >
                               重试
                             </Button>
@@ -1244,7 +1238,7 @@ export function InstallWizard({
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => void handleStartInstall(retryNames)}
+                    onClick={() => void handleStartInstall(retryNames, true)}
                   >
                     重试失败项
                   </Button>
@@ -1253,7 +1247,9 @@ export function InstallWizard({
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => void handleStartInstall(lastInstall.skills)}
+                    onClick={() =>
+                      void handleStartInstall(lastInstall.skills, true)
+                    }
                   >
                     重试
                   </Button>

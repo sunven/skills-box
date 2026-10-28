@@ -281,11 +281,13 @@ function updateTaskResult(
   overrides: Partial<TaskResult> = {},
 ): TaskResult {
   return {
+    action: "update",
     overall,
     skills,
     warnings: [],
     backupPath: "/tmp/backups/1-update-alpha",
     logPath: "/tmp/logs/operations.jsonl",
+    startedAt: 1,
     finishedAtEpochMs: 2,
     ...overrides,
   };

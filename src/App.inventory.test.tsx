@@ -198,7 +198,7 @@ describe("inventory list", () => {
     expect(rowNames()).toEqual(["beta", "alpha", "delta", "gamma"]);
   });
 
-  it("shows unmanaged and broken-attachment rows under the anomaly filter", async () => {
+  it("shows unmanaged, copy-only and broken-attachment rows under the anomaly filter", async () => {
     const broken = makeSkill({
       name: "broken",
       updatedAt: "2026-09-01T00:00:00.000Z",
@@ -219,8 +219,9 @@ describe("inventory list", () => {
     await screen.findByText("beta");
 
     fireEvent.click(sidebarButton(/^异常/));
-    expect(rowNames()).toEqual(["broken", "gamma"]);
+    expect(rowNames()).toEqual(["delta", "broken", "gamma"]);
     expect(within(row("broken")).getByText("断链")).toBeInTheDocument();
+    expect(within(row("delta")).getByText("仅副本")).toBeInTheDocument();
   });
 
   it("sorts by updated time, name and source", async () => {

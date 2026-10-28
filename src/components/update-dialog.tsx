@@ -226,12 +226,7 @@ export function UpdateDialog({
       if (event.phase === "failed") {
         setRunning(false);
         setCancelling(false);
-        setTaskError(
-          event.error ?? {
-            code: "cli.failed",
-            message: "更新失败，请重试。",
-          },
-        );
+        setTaskError(event.error ?? { message: "更新失败，请重试。" });
         invalidateQueries();
       }
     },
