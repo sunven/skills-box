@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod backup;
 pub mod baseline;
 pub mod cli;
 pub mod commands;
@@ -7,6 +8,7 @@ pub mod env;
 pub mod error;
 pub mod inventory;
 pub mod lock;
+pub mod logs;
 pub mod paths;
 pub mod process;
 pub mod security;

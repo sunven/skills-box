@@ -25,6 +25,9 @@ pub mod codes {
     pub const SKILL_INVALID_NAME: &str = "skill.invalid_name";
     pub const SKILL_INSTALL_FAILED: &str = "skill.install_failed";
     pub const SKILL_READ_FAILED: &str = "skill.read_failed";
+    pub const SKILL_UNMANAGED: &str = "skill.unmanaged";
+    pub const SKILL_COPY_ONLY: &str = "skill.copy_only";
+    pub const SKILL_SOURCE_UNRESOLVABLE: &str = "skill.source_unresolvable";
     pub const AGENT_INVALID: &str = "agent.invalid";
     pub const AGENT_NOT_DETECTED: &str = "agent.not_detected";
     pub const AGENT_UNSUPPORTED_GLOBAL: &str = "agent.unsupported_global";
@@ -54,6 +57,8 @@ pub mod codes {
     pub const VERIFY_ATTACHMENT_MISSING: &str = "verify.attachment_missing";
     pub const VERIFY_ATTACHMENT_MODE: &str = "verify.attachment_mode";
     pub const VERIFY_COPY_FALLBACK: &str = "verify.copy_fallback";
+    pub const UPDATE_LOCAL_MODIFIED: &str = "update.local_modified";
+    pub const UPDATE_COPY_TO_SYMLINK: &str = "update.copy_to_symlink";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -202,6 +207,50 @@ impl AppError {
             .detail(detail)
             .hint("请检查该 skill 目录的权限后重试。")
             .retryable(true)
+    }
+
+    pub fn skill_unmanaged(name: &str) -> Self {
+        Self::new(
+            codes::SKILL_UNMANAGED,
+            format!("skill「{name}」没有 lock 条目，不可更新。"),
+        )
+        .hint("未受管 skill 只能只读展示或手动处理，请刷新库存确认状态。")
+    }
+
+    pub fn skill_copy_only(name: &str) -> Self {
+        Self::new(
+            codes::SKILL_COPY_ONLY,
+            format!("skill「{name}」只有 agent 副本，没有共享目录，无法更新。"),
+        )
+        .hint("v1 不支持 copy-only 更新；请先卸载，再重新安装。")
+    }
+
+    pub fn skill_source_unresolvable(name: &str, detail: impl Into<String>) -> Self {
+        Self::new(
+            codes::SKILL_SOURCE_UNRESOLVABLE,
+            format!("无法从 lock 解析 skill「{name}」的来源，已跳过更新。"),
+        )
+        .detail(detail)
+        .hint("只支持公开 GitHub 来源；可重新安装该 skill 以恢复来源记录。")
+    }
+
+    pub fn update_local_modified(name: &str, detail: impl Into<String>) -> Self {
+        Self::new(
+            codes::UPDATE_LOCAL_MODIFIED,
+            format!("skill「{name}」存在本地改动，更新前需要确认。"),
+        )
+        .detail(detail)
+        .hint("更新会覆盖本地改动；操作前已要求确认并创建备份。")
+    }
+
+    pub fn update_copy_to_symlink(name: &str, agents: &str) -> Self {
+        Self::new(
+            codes::UPDATE_COPY_TO_SYMLINK,
+            format!("skill「{name}」在 {agents} 上是副本，更新后将转为符号链接。"),
+        )
+        .detail(format!(
+            "更新前已备份这些副本目录：{agents}；可自行恢复。"
+        ))
     }
 
     pub fn path_invalid(detail: impl Into<String>) -> Self {
@@ -394,7 +443,7 @@ impl AppError {
     }
 
     pub fn backup_failed(detail: impl Into<String>) -> Self {
-        Self::new(codes::BACKUP_FAILED, "无法创建安装前的 lock 快照。")
+        Self::new(codes::BACKUP_FAILED, "无法创建操作前的备份快照。")
             .detail(detail)
             .hint("请检查应用数据目录与磁盘空间后重试。")
             .retryable(true)
