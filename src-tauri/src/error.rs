@@ -248,9 +248,7 @@ impl AppError {
             codes::UPDATE_COPY_TO_SYMLINK,
             format!("skill「{name}」在 {agents} 上是副本，更新后将转为符号链接。"),
         )
-        .detail(format!(
-            "更新前已备份这些副本目录：{agents}；可自行恢复。"
-        ))
+        .detail(format!("更新前已备份这些副本目录：{agents}；可自行恢复。"))
     }
 
     pub fn path_invalid(detail: impl Into<String>) -> Self {

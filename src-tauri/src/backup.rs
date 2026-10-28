@@ -190,14 +190,16 @@ impl BackupStore {
                     ensure_directory(&attachment.path)?;
                     copy_tree(&attachment.path, &destination)
                         .map_err(|error| io_backup_error(&attachment.path, error))?;
-                    Some(format!(
-                        "{}/{}/{}",
-                        BACKUP_ATTACHMENTS_DIR,
-                        safe_component(&attachment.agent_id),
-                        ""
+                    Some(
+                        format!(
+                            "{}/{}/{}",
+                            BACKUP_ATTACHMENTS_DIR,
+                            safe_component(&attachment.agent_id),
+                            ""
+                        )
+                        .trim_end_matches('/')
+                        .to_string(),
                     )
-                    .trim_end_matches('/')
-                    .to_string())
                 }
                 _ => None,
             };
@@ -368,11 +370,7 @@ mod tests {
             )
             .unwrap();
             fs::create_dir_all(paths.agents_root()).unwrap();
-            fs::write(
-                paths.lock_path(),
-                r#"{"version":3,"skills":{"alpha":{}}}"#,
-            )
-            .unwrap();
+            fs::write(paths.lock_path(), r#"{"version":3,"skills":{"alpha":{}}}"#).unwrap();
 
             let qoder = home.join(".qoder/skills");
             let claude = home.join(".claude/skills");
@@ -549,18 +547,10 @@ mod tests {
         let fixture = Fixture::new();
         let missing = fixture.tmp.path().join("missing-skill");
         let error = BackupStore::new(&fixture.paths)
-            .create(
-                BackupAction::Update,
-                "alpha",
-                Some(&missing),
-                &[],
-                &[],
-            )
+            .create(BackupAction::Update, "alpha", Some(&missing), &[], &[])
             .unwrap_err();
         assert_eq!(error.code, codes::BACKUP_FAILED);
-        let remaining: Vec<_> = fs::read_dir(fixture.paths.backups_dir())
-            .unwrap()
-            .collect();
+        let remaining: Vec<_> = fs::read_dir(fixture.paths.backups_dir()).unwrap().collect();
         assert!(
             remaining.is_empty(),
             "partial backup directories must be removed"
@@ -588,12 +578,24 @@ mod tests {
         let store = BackupStore::new(&fixture.paths);
         // Hold the first directory open so the next attempt cannot reuse it.
         let first = store
-            .create(BackupAction::Update, "alpha", Some(&fixture.canonical), &[], &[])
+            .create(
+                BackupAction::Update,
+                "alpha",
+                Some(&fixture.canonical),
+                &[],
+                &[],
+            )
             .unwrap();
         let existing = first.path.join("marker");
         fs::write(&existing, b"x").unwrap();
         let second = store
-            .create(BackupAction::Update, "alpha", Some(&fixture.canonical), &[], &[])
+            .create(
+                BackupAction::Update,
+                "alpha",
+                Some(&fixture.canonical),
+                &[],
+                &[],
+            )
             .unwrap();
         assert_ne!(first.path, second.path);
         assert!(first.path.exists());

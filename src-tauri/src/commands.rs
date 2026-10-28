@@ -178,9 +178,7 @@ pub async fn reveal_app_data(
         Ok::<PathBuf, AppError>(directory)
     })
     .await
-    .map_err(|error| {
-        AppError::path_app_data(format!("无法准备应用数据目录：{error}"))
-    })??;
+    .map_err(|error| AppError::path_app_data(format!("无法准备应用数据目录：{error}")))??;
 
     app.opener()
         .open_path(directory.to_string_lossy().to_string(), None::<&str>)

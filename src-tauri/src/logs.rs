@@ -100,8 +100,8 @@ impl OperationLog {
             backup_path: entry.backup_path.as_deref(),
             error: entry.error.as_ref(),
         };
-        let serialized =
-            serde_json::to_string(&line).map_err(|error| log_write_failed(&self.path, error.into()))?;
+        let serialized = serde_json::to_string(&line)
+            .map_err(|error| log_write_failed(&self.path, error.into()))?;
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)

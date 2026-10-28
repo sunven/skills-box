@@ -10,9 +10,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::Serialize;
 use tokio::sync::Semaphore;
 
-use crate::cli::{CliRuntimeProvider, preview_command};
 use crate::backup::{BackupAction, BackupStore};
 use crate::baseline::{BaselineStore, LocalModification};
+use crate::cli::{CliRuntimeProvider, preview_command};
 use crate::error::{AppError, codes};
 use crate::lock::LockFile;
 use crate::logs::{OperationEntry, OperationLog};
@@ -405,15 +405,23 @@ impl TaskManager {
         on_event: EventSink,
     ) -> Result<TaskId, AppError> {
         let names = install::validate_skill_names(&skill_ids)?;
+        // Hold the write slot while planning so the lock/inventory snapshot
+        // cannot be read in the middle of another mutation.
+        let permit = self.try_acquire_mutation()?;
         let paths = self.inner.paths.clone();
-        let plan = tokio::task::spawn_blocking(move || {
+        let plan = match tokio::task::spawn_blocking(move || {
             let agents = crate::inventory::detected_agent_dirs(&paths);
             update_task::plan_updates(&paths, &agents, &names)
         })
         .await
-        .map_err(|error| AppError::cli_failed(format!("校验更新请求失败：{error}")))??;
+        {
+            Ok(Ok(plan)) => plan,
+            Ok(Err(error)) => return Err(error),
+            Err(error) => {
+                return Err(AppError::cli_failed(format!("校验更新请求失败：{error}")));
+            }
+        };
 
-        let permit = self.try_acquire_mutation()?;
         let task_id = format!("task-{}", self.inner.next_id.fetch_add(1, Ordering::SeqCst));
         let cancel = CancelToken::new();
         {
@@ -1071,11 +1079,8 @@ impl TaskManager {
             running_event.skill = Some(item.name.clone());
             emit(&sink, running_event);
 
-            let spec = update_task::update_command(
-                item,
-                &runtime,
-                self.inner.config.install_timeout,
-            );
+            let spec =
+                update_task::update_command(item, &runtime, self.inner.config.install_timeout);
             // Once the CLI exits the current skill is written; cancellation
             // is accepted again while it is verified.
             let exec_result = self.inner.executor.run(spec, cancel.clone()).await;
@@ -1095,10 +1100,8 @@ impl TaskManager {
                     break;
                 }
                 Err(ExecError::Timeout(timeout)) => {
-                    let error = AppError::cli_failed(format!(
-                        "更新超时（{} 秒）。",
-                        timeout.as_secs()
-                    ));
+                    let error =
+                        AppError::cli_failed(format!("更新超时（{} 秒）。", timeout.as_secs()));
                     results.push(failed_update_result(
                         &log,
                         item,
@@ -1116,9 +1119,7 @@ impl TaskManager {
                     continue;
                 }
                 Err(ExecError::Spawn { program, message }) => {
-                    let error = AppError::env_cli_missing(format!(
-                        "无法启动 {program}: {message}"
-                    ));
+                    let error = AppError::env_cli_missing(format!("无法启动 {program}: {message}"));
                     results.push(failed_update_result(
                         &log,
                         item,
@@ -1212,14 +1213,19 @@ impl TaskManager {
                 .await
                 {
                     Ok(Ok(_)) => {}
-                    Ok(Err(error)) => warnings.push(AppError::new(
-                        "baseline.write_failed",
-                        "更新成功，但无法刷新本地基线指纹。",
-                    )
-                    .detail(error.message)),
+                    Ok(Err(error)) => warnings.push(
+                        AppError::new(
+                            "baseline.write_failed",
+                            "更新成功，但无法刷新本地基线指纹。",
+                        )
+                        .detail(error.message),
+                    ),
                     Err(error) => warnings.push(
-                        AppError::new("baseline.write_failed", "更新成功，但无法刷新本地基线指纹。")
-                            .detail(error.to_string()),
+                        AppError::new(
+                            "baseline.write_failed",
+                            "更新成功，但无法刷新本地基线指纹。",
+                        )
+                        .detail(error.to_string()),
                     ),
                 }
             }
@@ -1253,10 +1259,7 @@ impl TaskManager {
         }
 
         self.set_task_cancellable(&task_id, true);
-        let overall = update_task::overall_for_update(
-            &results,
-            cancelled || cancel.is_cancelled(),
-        );
+        let overall = update_task::overall_for_update(&results, cancelled || cancel.is_cancelled());
         let message = update_task::summary_message(overall, &results);
         let backup_path = if backup_paths.len() == 1 {
             backup_paths.first().cloned()

@@ -19,9 +19,7 @@ use std::time::Duration;
 use crate::backup::BackupAttachment;
 use crate::baseline::LocalModification;
 use crate::error::AppError;
-use crate::inventory::{
-    self, AgentDir, AttachmentLocation, AttachmentMode, ManagementState,
-};
+use crate::inventory::{self, AgentDir, AttachmentLocation, AttachmentMode, ManagementState};
 use crate::lock::{LockEntry, LockFile};
 use crate::paths::AppPaths;
 use crate::process::{CommandSpec, ExecOutput};
@@ -138,7 +136,11 @@ pub fn plan_updates(
             });
             continue;
         }
-        let Some(entry) = located.lock_entry.clone().or_else(|| lock.get(name).cloned()) else {
+        let Some(entry) = located
+            .lock_entry
+            .clone()
+            .or_else(|| lock.get(name).cloned())
+        else {
             plan.skipped.push(UpdateSkip {
                 name: name.clone(),
                 error: AppError::skill_unmanaged(name),
@@ -174,17 +176,17 @@ pub fn plan_updates(
                         continue;
                     }
                     if attachment.mode == AttachmentMode::Copy {
-                        copy_agents.push((
-                            attachment.agent_id.clone(),
-                            attachment.agent_name.clone(),
-                        ));
+                        copy_agents
+                            .push((attachment.agent_id.clone(), attachment.agent_name.clone()));
                     }
-                    targets.entry(attachment.agent_id.clone()).or_insert(InstallTarget {
-                        id: attachment.agent_id.clone(),
-                        display_name: attachment.agent_name.clone(),
-                        universal: false,
-                        skills_dir: agent.skills_dir.clone(),
-                    });
+                    targets
+                        .entry(attachment.agent_id.clone())
+                        .or_insert(InstallTarget {
+                            id: attachment.agent_id.clone(),
+                            display_name: attachment.agent_name.clone(),
+                            universal: false,
+                            skills_dir: agent.skills_dir.clone(),
+                        });
                 }
                 AttachmentMode::Native | AttachmentMode::Broken => {}
             }
@@ -314,7 +316,11 @@ pub struct UpdateVerification {
 
 /// Interpret one `add --json` result and verify the filesystem afterwards.
 /// The CLI's `installed` status is never trusted on its own.
-pub fn verify_update(paths: &AppPaths, item: &UpdateItem, output: &ExecOutput) -> UpdateVerification {
+pub fn verify_update(
+    paths: &AppPaths,
+    item: &UpdateItem,
+    output: &ExecOutput,
+) -> UpdateVerification {
     let cli_results = match parse_install_output(&output.stdout) {
         InstallOutput::Results(results) => results,
         InstallOutput::Fatal(detail) => {
@@ -729,7 +735,10 @@ mod tests {
         fs::write(unmanaged.join("SKILL.md"), "unmanaged\n").unwrap();
         // Stale has a lock entry and no directory at all.
 
-        let plan = plan(&fixture, &["alpha", "copy-only", "non-github", "unmanaged", "ghost"]);
+        let plan = plan(
+            &fixture,
+            &["alpha", "copy-only", "non-github", "unmanaged", "ghost"],
+        );
         assert_eq!(plan.items.len(), 1);
         assert_eq!(plan.items[0].name, "alpha");
         let skipped: std::collections::HashMap<_, _> = plan
@@ -747,12 +756,8 @@ mod tests {
     fn corrupt_lock_fails_the_whole_plan() {
         let fixture = Fixture::new(&[("alpha", "acme/skills", None)]);
         fs::write(fixture.paths.lock_path(), "{not json").unwrap();
-        let error = plan_updates(
-            &fixture.paths,
-            &fixture.agents,
-            &["alpha".to_string()],
-        )
-        .unwrap_err();
+        let error =
+            plan_updates(&fixture.paths, &fixture.agents, &["alpha".to_string()]).unwrap_err();
         assert_eq!(error.code, codes::LOCK_CORRUPT);
     }
 
@@ -938,16 +943,10 @@ mod tests {
         )
     }
 
-    async fn run_update_task(
-        manager: &TaskManager,
-        names: &[&str],
-    ) -> (Vec<TaskPhase>, TaskEvent) {
+    async fn run_update_task(manager: &TaskManager, names: &[&str]) -> (Vec<TaskPhase>, TaskEvent) {
         let (sink, mut receiver) = sink();
         manager
-            .start_update(
-                names.iter().map(|name| name.to_string()).collect(),
-                sink,
-            )
+            .start_update(names.iter().map(|name| name.to_string()).collect(), sink)
             .await
             .unwrap();
         let mut phases = Vec::new();
@@ -1054,10 +1053,13 @@ mod tests {
         assert!(result.skills[0].error.is_none());
         let backup = result.skills[0].backup_path.clone().expect("skill backup");
         assert_eq!(result.backup_path.as_deref(), Some(backup.as_str()));
-        let backed_up = fs::read_to_string(PathBuf::from(&backup).join("canonical/SKILL.md"))
-            .unwrap();
+        let backed_up =
+            fs::read_to_string(PathBuf::from(&backup).join("canonical/SKILL.md")).unwrap();
         assert!(backed_up.contains("# alpha"), "{backed_up:?}");
-        assert!(!backed_up.contains("v2"), "backup must be the pre-update copy");
+        assert!(
+            !backed_up.contains("v2"),
+            "backup must be the pre-update copy"
+        );
         assert_eq!(
             fs::read_to_string(PathBuf::from(&backup).join("attachments/claude-code/SKILL.md"))
                 .unwrap(),
@@ -1069,10 +1071,17 @@ mod tests {
         .unwrap();
         assert_eq!(manifest["action"], "update");
         assert_eq!(manifest["skill"], "alpha");
-        assert_eq!(manifest["agents"], serde_json::json!(["claude-code", "qoder", "universal"]));
+        assert_eq!(
+            manifest["agents"],
+            serde_json::json!(["claude-code", "qoder", "universal"])
+        );
 
         assert_eq!(
-            result.warnings.iter().filter(|warning| warning.code == "update.copy_to_symlink").count(),
+            result
+                .warnings
+                .iter()
+                .filter(|warning| warning.code == "update.copy_to_symlink")
+                .count(),
             1
         );
         assert!(
@@ -1089,7 +1098,10 @@ mod tests {
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0]["action"], "update");
         assert_eq!(lines[0]["skill"], "alpha");
-        assert_eq!(lines[0]["agents"], serde_json::json!(["claude-code", "qoder", "universal"]));
+        assert_eq!(
+            lines[0]["agents"],
+            serde_json::json!(["claude-code", "qoder", "universal"])
+        );
         assert_eq!(lines[0]["result"], "updated");
         assert_eq!(lines[0]["backupPath"], backup);
         assert!(lines[0].get("error").is_none());
@@ -1217,11 +1229,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn corrupt_lock_rejects_the_update_before_a_task_starts() {
+        let fixture = Fixture::new(&[("alpha", "acme/skills", None)]);
+        fs::write(fixture.paths.lock_path(), "{not json").unwrap();
+        let executor = Arc::new(UpdateExecutor::new(vec![UpdateResponse::installed("alpha")]));
+        let manager = update_manager(&fixture.paths, executor.clone());
+        let (sink, _receiver) = sink();
+        let error = manager
+            .start_update(vec!["alpha".to_string()], sink)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, crate::error::codes::LOCK_CORRUPT);
+        assert_eq!(executor.calls().len(), 0);
+    }
+
+    #[tokio::test]
     async fn backup_failure_aborts_before_the_cli_runs() {
         let fixture = Fixture::new(&[("alpha", "acme/skills", None)]);
         fs::remove_dir_all(fixture.paths.backups_dir()).unwrap();
         fs::write(fixture.paths.backups_dir(), b"not a directory").unwrap();
-        let executor = Arc::new(UpdateExecutor::new(vec![UpdateResponse::installed("alpha")]));
+        let executor = Arc::new(UpdateExecutor::new(vec![UpdateResponse::installed(
+            "alpha",
+        )]));
         let manager = update_manager(&fixture.paths, executor.clone());
         let (_phases, final_event) = run_update_task(&manager, &["alpha"]).await;
 

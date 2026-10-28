@@ -38,6 +38,8 @@ interface ExecState {
   updateCalls: string[][];
   revealCalls: string[];
   inventoryCalls: number;
+  detailCalls: number;
+  checkCalls: number;
 }
 
 const LAST_SUCCESS = 1793163988000;
@@ -173,6 +175,8 @@ function setup(): ExecState {
     updateCalls: [],
     revealCalls: [],
     inventoryCalls: 0,
+    detailCalls: 0,
+    checkCalls: 0,
   };
   const snapshot = baseSnapshot();
   const report = baseReport();
@@ -183,11 +187,15 @@ function setup(): ExecState {
       return snapshot;
     }
     if (command === "get_skill_detail") {
+      state.detailCalls += 1;
       const skillId = (payload as { skillId: string }).skillId;
       const skill = snapshot.skills.find((entry) => entry.name === skillId);
       return skill ? detailForSkill(skill) : null;
     }
-    if (command === "check_updates") return report;
+    if (command === "check_updates") {
+      state.checkCalls += 1;
+      return report;
+    }
     if (command === "start_update") {
       const args = payload as {
         skillIds: string[];
@@ -394,6 +402,9 @@ describe("update execution", () => {
       ).toHaveTextContent("已是最新");
     });
     expect(state.inventoryCalls).toBeGreaterThanOrEqual(2);
+    await waitFor(() => expect(state.detailCalls).toBeGreaterThanOrEqual(2));
+    // Update execution must never trigger an automatic check.
+    expect(state.checkCalls).toBe(1);
 
     fireEvent.click(within(dialog).getByRole("button", { name: "完成" }));
     await waitFor(() =>
