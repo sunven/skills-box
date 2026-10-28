@@ -1,6 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type {
+  AppDataKind,
   CancelAck,
   EnvReport,
   InstallRequest,
@@ -85,6 +86,25 @@ export function checkUpdates(skillIds?: string[]): Promise<UpdateCheckReport> {
   return invoke<UpdateCheckReport>("check_updates", {
     skillIds: skillIds ?? null,
   });
+}
+
+/**
+ * Start a serialized update task. The frontend only sends update-candidate
+ * skill ids; Rust re-validates, backs up, rebuilds `skills add`, verifies and
+ * refreshes the baseline. No `skills update` / `skills check` is ever spawned.
+ */
+export function startUpdate(
+  skillIds: string[],
+  onEvent: (event: TaskEvent) => void,
+): Promise<string> {
+  const channel = new Channel<TaskEvent>();
+  channel.onmessage = onEvent;
+  return invoke<string>("start_update", { skillIds, onEvent: channel });
+}
+
+/** Open a fixed app-data directory; the frontend never supplies a path. */
+export function revealAppData(kind: AppDataKind): Promise<void> {
+  return invoke<void>("reveal_app_data", { kind });
 }
 
 /** Normalize a rejected Tauri command into an `AppError`-shaped object. */

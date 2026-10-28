@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod backup;
 pub mod baseline;
 pub mod cli;
 pub mod commands;
@@ -7,6 +8,7 @@ pub mod env;
 pub mod error;
 pub mod inventory;
 pub mod lock;
+pub mod logs;
 pub mod paths;
 pub mod process;
 pub mod security;
@@ -63,8 +65,10 @@ pub fn run() {
             commands::open_skill_md,
             commands::start_preview,
             commands::start_install,
+            commands::start_update,
             commands::check_updates,
-            commands::cancel_task
+            commands::cancel_task,
+            commands::reveal_app_data
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

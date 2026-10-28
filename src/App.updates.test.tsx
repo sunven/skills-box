@@ -574,11 +574,11 @@ describe("manual update checking", () => {
       ).toBeGreaterThan(0);
     }
     expect(
-      within(dialog).getByText(/更新执行（ticket 07）/),
+      within(dialog).getByRole("button", { name: /开始更新 \(1\)/ }),
     ).toBeInTheDocument();
     expect(
-      within(dialog).getByText(/不会调用 skills update/),
-    ).toBeInTheDocument();
+      within(dialog).getAllByText(/不调用 skills update/).length,
+    ).toBeGreaterThan(0);
 
     fireEvent.keyDown(document, { key: "Escape" });
     expect(

@@ -138,7 +138,7 @@ export function AppHeader({
           onClick={onUpdateAll}
           title={
             updateReport
-              ? "查看更新候选与跳过项；执行更新将在后续接入"
+              ? "查看更新候选与跳过项，备份后逐个执行更新"
               : "请先检查更新"
           }
         >

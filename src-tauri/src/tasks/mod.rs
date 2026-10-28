@@ -5,6 +5,7 @@ pub mod install;
 pub mod manager;
 pub mod parser;
 pub mod source;
+pub mod update;
 
 pub use conflicts::{ConflictInfo, ConflictProvider, InventoryConflictProvider, find_conflicts};
 pub use install::{
@@ -19,3 +20,7 @@ pub use manager::{
 };
 pub use parser::{ParsedSkill, PreviewParseOutcome, parse_preview_output};
 pub use source::{SourceSpec, validate_source};
+pub use update::{
+    UPDATE_TIMEOUT, UpdateItem, UpdatePlan, UpdateSkip, UpdateVerification, overall_for_update,
+    plan_updates, retryable_names, update_command, verify_update,
+};

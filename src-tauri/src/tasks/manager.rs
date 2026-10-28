@@ -10,9 +10,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::Serialize;
 use tokio::sync::Semaphore;
 
+use crate::backup::{BackupAction, BackupStore};
+use crate::baseline::{BaselineStore, LocalModification};
 use crate::cli::{CliRuntimeProvider, preview_command};
-use crate::error::AppError;
+use crate::error::{AppError, codes};
 use crate::lock::LockFile;
+use crate::logs::{OperationEntry, OperationLog};
 use crate::paths::AppPaths;
 use crate::process::{CancelToken, ExecError, ProcessExecutor};
 
@@ -24,6 +27,7 @@ use super::install::{
 };
 use super::parser::{ParsedSkill, PreviewParseOutcome, parse_preview_output};
 use super::source::{SourceSpec, validate_source};
+use super::update as update_task;
 
 pub type TaskId = String;
 pub type EventSink = Arc<dyn Fn(TaskEvent) + Send + Sync>;
@@ -36,6 +40,8 @@ pub enum TaskPhase {
     Preparing,
     /// Preview clones the repository before parsing its SKILL.md files.
     Cloning,
+    /// Update writes the mandatory pre-operation backup before the CLI runs.
+    Backup,
     RunningCli,
     Verifying,
     Completed,
@@ -62,6 +68,7 @@ pub enum TaskOverall {
 #[serde(rename_all = "snake_case")]
 pub enum TaskSkillStatus {
     Installed,
+    Updated,
     Skipped,
     Failed,
 }
@@ -73,6 +80,8 @@ pub struct TaskSkillResult {
     pub status: TaskSkillStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<AppError>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backup_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -386,6 +395,59 @@ impl TaskManager {
         })
     }
 
+    /// Plan and run a serialized update task. The selected ids are the
+    /// frontend's update candidates; Rust independently re-checks management,
+    /// canonical presence and lock source resolution. `skills update` and
+    /// `skills check` are never spawned: every skill is rebuilt as `add`.
+    pub async fn start_update(
+        &self,
+        skill_ids: Vec<String>,
+        on_event: EventSink,
+    ) -> Result<TaskId, AppError> {
+        let names = install::validate_skill_names(&skill_ids)?;
+        // Hold the write slot while planning so the lock/inventory snapshot
+        // cannot be read in the middle of another mutation.
+        let permit = self.try_acquire_mutation()?;
+        let paths = self.inner.paths.clone();
+        let plan = match tokio::task::spawn_blocking(move || {
+            let agents = crate::inventory::detected_agent_dirs(&paths);
+            update_task::plan_updates(&paths, &agents, &names)
+        })
+        .await
+        {
+            Ok(Ok(plan)) => plan,
+            Ok(Err(error)) => return Err(error),
+            Err(error) => {
+                return Err(AppError::cli_failed(format!("校验更新请求失败：{error}")));
+            }
+        };
+
+        let task_id = format!("task-{}", self.inner.next_id.fetch_add(1, Ordering::SeqCst));
+        let cancel = CancelToken::new();
+        {
+            let mut tasks = self.lock_tasks();
+            tasks.insert(
+                task_id.clone(),
+                TaskEntry {
+                    state: TaskState::Running,
+                    cancel: cancel.clone(),
+                    // Update may be cancelled between skills; the run loop
+                    // disables acceptance while one skill is being written.
+                    cancellable: true,
+                },
+            );
+        }
+
+        let manager = self.clone();
+        let spawned_id = task_id.clone();
+        tokio::spawn(async move {
+            manager
+                .run_update(spawned_id, plan, permit, cancel, on_event)
+                .await;
+        });
+        Ok(task_id)
+    }
+
     /// Seal a task against cancellation and report whether cancellation was
     /// requested before the seal. Used immediately before spawning a mutation.
     fn seal_task(&self, task_id: &str) -> bool {
@@ -396,6 +458,16 @@ impl TaskManager {
                 entry.cancel.is_cancelled()
             }
             None => true,
+        }
+    }
+
+    /// Toggle cancellation acceptance for update tasks. Updates accept a
+    /// cancel request between skills only, never while one skill is being
+    /// backed up, written, or verified.
+    fn set_task_cancellable(&self, task_id: &str, cancellable: bool) {
+        let mut tasks = self.lock_tasks();
+        if let Some(entry) = tasks.get_mut(task_id) {
+            entry.cancellable = cancellable;
         }
     }
 
@@ -822,6 +894,390 @@ impl TaskManager {
         self.finish(&task_id, &sink, FinishOutcome::Completed(result, message));
     }
 
+    async fn run_update(
+        &self,
+        task_id: TaskId,
+        plan: update_task::UpdatePlan,
+        permit: MutationPermit,
+        cancel: CancelToken,
+        sink: EventSink,
+    ) {
+        let _permit = permit;
+        let total = plan.total();
+        emit(
+            &sink,
+            TaskEvent::progress(&task_id, TaskPhase::Preparing, "正在准备更新…", 0, total),
+        );
+        if cancel.is_cancelled() {
+            self.finish(&task_id, &sink, FinishOutcome::Cancelled);
+            return;
+        }
+
+        let runtime = tokio::select! {
+            result = self.inner.runtime.cli_runtime() => match result {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    self.finish(&task_id, &sink, FinishOutcome::Failed(error));
+                    return;
+                }
+            },
+            _ = cancel.cancelled() => {
+                self.finish(&task_id, &sink, FinishOutcome::Cancelled);
+                return;
+            }
+        };
+        if cancel.is_cancelled() {
+            self.finish(&task_id, &sink, FinishOutcome::Cancelled);
+            return;
+        }
+
+        let paths = self.inner.paths.clone();
+        let backups = BackupStore::new(&paths);
+        let log = OperationLog::new(&paths);
+        let log_path = paths.display(log.path());
+        let baselines = BaselineStore::new(&paths);
+
+        let mut results: Vec<TaskSkillResult> = Vec::new();
+        let mut warnings: Vec<AppError> = Vec::new();
+        let mut backup_paths: Vec<String> = Vec::new();
+
+        // Ineligible selections are reported (and logged) without touching
+        // the disk, so update-all can continue with the remaining items.
+        for skip in &plan.skipped {
+            let _ = log.append(&OperationEntry::new(
+                "update",
+                &skip.name,
+                Vec::new(),
+                "skipped",
+                None,
+                Some(skip.error.clone()),
+            ));
+            results.push(TaskSkillResult {
+                name: skip.name.clone(),
+                status: TaskSkillStatus::Skipped,
+                error: Some(skip.error.clone()),
+                backup_path: None,
+            });
+        }
+
+        let mut cancelled = false;
+        for item in &plan.items {
+            // Cancellation is accepted between skills and while the next
+            // mandatory backup is being written; it is rejected exactly while
+            // the CLI is writing.
+            self.set_task_cancellable(&task_id, true);
+            if cancel.is_cancelled() {
+                cancelled = true;
+                break;
+            }
+
+            if item.local_modification != LocalModification::Clean {
+                let detail = item
+                    .local_modification_detail
+                    .clone()
+                    .unwrap_or_else(|| "无法确认当前文件是否与基线一致。".to_string());
+                warnings.push(AppError::update_local_modified(&item.name, detail));
+            }
+            if !item.copy_agents.is_empty() {
+                warnings.push(AppError::update_copy_to_symlink(
+                    &item.name,
+                    &item.copy_agents.join("、"),
+                ));
+            }
+
+            let mut backup_event = TaskEvent::progress(
+                &task_id,
+                TaskPhase::Backup,
+                format!("正在备份 {}…", item.name),
+                results.len() as u32,
+                total,
+            );
+            backup_event.skill = Some(item.name.clone());
+            emit(&sink, backup_event);
+
+            let backup_attachments = item.attachments.clone();
+            let backup_agents = item.agent_ids.clone();
+            let backup_canonical = item.canonical.clone();
+            let backup_name = item.name.clone();
+            let backup_store = backups.clone();
+            let backup_outcome = tokio::task::spawn_blocking(move || {
+                backup_store.create(
+                    BackupAction::Update,
+                    &backup_name,
+                    Some(&backup_canonical),
+                    &backup_attachments,
+                    &backup_agents,
+                )
+            })
+            .await;
+            let backup = match backup_outcome {
+                Ok(Ok(backup)) => backup,
+                Ok(Err(error)) => {
+                    let _ = log.append(&OperationEntry::new(
+                        "update",
+                        &item.name,
+                        item.agent_ids.clone(),
+                        "failed",
+                        None,
+                        Some(error.clone()),
+                    ));
+                    // A backup failure aborts the operation: no CLI runs.
+                    self.finish(&task_id, &sink, FinishOutcome::Failed(error));
+                    return;
+                }
+                Err(error) => {
+                    let error = AppError::backup_failed(error.to_string());
+                    let _ = log.append(&OperationEntry::new(
+                        "update",
+                        &item.name,
+                        item.agent_ids.clone(),
+                        "failed",
+                        None,
+                        Some(error.clone()),
+                    ));
+                    self.finish(&task_id, &sink, FinishOutcome::Failed(error));
+                    return;
+                }
+            };
+            let backup_display = paths.display(&backup.path);
+            backup_paths.push(backup_display.clone());
+
+            if cancel.is_cancelled() {
+                let _ = log.append(&OperationEntry::new(
+                    "update",
+                    &item.name,
+                    item.agent_ids.clone(),
+                    "cancelled",
+                    Some(backup_display),
+                    None,
+                ));
+                cancelled = true;
+                break;
+            }
+            // From here until the CLI exits the write window is sealed.
+            self.set_task_cancellable(&task_id, false);
+            if cancel.is_cancelled() {
+                let _ = log.append(&OperationEntry::new(
+                    "update",
+                    &item.name,
+                    item.agent_ids.clone(),
+                    "cancelled",
+                    Some(paths.display(&backup.path)),
+                    None,
+                ));
+                cancelled = true;
+                break;
+            }
+
+            let mut running_event = TaskEvent::progress(
+                &task_id,
+                TaskPhase::RunningCli,
+                format!("正在更新 {}（skills add）…", item.name),
+                results.len() as u32,
+                total,
+            );
+            running_event.skill = Some(item.name.clone());
+            emit(&sink, running_event);
+
+            let spec =
+                update_task::update_command(item, &runtime, self.inner.config.install_timeout);
+            // Once the CLI exits the current skill is written; cancellation
+            // is accepted again while it is verified.
+            let exec_result = self.inner.executor.run(spec, cancel.clone()).await;
+            self.set_task_cancellable(&task_id, true);
+            let output = match exec_result {
+                Ok(output) => output,
+                Err(ExecError::Cancelled) => {
+                    let _ = log.append(&OperationEntry::new(
+                        "update",
+                        &item.name,
+                        item.agent_ids.clone(),
+                        "cancelled",
+                        Some(backup_display.clone()),
+                        None,
+                    ));
+                    cancelled = true;
+                    break;
+                }
+                Err(ExecError::Timeout(timeout)) => {
+                    let error =
+                        AppError::cli_failed(format!("更新超时（{} 秒）。", timeout.as_secs()));
+                    results.push(failed_update_result(
+                        &log,
+                        item,
+                        Some(&backup_display),
+                        error,
+                    ));
+                    emit_update_progress(
+                        &sink,
+                        &task_id,
+                        item,
+                        TaskPhase::Verifying,
+                        results.len() as u32,
+                        total,
+                    );
+                    continue;
+                }
+                Err(ExecError::Spawn { program, message }) => {
+                    let error = AppError::env_cli_missing(format!("无法启动 {program}: {message}"));
+                    results.push(failed_update_result(
+                        &log,
+                        item,
+                        Some(&backup_display),
+                        error,
+                    ));
+                    emit_update_progress(
+                        &sink,
+                        &task_id,
+                        item,
+                        TaskPhase::Verifying,
+                        results.len() as u32,
+                        total,
+                    );
+                    continue;
+                }
+                Err(ExecError::Io(message)) => {
+                    let error = AppError::cli_failed(message);
+                    results.push(failed_update_result(
+                        &log,
+                        item,
+                        Some(&backup_display),
+                        error,
+                    ));
+                    emit_update_progress(
+                        &sink,
+                        &task_id,
+                        item,
+                        TaskPhase::Verifying,
+                        results.len() as u32,
+                        total,
+                    );
+                    continue;
+                }
+            };
+
+            let mut verify_event = TaskEvent::progress(
+                &task_id,
+                TaskPhase::Verifying,
+                format!("正在校验 {} 的 canonical、挂载与 lock…", item.name),
+                results.len() as u32,
+                total,
+            );
+            verify_event.skill = Some(item.name.clone());
+            emit(&sink, verify_event);
+
+            let verify_paths = paths.clone();
+            let verify_item = item.clone();
+            let verification = match tokio::task::spawn_blocking(move || {
+                update_task::verify_update(&verify_paths, &verify_item, &output)
+            })
+            .await
+            {
+                Ok(verification) => verification,
+                Err(error) => {
+                    let error = AppError::verify_failed(error.to_string());
+                    results.push(failed_update_result(
+                        &log,
+                        item,
+                        Some(&backup_display),
+                        error,
+                    ));
+                    emit_update_progress(
+                        &sink,
+                        &task_id,
+                        item,
+                        TaskPhase::Verifying,
+                        results.len() as u32,
+                        total,
+                    );
+                    continue;
+                }
+            };
+
+            warnings.extend(verification.warnings);
+            let (status, error) = match verification.result {
+                Ok(()) => (TaskSkillStatus::Updated, None),
+                Err(error) if error.code == codes::SKILL_NOT_IN_SOURCE => {
+                    (TaskSkillStatus::Skipped, Some(error))
+                }
+                Err(error) => (TaskSkillStatus::Failed, Some(error)),
+            };
+
+            if status == TaskSkillStatus::Updated {
+                let baseline_name = item.name.clone();
+                let baseline_canonical = item.canonical.clone();
+                let baseline_store = baselines.clone();
+                match tokio::task::spawn_blocking(move || {
+                    baseline_store.record_from_dir(&baseline_name, &baseline_canonical, true)
+                })
+                .await
+                {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(error)) => warnings.push(
+                        AppError::new(
+                            "baseline.write_failed",
+                            "更新成功，但无法刷新本地基线指纹。",
+                        )
+                        .detail(error.message),
+                    ),
+                    Err(error) => warnings.push(
+                        AppError::new(
+                            "baseline.write_failed",
+                            "更新成功，但无法刷新本地基线指纹。",
+                        )
+                        .detail(error.to_string()),
+                    ),
+                }
+            }
+
+            let result_status = update_task::status_label(status);
+            let _ = log.append(&OperationEntry::new(
+                "update",
+                &item.name,
+                item.agent_ids.clone(),
+                result_status,
+                Some(backup_display.clone()),
+                error.clone(),
+            ));
+            results.push(TaskSkillResult {
+                name: item.name.clone(),
+                status,
+                error,
+                backup_path: Some(backup_display.clone()),
+            });
+            self.set_task_cancellable(&task_id, true);
+            emit_update_progress(
+                &sink,
+                &task_id,
+                item,
+                TaskPhase::Verifying,
+                results.len() as u32,
+                total,
+            );
+            // Give the UI a chance to request a between-skills cancellation.
+            tokio::task::yield_now().await;
+        }
+
+        self.set_task_cancellable(&task_id, true);
+        let overall = update_task::overall_for_update(&results, cancelled || cancel.is_cancelled());
+        let message = update_task::summary_message(overall, &results);
+        let backup_path = if backup_paths.len() == 1 {
+            backup_paths.first().cloned()
+        } else {
+            None
+        };
+        let result = TaskResult {
+            overall,
+            skills: results,
+            warnings,
+            backup_path,
+            log_path: Some(log_path),
+            finished_at_epoch_ms: now_ms(),
+            preview: None,
+        };
+        self.finish(&task_id, &sink, FinishOutcome::Completed(result, message));
+    }
+
     async fn lookup_conflicts(&self, skills: &[ParsedSkill]) -> HashMap<String, ConflictInfo> {
         let names: Vec<String> = skills.iter().map(|skill| skill.name.clone()).collect();
         if names.is_empty() {
@@ -846,27 +1302,32 @@ impl TaskManager {
             entry.cancel.is_cancelled()
         };
         let outcome = if cancel_requested {
-            FinishOutcome::Cancelled
+            match outcome {
+                // A cancellation that races with the final event keeps the
+                // per-skill results instead of discarding what already ran.
+                FinishOutcome::Completed(mut result, _) if !result.skills.is_empty() => {
+                    result.overall = TaskOverall::Cancelled;
+                    FinishOutcome::Completed(result, "操作已取消。".to_string())
+                }
+                _ => FinishOutcome::Cancelled,
+            }
         } else {
             outcome
         };
         let event = match outcome {
             FinishOutcome::Completed(result, message) => {
+                let phase = if result.overall == TaskOverall::Cancelled {
+                    TaskPhase::Cancelled
+                } else {
+                    TaskPhase::Completed
+                };
                 let total = result
                     .preview
                     .as_ref()
                     .map(|preview| preview.skills.len().max(1) as u32)
                     .or_else(|| (!result.skills.is_empty()).then_some(result.skills.len() as u32))
                     .unwrap_or(1);
-                TaskEvent::finished(
-                    task_id,
-                    TaskPhase::Completed,
-                    message,
-                    total,
-                    total,
-                    result,
-                    None,
-                )
+                TaskEvent::finished(task_id, phase, message, total, total, result, None)
             }
             FinishOutcome::Failed(error) => TaskEvent::finished(
                 task_id,
@@ -914,7 +1375,48 @@ impl TaskManager {
     }
 }
 
-fn classify_install_failure(detail: &str, stderr: &str) -> AppError {
+fn failed_update_result(
+    log: &OperationLog,
+    item: &update_task::UpdateItem,
+    backup_path: Option<&str>,
+    error: AppError,
+) -> TaskSkillResult {
+    let _ = log.append(&OperationEntry::new(
+        "update",
+        &item.name,
+        item.agent_ids.clone(),
+        "failed",
+        backup_path.map(str::to_string),
+        Some(error.clone()),
+    ));
+    TaskSkillResult {
+        name: item.name.clone(),
+        status: TaskSkillStatus::Failed,
+        error: Some(error),
+        backup_path: backup_path.map(str::to_string),
+    }
+}
+
+fn emit_update_progress(
+    sink: &EventSink,
+    task_id: &str,
+    item: &update_task::UpdateItem,
+    phase: TaskPhase,
+    completed: u32,
+    total: u32,
+) {
+    let mut event = TaskEvent::progress(
+        task_id,
+        phase,
+        format!("已处理 {}", item.name),
+        completed,
+        total,
+    );
+    event.skill = Some(item.name.clone());
+    emit(sink, event);
+}
+
+pub(super) fn classify_install_failure(detail: &str, stderr: &str) -> AppError {
     let combined = if stderr.trim().is_empty() {
         detail.trim().to_string()
     } else if detail.trim().is_empty() {

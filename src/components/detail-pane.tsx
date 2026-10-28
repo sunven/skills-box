@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
+  ArrowUpCircle,
   FileText,
   FolderOpen,
   Loader2,
@@ -37,6 +38,7 @@ interface DetailPaneProps {
   updateResult?: UpdateSkillResult | null;
   checkingUpdates?: boolean;
   onCheckUpdates?: (skillIds: string[]) => void;
+  onUpdate?: (skillName: string) => void;
 }
 
 type DetailView = "rendered" | "raw";
@@ -147,6 +149,7 @@ export function DetailPane({
   updateResult,
   checkingUpdates = false,
   onCheckUpdates,
+  onUpdate,
 }: DetailPaneProps) {
   const skillId = skill?.name ?? null;
   const query = useSkillDetailQuery(skillId);
@@ -342,6 +345,17 @@ export function DetailPane({
                 aria-hidden="true"
               />
               检查更新
+            </Button>
+          ) : null}
+          {management === "managed" && update === "update" && onUpdate ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onUpdate(skill.name)}
+              title="更新前备份；使用当前物理挂载的 agent 重建 skills add"
+            >
+              <ArrowUpCircle className="size-3.5" aria-hidden="true" />
+              更新
             </Button>
           ) : null}
         </div>

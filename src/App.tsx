@@ -8,7 +8,7 @@ import { FilterSidebar } from "./components/filter-sidebar";
 import { InstallWizard } from "./components/install-wizard";
 import { LockErrorScreen } from "./components/lock-error-screen";
 import { SkillListPane } from "./components/skill-list-pane";
-import { UpdateAllDialog } from "./components/update-all-dialog";
+import { UpdateDialog } from "./components/update-dialog";
 import { useEnvironmentQuery, useRecheckEnvironment } from "./hooks/use-environment";
 import { useInventoryQuery } from "./hooks/use-inventory";
 import { useCheckUpdates, useUpdateReportQuery } from "./hooks/use-updates";
@@ -56,7 +56,8 @@ function App() {
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [anomaliesOpen, setAnomaliesOpen] = useState(false);
   const [installOpen, setInstallOpen] = useState(false);
-  const [updateAllOpen, setUpdateAllOpen] = useState(false);
+  const [updateMode, setUpdateMode] = useState<"single" | "all" | null>(null);
+  const [updateSkillName, setUpdateSkillName] = useState<string | null>(null);
 
   const skills = useMemo(
     () => applyUpdateReport(snapshot?.skills ?? [], updateData),
@@ -86,6 +87,13 @@ function App() {
       visibleSkills.find((skill) => skill.name === selectedName) ?? null,
     [visibleSkills, selectedName],
   );
+  const updateDialogSkills = useMemo(() => {
+    if (updateMode === "single") {
+      const skill = skills.find((entry) => entry.name === updateSkillName);
+      return skill ? [skill] : [];
+    }
+    return skills;
+  }, [skills, updateMode, updateSkillName]);
 
   useEffect(() => {
     if (selectedName === null) return;
@@ -138,7 +146,10 @@ function App() {
         checkingUpdates={checkUpdates.isPending}
         updatesEnabled={!lockError}
         onCheckUpdates={() => handleCheckUpdates()}
-        onUpdateAll={() => setUpdateAllOpen(true)}
+        onUpdateAll={() => {
+          setUpdateSkillName(null);
+          setUpdateMode("all");
+        }}
         updateCandidateCount={updateSummary.candidates.length}
       />
       {lockError ? (
@@ -190,6 +201,10 @@ function App() {
               updateResult={selectedSkill?.updateResult}
               checkingUpdates={checkUpdates.isPending}
               onCheckUpdates={handleCheckUpdates}
+              onUpdate={(name) => {
+                setUpdateSkillName(name);
+                setUpdateMode("single");
+              }}
             />
           </main>
         </>
@@ -199,10 +214,15 @@ function App() {
         open={anomaliesOpen}
         onClose={() => setAnomaliesOpen(false)}
       />
-      <UpdateAllDialog
-        open={updateAllOpen}
-        skills={skills}
-        onClose={() => setUpdateAllOpen(false)}
+      <UpdateDialog
+        open={updateMode !== null}
+        mode={updateMode ?? "all"}
+        skills={updateDialogSkills}
+        agents={snapshot?.agents ?? []}
+        onClose={() => {
+          setUpdateMode(null);
+          setUpdateSkillName(null);
+        }}
       />
       <InstallWizard
         open={installOpen}

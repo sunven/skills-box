@@ -11,6 +11,7 @@ import {
   applyUpdateReport,
   computeUpdateSummary,
   formatEpochDateTime,
+  markSkillsCurrent,
   mergeUpdateReports,
   updateBadgeTitle,
   updateBadgeVariant,
@@ -269,5 +270,23 @@ describe("badges and formatting", () => {
     expect(formatEpochDateTime(1793163988000)).toBe("2026-10-28 05:06");
     expect(formatEpochDateTime(null)).toBe("—");
     expect(formatEpochDateTime(Number.NaN)).toBe("—");
+  });
+
+  it("marks only successfully updated skills current after an update", () => {
+    const base = report([
+      updateResult("alpha", "update"),
+      updateResult("beta", "update"),
+      updateResult("gamma", "current"),
+    ]);
+    const patched = markSkillsCurrent(base, ["alpha"])!;
+    const alpha = patched.skills.find((entry) => entry.name === "alpha")!;
+    expect(alpha.state).toBe("current");
+    expect(alpha.lockHash).toBe(alpha.remoteHash);
+    expect(alpha.error).toBeNull();
+    expect(alpha.note).toBeNull();
+    expect(
+      patched.skills.find((entry) => entry.name === "beta")!.state,
+    ).toBe("update");
+    expect(markSkillsCurrent(undefined, ["alpha"])).toBeUndefined();
   });
 });
