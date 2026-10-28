@@ -1,0 +1,2136 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Skills Box — UI Prototype</title>
+<!--
+  PROTOTYPE — not production code.
+  Question: what should the global-skill manager look like and how should its key flows feel?
+  Three structurally different variants switchable via ?variant=three|drawer|cards.
+  Scenario switch: ?scenario=normal|empty|cli-missing.
+  Sample data only; no backend, no persistence.
+-->
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #e7e7ec;
+    --window: #f5f5f7;
+    --panel: #ffffff;
+    --panel-2: #fafafc;
+    --border: #dcdce3;
+    --border-strong: #c9c9d2;
+    --text: #1d1d1f;
+    --muted: #6e6e78;
+    --muted-2: #92929c;
+    --accent: #0a84ff;
+    --accent-soft: #e9f2ff;
+    --green: #1f8a4c;
+    --green-soft: #e8f7ee;
+    --amber: #a96000;
+    --amber-soft: #fff4df;
+    --red: #cf2e21;
+    --red-soft: #ffeceb;
+    --orange: #a64b0a;
+    --orange-soft: #fff1e6;
+    --gray-soft: #efeff3;
+    --shadow: 0 24px 70px rgba(20, 20, 35, .22), 0 2px 8px rgba(20, 20, 35, .08);
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    padding: 24px 24px 92px;
+    background: radial-gradient(circle at 22% 0%, #f6f6fa 0, #e7e7ec 40%, #d9d9e1 100%);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "PingFang SC", sans-serif;
+    font-size: 13px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+  }
+  button, input, select { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  button:focus-visible, input:focus-visible, select:focus-visible, [role="button"]:focus-visible {
+    outline: 2px solid rgba(10, 132, 255, .55);
+    outline-offset: 1px;
+  }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: #c9c9d2; border: 3px solid transparent; background-clip: padding-box; border-radius: 999px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+
+  .app-window {
+    position: relative;
+    max-width: 1440px;
+    height: min(860px, calc(100vh - 140px));
+    min-height: 600px;
+    margin: 0 auto;
+    background: var(--window);
+    border: 1px solid rgba(255, 255, 255, .8);
+    border-radius: 14px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .titlebar {
+    height: 42px;
+    flex: 0 0 42px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 14px;
+    background: rgba(246, 246, 248, .86);
+    backdrop-filter: blur(18px);
+    border-bottom: 1px solid var(--border);
+    position: relative;
+    z-index: 2;
+  }
+  .traffic { display: flex; gap: 7px; }
+  .traffic span { width: 12px; height: 12px; border-radius: 50%; display: block; }
+  .traffic .red { background: #ff5f57; }
+  .traffic .yellow { background: #febc2e; }
+  .traffic .green { background: #28c840; }
+  .titlebar-title { font-size: 12px; font-weight: 600; letter-spacing: .01em; display: flex; align-items: center; gap: 8px; }
+  .titlebar-spacer { flex: 1; }
+  .proto-chip {
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: .09em;
+    color: #8a5a00;
+    background: #fff1c9;
+    border: 1px solid #f0d78e;
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+  .env-chip {
+    height: 24px;
+    padding: 0 9px;
+    border-radius: 999px;
+    border: 1px solid #cfe8d8;
+    background: #f1fbf5;
+    color: var(--green);
+    font-size: 10.5px;
+    font-weight: 600;
+  }
+  .env-chip.bad { border-color: #f0b8b4; background: #fff4f3; color: var(--red); }
+
+  .variant { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .v-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 18px 22px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel-2);
+  }
+  .v-head h2 { margin: 0; font-size: 20px; letter-spacing: -.02em; line-height: 1.2; }
+  .v-head p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+  .head-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 30px;
+    padding: 0 10px;
+    border-radius: 7px;
+    border: 1px solid var(--border-strong);
+    background: var(--panel);
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .btn:hover { background: #f2f3f7; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary:hover { background: #0071e3; }
+  .btn.danger { color: var(--red); border-color: #efb5b0; background: #fff; }
+  .btn.danger:hover { background: #fff5f4; }
+  .btn.ghost { border-color: transparent; background: transparent; color: var(--muted); }
+  .btn.ghost:hover { background: #eceef4; color: var(--text); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .icon-btn {
+    width: 27px;
+    height: 27px;
+    border-radius: 7px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--muted);
+    display: grid;
+    place-items: center;
+    font-size: 17px;
+    line-height: 1;
+  }
+  .icon-btn:hover { background: #eceef4; color: var(--text); }
+
+  .search-wrap {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 30px;
+    padding: 0 9px;
+    border: 1px solid var(--border-strong);
+    border-radius: 7px;
+    background: var(--panel);
+    color: var(--muted-2);
+    min-width: 180px;
+  }
+  .search-wrap svg { flex: 0 0 auto; }
+  .search-wrap .input { border: 0; background: transparent; padding: 0; height: 26px; }
+  .search-wrap .input:focus-visible { outline: 0; }
+  .input {
+    width: 100%;
+    height: 32px;
+    padding: 0 9px;
+    border: 1px solid var(--border-strong);
+    border-radius: 7px;
+    background: #fff;
+    font-size: 12px;
+  }
+  .select {
+    height: 30px;
+    padding: 0 26px 0 9px;
+    border: 1px solid var(--border-strong);
+    border-radius: 7px;
+    background: var(--panel);
+    font-size: 11.5px;
+    color: var(--muted);
+  }
+
+  /* Three-pane variant */
+  .workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: 218px minmax(380px, 1fr) 382px; }
+  .sidebar { border-right: 1px solid var(--border); background: var(--panel-2); padding: 12px 10px; overflow: auto; }
+  .side-section { margin-bottom: 14px; }
+  .side-title {
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: .07em;
+    color: var(--muted-2);
+    padding: 0 8px 6px;
+  }
+  .filter-item {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 5px 8px;
+    border-radius: 6px;
+    border: 0;
+    background: transparent;
+    color: var(--text);
+    font-size: 12px;
+    text-align: left;
+  }
+  .filter-item:hover { background: #eceef4; }
+  .filter-item.active { background: var(--accent-soft); color: var(--accent); font-weight: 650; }
+  .filter-count { color: var(--muted-2); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .filter-item.active .filter-count { color: var(--accent); }
+  .anomaly-banner {
+    margin: 8px 4px 0;
+    padding: 9px 10px;
+    border: 1px solid #f1d29a;
+    background: #fff8eb;
+    border-radius: 8px;
+    color: #734600;
+    font-size: 11px;
+    text-align: left;
+    line-height: 1.4;
+  }
+  .anomaly-banner strong { display: block; font-size: 12px; margin-bottom: 2px; color: #9a5b00; }
+  .anomaly-banner:hover { border-color: #e7bc6e; }
+
+  .list-pane { min-width: 0; display: flex; flex-direction: column; background: var(--panel); }
+  .list-toolbar {
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    background: var(--panel);
+  }
+  .result-count { color: var(--muted-2); font-size: 10.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .list-scroll { flex: 1; overflow: auto; }
+
+  .skill-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 3px 12px;
+    width: 100%;
+    padding: 9px 12px;
+    border-bottom: 1px solid #ededf2;
+    background: transparent;
+    cursor: pointer;
+  }
+  .skill-row:hover { background: #f6f8fc; }
+  .skill-row.selected { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+  .skill-name {
+    font-weight: 650;
+    font-size: 12.5px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .skill-desc {
+    grid-column: 1 / 3;
+    color: var(--muted);
+    font-size: 11.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .skill-meta {
+    grid-column: 1 / 3;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--muted-2);
+    font-size: 10.5px;
+    margin-top: 1px;
+    min-width: 0;
+    overflow: hidden;
+  }
+  .skill-meta .src { max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row-badges { display: flex; align-items: center; justify-content: flex-end; gap: 4px; flex-wrap: wrap; }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 650;
+    white-space: nowrap;
+    line-height: 1.5;
+  }
+  .badge .dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+  .badge.green { color: var(--green); background: var(--green-soft); }
+  .badge.amber { color: var(--amber); background: var(--amber-soft); }
+  .badge.red { color: var(--red); background: var(--red-soft); }
+  .badge.orange { color: var(--orange); background: var(--orange-soft); }
+  .badge.gray { color: var(--muted); background: var(--gray-soft); }
+  .badge.blue { color: var(--accent); background: var(--accent-soft); }
+
+  .agent-stack { display: flex; align-items: center; padding-left: 4px; }
+  .agent-dot {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: 2px solid var(--panel);
+    margin-left: -5px;
+    display: grid;
+    place-items: center;
+    color: #fff;
+    font-size: 7.5px;
+    font-weight: 800;
+    letter-spacing: -.03em;
+    flex: 0 0 auto;
+  }
+  .agent-stack .agent-dot:first-child { margin-left: 0; }
+  .agent-more { margin-left: 4px; font-size: 9.5px; color: var(--muted-2); }
+  .row-badges .agent-stack { padding-left: 0; }
+
+  .detail-pane { border-left: 1px solid var(--border); background: var(--panel-2); overflow: auto; padding: 16px 18px 28px; }
+  .detail-head h3 { margin: 0; font-size: 18px; letter-spacing: -.02em; line-height: 1.2; }
+  .detail-title-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .detail-head .desc { color: var(--muted); margin: 5px 0 0; font-size: 12px; }
+  .detail-actions { display: flex; gap: 6px; flex-wrap: wrap; margin: 12px 0 12px; }
+  .meta-grid { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 5px 10px; font-size: 11.5px; margin: 8px 0 12px; }
+  .meta-grid dt { color: var(--muted-2); }
+  .meta-grid dd { margin: 0; overflow-wrap: anywhere; }
+  .section-title {
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: .07em;
+    color: var(--muted-2);
+    margin: 16px 0 7px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .section-sub { font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--muted-2); font-size: 10.5px; }
+  .agent-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #ececf2; }
+  .agent-row:last-child { border-bottom: 0; }
+  .agent-row .agent-name { flex: 1; font-size: 11.5px; min-width: 0; }
+  .mode { font-size: 10px; color: var(--muted); margin-top: 1px; }
+  .empty-inline { color: var(--muted); font-size: 11.5px; padding: 8px 0; }
+  .note {
+    font-size: 11px;
+    color: #5d5d68;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 8px 10px;
+    margin: 7px 0;
+    line-height: 1.45;
+  }
+  .note.warn { background: var(--amber-soft); border-color: #efd09a; color: #744800; }
+  .note.soft { background: #f3f6fb; border-color: #dbe4f0; color: #46536a; }
+  .mono { font-family: var(--mono); font-size: 10.5px; }
+  .muted { color: var(--muted-2); }
+
+  .raw-toggle { display: flex; gap: 4px; margin-bottom: 6px; }
+  .md-box {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 11.5px;
+    max-height: 235px;
+    overflow: auto;
+  }
+  .md-box h1, .md-box h2, .md-box h3 { margin: 9px 0 4px; font-size: 13px; line-height: 1.3; }
+  .md-box h1:first-child { margin-top: 0; }
+  .md-box h2 { font-size: 12.5px; }
+  .md-box h3 { font-size: 12px; }
+  .md-box p { margin: 5px 0; }
+  .md-box ul { margin: 5px 0; padding-left: 18px; }
+  .md-box pre { background: #f3f3f7; padding: 8px; border-radius: 6px; overflow: auto; font-family: var(--mono); font-size: 10.5px; }
+  .md-box code { font-family: var(--mono); font-size: 10.5px; background: #f0f0f4; padding: 1px 3px; border-radius: 4px; }
+  .md-box pre code { background: none; padding: 0; }
+  .md-box.raw { white-space: pre-wrap; margin: 0; font-family: var(--mono); font-size: 10.5px; line-height: 1.55; background: #f7f7fa; }
+
+  .no-selection { padding: 48px 24px; text-align: center; color: var(--muted); }
+  .no-selection h3 { margin: 8px 0 4px; color: var(--text); font-size: 14px; }
+  .no-selection p { margin: 0; font-size: 11.5px; }
+  .empty-icon {
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    display: grid;
+    place-items: center;
+    margin: 0 auto 6px;
+    font-size: 17px;
+    font-weight: 800;
+  }
+
+  .empty-state { padding: 48px 24px; display: flex; justify-content: center; }
+  .empty-card { text-align: center; max-width: 380px; }
+  .empty-card h3 { margin: 0 0 5px; font-size: 15px; }
+  .empty-card p { margin: 0 0 13px; color: var(--muted); font-size: 12px; }
+  .code {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    background: #f1f1f5;
+    padding: 1px 4px;
+    border-radius: 4px;
+  }
+
+  /* Table + drawer variant */
+  .filter-bar {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    flex-wrap: wrap;
+    padding: 9px 22px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 26px;
+    padding: 0 9px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--muted);
+    font-size: 11px;
+    white-space: nowrap;
+  }
+  .chip:hover { background: #f2f3f7; }
+  .chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .chip .count { opacity: .72; font-variant-numeric: tabular-nums; }
+  .anomaly-inline {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 22px;
+    border-bottom: 1px solid #f1d29a;
+    background: #fff8eb;
+    color: #734600;
+    font-size: 11.5px;
+    text-align: left;
+    width: 100%;
+  }
+  .anomaly-inline:hover { background: #fff4da; }
+  .anomaly-inline strong { color: #9a5b00; }
+  .anomaly-inline .link { margin-left: auto; color: #9a5b00; text-decoration: underline; white-space: nowrap; }
+  .anomaly-mark {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #f2c35f;
+    color: #5b3600;
+    display: grid;
+    place-items: center;
+    font-size: 11px;
+    font-weight: 900;
+    flex: 0 0 auto;
+  }
+  .table-wrap { flex: 1; overflow: auto; background: var(--panel); }
+  table { width: 100%; border-collapse: collapse; }
+  th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--panel-2);
+    text-align: left;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--muted-2);
+    font-weight: 800;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  td { padding: 8px 14px; border-bottom: 1px solid #ededf2; vertical-align: middle; }
+  tr.row { cursor: pointer; }
+  tr.row:hover td { background: #f7f9fc; }
+  tr.row.selected td { background: var(--accent-soft); }
+  .table-name { font-weight: 650; font-size: 12.5px; }
+  .table-desc { color: var(--muted); font-size: 11px; max-width: 430px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .table-actions { text-align: right; white-space: nowrap; }
+  .drawer-backdrop { position: absolute; inset: 0; background: rgba(20, 20, 35, .16); z-index: 20; }
+  .drawer {
+    position: absolute;
+    top: 42px;
+    right: 0;
+    bottom: 0;
+    width: min(440px, 92%);
+    background: var(--panel-2);
+    border-left: 1px solid var(--border);
+    box-shadow: -18px 0 50px rgba(20, 20, 35, .16);
+    z-index: 21;
+    padding: 18px 20px 28px;
+    overflow: auto;
+  }
+  .drawer-close { position: absolute; top: 10px; right: 12px; z-index: 2; background: var(--panel); border: 1px solid var(--border); }
+
+  /* Cards / gallery variant */
+  .cards-head { align-items: center; }
+  .cards-head .search-wrap { min-width: 230px; }
+  .source-tabs {
+    display: flex;
+    gap: 5px;
+    padding: 9px 22px;
+    border-bottom: 1px solid var(--border);
+    overflow: auto;
+    background: var(--panel);
+  }
+  .source-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 27px;
+    padding: 0 9px;
+    border-radius: 7px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--muted);
+    font-size: 11px;
+    white-space: nowrap;
+  }
+  .source-tab:hover { background: #f2f3f7; }
+  .source-tab.active { background: var(--panel); border-color: var(--border-strong); color: var(--text); font-weight: 650; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+  .source-swatch { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
+  .source-tab .count { color: var(--muted-2); font-size: 10px; font-variant-numeric: tabular-nums; }
+  .cards-toolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 8px 22px; border-bottom: 1px solid var(--border); background: var(--panel-2); }
+  .cards-scroll { flex: 1; overflow: auto; padding: 16px 22px 32px; }
+  .source-group { margin-bottom: 20px; }
+  .source-group-head { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; }
+  .source-group-head h3 { margin: 0; font-size: 12.5px; letter-spacing: -.01em; }
+  .source-group-head .muted { font-size: 10.5px; }
+  .cards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 9px; }
+  .skill-card {
+    text-align: left;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 11px 12px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    min-height: 112px;
+  }
+  .skill-card:hover { border-color: #a9cdf5; box-shadow: 0 6px 18px rgba(10, 132, 255, .10); }
+  .card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+  .skill-card h4 { margin: 0; font-size: 12.5px; letter-spacing: -.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .skill-card p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 11.5px;
+    line-height: 1.4;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    flex: 1;
+  }
+  .card-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 2px; }
+  .card-foot .muted { font-size: 10px; }
+
+  /* Modals */
+  .modal { position: absolute; inset: 0; display: grid; place-items: center; z-index: 40; padding: 22px; }
+  .modal.detail-modal { z-index: 30; }
+  .modal-backdrop { position: absolute; inset: 0; background: rgba(20, 20, 35, .28); }
+  .modal-card {
+    position: relative;
+    width: min(640px, 94%);
+    max-height: 86%;
+    overflow: auto;
+    background: var(--panel);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    padding: 16px 20px 18px;
+    z-index: 1;
+  }
+  .modal-card.sm { width: min(530px, 94%); }
+  .modal-card.lg { width: min(790px, 94%); }
+  .modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+  .modal-head h3 { margin: 0; font-size: 15px; letter-spacing: -.02em; }
+  .modal-sub { color: var(--muted); font-size: 11.5px; margin: 0 0 10px; }
+  .modal-close { position: absolute; top: 9px; right: 10px; z-index: 2; background: var(--panel); border: 1px solid var(--border); }
+  .stepper { display: flex; gap: 4px; margin: 2px 0 14px; }
+  .step { flex: 1; height: 4px; border-radius: 2px; background: #e7e7ee; }
+  .step.done { background: var(--accent); }
+  .step.current { background: #8fc2ff; }
+  .wizard-source { display: flex; gap: 7px; margin: 8px 0; }
+  .wizard-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 16px; }
+  .wizard-footer .right { display: flex; gap: 6px; margin-left: auto; }
+  .pick-list { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+  .pick-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--panel-2);
+    cursor: pointer;
+    font-size: 11.5px;
+  }
+  .pick-row:hover { border-color: var(--border-strong); }
+  .pick-row.selected { border-color: #9ecbf9; background: var(--accent-soft); }
+  .pick-row input { accent-color: var(--accent); flex: 0 0 auto; }
+  .pick-main { flex: 1; min-width: 0; }
+  .pick-name { display: block; font-weight: 650; font-size: 12px; }
+  .pick-sub { display: block; color: var(--muted); font-size: 10.5px; margin-top: 1px; }
+  .summary { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; margin: 10px 0; }
+  .summary > div { background: var(--panel-2); border: 1px solid var(--border); border-radius: 7px; padding: 7px 9px; }
+  .summary span { display: block; color: var(--muted-2); font-size: 10px; }
+  .summary strong { display: block; font-size: 11.5px; margin-top: 2px; overflow-wrap: anywhere; }
+  .progress { height: 6px; background: #e7e7ee; border-radius: 3px; overflow: hidden; margin: 12px 0 6px; }
+  .progress > div { height: 100%; background: var(--accent); transition: width .12s linear; }
+  .wizard-progress-meta { display: flex; justify-content: space-between; color: var(--muted); font-size: 10.5px; }
+  .success-mark {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: var(--green-soft);
+    color: var(--green);
+    display: grid;
+    place-items: center;
+    font-size: 22px;
+    font-weight: 700;
+    margin: 4px auto 8px;
+  }
+  .wizard-result { text-align: center; padding: 6px 0 2px; }
+  .wizard-result h4 { margin: 0 0 4px; font-size: 15px; }
+  .wizard-result p { margin: 0 0 10px; color: var(--muted); font-size: 11.5px; }
+  .anomaly-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin: 10px 0; }
+  .anomaly-item { border: 1px solid var(--border); border-radius: 8px; padding: 9px 10px; background: var(--panel-2); }
+  .anomaly-item strong { font-size: 18px; color: #9a5b00; line-height: 1; }
+  .anomaly-item span { display: block; font-size: 11px; font-weight: 650; margin-top: 3px; }
+  .anomaly-item p { margin: 3px 0 0; color: var(--muted); font-size: 10.5px; line-height: 1.4; }
+  .env-grid { display: flex; flex-direction: column; gap: 5px; margin: 8px 0 10px; }
+  .env-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 7px; font-size: 11.5px; }
+  .env-row .env-name { width: 55px; color: var(--muted); }
+  .env-row .env-value { flex: 1; font-family: var(--mono); font-size: 10.5px; }
+  .error-panel { flex: 1; display: grid; place-items: center; padding: 36px; background: var(--panel); }
+  .error-card { max-width: 560px; border: 1px solid #efb5b0; background: #fff8f7; border-radius: 12px; padding: 20px; }
+  .error-card h3 { margin: 0 0 6px; color: var(--red); font-size: 16px; }
+  .error-card p { margin: 0 0 10px; color: #7f1d1d; font-size: 12px; }
+  .error-actions { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 12px; }
+
+  /* Prototype controls */
+  .proto-switcher {
+    position: fixed;
+    left: 50%;
+    bottom: 18px;
+    transform: translateX(-50%);
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 7px 10px;
+    background: #111116;
+    color: #fff;
+    border-radius: 999px;
+    box-shadow: 0 12px 30px rgba(0, 0, 0, .28);
+    font-size: 11.5px;
+    white-space: nowrap;
+  }
+  .proto-switcher .tag { font-size: 9px; letter-spacing: .09em; color: #8f8f9a; font-weight: 800; }
+  .proto-switcher button {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    border: 1px solid #33333d;
+    background: #1c1c23;
+    color: #fff;
+    display: grid;
+    place-items: center;
+    font-size: 15px;
+    line-height: 1;
+    padding: 0;
+  }
+  .proto-switcher button:hover { background: #2b2b35; }
+  .proto-switcher .variant-label { min-width: 112px; text-align: center; font-weight: 600; }
+  .proto-switcher select {
+    background: #1c1c23;
+    color: #fff;
+    border: 1px solid #33333d;
+    border-radius: 999px;
+    height: 26px;
+    padding: 0 8px;
+    font-size: 10.5px;
+  }
+  .proto-switcher .proto-hint { color: #8f8f9a; font-size: 10px; }
+  .toast {
+    position: fixed;
+    left: 50%;
+    bottom: 78px;
+    transform: translateX(-50%);
+    z-index: 110;
+    background: #1c1c23;
+    color: #fff;
+    padding: 8px 12px;
+    border-radius: 8px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, .22);
+    font-size: 11.5px;
+    max-width: min(560px, 90vw);
+  }
+  .toast.success { background: #14532d; }
+  .toast.error { background: #7f1d1d; }
+
+  @media (max-width: 1080px) {
+    .workspace { grid-template-columns: 190px minmax(320px, 1fr) 340px; }
+    .head-actions .btn:first-child { display: none; }
+  }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="switcher"></div>
+<script>
+  const TODAY = '2026-10-28';
+  const ANOMALY_TOTAL = 34;
+
+  const AGENTS = [
+    { id: 'claude', name: 'Claude Code', short: 'CC', color: '#c96145', dir: '~/.claude/skills' },
+    { id: 'codex', name: 'Codex', short: 'CX', color: '#2f3437', dir: '~/.codex/skills' },
+    { id: 'gemini', name: 'Gemini CLI', short: 'GM', color: '#3f7ef7', dir: '~/.gemini/skills' },
+    { id: 'copilot', name: 'GitHub Copilot', short: 'GH', color: '#6e40c9', dir: '~/.copilot/skills' },
+    { id: 'opencode', name: 'OpenCode', short: 'OC', color: '#0f766e', dir: '~/.config/opencode/skills' },
+    { id: 'antigravity', name: 'Antigravity', short: 'AG', color: '#a64b0a', dir: '~/.antigravity/skills' }
+  ];
+  const AGENT_BY_ID = Object.fromEntries(AGENTS.map(a => [a.id, a]));
+
+  const SOURCE_META = {
+    'mattpocock/skills': { label: 'mattpocock/skills', color: '#2563eb' },
+    'heygen-com/hyperframes': { label: 'heygen-com/hyperframes', color: '#7c3aed' },
+    'vercel-labs/agent-skills': { label: 'vercel-labs/agent-skills', color: '#111827' },
+    'vercel-labs/skills': { label: 'vercel-labs/skills', color: '#0f766e' },
+    'vercel-labs/agent-browser': { label: 'vercel-labs/agent-browser', color: '#b45309' },
+    'antigravity/local': { label: 'Antigravity（未受管）', color: '#9a3412' }
+  };
+
+  const STATUS = {
+    current: { label: '已是最新', tone: 'green' },
+    update: { label: '可更新', tone: 'amber' },
+    unknown: { label: '未知', tone: 'gray' },
+    'path-missing': { label: '源路径缺失', tone: 'red' },
+    error: { label: '检查失败', tone: 'red' },
+    unmanaged: { label: '未受管', tone: 'orange' }
+  };
+
+  const STATUS_FILTERS = [
+    { key: 'all', label: '全部' },
+    { key: 'update', label: '可更新' },
+    { key: 'current', label: '已是最新' },
+    { key: 'unknown', label: '未知' },
+    { key: 'anomaly', label: '异常' },
+    { key: 'unmanaged', label: '未受管' }
+  ];
+
+  const DESC = {
+    grilling: '把计划、决策或想法逼问到共同理解，按设计树逐轮提问。',
+    'domain-modeling': '主动收紧领域语言，维护 GLOSSARY.md 与 ADR。',
+    wayfinder: '把过大的想法画成地图，逐张解决决策票据。',
+    'code-review': '按 standards 与 spec 两条轴并行审查改动。',
+    'codebase-design': '用深模块词汇讨论接口、接缝与可测试性。',
+    'diagnosing-bugs': '针对难复现的 bug 与性能回退，跑诊断循环。',
+    tdd: '测试先行，按 red-green-refactor 节奏实现功能。',
+    prototype: '做抛弃型原型回答一个设计问题。',
+    research: '对高可信来源做调研，把结论写成仓库里的 Markdown。',
+    pr: '写 PR 描述。',
+    implement: '按计划实施，保持小步与可验证。',
+    'implement-spec': '从规格出发实施，并逐项对照验收。',
+    'improve-codebase-architecture': '寻找架构加深机会并逐步重构。',
+    'resolving-merge-conflicts': '解决进行中的 merge/rebase 冲突。',
+    retro: '对一段工作做回顾，提炼可复用的经验。',
+    'setup-matt-pocock-skills': '为本仓库配置 issue tracker 与技能约定。',
+    teach: '把主题拆成可学习路径并逐步讲解。',
+    'to-questionnaire': '把需求转成问卷，补齐未知信息。',
+    'to-spec': '把问题与决策整理成可实施规格。',
+    'to-tickets': '把规格拆成可独立执行的票据。',
+    triage: '把新问题分流到正确的处理队列。',
+    'wait-what': '在偏离目标时把对话拉回共同理解。',
+    wizard: '生成一步一步的人类操作向导。',
+    'writing-for-agents': '写给 agent 看的文档与 skill。',
+    'writing-great-skills': '设计高质量、可维护的 skill。',
+    'ask-matt': '按 Matt 的技能库路由问题。',
+    'grill-me': '对单个决策做高强度追问。',
+    'grill-with-docs': '带文档语境的追问与设计评审。',
+    handoff: '把当前会话整理成可交接的上下文。',
+    hyperframes: 'HyperFrames 视频合成的入口。',
+    'hyperframes-animation': '动画规则、场景蓝图与运行时适配器。',
+    'hyperframes-audio': '音频混音、淡入淡出与 ducking。',
+    'hyperframes-cli': 'HyperFrames CLI 的开发循环。',
+    'hyperframes-core': '合成契约、时间属性与确定性渲染。',
+    'hyperframes-creative': '视觉方向、调色板与旁白规划。',
+    'hyperframes-keyframes': '关键帧、镜头运动与转场。',
+    'hyperframes-registry': '安装与接入 registry blocks。',
+    'media-use': '为 HyperFrames 解析音乐、音效、图标与素材。',
+    'agent-browser': '面向 agent 的浏览器自动化 CLI。',
+    'find-skills': '在 skills.sh 生态中搜索 skill。',
+    'web-design-guidelines': 'Web 界面设计准则与审查清单。',
+    'vercel-optimize': '按 Vercel 最佳实践优化前端性能。',
+    'pr-review': '以审查者视角检查 PR。',
+    'vercel-react-best-practices': 'React / Next.js 性能优化准则。'
+  };
+
+  function templateMd(name, description, source) {
+    return [
+      '---',
+      'name: ' + name,
+      'description: ' + description,
+      '---',
+      '',
+      '# ' + name,
+      '',
+      description,
+      '',
+      '## When to use',
+      '',
+      'Use this skill when the task matches the description above.',
+      '',
+      '## Workflow',
+      '',
+      '1. Read the relevant files and the source at `' + source + '`.',
+      '2. Apply the instructions conservatively.',
+      '3. Report what changed and what remains uncertain.',
+      '',
+      '```bash',
+      'skills list -g --json',
+      '```',
+      ''
+    ].join('\n');
+  }
+
+  function attachments(ids = ['claude', 'codex', 'gemini', 'copilot', 'opencode'], opts = {}) {
+    return ids.map(id => ({
+      agent: id,
+      mode: opts.modes && opts.modes[id] ? opts.modes[id] : (id === 'codex' ? 'shared' : 'link')
+    }));
+  }
+
+  function hfAttachments() {
+    return attachments(['claude', 'gemini', 'copilot', 'opencode', 'antigravity'], {
+      modes: { claude: 'copy', gemini: 'link', copilot: 'link', opencode: 'link', antigravity: 'link' }
+    });
+  }
+
+  let SKILLS = [];
+  let seq = 0;
+  function addSkill(name, source, opts = {}) {
+    const description = opts.description || DESC[name] || ('来自 ' + source + ' 的全局 skill。');
+    const unmanaged = opts.unmanaged;
+    const s = {
+      id: name,
+      name,
+      description,
+      source,
+      sourceType: unmanaged ? 'local' : 'github',
+      sourceUrl: unmanaged ? null : ('https://github.com/' + source + '.git'),
+      path: opts.path || (unmanaged ? ('~/.antigravity/skills/' + name) : ('~/.agents/skills/' + name)),
+      installedAt: opts.installedAt || '2026-10-21',
+      updatedAt: opts.updatedAt || ['2026-10-21', '2026-10-07', '2026-09-18', '2026-08-28', '2026-07-16'][seq % 5],
+      status: opts.status || (unmanaged ? 'unmanaged' : 'current'),
+      localModified: !!opts.localModified,
+      crossLink: !!opts.crossLink,
+      hash: opts.hash !== undefined ? opts.hash : (unmanaged ? '—' : 'b7e4c1a9…'),
+      attachments: opts.attachments || (unmanaged
+        ? [{ agent: 'antigravity', mode: 'unmanaged' }]
+        : attachments()),
+      skillMd: opts.skillMd || templateMd(name, description, source)
+    };
+    seq += 1;
+    SKILLS.push(s);
+    return s;
+  }
+
+  const MATT = [
+    'grilling', 'domain-modeling', 'wayfinder', 'code-review', 'codebase-design',
+    'diagnosing-bugs', 'tdd', 'prototype', 'research', 'pr', 'implement',
+    'implement-spec', 'improve-codebase-architecture', 'resolving-merge-conflicts',
+    'retro', 'setup-matt-pocock-skills', 'teach', 'to-questionnaire',
+    'triage', 'wait-what', 'wizard', 'writing-for-agents',
+    'writing-great-skills', 'ask-matt', 'grill-me', 'grill-with-docs', 'handoff'
+  ];
+  MATT.forEach(name => addSkill(name, 'mattpocock/skills'));
+
+  const HF = [
+    'hyperframes', 'hyperframes-animation', 'hyperframes-audio', 'hyperframes-cli',
+    'hyperframes-core', 'hyperframes-creative', 'hyperframes-keyframes',
+    'hyperframes-registry', 'media-use'
+  ];
+  HF.forEach(name => {
+    const s = addSkill(name, 'heygen-com/hyperframes', { attachments: hfAttachments(), crossLink: true });
+    s.skillMd = templateMd(name, s.description, 'heygen-com/hyperframes');
+  });
+
+  [
+    ['agent-browser', 'vercel-labs/agent-browser'],
+    ['find-skills', 'vercel-labs/skills'],
+    ['web-design-guidelines', 'vercel-labs/agent-skills'],
+    ['vercel-optimize', 'vercel-labs/agent-skills'],
+    ['pr-review', 'vercel-labs/agent-skills'],
+    ['vercel-react-best-practices', 'vercel-labs/agent-skills']
+  ].forEach(([name, source]) => addSkill(name, source));
+
+  for (let i = 1; i <= 9; i += 1) {
+    addSkill('gitnexus-' + i, 'antigravity/local', {
+      unmanaged: true,
+      description: '由其他工具写入 Antigravity 目录，没有 lock 条目。',
+      path: '~/.antigravity/skills/gitnexus-' + i,
+      updatedAt: '2026-09-02'
+    });
+  }
+
+  const byName = Object.fromEntries(SKILLS.map(s => [s.id, s]));
+
+  // Status and edge-case samples
+  byName['code-review'].status = 'update';
+  byName['web-design-guidelines'].status = 'update';
+  byName['vercel-react-best-practices'].status = 'update';
+  byName['vercel-react-best-practices'].localModified = true;
+  byName['find-skills'].status = 'unknown';
+  byName['find-skills'].hash = '';
+  byName['hyperframes-audio'].status = 'path-missing';
+  byName['hyperframes-audio'].description = '音频混音 skill；但上游仓库中找不到记录的路径。';
+  byName['hyperframes-registry'].status = 'error';
+  byName['hyperframes-registry'].description = 'registry 接入 skill；来源仓库改名或不可达（模拟）。';
+  byName['codebase-design'].localModified = true;
+  byName['retro'].attachments = [];
+  byName['wait-what'].attachments = attachments(['claude'], { modes: { claude: 'copy' } });
+  byName['teach'].attachments = attachments(['claude', 'codex'], { modes: { claude: 'copy', codex: 'link' } });
+
+  byName['grilling'].skillMd = [
+    '---',
+    'name: grilling',
+    'description: 把计划、决策或想法逼问到共同理解，按设计树逐轮提问。',
+    '---',
+    '',
+    '# Grilling',
+    '',
+    'Interview the user relentlessly until you reach a shared understanding.',
+    '',
+    '## Rules',
+    '',
+    '- Map the conversation as a design tree.',
+    '- Work the frontier in rounds.',
+    '- Every question gets a recommended answer.',
+    '',
+    '```bash',
+    'npx skills list -g --json',
+    '```',
+    ''
+  ].join('\n');
+
+  const REPO_SKILLS = [
+    { name: 'grilling', installed: true, description: '逼问计划与决策' },
+    { name: 'domain-modeling', installed: true, description: '维护领域词汇与 ADR' },
+    { name: 'wayfinder', installed: true, description: '把大想法画成决策地图' },
+    { name: 'to-spec', installed: false, description: '把问题整理成规格' },
+    { name: 'to-tickets', installed: false, description: '把规格拆成票据' },
+    { name: 'wizard', installed: true, description: '生成人类操作向导' }
+  ];
+
+  function defaultWizard() {
+    return {
+      step: 1,
+      source: 'mattpocock/skills',
+      selectedSkills: new Set(['to-spec', 'to-tickets']),
+      selectedAgents: new Set(['claude', 'codex', 'gemini', 'copilot', 'opencode']),
+      installing: false,
+      progress: 0,
+      error: null,
+      simulateFail: false,
+      timer: null
+    };
+  }
+
+  const state = {
+    variant: 'three',
+    scenario: 'normal',
+    query: '',
+    source: 'all',
+    agent: 'all',
+    status: 'all',
+    sort: 'updated',
+    selectedId: null,
+    detailOpen: false,
+    showRaw: false,
+    modal: null,
+    wizard: defaultWizard(),
+    checking: false,
+    toast: null
+  };
+
+  let toastTimer = null;
+
+  function dataSet() {
+    return state.scenario === 'empty' ? [] : SKILLS;
+  }
+
+  function sourceLabel(source) {
+    return SOURCE_META[source] ? SOURCE_META[source].label : source;
+  }
+  function sourceColor(source) {
+    return SOURCE_META[source] ? SOURCE_META[source].color : '#6b7280';
+  }
+
+  function sourceCounts() {
+    const counts = {};
+    dataSet().forEach(s => { counts[s.source] = (counts[s.source] || 0) + 1; });
+    return counts;
+  }
+  function agentCount(id) {
+    return dataSet().filter(s => s.attachments.some(a => a.agent === id)).length;
+  }
+  function isAnomaly(s) {
+    return ['path-missing', 'error'].includes(s.status) || s.localModified || s.attachments.some(a => a.mode === 'broken');
+  }
+  function statusCount(key) {
+    if (key === 'all') return dataSet().length;
+    if (key === 'anomaly') return dataSet().filter(isAnomaly).length;
+    return dataSet().filter(s => s.status === key).length;
+  }
+  function matchesStatus(s, key) {
+    if (key === 'all') return true;
+    if (key === 'anomaly') return isAnomaly(s);
+    return s.status === key;
+  }
+
+  function visibleSkills() {
+    const q = state.query.trim().toLowerCase();
+    let list = dataSet().filter(s => {
+      if (state.source !== 'all' && s.source !== state.source) return false;
+      if (state.agent !== 'all' && !s.attachments.some(a => a.agent === state.agent)) return false;
+      if (!matchesStatus(s, state.status)) return false;
+      if (q) {
+        const hay = (s.name + ' ' + s.description + ' ' + s.source).toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+    if (state.sort === 'name') list.sort((a, b) => a.name.localeCompare(b.name));
+    else if (state.sort === 'source') list.sort((a, b) => a.source.localeCompare(b.source) || a.name.localeCompare(b.name));
+    else list.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.name.localeCompare(b.name));
+    return list;
+  }
+
+  function selectedSkill() {
+    return SKILLS.find(s => s.id === state.selectedId) || null;
+  }
+  function ensureSelection() {
+    const vis = visibleSkills();
+    if (!vis.some(s => s.id === state.selectedId)) state.selectedId = vis.length ? vis[0].id : null;
+    if (!state.selectedId) state.detailOpen = false;
+  }
+
+  function esc(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, c => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[c]));
+  }
+
+  function statusBadge(s) {
+    const st = STATUS[s.status] || STATUS.unknown;
+    let html = '<span class="badge ' + st.tone + '"><span class="dot"></span>' + st.label + '</span>';
+    if (s.attachments.length === 0 && s.status !== 'unmanaged') {
+      html += '<span class="badge gray">未挂载</span>';
+    }
+    return html;
+  }
+
+  function agentStack(s) {
+    const seen = [];
+    s.attachments.forEach(a => {
+      if (!seen.includes(a.agent) && AGENT_BY_ID[a.agent]) seen.push(a.agent);
+    });
+    const shown = seen.slice(0, 5);
+    let html = '<div class="agent-stack">';
+    shown.forEach(id => {
+      const a = AGENT_BY_ID[id];
+      html += '<span class="agent-dot" style="background:' + a.color + '" title="' + esc(a.name) + '">' + a.short + '</span>';
+    });
+    if (seen.length > 5) html += '<span class="agent-more">+' + (seen.length - 5) + '</span>';
+    html += '</div>';
+    return html;
+  }
+
+  function mdToHtml(md) {
+    const lines = esc(md).split('\n');
+    let start = 0;
+    if (lines[0] === '---') {
+      const end = lines.indexOf('---', 1);
+      if (end > 0) start = end + 1;
+    }
+    const body = lines.slice(start);
+    let html = '';
+    let inCode = false;
+    let code = [];
+    let inList = false;
+    const flushList = () => {
+      if (inList) { html += '</ul>'; inList = false; }
+    };
+    const inline = (text) => text
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+
+    body.forEach(line => {
+      if (line.startsWith('```')) {
+        if (inCode) {
+          html += '<pre><code>' + code.join('\n') + '</code></pre>';
+          code = [];
+          inCode = false;
+        } else {
+          flushList();
+          inCode = true;
+        }
+        return;
+      }
+      if (inCode) { code.push(line); return; }
+      if (/^### /.test(line)) { flushList(); html += '<h3>' + inline(line.slice(4)) + '</h3>'; return; }
+      if (/^## /.test(line)) { flushList(); html += '<h2>' + inline(line.slice(3)) + '</h2>'; return; }
+      if (/^# /.test(line)) { flushList(); html += '<h1>' + inline(line.slice(2)) + '</h1>'; return; }
+      if (/^\s*[-*] /.test(line)) {
+        if (!inList) { html += '<ul>'; inList = true; }
+        html += '<li>' + inline(line.replace(/^\s*[-*] /, '')) + '</li>';
+        return;
+      }
+      flushList();
+      if (!line.trim()) return;
+      html += '<p>' + inline(line) + '</p>';
+    });
+    flushList();
+    if (inCode) html += '<pre><code>' + code.join('\n') + '</code></pre>';
+    return html;
+  }
+
+  function envLabel() {
+    return state.scenario === 'cli-missing' ? '环境异常' : 'Node 26.3.0 · skills 1.7.4';
+  }
+
+  function renderActions() {
+    return [
+      '<button class="btn" data-action="open-env">' + envLabel() + '</button>',
+      '<button class="btn" data-action="check-updates"' + (state.checking ? ' disabled' : '') + '>' + (state.checking ? '检查中…' : '检查更新') + '</button>',
+      '<button class="btn primary" data-action="open-install">安装 skill</button>'
+    ].join('');
+  }
+
+  function renderTitlebar() {
+    return [
+      '<div class="titlebar">',
+      '<div class="traffic"><span class="red"></span><span class="yellow"></span><span class="green"></span></div>',
+      '<div class="titlebar-title">Skills Box <span class="proto-chip">PROTOTYPE</span></div>',
+      '<div class="titlebar-spacer"></div>',
+      '<button class="env-chip ' + (state.scenario === 'cli-missing' ? 'bad' : '') + '" data-action="open-env">' + (state.scenario === 'cli-missing' ? '环境异常' : '环境正常') + '</button>',
+      '</div>'
+    ].join('');
+  }
+
+  function renderSideSection(title, items, kind) {
+    return [
+      '<div class="side-section">',
+      '<div class="side-title">' + title + '</div>',
+      items.map(item => (
+        '<button class="filter-item ' + (state[kind] === item.key ? 'active' : '') + '" data-action="filter-' + kind + '" data-key="' + esc(item.key) + '">' +
+        '<span>' + esc(item.label) + '</span><span class="filter-count">' + item.count + '</span>' +
+        '</button>'
+      )).join(''),
+      '</div>'
+    ].join('');
+  }
+
+  function renderSidebar() {
+    const sc = sourceCounts();
+    const sourceItems = [{ key: 'all', label: '全部来源', count: dataSet().length }]
+      .concat(Object.keys(sc).sort((a, b) => sc[b] - sc[a]).map(source => ({ key: source, label: sourceLabel(source), count: sc[source] })));
+    const agentItems = [{ key: 'all', label: '全部 agent', count: dataSet().length }]
+      .concat(AGENTS.filter(a => agentCount(a.id) > 0).map(a => ({ key: a.id, label: a.name, count: agentCount(a.id) })));
+    const statusItems = STATUS_FILTERS.map(f => ({ key: f.key, label: f.label, count: statusCount(f.key) }));
+    return [
+      '<aside class="sidebar">',
+      renderSideSection('来源', sourceItems, 'source'),
+      renderSideSection('Agents', agentItems, 'agent'),
+      renderSideSection('状态', statusItems, 'status'),
+      '</aside>'
+    ].join('');
+  }
+
+  function searchSvg() {
+    return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>';
+  }
+
+  function renderSortSelect() {
+    return [
+      '<select id="sort" class="select" title="排序">',
+      '<option value="updated"' + (state.sort === 'updated' ? ' selected' : '') + '>最近更新</option>',
+      '<option value="name"' + (state.sort === 'name' ? ' selected' : '') + '>名称</option>',
+      '<option value="source"' + (state.sort === 'source' ? ' selected' : '') + '>来源</option>',
+      '</select>'
+    ].join('');
+  }
+
+  function renderSearchInput() {
+    return '<div class="search-wrap">' + searchSvg() + '<input id="search" class="input" placeholder="搜索 skill、来源或描述" value="' + esc(state.query) + '"></div>';
+  }
+
+  function renderStatusChips() {
+    return STATUS_FILTERS.map(f => (
+      '<button class="chip ' + (state.status === f.key ? 'active' : '') + '" data-action="filter-status" data-key="' + f.key + '">' +
+      f.label + ' <span class="count">' + statusCount(f.key) + '</span></button>'
+    )).join('');
+  }
+
+  function renderSourceFilter() {
+    const sc = sourceCounts();
+    const options = ['<option value="all">所有来源</option>']
+      .concat(Object.keys(sc).sort((a, b) => sc[b] - sc[a]).map(source => (
+        '<option value="' + esc(source) + '"' + (state.source === source ? ' selected' : '') + '>' + esc(sourceLabel(source)) + ' (' + sc[source] + ')</option>'
+      )));
+    return '<select id="source-filter" class="select">' + options.join('') + '</select>';
+  }
+
+  function renderAgentFilter() {
+    const options = ['<option value="all">所有 agent</option>']
+      .concat(AGENTS.filter(a => agentCount(a.id) > 0).map(a => (
+        '<option value="' + a.id + '"' + (state.agent === a.id ? ' selected' : '') + '>' + esc(a.name) + ' (' + agentCount(a.id) + ')</option>'
+      )));
+    return '<select id="agent-filter" class="select">' + options.join('') + '</select>';
+  }
+
+  function renderAnomalyInline() {
+    return [
+      '<button class="anomaly-inline" data-action="open-anomalies">',
+      '<span class="anomaly-mark">!</span>',
+      '<span><strong>异常 ' + ANOMALY_TOTAL + '</strong> · 21 条 stale lock · 9 个未受管 · 2 个断链 · 1 个本地改动 · 1 个源路径缺失</span>',
+      '<span class="link">查看只读提示</span>',
+      '</button>'
+    ].join('');
+  }
+
+  function renderEmptyList() {
+    return [
+      '<div class="empty-state"><div class="empty-card">',
+      '<div class="empty-icon">+</div>',
+      '<h3>' + (state.scenario === 'empty' ? '还没有全局 skill' : '没有匹配的 skill') + '</h3>',
+      '<p>' + (state.scenario === 'empty'
+        ? '用安装向导从公开 GitHub 来源安装第一个 skill，或先在终端运行 npx skills add … -g。'
+        : '调整搜索或筛选条件，或者清除筛选后重试。') + '</p>',
+      state.scenario === 'empty' ? '<button class="btn primary" data-action="open-install">安装 skill</button>' : '<button class="btn" data-action="clear-filters">清除筛选</button>',
+      '</div></div>'
+    ].join('');
+  }
+
+  function renderNoSelection() {
+    return [
+      '<div class="no-selection">',
+      '<div class="empty-icon">S</div>',
+      '<h3>选择一个 skill</h3>',
+      '<p>从列表选择，查看来源、agent 挂载、状态与 SKILL.md。</p>',
+      '</div>'
+    ].join('');
+  }
+
+  function renderRow(s) {
+    const selected = s.id === state.selectedId;
+    return [
+      '<div class="skill-row ' + (selected ? 'selected' : '') + '" role="button" tabindex="0" data-action="select-skill" data-id="' + esc(s.id) + '">',
+      '<div class="skill-name">' + esc(s.name) + ' ' + statusBadge(s) + '</div>',
+      '<div class="row-badges">' + agentStack(s) + '</div>',
+      '<div class="skill-desc">' + esc(s.description) + '</div>',
+      '<div class="skill-meta"><span class="src">' + esc(sourceLabel(s.source)) + '</span><span>·</span><span>' + esc(s.updatedAt) + '</span>' + (s.localModified ? '<span class="badge amber">本地改动</span>' : '') + '</div>',
+      '</div>'
+    ].join('');
+  }
+
+  function renderThree() {
+    const vis = visibleSkills();
+    const sel = selectedSkill();
+    return [
+      '<div class="variant variant-three">',
+      '<div class="v-head">',
+      '<div><h2>全局 Skills</h2><p>' + dataSet().length + ' 个 skill · ' + AGENTS.filter(a => agentCount(a.id) > 0).length + ' 个 agent · 共享目录 ~/.agents/skills</p></div>',
+      '<div class="head-actions">' + renderActions() + '</div>',
+      '</div>',
+      '<div class="workspace">',
+      renderSidebar(),
+      '<div class="list-pane">',
+      '<div class="list-toolbar">' + renderSearchInput() + renderSortSelect() + '<span class="result-count">' + vis.length + ' 个</span></div>',
+      state.scenario === 'empty' ? '' : renderAnomalyInline(),
+      '<div class="list-scroll">' + (vis.length ? vis.map(renderRow).join('') : renderEmptyList()) + '</div>',
+      '</div>',
+      '<div class="detail-pane">' + (sel ? renderDetail(sel) : renderNoSelection()) + '</div>',
+      '</div>',
+      '</div>'
+    ].join('');
+  }
+
+  function renderFilterBar() {
+    return [
+      '<div class="filter-bar">',
+      renderSearchInput(),
+      renderStatusChips(),
+      renderSourceFilter(),
+      renderAgentFilter(),
+      renderSortSelect(),
+      '</div>'
+    ].join('');
+  }
+
+  function renderTableRow(s) {
+    const selected = s.id === state.selectedId;
+    return [
+      '<tr class="row ' + (selected ? 'selected' : '') + '" data-action="select-skill" data-id="' + esc(s.id) + '">',
+      '<td><div class="table-name">' + esc(s.name) + '</div><div class="table-desc">' + esc(s.description) + '</div></td>',
+      '<td class="muted">' + esc(sourceLabel(s.source)) + '</td>',
+      '<td>' + agentStack(s) + '</td>',
+      '<td>' + statusBadge(s) + '</td>',
+      '<td class="mono muted">' + esc(s.updatedAt) + '</td>',
+      '<td class="table-actions"><button class="btn ghost" data-action="select-skill" data-id="' + esc(s.id) + '">详情</button></td>',
+      '</tr>'
+    ].join('');
+  }
+
+  function renderDrawer() {
+    const vis = visibleSkills();
+    const sel = selectedSkill();
+    return [
+      '<div class="variant variant-drawer">',
+      '<div class="v-head">',
+      '<div><h2>Skills</h2><p>高密度表格 · 点击行打开详情抽屉</p></div>',
+      '<div class="head-actions">' + renderActions() + '</div>',
+      '</div>',
+      renderFilterBar(),
+      state.scenario === 'empty' ? '' : renderAnomalyInline(),
+      '<div class="table-wrap">',
+      '<table><thead><tr><th>Skill</th><th>来源</th><th>Agents</th><th>状态</th><th>更新时间</th><th></th></tr></thead>',
+      '<tbody>' + vis.map(renderTableRow).join('') + '</tbody></table>',
+      vis.length ? '' : renderEmptyList(),
+      '</div>',
+      state.detailOpen && sel ? renderDrawerOverlay(sel) : '',
+      '</div>'
+    ].join('');
+  }
+
+  function renderDrawerOverlay(s) {
+    return [
+      '<div class="drawer-backdrop" data-action="close-detail"></div>',
+      '<aside class="drawer">',
+      '<button class="icon-btn drawer-close" data-action="close-detail">×</button>',
+      renderDetail(s),
+      '</aside>'
+    ].join('');
+  }
+
+  function renderCard(s) {
+    return [
+      '<div class="skill-card" role="button" tabindex="0" data-action="select-skill" data-id="' + esc(s.id) + '">',
+      '<div class="card-top"><h4>' + esc(s.name) + '</h4>' + statusBadge(s) + '</div>',
+      '<p>' + esc(s.description) + '</p>',
+      '<div class="card-foot">' + agentStack(s) + '<span class="muted mono">' + esc(s.updatedAt) + '</span></div>',
+      '</div>'
+    ].join('');
+  }
+
+  function renderCards() {
+    const vis = visibleSkills();
+    const sc = sourceCounts();
+    const tabs = [{ key: 'all', label: '全部', count: dataSet().length }]
+      .concat(Object.keys(sc).sort((a, b) => sc[b] - sc[a]).map(source => ({ key: source, label: sourceLabel(source), count: sc[source] })));
+    const groups = [];
+    const seen = new Set();
+    vis.forEach(s => {
+      if (!seen.has(s.source)) { seen.add(s.source); groups.push({ source: s.source, items: [] }); }
+      groups.find(g => g.source === s.source).items.push(s);
+    });
+    groups.sort((a, b) => (sc[b.source] || 0) - (sc[a.source] || 0));
+    return [
+      '<div class="variant variant-cards">',
+      '<div class="v-head cards-head">',
+      '<div><h2>Skills 画廊</h2><p>来源优先 · 点击卡片查看详情</p></div>',
+      '<div class="head-actions">' + renderSearchInput() + renderActions() + '</div>',
+      '</div>',
+      '<div class="source-tabs">',
+      tabs.map(t => (
+        '<button class="source-tab ' + (state.source === t.key ? 'active' : '') + '" data-action="filter-source" data-key="' + esc(t.key) + '">' +
+        '<span class="source-swatch" style="background:' + (t.key === 'all' ? '#6b7280' : sourceColor(t.key)) + '"></span>' +
+        esc(t.label) + ' <span class="count">' + t.count + '</span></button>'
+      )).join(''),
+      '</div>',
+      '<div class="cards-toolbar">' + renderStatusChips() + renderAgentFilter() + renderSortSelect() + '</div>',
+      state.scenario === 'empty' ? '' : renderAnomalyInline(),
+      '<div class="cards-scroll">',
+      groups.length
+        ? groups.map(g => [
+          '<section class="source-group">',
+          '<div class="source-group-head"><span class="source-swatch" style="background:' + sourceColor(g.source) + '"></span><h3>' + esc(sourceLabel(g.source)) + '</h3><span class="muted">' + g.items.length + '</span></div>',
+          '<div class="cards-grid">' + g.items.map(renderCard).join('') + '</div>',
+          '</section>'
+        ].join('')).join('')
+        : renderEmptyList(),
+      '</div>',
+      state.detailOpen && selectedSkill() ? renderCardDetail(selectedSkill()) : '',
+      '</div>'
+    ].join('');
+  }
+
+  function renderCardDetail(s) {
+    return [
+      '<div class="modal detail-modal">',
+      '<div class="modal-backdrop" data-action="close-detail"></div>',
+      '<div class="modal-card lg">',
+      '<button class="icon-btn modal-close" data-action="close-detail">×</button>',
+      renderDetail(s),
+      '</div>',
+      '</div>'
+    ].join('');
+  }
+
+  function renderDetail(s) {
+    const unmanaged = s.status === 'unmanaged';
+    const canUpdate = s.status === 'update';
+    const attachmentsHtml = s.attachments.length
+      ? s.attachments.map(a => {
+        const agent = AGENT_BY_ID[a.agent];
+        if (!agent) return '';
+        const modeLabel = { link: '链接', copy: '副本', shared: '共享', unmanaged: '未受管', broken: '断链' }[a.mode] || a.mode;
+        const canDetach = a.mode === 'link' || a.mode === 'copy';
+        return [
+          '<div class="agent-row">',
+          '<span class="agent-dot" style="background:' + agent.color + ';margin-left:0;border-color:var(--panel-2)">' + agent.short + '</span>',
+          '<span class="agent-name">' + esc(agent.name) + '<div class="mode">' + esc(agent.dir) + ' · ' + modeLabel + '</div></span>',
+          canDetach
+            ? '<button class="btn ghost" data-action="detach-agent" data-agent="' + a.agent + '" data-id="' + esc(s.id) + '">断开</button>'
+            : '<span class="badge gray">' + modeLabel + '</span>',
+          '</div>'
+        ].join('');
+      }).join('')
+      : '<div class="empty-inline">未挂载任何 agent。共享副本仍保留，可在安装向导中重新挂载。</div>';
+
+    const stateNote = ['path-missing', 'error'].includes(s.status)
+      ? '<div class="note warn">' + (s.status === 'path-missing'
+        ? '来源路径缺失：上游仓库中找不到记录的 skill 路径，更新状态标为异常。'
+        : '检查失败：来源仓库不可达或已改名；保留上次状态，不误报为可更新。') + '</div>'
+      : '';
+
+    return [
+      '<div class="detail-head">',
+      '<div class="detail-title-row"><h3>' + esc(s.name) + '</h3>' + statusBadge(s) + '</div>',
+      '<p class="desc">' + esc(s.description) + '</p>',
+      '</div>',
+      '<div class="detail-actions">',
+      '<button class="btn" data-action="check-one" data-id="' + esc(s.id) + '"' + (unmanaged ? ' disabled' : '') + '>检查更新</button>',
+      '<button class="btn ' + (canUpdate && !unmanaged ? 'primary' : '') + '" data-action="update-skill" data-id="' + esc(s.id) + '"' + (!canUpdate || unmanaged ? ' disabled' : '') + '>更新</button>',
+      '<button class="btn danger" data-action="uninstall-skill" data-id="' + esc(s.id) + '"' + (unmanaged ? ' disabled' : '') + '>彻底卸载</button>',
+      '<button class="btn ghost" data-action="open-finder" data-id="' + esc(s.id) + '">在 Finder 中查看</button>',
+      '</div>',
+      s.localModified ? '<div class="note warn">检测到本地改动：共享副本与 lock 记录不一致。更新会覆盖修改，请先备份。</div>' : '',
+      s.crossLink ? '<div class="note warn">跨 agent 链接：Gemini CLI / Copilot / OpenCode 的链接可能指向 Claude 副本，断开 Claude Code 前需检查依赖。</div>' : '',
+      unmanaged ? '<div class="note">未受管：该目录没有 lock 条目，v1 只读展示，不提供卸载或更新。</div>' : '',
+      stateNote,
+      '<div class="section-title">概览</div>',
+      '<dl class="meta-grid">',
+      '<dt>来源</dt><dd>' + esc(s.source) + (s.sourceType === 'github' ? ' · 公开 GitHub' : ' · 本地 / 其他工具') + '</dd>',
+      '<dt>安装时间</dt><dd>' + esc(s.installedAt) + '</dd>',
+      '<dt>更新时间</dt><dd>' + esc(s.updatedAt) + '</dd>',
+      '<dt>目录</dt><dd class="mono">' + esc(s.path) + '</dd>',
+      '<dt>版本指纹</dt><dd class="mono">' + esc(s.hash || '—') + '</dd>',
+      '<dt>状态</dt><dd>' + (STATUS[s.status] || STATUS.unknown).label + (s.localModified ? ' · 本地改动' : '') + '</dd>',
+      '</dl>',
+      '<div class="section-title">Agent 挂载 <span class="section-sub">' + s.attachments.length + ' 个</span></div>',
+      '<div class="agent-list">' + attachmentsHtml + '</div>',
+      '<div class="section-title">SKILL.md <span class="section-sub">只读</span></div>',
+      '<div class="raw-toggle">',
+      '<button class="chip ' + (!state.showRaw ? 'active' : '') + '" data-action="toggle-raw" data-raw="0">渲染</button>',
+      '<button class="chip ' + (state.showRaw ? 'active' : '') + '" data-action="toggle-raw" data-raw="1">原文</button>',
+      '</div>',
+      state.showRaw
+        ? '<pre class="md-box raw">' + esc(s.skillMd) + '</pre>'
+        : '<div class="md-box">' + mdToHtml(s.skillMd) + '</div>'
+    ].join('');
+  }
+
+  function modalShell(title, body, size) {
+    return [
+      '<div class="modal">',
+      '<div class="modal-backdrop" data-action="close-modal"></div>',
+      '<div class="modal-card ' + (size || 'md') + '">',
+      '<div class="modal-head"><h3>' + esc(title) + '</h3><button class="icon-btn" data-action="close-modal">×</button></div>',
+      body,
+      '</div>',
+      '</div>'
+    ].join('');
+  }
+
+  function renderStepper(step) {
+    return '<div class="stepper">' + [1, 2, 3, 4].map(i => (
+      '<span class="step ' + (step > i ? 'done' : step === i ? 'current' : '') + '"></span>'
+    )).join('') + '</div>';
+  }
+
+  function renderWizardModal() {
+    const w = state.wizard;
+    let body = renderStepper(w.step);
+
+    if (w.installing) {
+      body += [
+        '<p class="modal-sub">正在运行 npx skills add …（原型模拟）</p>',
+        '<div class="progress"><div style="width:' + Math.round(w.progress) + '%"></div></div>',
+        '<div class="wizard-progress-meta"><span>' + Math.round(w.progress) + '%</span><span>写入共享目录 → 链接 agent</span></div>',
+        '<div class="note soft">开始前会快照 ~/.agents/.skill-lock.json；任务串行执行，完成后校验目录与 lock。</div>',
+        '<div class="wizard-footer"><button class="btn ghost" data-action="cancel-install">取消任务</button><span class="muted">单写者队列</span></div>'
+      ].join('');
+      return modalShell('安装 skill', body, 'md');
+    }
+
+    if (w.step === 5) {
+      if (w.error) {
+        body += [
+          '<div class="wizard-result">',
+          '<div class="success-mark" style="background:var(--red-soft);color:var(--red)">!</div>',
+          '<h4>安装部分失败</h4>',
+          '<p>' + esc(w.error) + '</p>',
+          '</div>',
+          '<div class="note warn">共享目录已写入，但部分 agent 链接失败。GUI 会保留已成功项，并提示逐项重试，不会回滚整个安装。</div>',
+          '<div class="wizard-footer"><button class="btn" data-action="close-modal">关闭</button><div class="right"><button class="btn primary" data-action="retry-install">重试失败项</button></div></div>'
+        ].join('');
+      } else {
+        const count = w.selectedSkills.size;
+        body += [
+          '<div class="wizard-result">',
+          '<div class="success-mark">✓</div>',
+          '<h4>安装完成</h4>',
+          '<p>已安装 ' + count + ' 个 skill，并链接到 ' + w.selectedAgents.size + ' 个 agent。</p>',
+          '</div>',
+          '<div class="note">命令示例：<span class="code">npx skills add mattpocock/skills -g -s … -a … -a universal -y --json</span></div>',
+          '<div class="wizard-footer"><span class="muted">已校验 lock 与目录</span><div class="right"><button class="btn primary" data-action="close-modal">完成</button></div></div>'
+        ].join('');
+      }
+      return modalShell('安装 skill', body, 'md');
+    }
+
+    if (w.step === 1) {
+      const blocked = state.scenario === 'cli-missing';
+      body += [
+        '<p class="modal-sub">v1 只接受公开 GitHub 来源。安装会写入共享目录，并按所选 agent 建立链接。</p>',
+        '<div class="wizard-source"><input id="wizard-source" class="input" value="' + esc(w.source) + '" placeholder="owner/repo 或 GitHub URL"><button class="btn primary" data-action="wizard-preview"' + (blocked ? ' disabled' : '') + '>预览仓库</button></div>',
+        '<div class="note">示例：mattpocock/skills · 将读取仓库内的 SKILL.md 列表。</div>',
+        blocked ? '<div class="note warn">环境异常：未找到 Node / skills CLI，无法预览。先修复环境再继续。</div>' : '',
+        '<div class="wizard-footer"><span class="muted">公开来源 · 不支持私有仓库</span></div>'
+      ].join('');
+      return modalShell('安装 skill · 选择来源', body, 'md');
+    }
+
+    if (w.step === 2) {
+      body += [
+        '<p class="modal-sub">' + esc(w.source) + ' · 6 个 skill（示例）</p>',
+        '<div class="pick-list">',
+        REPO_SKILLS.map(item => {
+          const checked = w.selectedSkills.has(item.name);
+          return [
+            '<label class="pick-row ' + (checked ? 'selected' : '') + '">',
+            '<input type="checkbox" data-action="toggle-wizard-skill" data-skill="' + item.name + '"' + (checked ? ' checked' : '') + (item.installed ? ' disabled' : '') + '>',
+            '<span class="pick-main"><span class="pick-name">' + item.name + '</span><span class="pick-sub">' + esc(item.description) + '</span></span>',
+            item.installed ? '<span class="badge gray">已安装</span>' : '',
+            '</label>'
+          ].join('');
+        }).join(''),
+        '</div>',
+        '<div class="wizard-footer"><button class="btn ghost" data-action="wizard-back">上一步</button><div class="right"><button class="btn primary" data-action="wizard-next"' + (w.selectedSkills.size ? '' : ' disabled') + '>下一步</button></div></div>'
+      ].join('');
+      return modalShell('安装 skill · 选择 skill', body, 'md');
+    }
+
+    if (w.step === 3) {
+      body += [
+        '<p class="modal-sub">选择要写入的 agent。默认勾选本机检测到的 agent。</p>',
+        '<div class="pick-list">',
+        AGENTS.map(agent => {
+          const checked = w.selectedAgents.has(agent.id);
+          return [
+            '<label class="pick-row ' + (checked ? 'selected' : '') + '">',
+            '<input type="checkbox" data-action="toggle-wizard-agent" data-agent="' + agent.id + '"' + (checked ? ' checked' : '') + '>',
+            '<span class="agent-dot" style="background:' + agent.color + ';margin-left:0;border-color:var(--panel-2)">' + agent.short + '</span>',
+            '<span class="pick-main"><span class="pick-name">' + esc(agent.name) + '</span><span class="pick-sub">' + esc(agent.dir) + (agent.id === 'antigravity' ? ' · 目录含未受管 skill' : ' · 已检测') + '</span></span>',
+            '</label>'
+          ].join('');
+        }).join(''),
+        '</div>',
+        '<div class="note">命令会显式传 <span class="code">-a</span> 并追加 <span class="code">-a universal</span>，避免单 agent 默认 copy、不写共享目录。</div>',
+        '<div class="wizard-footer"><button class="btn ghost" data-action="wizard-back">上一步</button><div class="right"><button class="btn primary" data-action="wizard-next"' + (w.selectedAgents.size ? '' : ' disabled') + '>下一步</button></div></div>'
+      ].join('');
+      return modalShell('安装 skill · 选择 agent', body, 'md');
+    }
+
+    // step 4: confirm
+    const skillNames = Array.from(w.selectedSkills);
+    const agentNames = Array.from(w.selectedAgents).map(id => AGENT_BY_ID[id] ? AGENT_BY_ID[id].name : id);
+    body += [
+      '<p class="modal-sub">确认后将启动串行安装任务。</p>',
+      '<div class="summary">',
+      '<div><span>来源</span><strong>' + esc(w.source) + '</strong></div>',
+      '<div><span>Skill</span><strong>' + skillNames.length + ' 个</strong></div>',
+      '<div><span>Agents</span><strong>' + esc(agentNames.join('、')) + '</strong></div>',
+      '<div><span>目标</span><strong>~/.agents/skills + agent 链接</strong></div>',
+      '</div>',
+      '<div class="note">安装前快照 lock；任务串行；完成后逐项校验。不会使用 <span class="code">remove --all</span>。</div>',
+      '<label class="pick-row"><input type="checkbox" data-action="toggle-simulate-fail"' + (w.simulateFail ? ' checked' : '') + '><span class="pick-main"><span class="pick-name">模拟部分失败（仅原型）</span><span class="pick-sub">用于预览错误态与重试入口</span></span></label>',
+      '<div class="wizard-footer"><button class="btn ghost" data-action="wizard-back">上一步</button><div class="right"><button class="btn primary" data-action="wizard-install">开始安装</button></div></div>'
+    ].join('');
+    return modalShell('安装 skill · 确认', body, 'md');
+  }
+
+  function renderDangerModal() {
+    const d = state.modal;
+    const s = SKILLS.find(x => x.id === d.skillId);
+    if (!s) return '';
+    const agent = d.agentId ? AGENT_BY_ID[d.agentId] : null;
+    let title = '';
+    let body = '';
+    let confirmLabel = '确认';
+    let requiresCheck = false;
+    let warning = '';
+
+    if (d.action === 'update') {
+      title = '更新 ' + s.name + '？';
+      body = [
+        '<p class="modal-sub">将从来源重新拉取并覆盖共享副本，再按当前挂载重新链接。</p>',
+        '<div class="summary">',
+        '<div><span>来源</span><strong>' + esc(s.source) + '</strong></div>',
+        '<div><span>影响 agent</span><strong>' + s.attachments.length + ' 个</strong></div>',
+        '<div><span>本地改动</span><strong>' + (s.localModified ? '有，将被覆盖' : '无') + '</strong></div>',
+        '<div><span>回滚</span><strong>不支持</strong></div>',
+        '</div>'
+      ].join('');
+      confirmLabel = '更新';
+      requiresCheck = s.localModified;
+      warning = s.localModified ? '<div class="note warn">本地改动会被覆盖。建议先在 Finder 中备份共享副本。</div>' : '';
+    } else if (d.action === 'detach') {
+      title = '从 ' + (agent ? agent.name : 'agent') + ' 断开 ' + s.name + '？';
+      body = [
+        '<p class="modal-sub">只移除该 agent 目录中的链接或副本，共享副本与 lock 条目保留。</p>',
+        '<div class="summary">',
+        '<div><span>Agent</span><strong>' + esc(agent ? agent.name : '') + '</strong></div>',
+        '<div><span>共享副本</span><strong>保留</strong></div>',
+        '<div><span>lock 条目</span><strong>保留</strong></div>',
+        '<div><span>其他 agent</span><strong>' + Math.max(0, s.attachments.length - 1) + ' 个不受影响</strong></div>',
+        '</div>'
+      ].join('');
+      confirmLabel = '断开';
+      requiresCheck = s.crossLink;
+      warning = s.crossLink ? '<div class="note warn">cross-link 警告：Gemini CLI / Copilot / OpenCode 可能指向 Claude 副本，断开后需检查其他链接。</div>' : '';
+    } else {
+      title = '彻底卸载 ' + s.name + '？';
+      body = [
+        '<p class="modal-sub">将删除共享副本、所有 agent 挂载与 lock 条目。此操作不可撤销。</p>',
+        '<div class="summary">',
+        '<div><span>共享副本</span><strong>删除</strong></div>',
+        '<div><span>Agent 挂载</span><strong>' + s.attachments.length + ' 个删除</strong></div>',
+        '<div><span>lock 条目</span><strong>删除</strong></div>',
+        '<div><span>来源</span><strong>仍保留在上游</strong></div>',
+        '</div>'
+      ].join('');
+      confirmLabel = '彻底卸载';
+      requiresCheck = true;
+    }
+
+    const check = requiresCheck
+      ? '<label class="pick-row ' + (d.confirmed ? 'selected' : '') + '"><input type="checkbox" data-action="danger-check"' + (d.confirmed ? ' checked' : '') + '><span class="pick-main"><span class="pick-name">我了解此操作的影响</span><span class="pick-sub">' + (d.action === 'uninstall' ? '删除后无法从本应用恢复' : '继续前请确认已备份需要保留的内容') + '</span></span></label>'
+      : '';
+
+    return modalShell(title, body + warning + check + (
+      '<div class="wizard-footer"><button class="btn ghost" data-action="close-modal">取消</button><div class="right"><button class="btn danger" data-action="danger-confirm"' + (requiresCheck && !d.confirmed ? ' disabled' : '') + '>' + confirmLabel + '</button></div></div>'
+    ), 'sm');
+  }
+
+  function renderAnomalyModal() {
+    const items = [
+      { n: 21, label: '失效 lock 条目', desc: '目录已不存在；list 不显示。update -g 可能把它们装回来。' },
+      { n: 9, label: '未受管目录', desc: 'Antigravity 下的 gitnexus-*；没有 lock，v1 不删除。' },
+      { n: 2, label: '断链', desc: '指向已移动的副本；详情中标为异常。' },
+      { n: 1, label: '本地改动', desc: '共享副本与 lock hash 不一致。' },
+      { n: 1, label: '源路径缺失', desc: '上游仓库中找不到记录的 skill 路径。' }
+    ];
+    return modalShell('异常与只读提示', [
+      '<p class="modal-sub">v1 只展示异常，不提供一键修复。所有操作都不会使用 remove --all。</p>',
+      '<div class="anomaly-grid">',
+      items.map(item => (
+        '<div class="anomaly-item"><strong>' + item.n + '</strong><span>' + item.label + '</span><p>' + item.desc + '</p></div>'
+      )).join(''),
+      '</div>',
+      '<div class="note">建议：操作前备份 <span class="code">~/.agents/.skill-lock.json</span>；逐名操作、串行写入；v2 再考虑修复工作流。</div>'
+    ].join(''), 'md');
+  }
+
+  function renderEnvModal() {
+    const missing = state.scenario === 'cli-missing';
+    const rows = [
+      ['Node', missing ? '未找到' : 'v26.3.0', '>= 22.20'],
+      ['npx', missing ? '未找到' : '随 Node', '用于执行 skills'],
+      ['git', missing ? '未找到' : '2.39.0', 'skills 需要'],
+      ['skills', missing ? '未找到' : '1.7.4', '固定版本'],
+      ['PATH', missing ? '最小 PATH' : 'nvm 解析', missing ? '仅 /usr/bin:/bin' : '已注入子进程']
+    ];
+    return modalShell('运行环境', [
+      '<div class="env-grid">',
+      rows.map(row => (
+        '<div class="env-row"><span class="env-name">' + row[0] + '</span><span class="env-value">' + esc(row[1]) + '</span><span class="badge ' + (missing ? 'red' : 'green') + '">' + row[2] + '</span></div>'
+      )).join(''),
+      '</div>',
+      '<div class="note">探测顺序：用户覆盖 → Volta → fnm → nvm → Homebrew → 系统 → 有界登录 shell 回退。结果缓存；可手动重新检测。</div>',
+      '<div class="wizard-footer"><button class="btn ghost" data-action="close-modal">关闭</button><div class="right"><button class="btn primary" data-action="retry-env">重新检测</button></div></div>'
+    ].join(''), 'sm');
+  }
+
+  function renderCliMissing() {
+    return [
+      '<div class="error-panel"><div class="error-card">',
+      '<h3>未找到 Node 或 skills CLI</h3>',
+      '<p>Skills Box 需要 Node >= 22.20、npx、git。当前从 Finder 启动时只拿到最小 PATH。</p>',
+      '<div class="note">已尝试：用户覆盖 → Volta → fnm → nvm → Homebrew → 系统路径。未找到可用的 node / npx / git。</div>',
+      '<div class="error-actions">',
+      '<button class="btn primary" data-action="retry-env">重新检测</button>',
+      '<button class="btn" data-action="open-env">查看探测详情</button>',
+      '<button class="btn ghost" data-action="set-scenario" data-scenario="normal">返回正常状态（原型）</button>',
+      '</div>',
+      '</div></div>'
+    ].join('');
+  }
+
+  function renderModal() {
+    if (!state.modal) return '';
+    if (state.modal.type === 'install') return renderWizardModal();
+    if (state.modal.type === 'danger') return renderDangerModal();
+    if (state.modal.type === 'anomaly') return renderAnomalyModal();
+    if (state.modal.type === 'env') return renderEnvModal();
+    return '';
+  }
+
+  function renderToast() {
+    if (!state.toast) return '';
+    return '<div class="toast ' + (state.toast.kind || '') + '">' + esc(state.toast.msg) + '</div>';
+  }
+
+  function renderSwitcher() {
+    const labels = { three: 'A · 三栏工作台', drawer: 'B · 表格 + 抽屉', cards: 'C · 来源画廊' };
+    const options = [
+      ['normal', '正常数据'],
+      ['empty', '空列表'],
+      ['cli-missing', 'CLI 缺失']
+    ];
+    return [
+      '<div class="proto-switcher">',
+      '<span class="tag">PROTOTYPE</span>',
+      '<button data-action="prev-variant" title="上一个变体">‹</button>',
+      '<span class="variant-label">' + labels[state.variant] + '</span>',
+      '<button data-action="next-variant" title="下一个变体">›</button>',
+      '<select id="scenario" title="场景">',
+      options.map(([key, label]) => '<option value="' + key + '"' + (state.scenario === key ? ' selected' : '') + '>' + label + '</option>').join(''),
+      '</select>',
+      '<span class="proto-hint">← → 切换 · ?variant=three|drawer|cards</span>',
+      '</div>'
+    ].join('');
+  }
+
+  function render() {
+    const app = document.getElementById('app');
+    const switcher = document.getElementById('switcher');
+    let content = '';
+    if (state.scenario === 'cli-missing') {
+      content = renderCliMissing();
+    } else if (state.variant === 'three') {
+      content = renderThree();
+    } else if (state.variant === 'drawer') {
+      content = renderDrawer();
+    } else {
+      content = renderCards();
+    }
+    app.innerHTML = [
+      '<div class="app-window">',
+      renderTitlebar(),
+      content,
+      renderModal(),
+      '</div>'
+    ].join('');
+    switcher.innerHTML = renderSwitcher();
+    renderToastElement();
+  }
+
+  function renderToastElement() {
+    const existing = document.getElementById('proto-toast');
+    if (existing) existing.remove();
+    if (state.toast) {
+      const el = document.createElement('div');
+      el.id = 'proto-toast';
+      el.className = 'toast ' + (state.toast.kind || '');
+      el.textContent = state.toast.msg;
+      document.body.appendChild(el);
+    }
+  }
+
+  function renderWithFocus() {
+    const active = document.activeElement;
+    const id = active && active.id;
+    const start = active && typeof active.selectionStart === 'number' ? active.selectionStart : null;
+    const end = active && typeof active.selectionEnd === 'number' ? active.selectionEnd : null;
+    render();
+    if (id) {
+      const next = document.getElementById(id);
+      if (next && next.focus) {
+        next.focus();
+        if (start !== null && next.setSelectionRange) {
+          try { next.setSelectionRange(start, end); } catch (e) { /* ignore */ }
+        }
+      }
+    }
+  }
+
+  function showToast(msg, kind) {
+    state.toast = { msg, kind: kind || '' };
+    clearTimeout(toastTimer);
+    render();
+    toastTimer = setTimeout(() => {
+      state.toast = null;
+      render();
+    }, 2600);
+  }
+
+  function updateUrl() {
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set('variant', state.variant);
+      if (state.scenario === 'normal') url.searchParams.delete('scenario');
+      else url.searchParams.set('scenario', state.scenario);
+      window.history.replaceState(null, '', url.toString());
+    } catch (e) { /* file:// may reject replaceState */ }
+  }
+
+  function setVariant(variant) {
+    state.variant = variant;
+    if (variant !== 'three') state.detailOpen = false;
+    ensureSelection();
+    updateUrl();
+    render();
+  }
+
+  function cycleVariant(dir) {
+    const order = ['three', 'drawer', 'cards'];
+    const index = order.indexOf(state.variant);
+    setVariant(order[(index + dir + order.length) % order.length]);
+  }
+
+  function setScenario(scenario) {
+    state.scenario = scenario;
+    state.modal = null;
+    state.detailOpen = false;
+    ensureSelection();
+    updateUrl();
+    render();
+  }
+
+  function openInstall() {
+    if (state.wizard.step >= 5 || state.wizard.error) state.wizard = defaultWizard();
+    state.modal = { type: 'install' };
+    render();
+  }
+
+  function openDanger(action, skillId, agentId) {
+    state.modal = { type: 'danger', action, skillId, agentId: agentId || null, confirmed: false };
+    render();
+  }
+
+  function closeModal() {
+    if (state.wizard.timer) {
+      clearInterval(state.wizard.timer);
+      state.wizard.timer = null;
+    }
+    state.wizard.installing = false;
+    state.modal = null;
+    render();
+  }
+
+  function checkAll() {
+    if (state.checking) return;
+    state.checking = true;
+    render();
+    setTimeout(() => {
+      const candidates = SKILLS.filter(s => s.status === 'current' && s.attachments.length && !s.localModified).slice(0, 2);
+      candidates.forEach(s => { s.status = 'update'; });
+      state.checking = false;
+      showToast(candidates.length
+        ? '已检查 18 个来源，发现 ' + candidates.length + ' 个可用更新（模拟）'
+        : '已检查 18 个来源，全部是最新（模拟）', 'success');
+    }, 900);
+  }
+
+  function checkOne(id) {
+    const s = SKILLS.find(x => x.id === id);
+    if (!s) return;
+    if (s.status === 'path-missing') return showToast('检查失败：来源路径缺失（模拟）', 'error');
+    if (s.status === 'error') return showToast('检查失败：仓库不可达（模拟）', 'error');
+    if (s.status === 'unmanaged') return showToast('未受管 skill 没有来源可检查', 'error');
+    showToast('已检查 ' + s.name + '：' + (s.status === 'update' ? '发现可用更新' : '已是最新') + '（模拟）', s.status === 'update' ? '' : 'success');
+  }
+
+  function executeDanger() {
+    const d = state.modal;
+    if (!d || d.type !== 'danger') return;
+    const s = SKILLS.find(x => x.id === d.skillId);
+    if (!s) { state.modal = null; render(); return; }
+    let message = '';
+    if (d.action === 'update') {
+      s.status = 'current';
+      s.updatedAt = TODAY;
+      s.localModified = false;
+      message = '已更新 ' + s.name + '（模拟）';
+    } else if (d.action === 'detach') {
+      const agent = AGENT_BY_ID[d.agentId];
+      s.attachments = s.attachments.filter(a => a.agent !== d.agentId);
+      message = '已从 ' + (agent ? agent.name : 'agent') + ' 断开 ' + s.name + '（模拟）';
+    } else if (d.action === 'uninstall') {
+      const index = SKILLS.indexOf(s);
+      if (index >= 0) SKILLS.splice(index, 1);
+      state.selectedId = null;
+      state.detailOpen = false;
+      message = '已彻底卸载 ' + s.name + '（模拟）';
+    }
+    state.modal = null;
+    ensureSelection();
+    showToast(message, 'success');
+  }
+
+  function runInstall() {
+    const w = state.wizard;
+    if (w.installing) return;
+    w.installing = true;
+    w.progress = 0;
+    w.error = null;
+    render();
+    clearInterval(w.timer);
+    w.timer = setInterval(() => {
+      w.progress = Math.min(100, w.progress + 8 + Math.random() * 8);
+      if (w.progress >= 100) {
+        clearInterval(w.timer);
+        w.timer = null;
+        w.installing = false;
+        if (w.simulateFail) {
+          w.error = '2 个 skill 已写入共享目录，但 1 个 agent 链接失败。';
+          w.step = 5;
+          render();
+          return;
+        }
+        const selected = Array.from(w.selectedSkills);
+        const agentIds = Array.from(w.selectedAgents);
+        const modes = {};
+        agentIds.forEach(id => { modes[id] = id === 'codex' ? 'shared' : 'link'; });
+        selected.forEach(name => {
+          if (SKILLS.some(s => s.name === name)) return;
+          const meta = REPO_SKILLS.find(r => r.name === name);
+          addSkill(name, 'mattpocock/skills', {
+            description: meta ? meta.description : '来自 mattpocock/skills 的 skill。',
+            status: 'current',
+            attachments: attachments(agentIds, { modes }),
+            updatedAt: TODAY,
+            installedAt: TODAY
+          });
+        });
+        state.scenario = 'normal';
+        w.step = 5;
+        const first = SKILLS.find(s => selected.includes(s.name));
+        if (first) state.selectedId = first.id;
+        ensureSelection();
+        render();
+      } else {
+        render();
+      }
+    }, 140);
+  }
+
+  function retryInstall() {
+    state.wizard.step = 4;
+    state.wizard.error = null;
+    state.wizard.simulateFail = false;
+    render();
+  }
+
+  document.addEventListener('click', event => {
+    const target = event.target.closest('[data-action]');
+    if (!target) return;
+    if (target.tagName === 'INPUT' || target.tagName === 'SELECT') return;
+    const action = target.dataset.action;
+
+    if (action === 'select-skill') {
+      state.selectedId = target.dataset.id;
+      if (state.variant !== 'three') state.detailOpen = true;
+      render();
+      return;
+    }
+    if (action === 'filter-source') { state.source = target.dataset.key; ensureSelection(); render(); return; }
+    if (action === 'filter-agent') { state.agent = target.dataset.key; ensureSelection(); render(); return; }
+    if (action === 'filter-status') { state.status = target.dataset.key; ensureSelection(); render(); return; }
+    if (action === 'clear-filters') {
+      state.query = ''; state.source = 'all'; state.agent = 'all'; state.status = 'all';
+      ensureSelection(); render(); return;
+    }
+    if (action === 'open-install') { openInstall(); return; }
+    if (action === 'open-env') { state.modal = { type: 'env' }; render(); return; }
+    if (action === 'open-anomalies') { state.modal = { type: 'anomaly' }; render(); return; }
+    if (action === 'close-modal') { closeModal(); return; }
+    if (action === 'close-detail') { state.detailOpen = false; render(); return; }
+    if (action === 'toggle-raw') { state.showRaw = target.dataset.raw === '1'; render(); return; }
+    if (action === 'check-updates') { checkAll(); return; }
+    if (action === 'check-one') { checkOne(target.dataset.id); return; }
+    if (action === 'update-skill') { openDanger('update', target.dataset.id); return; }
+    if (action === 'uninstall-skill') { openDanger('uninstall', target.dataset.id); return; }
+    if (action === 'detach-agent') { openDanger('detach', target.dataset.id, target.dataset.agent); return; }
+    if (action === 'open-finder') { showToast('已在 Finder 中打开（原型不执行）'); return; }
+    if (action === 'danger-confirm') { executeDanger(); return; }
+    if (action === 'wizard-preview') {
+      if (state.scenario === 'cli-missing') { showToast('环境异常：未找到 Node / skills CLI', 'error'); return; }
+      state.wizard.step = 2; render(); return;
+    }
+    if (action === 'wizard-next') { state.wizard.step = Math.min(4, state.wizard.step + 1); render(); return; }
+    if (action === 'wizard-back') { state.wizard.step = Math.max(1, state.wizard.step - 1); render(); return; }
+    if (action === 'wizard-install') { runInstall(); return; }
+    if (action === 'cancel-install') {
+      if (state.wizard.timer) { clearInterval(state.wizard.timer); state.wizard.timer = null; }
+      state.wizard.installing = false;
+      state.modal = null;
+      showToast('已取消安装任务（模拟）');
+      return;
+    }
+    if (action === 'retry-install') { retryInstall(); return; }
+    if (action === 'retry-env') {
+      state.scenario = 'normal';
+      state.modal = null;
+      ensureSelection();
+      updateUrl();
+      showToast('已找到 Node 26.3.0 · skills 1.7.4（模拟）', 'success');
+      return;
+    }
+    if (action === 'set-scenario') { setScenario(target.dataset.scenario); return; }
+    if (action === 'prev-variant') { cycleVariant(-1); return; }
+    if (action === 'next-variant') { cycleVariant(1); return; }
+  });
+
+  document.addEventListener('change', event => {
+    const target = event.target;
+    if (target.id === 'sort') { state.sort = target.value; render(); return; }
+    if (target.id === 'source-filter') { state.source = target.value; ensureSelection(); render(); return; }
+    if (target.id === 'agent-filter') { state.agent = target.value; ensureSelection(); render(); return; }
+    if (target.id === 'status-filter') { state.status = target.value; ensureSelection(); render(); return; }
+    if (target.id === 'scenario') { setScenario(target.value); return; }
+    if (target.dataset.action === 'toggle-wizard-skill') {
+      const name = target.dataset.skill;
+      if (target.checked) state.wizard.selectedSkills.add(name);
+      else state.wizard.selectedSkills.delete(name);
+      render(); return;
+    }
+    if (target.dataset.action === 'toggle-wizard-agent') {
+      const id = target.dataset.agent;
+      if (target.checked) state.wizard.selectedAgents.add(id);
+      else state.wizard.selectedAgents.delete(id);
+      render(); return;
+    }
+    if (target.dataset.action === 'toggle-simulate-fail') {
+      state.wizard.simulateFail = target.checked;
+      render(); return;
+    }
+    if (target.dataset.action === 'danger-check') {
+      if (state.modal) state.modal.confirmed = target.checked;
+      render(); return;
+    }
+  });
+
+  document.addEventListener('input', event => {
+    const target = event.target;
+    if (target.id === 'search') {
+      state.query = target.value;
+      ensureSelection();
+      renderWithFocus();
+      return;
+    }
+    if (target.id === 'wizard-source') {
+      state.wizard.source = target.value;
+    }
+  });
+
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape') {
+      if (state.modal) { closeModal(); return; }
+      if (state.detailOpen) { state.detailOpen = false; render(); return; }
+    }
+    if (event.target.matches('input, textarea, select, [contenteditable="true"]')) return;
+    if (event.key === 'Enter' && event.target.matches('[role="button"][data-action]')) {
+      event.target.click();
+      return;
+    }
+    if (event.key === 'ArrowLeft') { event.preventDefault(); cycleVariant(-1); return; }
+    if (event.key === 'ArrowRight') { event.preventDefault(); cycleVariant(1); }
+  });
+
+  (function init() {
+    const params = new URLSearchParams(window.location.search);
+    const rawVariant = params.get('variant');
+    const variantMap = { A: 'three', B: 'drawer', C: 'cards', three: 'three', drawer: 'drawer', cards: 'cards' };
+    state.variant = variantMap[rawVariant] || 'three';
+    const rawScenario = params.get('scenario');
+    state.scenario = ['normal', 'empty', 'cli-missing'].includes(rawScenario) ? rawScenario : 'normal';
+    state.selectedId = SKILLS[0] ? SKILLS[0].id : null;
+    ensureSelection();
+    render();
+  })();
+</script>
+</body>
+</html>
