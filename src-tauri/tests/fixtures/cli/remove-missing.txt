@@ -1,0 +1,5 @@
+[?25l│
+◇  Found 0 unique installed skill(s)
+[?25h│
+└  [33mNo skills found to remove.[39m
+

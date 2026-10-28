@@ -1,0 +1,10 @@
+[?25l│
+◇  Found 1 unique installed skill(s)
+[?25h[?25l│
+◇  Removal process complete
+[?25h│
+◆  [32mSuccessfully removed 1 skill(s)[39m
+
+│
+└  [32mDone![39m
+
