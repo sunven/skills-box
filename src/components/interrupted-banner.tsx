@@ -40,47 +40,37 @@ export function InterruptedBanner({
     <div
       role="alert"
       data-testid="interrupted-banner"
-      className="mx-1 mt-1 rounded-lg border border-warning/40 bg-warning-soft px-3 py-2 text-[11px] leading-relaxed text-warning"
+      className="border-b border-warning/30 bg-warning-soft px-6 py-3 text-warning"
     >
-      <div className="flex items-start gap-2">
+      <div className="flex items-start gap-3">
         <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
         <div className="min-w-0 flex-1">
-          <p className="text-xs font-semibold">检测到上次变更被中断</p>
+          <p className="text-[13px] font-semibold">检测到上次变更被中断</p>
           {report.markerCorrupt ? (
-            <p className="mt-0.5">
+            <p className="mt-0.5 text-[12.5px] leading-relaxed">
               中断记录无法解析（{report.markerError ?? "未知错误"}）。请手动检查
               lock、canonical 与 agent 挂载。
             </p>
           ) : (
-            <p className="mt-0.5">
+            <p className="mt-0.5 text-[12.5px] leading-relaxed">
               {kind} · {report.skills.join("、") || "—"} · 已保留快照{" "}
               {report.snapshotsPresent.length} 个
               {missing > 0 ? `，缺失 ${missing} 个` : ""}
             </p>
           )}
-          <p className="mt-0.5">
+          <p className="mt-0.5 text-[12.5px] leading-relaxed">
             {LOCK_LABELS[report.lock.status]}
             {report.lock.version ? `（v${report.lock.version}）` : ""}
             {missing > 0
               ? " · 记录的备份路径已不存在，请检查 app 数据目录。"
               : " · 应用不会自动回滚，请按需从备份恢复。"}
           </p>
-          <div className="mt-1.5 flex flex-wrap gap-1.5">
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 text-[10.5px]"
-              onClick={onRevealBackups}
-            >
-              <ArchiveRestore className="size-3.5" aria-hidden="true" />
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" onClick={onRevealBackups}>
+              <ArchiveRestore aria-hidden="true" />
               打开备份目录
             </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 text-[10.5px]"
-              onClick={onDismiss}
-            >
+            <Button variant="ghost" size="sm" onClick={onDismiss}>
               知道了
             </Button>
           </div>

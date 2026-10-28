@@ -15,23 +15,24 @@ export function AnomalyBanner({ anomalies, onOpen }: AnomalyBannerProps) {
     <button
       type="button"
       onClick={onOpen}
-      className="mx-1 mt-1 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning-soft px-2.5 py-2 text-left text-[11px] leading-snug text-warning transition-colors hover:border-warning/50"
+      className="anomaly-strip"
+      aria-label={`只读提示：异常 ${anomalies.total}`}
     >
-      <span className="mt-0.5 grid size-4 shrink-0 place-items-center rounded-full border border-warning/40 text-[10px] font-bold">
-        !
-      </span>
+      <AlertTriangle
+        className="size-3.5 shrink-0 self-start"
+        aria-hidden="true"
+      />
       <span className="min-w-0 flex-1">
-        <strong className="block text-xs">异常 {anomalies.total}</strong>
+        <strong className="font-medium">异常 {anomalies.total}</strong>
         <span className="text-warning/90">
-          {anomalies.stale.count} 条 stale lock · {anomalies.unmanaged.count}{" "}
+          {" "}
+          · {anomalies.stale.count} 条 stale lock · {anomalies.unmanaged.count}{" "}
           个未受管 · {anomalies.broken.count} 个断链 ·{" "}
           {anomalies.modified.count} 个本地改动 · {anomalies.pathMissing.count}{" "}
           个源路径缺失 · {anomalies.checkFailed.count} 个检查失败
         </span>
       </span>
-      <span className="shrink-0 pt-3 text-[10.5px] underline underline-offset-2">
-        查看只读提示
-      </span>
+      <span className="link">查看只读提示</span>
     </button>
   );
 }
@@ -95,26 +96,26 @@ function CategoryCard({
   group: AnomalyGroup;
 }) {
   return (
-    <section className="rounded-lg border border-border bg-muted/40 p-2.5">
+    <section className="panel-well">
       <div className="flex items-baseline gap-2">
-        <strong className="text-lg leading-none text-warning">
+        <strong className="num text-xl font-semibold leading-none">
           {group.count}
         </strong>
-        <span className="text-[11.5px] font-semibold">{label}</span>
+        <span className="text-[12.5px] font-medium">{label}</span>
       </div>
-      <p className="mt-1 text-[10.5px] leading-relaxed text-muted-foreground">
+      <p className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground">
         {description}
       </p>
       {group.examples.length > 0 ? (
-        <ul className="mt-1.5 space-y-0.5 text-[10.5px] text-muted-foreground">
+        <ul className="mt-1.5 space-y-0.5 text-[12px] text-muted-foreground">
           {group.examples.map((example) => (
-            <li key={example} className="truncate font-mono">
+            <li key={example} className="mono truncate">
               {example}
             </li>
           ))}
         </ul>
       ) : (
-        <p className="mt-1.5 text-[10.5px] text-muted-foreground/60">—</p>
+        <p className="mt-1.5 text-[12px] text-muted-foreground">—</p>
       )}
     </section>
   );
@@ -137,7 +138,7 @@ export function AnomalyDialog({ anomalies, open, onClose }: AnomalyDialogProps) 
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-6"
+      className="modal-overlay"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onCloseRef.current();
       }}
@@ -147,51 +148,49 @@ export function AnomalyDialog({ anomalies, open, onClose }: AnomalyDialogProps) 
         role="dialog"
         aria-modal="true"
         aria-labelledby="anomaly-title"
-        className="w-full max-w-lg rounded-xl border border-border bg-card p-4 shadow-xl"
+        className="modal-panel max-w-xl"
       >
-        <div className="flex items-start justify-between gap-3">
+        <div className="modal-head">
           <div>
-            <h2
-              id="anomaly-title"
-              className="flex items-center gap-2 text-sm font-semibold"
-            >
+            <h2 id="anomaly-title" className="modal-title">
               <AlertTriangle
                 className="size-4 text-warning"
                 aria-hidden="true"
               />
               异常与只读提示
             </h2>
-            <p className="mt-1 text-[11px] text-muted-foreground">
-              v1 只展示异常，不提供一键修复。所有操作都不会使用 remove
-              --all。
+            <p className="modal-sub">
+              v1 只展示异常，不提供一键修复。所有操作都不会使用 remove --all。
             </p>
           </div>
           <Button
             ref={closeRef}
             variant="ghost"
-            size="sm"
+            size="icon"
             aria-label="关闭异常提示"
             onClick={onClose}
-            className="size-7 shrink-0 p-0"
+            className="size-7 shrink-0"
           >
             <X className="size-4" aria-hidden="true" />
           </Button>
         </div>
 
-        <div className="mt-3 grid grid-cols-2 gap-2">
-          {CATEGORIES.map((category) => (
-            <CategoryCard
-              key={category.key}
-              label={category.label}
-              description={category.description}
-              group={anomalies[category.key]}
-            />
-          ))}
-        </div>
+        <div className="modal-body">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {CATEGORIES.map((category) => (
+              <CategoryCard
+                key={category.key}
+                label={category.label}
+                description={category.description}
+                group={anomalies[category.key]}
+              />
+            ))}
+          </div>
 
-        <p className="mt-3 rounded-md border border-border bg-muted/50 px-2.5 py-1.5 text-[10.5px] text-muted-foreground">
-          建议：操作前备份 ~/.agents/.skill-lock.json；逐名操作，不使用批量删除。
-        </p>
+          <p className="mt-3 rounded-md bg-raised px-3 py-2 text-[12px] text-muted-foreground">
+            建议：操作前备份 ~/.agents/.skill-lock.json；逐名操作，不使用批量删除。
+          </p>
+        </div>
       </div>
     </div>
   );

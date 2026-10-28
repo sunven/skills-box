@@ -53,6 +53,7 @@ interface SkillMarkdownProps {
 export function SkillMarkdown({ content, onOpenUrl }: SkillMarkdownProps) {
   const open = onOpenUrl ?? ((url: string) => void openExternalUrl(url));
   const components: Components = {
+    h1: ({ children }) => <h2>{children}</h2>,
     a: ({ href, children }) => (
       <SafeLink href={href} onOpen={open}>
         {children}
@@ -62,7 +63,7 @@ export function SkillMarkdown({ content, onOpenUrl }: SkillMarkdownProps) {
       const url = typeof src === "string" ? src : "";
       const label = alt?.trim() || "未命名图片";
       return (
-        <span className="my-1 inline-flex flex-wrap items-center gap-1 rounded border border-border bg-muted/50 px-1.5 py-0.5 text-[11px] text-muted-foreground">
+        <span className="my-1 inline-flex flex-wrap items-center gap-1 rounded-sm border border-border bg-raised px-1.5 py-0.5 text-[12px] text-muted-foreground">
           <span>图片：{label}</span>
           {isHttpsUrl(url) ? (
             <SafeLink href={url} onOpen={open}>

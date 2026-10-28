@@ -1,10 +1,26 @@
 import { useEffect, useMemo, useState } from "react";
+
+function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(() =>
+    typeof window.matchMedia === "function"
+      ? window.matchMedia(query).matches
+      : false,
+  );
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const list = window.matchMedia(query);
+    const update = () => setMatches(list.matches);
+    update();
+    list.addEventListener("change", update);
+    return () => list.removeEventListener("change", update);
+  }, [query]);
+  return matches;
+}
 import { useQueryClient } from "@tanstack/react-query";
 import { AnomalyDialog } from "./components/anomaly-panel";
 import { AppHeader } from "./components/app-header";
 import { DetailPane } from "./components/detail-pane";
 import { EnvironmentBanner } from "./components/environment-banner";
-import { EnvironmentMetrics } from "./components/environment-metrics";
 import { ExitDialog } from "./components/exit-dialog";
 import { FilterSidebar } from "./components/filter-sidebar";
 import { InstallWizard } from "./components/install-wizard";
@@ -72,6 +88,9 @@ function App() {
   const [status, setStatus] = useState<StatusFilter>("all");
   const [sort, setSort] = useState<SortKey>("recent");
   const [selectedName, setSelectedName] = useState<string | null>(null);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const isPhone = useMediaQuery("(max-width: 860px)");
   const [anomaliesOpen, setAnomaliesOpen] = useState(false);
   const [installOpen, setInstallOpen] = useState(false);
   const [updateMode, setUpdateMode] = useState<"single" | "all" | null>(null);
@@ -121,7 +140,9 @@ function App() {
   useEffect(() => {
     if (selectedName === null) return;
     if (!visibleSkills.some((skill) => skill.name === selectedName)) {
-      setSelectedName(visibleSkills[0]?.name ?? null);
+      const fallback = visibleSkills[0]?.name ?? null;
+      setSelectedName(fallback);
+      if (fallback === null) setDetailOpen(false);
     }
   }, [visibleSkills, selectedName]);
 
@@ -206,15 +227,33 @@ function App() {
     setStatus(defaults.status);
   };
 
+  const handleSelectSkill = (name: string) => {
+    setSelectedName(name);
+    setDetailOpen(true);
+  };
+
+  const handleSourceChange = (value: string) => {
+    setSource(value);
+    setFiltersOpen(false);
+  };
+
+  const handleAgentChange = (value: string) => {
+    setAgent(value);
+    setFiltersOpen(false);
+  };
+
+  const handleStatusChange = (value: StatusFilter) => {
+    setStatus(value);
+    setFiltersOpen(false);
+  };
+
   return (
-    <div className="flex h-screen min-w-[1080px] flex-col overflow-hidden bg-background text-foreground">
+    <div className="app-shell text-foreground">
       <AppHeader
         report={report}
         isLoading={environment.isPending}
         isError={environment.isError}
         mutationsEnabled={mutationsEnabled}
-        rechecking={recheck.isPending}
-        onRecheck={handleRecheck}
         onInstall={() => setInstallOpen(true)}
         updateReport={updateData}
         updateError={updateError}
@@ -226,6 +265,8 @@ function App() {
           setUpdateMode("all");
         }}
         updateCandidateCount={updateSummary.candidates.length}
+        filtersOpen={filtersOpen}
+        onToggleFilters={() => setFiltersOpen((open) => !open)}
       />
       <InterruptedBanner
         report={report?.interrupted ?? null}
@@ -240,7 +281,6 @@ function App() {
         />
       ) : (
         <>
-          <EnvironmentMetrics report={report} />
           <EnvironmentBanner
             report={report}
             isLoading={environment.isPending}
@@ -248,22 +288,38 @@ function App() {
             rechecking={recheck.isPending}
             onRecheck={handleRecheck}
           />
-          <main className="grid min-h-0 flex-1 grid-cols-[220px_minmax(0,1fr)_340px]">
-            <FilterSidebar
-              sources={sourceOptions}
-              agents={agentOptions}
-              statusCounts={statusCounts}
-              activeSource={source}
-              activeAgent={agent}
-              activeStatus={status}
-              onSourceChange={setSource}
-              onAgentChange={setAgent}
-              onStatusChange={setStatus}
-            />
+          <main
+            className="app-body"
+            data-detail={detailOpen ? "true" : "false"}
+          >
+            <div
+              className="rail-wrap"
+              data-open={filtersOpen ? "true" : "false"}
+            >
+              <FilterSidebar
+                sources={sourceOptions}
+                agents={agentOptions}
+                statusCounts={statusCounts}
+                activeSource={source}
+                activeAgent={agent}
+                activeStatus={status}
+                onSourceChange={handleSourceChange}
+                onAgentChange={handleAgentChange}
+                onStatusChange={handleStatusChange}
+                report={report}
+                envLoading={environment.isPending}
+                envError={environment.isError}
+                rechecking={recheck.isPending}
+                onRecheck={handleRecheck}
+                onClose={() => setFiltersOpen(false)}
+              />
+            </div>
             <SkillListPane
               totalSkills={skills.length}
               visibleSkills={visibleSkills}
               anomalies={anomalies}
+              sourceCount={sourceOptions.length}
+              candidateCount={updateSummary.candidates.length}
               query={query}
               sort={sort}
               selectedName={selectedSkill?.name ?? null}
@@ -271,16 +327,19 @@ function App() {
               error={inventoryQuery.error}
               onQueryChange={setQuery}
               onSortChange={setSort}
-              onSelect={setSelectedName}
+              onSelect={handleSelectSkill}
               onClearFilters={handleClearFilters}
               onOpenAnomalies={() => setAnomaliesOpen(true)}
               onRetry={handleRetryInventory}
+              titleIsPrimary={!(isPhone && detailOpen)}
             />
             <DetailPane
               skill={selectedSkill}
               updateResult={selectedSkill?.updateResult}
               checkingUpdates={checkUpdates.isPending}
               onCheckUpdates={handleCheckUpdates}
+              onBack={() => setDetailOpen(false)}
+              titleIsPrimary={isPhone && detailOpen}
               onUpdate={(name) => {
                 setUpdateSkillName(name);
                 setUpdateMode("single");
@@ -291,6 +350,13 @@ function App() {
               }}
             />
           </main>
+          {filtersOpen ? (
+            <div
+              className="rail-scrim"
+              onClick={() => setFiltersOpen(false)}
+              aria-hidden="true"
+            />
+          ) : null}
         </>
       )}
       <AnomalyDialog

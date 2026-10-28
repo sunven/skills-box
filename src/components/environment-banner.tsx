@@ -40,7 +40,7 @@ export function EnvironmentBanner({
     return (
       <div
         role="status"
-        className="flex items-center gap-2 border-b border-border bg-card/60 px-5 py-2 text-xs text-muted-foreground"
+        className="flex items-center gap-2 border-b border-border bg-background px-6 py-2 text-[12.5px] text-muted-foreground"
       >
         <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
         正在检测运行环境…
@@ -52,7 +52,7 @@ export function EnvironmentBanner({
     return (
       <div
         role="alert"
-        className="border-b border-destructive/20 bg-destructive/5 px-5 py-3"
+        className="border-b border-destructive/25 bg-destructive-soft px-6 py-3"
       >
         <div className="flex items-start gap-3">
           <AlertTriangle
@@ -60,11 +60,13 @@ export function EnvironmentBanner({
             aria-hidden="true"
           />
           <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium text-destructive">环境检测失败</p>
-            <p className="mt-0.5 break-words text-xs text-destructive/80">
+            <p className="text-[13px] font-medium text-destructive">
+              环境检测失败
+            </p>
+            <p className="mt-0.5 break-words text-[12.5px] text-destructive/90">
               {errorText(error)}
             </p>
-            <p className="mt-1 text-xs text-destructive/70">
+            <p className="mt-1 text-[12.5px] text-destructive/80">
               只读界面仍可使用。请确认后端命令可用，然后重新检测。
             </p>
           </div>
@@ -93,7 +95,7 @@ export function EnvironmentBanner({
   return (
     <div
       role="alert"
-      className="border-b border-destructive/20 bg-destructive/5 px-5 py-3"
+      className="border-b border-destructive/25 bg-destructive-soft px-6 py-3"
     >
       <div className="flex items-start gap-3">
         <AlertTriangle
@@ -101,23 +103,26 @@ export function EnvironmentBanner({
           aria-hidden="true"
         />
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-medium text-destructive">
+          <p className="text-[13px] font-medium text-destructive">
             {onlyLockIssues
               ? "Skill lock 异常，变更入口已禁用"
               : "运行环境不完整，变更入口已禁用"}
           </p>
-          <ul className="mt-1 space-y-1.5">
+          <ul className="mt-1 space-y-1">
             {issues.map((issue, index) => (
-              <li key={`${issue.code}-${index}`} className="text-xs text-destructive/90">
+              <li
+                key={`${issue.code}-${index}`}
+                className="text-[12.5px] text-destructive/90"
+              >
                 <span className="font-medium">{issue.message}</span>
                 {issue.detail ? (
-                  <span className="break-words text-destructive/70">
+                  <span className="break-words text-destructive/80">
                     {" "}
                     · {issue.detail}
                   </span>
                 ) : null}
                 {issue.hint ? (
-                  <span className="block text-destructive/70">{issue.hint}</span>
+                  <span className="block text-destructive/80">{issue.hint}</span>
                 ) : null}
               </li>
             ))}

@@ -1,11 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import {
-  AlertTriangle,
-  CheckCircle2,
-  Trash2,
-  X,
-} from "lucide-react";
+import { AlertTriangle, CheckCircle2, Trash2, X } from "lucide-react";
 import { Button } from "./ui/button";
 import { TaskProgress } from "./install-wizard";
 import { useModalFocus } from "../hooks/use-modal-focus";
@@ -132,7 +127,7 @@ export function UninstallDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-6"
+      className="modal-overlay"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget && !running) {
           onCloseRef.current();
@@ -145,70 +140,65 @@ export function UninstallDialog({
         aria-modal="true"
         aria-labelledby="uninstall-dialog-title"
         data-testid="uninstall-dialog"
-        className="flex max-h-[86vh] w-full max-w-xl flex-col rounded-xl border border-border bg-card p-4 shadow-xl"
+        className="modal-panel max-w-xl"
       >
-        <div className="flex items-start justify-between gap-3">
+        <div className="modal-head">
           <div>
-            <h2
-              id="uninstall-dialog-title"
-              className="flex items-center gap-2 text-sm font-semibold"
-            >
+            <h2 id="uninstall-dialog-title" className="modal-title">
               <Trash2 className="size-4 text-destructive" aria-hidden="true" />
               彻底卸载 · {skill.name}
             </h2>
-            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+            <p className="modal-sub">
               先备份，再执行 skills remove -g -s；CLI 退出后会逐项校验。
             </p>
           </div>
           <Button
             ref={closeRef}
             variant="ghost"
-            size="sm"
+            size="icon"
             aria-label="关闭卸载"
             disabled={closeDisabled}
             title={closeDisabled ? "卸载进行中，CLI 启动前可取消" : undefined}
             onClick={onClose}
-            className="size-7 shrink-0 p-0"
+            className="size-7 shrink-0"
           >
             <X className="size-4" aria-hidden="true" />
           </Button>
         </div>
 
-        <div className="mt-3 min-h-0 flex-1 overflow-y-auto">
+        <div className="modal-body">
           {showInitial ? (
             <>
               <div
                 data-testid="uninstall-scope"
-                className="rounded-lg border border-destructive/25 bg-red-50/60 p-3 text-xs"
+                className="rounded-md border border-destructive/25 bg-destructive-soft p-3.5"
               >
-                <p className="flex items-center gap-1.5 font-medium text-destructive">
+                <p className="flex items-center gap-1.5 text-[13px] font-medium text-destructive">
                   <AlertTriangle className="size-3.5" aria-hidden="true" />
                   将永久删除以下内容
                 </p>
-                <dl className="mt-2 space-y-1.5">
+                <dl className="mt-2.5 space-y-2 text-[12.5px]">
                   <div>
-                    <dt className="text-[10.5px] font-medium text-muted-foreground">
+                    <dt className="text-[12px] text-muted-foreground">
                       canonical
                     </dt>
-                    <dd className="break-all font-mono text-[10.5px]">
-                      {canonicalLabel}
-                    </dd>
+                    <dd className="mono break-all">{canonicalLabel}</dd>
                   </div>
                   <div>
-                    <dt className="text-[10.5px] font-medium text-muted-foreground">
+                    <dt className="text-[12px] text-muted-foreground">
                       agent 挂载（{attachments.length} 个）
                     </dt>
                     {attachments.length === 0 ? (
-                      <dd className="text-[10.5px] text-muted-foreground">
+                      <dd className="text-muted-foreground">
                         未挂载任何 agent。
                       </dd>
                     ) : (
                       <dd>
-                        <ul className="mt-0.5 space-y-0.5">
+                        <ul className="mt-0.5 space-y-1">
                           {attachments.map((attachment) => (
                             <li
                               key={`${attachment.agentId}:${attachment.path}`}
-                              className="break-all text-[10.5px]"
+                              className="break-all"
                             >
                               <span className="font-medium">
                                 {attachment.agentName}
@@ -216,7 +206,7 @@ export function UninstallDialog({
                               <span className="ml-1 text-muted-foreground">
                                 {ATTACHMENT_LABELS[attachment.mode]}
                               </span>
-                              <span className="ml-1 font-mono text-muted-foreground/80">
+                              <span className="mono ml-1 text-muted-foreground">
                                 {attachment.path}
                               </span>
                             </li>
@@ -226,42 +216,39 @@ export function UninstallDialog({
                     )}
                   </div>
                   <div>
-                    <dt className="text-[10.5px] font-medium text-muted-foreground">
+                    <dt className="text-[12px] text-muted-foreground">
                       lock 条目
                     </dt>
-                    <dd className="break-all font-mono text-[10.5px]">
-                      lock 条目：{skill.name}
-                    </dd>
+                    <dd className="mono break-all">lock 条目：{skill.name}</dd>
                   </div>
                   <div>
-                    <dt className="text-[10.5px] font-medium text-muted-foreground">
+                    <dt className="text-[12px] text-muted-foreground">
                       本地基线
                     </dt>
-                    <dd className="text-[10.5px]">
-                      本地基线指纹（baseline）
-                    </dd>
+                    <dd>本地基线指纹（baseline）</dd>
                   </div>
                 </dl>
               </div>
 
               <div
                 data-testid="uninstall-danger"
-                className="mt-3 flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-[11px] text-destructive"
+                className="notice mt-3"
+                data-tone="negative"
               >
                 <AlertTriangle
-                  className="mt-0.5 size-3.5 shrink-0"
+                  className="mt-0.5 size-4 shrink-0"
                   aria-hidden="true"
                 />
                 <div>
                   <p className="font-medium">此操作不可撤销</p>
-                  <p className="mt-0.5 opacity-90">
+                  <p className="mt-0.5">
                     卸载前会创建 lock、canonical、copy 挂载与 manifest
                     的备份；但应用不会自动回滚，也不提供「仅卸载、保留目录」。
                   </p>
                 </div>
               </div>
 
-              <label className="mt-3 flex cursor-pointer items-start gap-2 rounded-lg border border-border px-3 py-2 text-[11px]">
+              <label className="mt-3 flex cursor-pointer items-start gap-2 rounded-md border border-border px-3 py-2.5 text-[12.5px] leading-relaxed">
                 <input
                   type="checkbox"
                   className="mt-0.5"
@@ -289,7 +276,7 @@ export function UninstallDialog({
                 cancelLabel="取消卸载"
                 onCancel={() => void handleCancelTask()}
               />
-              <p className="mt-2 rounded-md border border-border bg-muted/50 px-2.5 py-1.5 text-[11px] text-muted-foreground">
+              <p className="mt-2 text-[12px] text-muted-foreground">
                 备份完成后、CLI 启动前可取消；CLI 启动后不可取消。
               </p>
             </>
@@ -299,19 +286,18 @@ export function UninstallDialog({
             <div
               role="alert"
               data-testid="uninstall-start-error"
-              className="mt-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive"
+              className="notice mt-3"
+              data-tone="negative"
             >
-              <p className="font-medium">{startError.message}</p>
-              {startError.detail ? (
-                <p className="mt-0.5 line-clamp-4 text-[10.5px] opacity-80">
-                  {startError.detail}
-                </p>
-              ) : null}
-              {startError.hint ? (
-                <p className="mt-0.5 text-[10.5px] opacity-80">
-                  {startError.hint}
-                </p>
-              ) : null}
+              <div>
+                <p className="font-medium">{startError.message}</p>
+                {startError.detail ? (
+                  <p className="mt-0.5">{startError.detail}</p>
+                ) : null}
+                {startError.hint ? (
+                  <p className="mt-0.5">{startError.hint}</p>
+                ) : null}
+              </div>
             </div>
           ) : null}
 
@@ -319,19 +305,16 @@ export function UninstallDialog({
             <div
               role="alert"
               data-testid="uninstall-error"
-              className="mt-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive"
+              className="notice mt-3"
+              data-tone="negative"
             >
-              <p className="font-medium">{taskError.message}</p>
-              {taskError.detail ? (
-                <p className="mt-0.5 line-clamp-4 text-[10.5px] opacity-70">
-                  {taskError.detail}
-                </p>
-              ) : null}
-              {taskError.hint ? (
-                <p className="mt-0.5 text-[10.5px] opacity-80">
-                  {taskError.hint}
-                </p>
-              ) : null}
+              <div>
+                <p className="font-medium">{taskError.message}</p>
+                {taskError.detail ? (
+                  <p className="mt-0.5">{taskError.detail}</p>
+                ) : null}
+                {taskError.hint ? <p className="mt-0.5">{taskError.hint}</p> : null}
+              </div>
             </div>
           ) : null}
 
@@ -347,41 +330,41 @@ export function UninstallDialog({
                   ) : null}
                   {taskOverallHeading("uninstall", result.overall)}
                 </h3>
-                <span className="text-[11px] text-muted-foreground">
+                <span className="text-[12px] text-muted-foreground">
                   {message}
                 </span>
               </div>
-              <p className="mt-1 text-[10.5px] text-muted-foreground">
+              <p className="mt-1 text-[12px] text-muted-foreground">
                 不自动回滚；备份与日志保留在应用数据目录。
               </p>
 
-              <ul className="mt-2 space-y-1.5">
+              <ul className="mt-2.5 space-y-2">
                 {result.skills.map((skillResult) => (
                   <li
                     key={skillResult.name}
                     data-testid="uninstall-skill-result"
                     data-skill-name={skillResult.name}
                     data-skill-status={skillResult.status}
-                    className="rounded-lg border border-border px-3 py-2"
+                    className="rounded-md border border-border px-3 py-2.5"
                   >
                     <div className="flex items-center gap-2">
-                      <span className="text-xs font-medium">
+                      <span className="text-[13px] font-medium">
                         {skillResult.name}
                       </span>
                       <span
                         className={
                           skillResult.status === "removed"
-                            ? "rounded border border-success/30 bg-success-soft px-1.5 py-0.5 text-[10px] text-success"
+                            ? "ml-auto rounded-sm bg-success-soft px-1.5 py-0.5 text-[11.5px] font-medium text-success"
                             : skillResult.status === "failed"
-                              ? "rounded border border-destructive/30 bg-destructive/5 px-1.5 py-0.5 text-[10px] text-destructive"
-                              : "rounded border border-warning/30 bg-warning-soft px-1.5 py-0.5 text-[10px] text-warning"
+                              ? "ml-auto rounded-sm bg-destructive-soft px-1.5 py-0.5 text-[11.5px] font-medium text-destructive"
+                              : "ml-auto rounded-sm bg-warning-soft px-1.5 py-0.5 text-[11.5px] font-medium text-warning"
                         }
                       >
                         {TASK_SKILL_STATUS_LABELS[skillResult.status]}
                       </span>
                     </div>
                     {skillResult.error ? (
-                      <p className="mt-1 text-[10.5px] leading-relaxed text-muted-foreground">
+                      <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">
                         {skillResult.error.message}
                         {skillResult.error.detail
                           ? ` · ${skillResult.error.detail}`
@@ -389,7 +372,7 @@ export function UninstallDialog({
                       </p>
                     ) : null}
                     {skillResult.backupPath ? (
-                      <p className="mt-1 font-mono text-[9.5px] text-muted-foreground/80">
+                      <p className="mono mt-1 text-muted-foreground">
                         备份：{skillResult.backupPath}
                       </p>
                     ) : null}
@@ -398,7 +381,7 @@ export function UninstallDialog({
               </ul>
 
               {result.warnings.length > 0 ? (
-                <ul className="mt-2 space-y-1 rounded-lg border border-warning/30 bg-warning-soft px-3 py-2 text-[10.5px] text-warning">
+                <ul className="notice mt-2 list-disc pl-8" data-tone="warning">
                   {result.warnings.map((warning) => (
                     <li key={`${warning.code}-${warning.message}`}>
                       {warning.message}
@@ -408,11 +391,11 @@ export function UninstallDialog({
                 </ul>
               ) : null}
 
-              <div className="mt-2 space-y-0.5">
+              <div className="mt-2.5 space-y-1">
                 {result.backupPath ? (
                   <p
                     data-testid="uninstall-backup-path"
-                    className="break-all font-mono text-[10px] text-muted-foreground"
+                    className="mono break-all text-muted-foreground"
                   >
                     备份：{result.backupPath}
                   </p>
@@ -420,13 +403,13 @@ export function UninstallDialog({
                 {result.logPath ? (
                   <p
                     data-testid="uninstall-log-path"
-                    className="break-all font-mono text-[10px] text-muted-foreground"
+                    className="mono break-all text-muted-foreground"
                   >
                     日志：{result.logPath}
                   </p>
                 ) : null}
               </div>
-              <div className="mt-2 flex flex-wrap gap-1.5">
+              <div className="mt-2.5 flex flex-wrap gap-1.5">
                 <Button
                   variant="outline"
                   size="sm"
@@ -443,7 +426,7 @@ export function UninstallDialog({
                 </Button>
               </div>
               {revealError ? (
-                <p className="mt-1 text-[10.5px] text-destructive">
+                <p className="mt-1.5 text-[12px] text-destructive">
                   {revealError}
                 </p>
               ) : null}
@@ -451,8 +434,8 @@ export function UninstallDialog({
           ) : null}
         </div>
 
-        <div className="mt-3 flex items-center justify-between gap-2 border-t border-border pt-3">
-          <div className="text-[10.5px] text-muted-foreground">
+        <div className="modal-foot">
+          <div className="modal-foot-note">
             {running
               ? "卸载进行中；CLI 启动后不可取消"
               : "危险操作 · 自动备份 · 不自动回滚"}

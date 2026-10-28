@@ -53,7 +53,8 @@ export function ExitDialog({
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-6"
+      className="modal-overlay"
+      style={{ zIndex: 60 }}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget && !pending) onCancel();
       }}
@@ -64,75 +65,71 @@ export function ExitDialog({
         aria-modal="true"
         aria-labelledby="exit-dialog-title"
         data-testid="exit-dialog"
-        className="w-full max-w-lg rounded-xl border border-destructive/30 bg-card p-4 shadow-xl"
+        className="modal-panel max-w-lg"
       >
-        <div className="flex items-start justify-between gap-3">
+        <div className="modal-head">
           <div>
-            <h2
-              id="exit-dialog-title"
-              className="flex items-center gap-2 text-sm font-semibold text-destructive"
-            >
+            <h2 id="exit-dialog-title" className="modal-title text-destructive">
               <LogOut className="size-4" aria-hidden="true" />
               退出 Skills Box？
             </h2>
-            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+            <p className="modal-sub">
               {title}。退出会立即终止 skills CLI 的整个进程组。
             </p>
           </div>
           <Button
             ref={closeRef}
             variant="ghost"
-            size="sm"
+            size="icon"
             aria-label="关闭退出确认"
             disabled={pending}
             onClick={onCancel}
-            className="size-7 shrink-0 p-0"
+            className="size-7 shrink-0"
           >
             <X className="size-4" aria-hidden="true" />
           </Button>
         </div>
 
-        <div className="mt-3 flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-[11px] text-destructive">
-          <AlertTriangle
-            className="mt-0.5 size-3.5 shrink-0"
-            aria-hidden="true"
-          />
-          <div>
-            <p className="font-medium">写入可能只完成一部分</p>
-            <p className="mt-0.5 opacity-90">
-              应用不会自动回滚；已创建的 lock
-              快照会保留。下次启动会显示中断警告并校验 lock
-              与快照，请根据备份手动确认 skill 状态。
-            </p>
+        <div className="modal-body">
+          <div className="notice" data-tone="negative">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+            <div>
+              <p className="font-medium">写入可能只完成一部分</p>
+              <p className="mt-0.5">
+                应用不会自动回滚；已创建的 lock
+                快照会保留。下次启动会显示中断警告并校验 lock
+                与快照，请根据备份手动确认 skill 状态。
+              </p>
+            </div>
           </div>
+
+          {info ? (
+            <div
+              data-testid="exit-active-task"
+              className="panel-well mt-3 text-[12.5px]"
+            >
+              <p>
+                <span className="text-muted-foreground">任务：</span>
+                <strong>{KIND_LABELS[info.kind]}</strong>
+              </p>
+              <p className="mt-1 break-all">
+                <span className="text-muted-foreground">Skill：</span>
+                {info.skills.join("、") || "—"}
+              </p>
+              <p className="mono mt-1 break-all">
+                快照：{info.snapshotPaths.join("、") || "尚未创建"}
+              </p>
+            </div>
+          ) : null}
+
+          {error ? (
+            <p role="alert" className="mt-3 text-[12.5px] text-destructive">
+              {error}
+            </p>
+          ) : null}
         </div>
 
-        {info ? (
-          <div
-            data-testid="exit-active-task"
-            className="mt-3 rounded-lg border border-border bg-muted/40 px-3 py-2 text-[11px]"
-          >
-            <p>
-              <span className="text-muted-foreground">任务：</span>
-              <strong>{KIND_LABELS[info.kind]}</strong>
-            </p>
-            <p className="mt-0.5 break-all">
-              <span className="text-muted-foreground">Skill：</span>
-              {info.skills.join("、") || "—"}
-            </p>
-            <p className="mt-0.5 break-all font-mono text-[10px] text-muted-foreground">
-              快照：{info.snapshotPaths.join("、") || "尚未创建"}
-            </p>
-          </div>
-        ) : null}
-
-        {error ? (
-          <p role="alert" className="mt-3 text-[11px] text-destructive">
-            {error}
-          </p>
-        ) : null}
-
-        <div className="mt-3 flex items-center justify-end gap-2 border-t border-border pt-3">
+        <div className="modal-foot justify-end">
           <Button
             ref={cancelRef}
             variant="ghost"

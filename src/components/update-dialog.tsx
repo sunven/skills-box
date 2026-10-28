@@ -263,7 +263,7 @@ export function UpdateDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-6"
+      className="modal-overlay"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget && !running) {
           onCloseRef.current();
@@ -277,18 +277,18 @@ export function UpdateDialog({
         aria-labelledby="update-dialog-title"
         data-testid="update-dialog"
         data-mode={mode}
-        className="flex max-h-[86vh] w-full max-w-2xl flex-col rounded-xl border border-border bg-card p-4 shadow-xl"
+        className="modal-panel max-w-2xl"
       >
-        <div className="flex items-start justify-between gap-3">
+        <div className="modal-head">
           <div>
-            <h2
-              id="update-dialog-title"
-              className="flex items-center gap-2 text-sm font-semibold"
-            >
-              <ArrowUpCircle className="size-4 text-primary" aria-hidden="true" />
+            <h2 id="update-dialog-title" className="modal-title">
+              <ArrowUpCircle
+                className="size-4 text-muted-foreground"
+                aria-hidden="true"
+              />
               {title}
             </h2>
-            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+            <p className="modal-sub">
               更新前强制备份；逐个 skill 调用 skills add，不调用 skills update /
               check。
             </p>
@@ -296,29 +296,29 @@ export function UpdateDialog({
           <Button
             ref={closeRef}
             variant="ghost"
-            size="sm"
+            size="icon"
             aria-label="关闭更新"
             disabled={closeDisabled}
             title={closeDisabled ? "更新进行中，可在 skill 之间取消" : undefined}
             onClick={onClose}
-            className="size-7 shrink-0 p-0"
+            className="size-7 shrink-0"
           >
             <X className="size-4" aria-hidden="true" />
           </Button>
         </div>
 
-        <div className="mt-3 min-h-0 flex-1 overflow-y-auto">
+        <div className="modal-body">
           {showInitial && mode === "single" ? (
             <div data-testid="update-single-confirm">
               {!singleSkill || !singleEligible ? (
-                <p className="rounded-md border border-warning/30 bg-warning-soft px-2.5 py-2 text-[11px] text-warning">
+                <div className="notice" data-tone="warning">
                   当前 skill 没有可执行的更新候选；请先检查更新，或先处理本地改动 /
                   仅副本 / 来源异常。
-                </p>
+                </div>
               ) : (
                 <>
-                  <div className="rounded-lg border border-border bg-muted/40 p-3 text-xs">
-                    <div className="flex justify-between gap-4 py-0.5">
+                  <div className="panel-well">
+                    <div className="kv-row">
                       <span className="text-muted-foreground">来源</span>
                       <strong className="font-mono">
                         {singleSkill.source ?? "来源未知"}
@@ -327,7 +327,7 @@ export function UpdateDialog({
                           : ""}
                       </strong>
                     </div>
-                    <div className="flex justify-between gap-4 py-0.5">
+                    <div className="kv-row">
                       <span className="text-muted-foreground">当前版本</span>
                       <strong
                         className="font-mono"
@@ -338,7 +338,7 @@ export function UpdateDialog({
                           : "—"}
                       </strong>
                     </div>
-                    <div className="flex justify-between gap-4 py-0.5">
+                    <div className="kv-row">
                       <span className="text-muted-foreground">目标版本</span>
                       <strong
                         className="font-mono"
@@ -349,7 +349,7 @@ export function UpdateDialog({
                           : "—"}
                       </strong>
                     </div>
-                    <div className="flex justify-between gap-4 py-0.5">
+                    <div className="kv-row">
                       <span className="text-muted-foreground">受影响 agent</span>
                       <strong>
                         {singleAffectedAgents.length > 0
@@ -357,7 +357,7 @@ export function UpdateDialog({
                           : "无（仅写入共享 canonical）"}
                       </strong>
                     </div>
-                    <div className="flex justify-between gap-4 py-0.5">
+                    <div className="kv-row">
                       <span className="text-muted-foreground">本地改动</span>
                       <strong>
                         {LOCAL_MODIFICATION_LABELS[singleSkill.localModification]}
@@ -368,7 +368,7 @@ export function UpdateDialog({
                   {singleSkill.localModification !== "clean" ? (
                     <div
                       data-testid="update-local-warning"
-                      className="mt-3 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning-soft px-3 py-2 text-[11px] text-warning"
+                      className="notice mt-3" data-tone="warning"
                     >
                       <AlertTriangle
                         className="mt-0.5 size-3.5 shrink-0"
@@ -378,7 +378,7 @@ export function UpdateDialog({
                         <p className="font-medium">
                           本地改动将被覆盖（需确认）
                         </p>
-                        <p className="mt-0.5 opacity-90">
+                        <p className="mt-0.5">
                           共享目录与基线不一致，或首次扫描无法确认。更新会覆盖这些修改；备份会保留更新前内容。
                         </p>
                       </div>
@@ -388,7 +388,7 @@ export function UpdateDialog({
                   {singleCopyAgents.length > 0 ? (
                     <div
                       data-testid="update-copy-warning"
-                      className="mt-3 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning-soft px-3 py-2 text-[11px] text-warning"
+                      className="notice mt-3" data-tone="warning"
                     >
                       <ShieldAlert
                         className="mt-0.5 size-3.5 shrink-0"
@@ -398,7 +398,7 @@ export function UpdateDialog({
                         <p className="font-medium">
                           copy 挂载将转为 symlink
                         </p>
-                        <p className="mt-0.5 opacity-90">
+                        <p className="mt-0.5">
                           {singleCopyAgents.join("、")} 当前是副本目录；更新前会先备份这些副本，更新后改为指向共享 canonical 的符号链接。其他已挂载 agent
                           会按当前物理挂载重建。
                         </p>
@@ -407,7 +407,7 @@ export function UpdateDialog({
                   ) : null}
 
                   {singleNeedsConfirmation ? (
-                    <label className="mt-3 flex cursor-pointer items-start gap-2 rounded-lg border border-border px-3 py-2 text-[11px]">
+                    <label className="mt-3 flex cursor-pointer items-start gap-2 rounded-md border border-border px-3 py-2.5 text-[12.5px] leading-relaxed">
                       <input
                         type="checkbox"
                         className="mt-0.5"
@@ -421,61 +421,53 @@ export function UpdateDialog({
                     </label>
                   ) : null}
 
-                  <p className="mt-3 flex items-start gap-2 rounded-md border border-border bg-muted/50 px-2.5 py-2 text-[10.5px] leading-relaxed text-muted-foreground">
+                  <div className="notice mt-3">
                     <HardDrive
                       className="mt-0.5 size-3.5 shrink-0"
                       aria-hidden="true"
                     />
                     更新执行：rebuilt skills add（当前物理挂载的非 universal agents +
                     universal）。已断开的 agent 不会被重挂；无挂载时仅 -a universal。
-                  </p>
+                  </div>
                 </>
               )}
             </div>
           ) : null}
 
           {showInitial && mode === "all" ? (
-            <div className="grid min-h-0 flex-1 grid-cols-2 gap-2">
+            <div className="grid gap-2 sm:grid-cols-2">
               <section
                 data-testid="update-candidates"
-                className="rounded-lg border border-border bg-muted/40 p-2.5"
+                className="panel-well"
               >
                 <div className="flex items-baseline gap-2">
-                  <strong className="text-lg leading-none text-success">
+                  <strong className="num text-xl font-semibold leading-none">
                     {summary.candidates.length}
                   </strong>
-                  <span className="text-[11.5px] font-semibold">更新候选</span>
+                  <span className="text-[12.5px] font-medium">更新候选</span>
                 </div>
-                <p className="mt-1 text-[10.5px] leading-relaxed text-muted-foreground">
+                <p className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground">
                   仅包含受管、本地干净且来源可更新的 skill；将串行执行。
                 </p>
                 {summary.candidates.length === 0 ? (
-                  <p className="mt-2 text-[10.5px] text-muted-foreground/70">
+                  <p className="mt-2 text-[12px] text-muted-foreground">
                     没有可直接更新的 skill。
                   </p>
                 ) : (
-                  <ul className="mt-2 space-y-1 text-[10.5px]">
+                  <ul className="mt-2 space-y-1 text-[12px]">
                     {summary.candidates.map((skill) => (
                       <li
                         key={skill.name}
                         data-testid="update-candidate"
                         data-skill-name={skill.name}
-                        className="rounded-md bg-card px-2 py-1"
+                        className="rounded-sm bg-card px-2 py-1.5"
                       >
                         <span className="font-medium">{skill.name}</span>
                         <span className="ml-1 text-muted-foreground">
                           {skill.source ?? "来源未知"}
                         </span>
-                        {skill.updateResult?.remoteHash ? (
-                          <span
-                            className="ml-1 font-mono text-[9.5px] text-muted-foreground/70"
-                            title={skill.updateResult.remoteHash}
-                          >
-                            {shortHash(skill.updateResult.remoteHash, 8)}
-                          </span>
-                        ) : null}
                         {copyAgents(skill, universalIds).length > 0 ? (
-                          <span className="ml-1 rounded border border-warning/40 bg-warning-soft px-1 py-0.5 text-[9.5px] text-warning">
+                          <span className="ml-1 rounded-sm bg-warning-soft px-1 py-0.5 text-[11px] font-medium text-warning">
                             copy → symlink
                           </span>
                         ) : null}
@@ -487,38 +479,40 @@ export function UpdateDialog({
 
               <section
                 data-testid="update-skipped"
-                className="rounded-lg border border-border bg-muted/40 p-2.5"
+                className="panel-well"
               >
                 <div className="flex items-baseline gap-2">
-                  <strong className="text-lg leading-none text-warning">
+                  <strong className="num text-xl font-semibold leading-none">
                     {summary.skipped.length}
                   </strong>
-                  <span className="text-[11.5px] font-semibold">跳过项</span>
+                  <span className="text-[12.5px] font-medium">跳过项</span>
                 </div>
-                <p className="mt-1 text-[10.5px] leading-relaxed text-muted-foreground">
+                <p className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground">
                   本地改动、未知、源路径缺失、检查失败与仅副本不会进入更新执行。
                 </p>
                 {summary.skipped.length === 0 ? (
-                  <p className="mt-2 text-[10.5px] text-muted-foreground/70">
+                  <p className="mt-2 text-[12px] text-muted-foreground">
                     没有被跳过的 skill。
                   </p>
                 ) : (
-                  <div className="mt-2 space-y-1.5">
+                  <div className="mt-2 space-y-2">
                     {REASON_ORDER.filter((reason) => grouped.has(reason)).map(
                       (reason) => {
                         const items = grouped.get(reason)!;
                         return (
                           <div key={reason}>
-                            <p className="text-[10px] font-semibold text-warning">
+                            <p className="text-[12px] font-medium text-warning">
                               {items[0]!.label} · {items.length}
                             </p>
-                            <ul className="mt-0.5 space-y-0.5 text-[10.5px] text-muted-foreground">
+                            <ul className="mt-0.5 space-y-0.5 text-[12px] text-muted-foreground">
                               {items.map((item) => (
                                 <li key={item.name} title={item.detail}>
-                                  <span className="font-medium text-foreground">
+                                  <span className="block font-medium text-foreground">
                                     {item.name}
                                   </span>
-                                  <span className="ml-1">{item.detail}</span>
+                                  <span className="block leading-relaxed">
+                                    {item.detail}
+                                  </span>
                                 </li>
                               ))}
                             </ul>
@@ -533,7 +527,7 @@ export function UpdateDialog({
               {copyCandidateCount > 0 ? (
                 <div
                   data-testid="update-copy-warning"
-                  className="col-span-2 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning-soft px-3 py-2 text-[11px] text-warning"
+                  className="notice sm:col-span-2" data-tone="warning"
                 >
                   <ShieldAlert
                     className="mt-0.5 size-3.5 shrink-0"
@@ -541,7 +535,7 @@ export function UpdateDialog({
                   />
                   <div>
                     <p className="font-medium">copy 挂载将转为 symlink</p>
-                    <p className="mt-0.5 opacity-90">
+                    <p className="mt-0.5">
                       有 {copyCandidateCount} 个候选带 copy 挂载；更新前会先备份副本目录，更新后改为指向共享 canonical 的符号链接。
                     </p>
                   </div>
@@ -562,7 +556,7 @@ export function UpdateDialog({
                 cancelLabel="取消更新"
                 onCancel={() => void handleCancelTask()}
               />
-              <p className="mt-2 rounded-md border border-border bg-muted/50 px-2.5 py-1.5 text-[11px] text-muted-foreground">
+              <p className="mt-2 text-[12px] text-muted-foreground">
                 每个 skill 写入前都会先备份；当前 skill 写入期间不可取消，skill 之间可取消。
               </p>
             </>
@@ -572,11 +566,11 @@ export function UpdateDialog({
             <div
               role="alert"
               data-testid="update-start-error"
-              className="mt-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive"
+              className="notice mt-3" data-tone="negative"
             >
               <p className="font-medium">{startError.message}</p>
               {startError.detail ? (
-                <p className="mt-0.5 line-clamp-3 text-[10.5px] opacity-70">
+                <p className="mt-0.5 text-[12px]">
                   {startError.detail}
                 </p>
               ) : null}
@@ -587,16 +581,16 @@ export function UpdateDialog({
             <div
               role="alert"
               data-testid="update-error"
-              className="mt-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive"
+              className="notice mt-3" data-tone="negative"
             >
               <p className="font-medium">{taskError.message}</p>
               {taskError.detail ? (
-                <p className="mt-0.5 line-clamp-4 text-[10.5px] opacity-70">
+                <p className="mt-0.5 text-[12px]">
                   {taskError.detail}
                 </p>
               ) : null}
               {taskError.hint ? (
-                <p className="mt-0.5 text-[10.5px] opacity-80">
+                <p className="mt-0.5 text-[12px]">
                   {taskError.hint}
                 </p>
               ) : null}
@@ -615,32 +609,32 @@ export function UpdateDialog({
                   ) : null}
                   {taskOverallHeading("update", result.overall)}
                 </h3>
-                <span className="text-[11px] text-muted-foreground">
+                <span className="text-[12px] text-muted-foreground">
                   {message}
                 </span>
               </div>
-              <p className="mt-1 text-[10.5px] text-muted-foreground">
+              <p className="mt-1 text-[12px] text-muted-foreground">
                 不自动回滚；失败项可单独重试。备份与日志保留在应用数据目录。
               </p>
 
-              <ul className="mt-2 space-y-1.5">
+              <ul className="mt-2 space-y-2">
                 {result.skills.map((skill) => (
                   <li
                     key={skill.name}
                     data-testid="update-skill-result"
                     data-skill-name={skill.name}
                     data-skill-status={skill.status}
-                    className="rounded-lg border border-border px-3 py-2"
+                    className="rounded-md border border-border px-3 py-2.5"
                   >
                     <div className="flex items-center gap-2">
                       <span className="text-xs font-medium">{skill.name}</span>
                       <span
                         className={
                           skill.status === "updated"
-                            ? "rounded border border-success/30 bg-success-soft px-1.5 py-0.5 text-[10px] text-success"
+                            ? "ml-auto rounded-sm bg-success-soft px-1.5 py-0.5 text-[11.5px] font-medium text-success"
                             : skill.status === "failed"
-                              ? "rounded border border-destructive/30 bg-destructive/5 px-1.5 py-0.5 text-[10px] text-destructive"
-                              : "rounded border border-warning/30 bg-warning-soft px-1.5 py-0.5 text-[10px] text-warning"
+                              ? "ml-auto rounded-sm bg-destructive-soft px-1.5 py-0.5 text-[11.5px] font-medium text-destructive"
+                              : "ml-auto rounded-sm bg-warning-soft px-1.5 py-0.5 text-[11.5px] font-medium text-warning"
                         }
                       >
                         {TASK_SKILL_STATUS_LABELS[skill.status]}
@@ -658,13 +652,13 @@ export function UpdateDialog({
                       ) : null}
                     </div>
                     {skill.error ? (
-                      <p className="mt-1 text-[10.5px] leading-relaxed text-muted-foreground">
+                      <p className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground">
                         {skill.error.message}
                         {skill.error.detail ? ` · ${skill.error.detail}` : ""}
                       </p>
                     ) : null}
                     {skill.backupPath ? (
-                      <p className="mt-1 font-mono text-[9.5px] text-muted-foreground/80">
+                      <p className="mono mt-1 text-muted-foreground">
                         备份：{skill.backupPath}
                       </p>
                     ) : null}
@@ -675,7 +669,7 @@ export function UpdateDialog({
               {result.warnings.length > 0 ? (
                 <ul
                   data-testid="update-warnings"
-                  className="mt-2 space-y-1 rounded-lg border border-warning/30 bg-warning-soft px-3 py-2 text-[10.5px] text-warning"
+                  className="notice mt-2 list-disc pl-8" data-tone="warning"
                 >
                   {result.warnings.map((warning) => (
                     <li key={`${warning.code}-${warning.message}`}>
@@ -690,7 +684,7 @@ export function UpdateDialog({
                 {result.backupPath ? (
                   <p
                     data-testid="update-backup-path"
-                    className="break-all font-mono text-[10px] text-muted-foreground"
+                    className="mono break-all text-muted-foreground"
                   >
                     备份：{result.backupPath}
                   </p>
@@ -698,7 +692,7 @@ export function UpdateDialog({
                 {result.logPath ? (
                   <p
                     data-testid="update-log-path"
-                    className="break-all font-mono text-[10px] text-muted-foreground"
+                    className="mono break-all text-muted-foreground"
                   >
                     日志：{result.logPath}
                   </p>
@@ -721,14 +715,14 @@ export function UpdateDialog({
                 </Button>
               </div>
               {revealError ? (
-                <p className="mt-1 text-[10.5px] text-destructive">{revealError}</p>
+                <p className="mt-1.5 text-[12px] text-destructive">{revealError}</p>
               ) : null}
             </div>
           ) : null}
         </div>
 
-        <div className="mt-3 flex items-center justify-between gap-2 border-t border-border pt-3">
-          <div className="text-[10.5px] text-muted-foreground">
+        <div className="modal-foot">
+          <div className="modal-foot-note">
             {running
               ? "更新进行中；当前 skill 写入期间不可取消"
               : "更新前自动备份 · 不调用 skills update / check"}

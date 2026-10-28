@@ -1,5 +1,8 @@
 import type { ReactNode } from "react";
-import { Bot, Filter } from "lucide-react";
+import { RotateCcw, X } from "lucide-react";
+import { Button } from "./ui/button";
+import { EnvironmentBadge } from "./environment-badge";
+import { EnvironmentMetrics } from "./environment-metrics";
 import { cn } from "../lib/utils";
 import {
   STATUS_FILTERS,
@@ -8,6 +11,7 @@ import {
   type StatusCounts,
   type StatusFilter,
 } from "../lib/inventory-view";
+import type { EnvReport } from "../lib/types";
 
 interface FilterSidebarProps {
   sources: SourceOption[];
@@ -19,6 +23,12 @@ interface FilterSidebarProps {
   onSourceChange: (value: string) => void;
   onAgentChange: (value: string) => void;
   onStatusChange: (value: StatusFilter) => void;
+  report?: EnvReport;
+  envLoading: boolean;
+  envError: boolean;
+  rechecking: boolean;
+  onRecheck: () => void;
+  onClose?: () => void;
 }
 
 interface FilterRowProps {
@@ -27,6 +37,7 @@ interface FilterRowProps {
   active: boolean;
   onClick: () => void;
   title?: string;
+  countTone?: "accent";
   trailing?: ReactNode;
 }
 
@@ -36,6 +47,7 @@ function FilterRow({
   active,
   onClick,
   title,
+  countTone,
   trailing,
 }: FilterRowProps) {
   return (
@@ -44,16 +56,16 @@ function FilterRow({
       onClick={onClick}
       aria-pressed={active}
       title={title}
-      className={cn(
-        "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors",
-        active
-          ? "bg-primary/10 font-medium text-primary"
-          : "text-muted-foreground hover:bg-muted",
-      )}
+      className="filter-row"
     >
-      <span className="min-w-0 flex-1 truncate">{label}</span>
+      <span className="filter-name">{label}</span>
       {trailing}
-      <span className="tabular-nums text-[11px] text-muted-foreground/80">
+      <span
+        className={cn(
+          "filter-count",
+          countTone === "accent" && count > 0 && "update-count",
+        )}
+      >
         {count}
       </span>
     </button>
@@ -61,11 +73,7 @@ function FilterRow({
 }
 
 function SectionTitle({ children }: { children: ReactNode }) {
-  return (
-    <h3 className="px-2 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/80">
-      {children}
-    </h3>
-  );
+  return <h3 className="filter-label">{children}</h3>;
 }
 
 export function FilterSidebar({
@@ -78,21 +86,32 @@ export function FilterSidebar({
   onSourceChange,
   onAgentChange,
   onStatusChange,
+  report,
+  envLoading,
+  envError,
+  rechecking,
+  onRecheck,
+  onClose,
 }: FilterSidebarProps) {
   return (
-    <aside
-      aria-label="筛选"
-      className="flex min-h-0 flex-col border-r border-border bg-card/40"
-    >
-      <div className="flex items-center gap-2 border-b border-border px-4 py-3">
-        <Filter className="size-3.5 text-muted-foreground" aria-hidden="true" />
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          筛选
-        </h2>
+    <aside aria-label="筛选" className="rail">
+      <div className="rail-head">
+        <h2 className="rail-title">筛选</h2>
+        {onClose ? (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="rail-close size-7"
+            aria-label="关闭筛选"
+            onClick={onClose}
+          >
+            <X className="size-4" aria-hidden="true" />
+          </Button>
+        ) : null}
       </div>
 
-      <div className="flex-1 space-y-5 overflow-auto p-3">
-        <section>
+      <div className="rail-scroll">
+        <section aria-label="来源" className="filter-group">
           <SectionTitle>来源</SectionTitle>
           <FilterRow
             label="全部来源"
@@ -101,26 +120,23 @@ export function FilterSidebar({
             onClick={() => onSourceChange("all")}
           />
           {sources.length === 0 ? (
-            <p className="px-2 pt-2 text-[11px] text-muted-foreground/70">
-              暂无来源
-            </p>
+            <p className="filter-note">暂无来源</p>
           ) : (
-            <div className="mt-0.5 space-y-0.5">
-              {sources.map((source) => (
-                <FilterRow
-                  key={source.value}
-                  label={source.label}
-                  count={source.count}
-                  active={activeSource === source.value}
-                  onClick={() => onSourceChange(source.value)}
-                />
-              ))}
-            </div>
+            sources.map((source) => (
+              <FilterRow
+                key={source.value}
+                label={source.label}
+                count={source.count}
+                active={activeSource === source.value}
+                onClick={() => onSourceChange(source.value)}
+                title={source.label}
+              />
+            ))
           )}
         </section>
 
-        <section>
-          <SectionTitle>Agents</SectionTitle>
+        <section aria-label="Agents" className="filter-group">
+          <SectionTitle>Agent</SectionTitle>
           <FilterRow
             label="全部 Agent"
             count={statusCounts.all}
@@ -128,52 +144,73 @@ export function FilterSidebar({
             onClick={() => onAgentChange("all")}
           />
           {agents.length === 0 ? (
-            <p className="px-2 pt-2 text-[11px] text-muted-foreground/70">
-              未检测到 agent
-            </p>
+            <p className="filter-note">未检测到 agent</p>
           ) : (
-            <div className="mt-0.5 space-y-0.5">
-              {agents.map((agent) => (
-                <FilterRow
-                  key={agent.id}
-                  label={agent.displayName}
-                  count={agent.count}
-                  active={activeAgent === agent.id}
-                  onClick={() => onAgentChange(agent.id)}
-                  trailing={
-                    agent.shared ? (
-                      <span className="text-[10px] text-muted-foreground/80">
-                        共享
-                      </span>
-                    ) : null
-                  }
-                />
-              ))}
-            </div>
+            agents.map((agent) => (
+              <FilterRow
+                key={agent.id}
+                label={agent.displayName}
+                count={agent.count}
+                active={activeAgent === agent.id}
+                onClick={() => onAgentChange(agent.id)}
+                trailing={
+                  agent.shared ? (
+                    <span className="text-[11.5px] text-muted-foreground">
+                      共享
+                    </span>
+                  ) : null
+                }
+                title={
+                  agent.shared
+                    ? `${agent.displayName} · 共享 canonical store`
+                    : agent.displayName
+                }
+              />
+            ))
           )}
         </section>
 
-        <section>
+        <section aria-label="状态" className="filter-group">
           <SectionTitle>状态</SectionTitle>
-          <div className="space-y-0.5">
-            {STATUS_FILTERS.map((filter) => (
-              <FilterRow
-                key={filter.value}
-                label={filter.label}
-                count={statusCounts[filter.value]}
-                active={activeStatus === filter.value}
-                onClick={() => onStatusChange(filter.value)}
-              />
-            ))}
-          </div>
+          {STATUS_FILTERS.map((filter) => (
+            <FilterRow
+              key={filter.value}
+              label={filter.label}
+              count={statusCounts[filter.value]}
+              active={activeStatus === filter.value}
+              onClick={() => onStatusChange(filter.value)}
+              countTone={filter.value === "update" ? "accent" : undefined}
+            />
+          ))}
         </section>
+      </div>
 
-        <section className="px-2 pt-1">
-          <p className="flex items-start gap-1.5 text-[10.5px] leading-relaxed text-muted-foreground/70">
-            <Bot className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
-            Agent 挂载来自物理目录与 lstat，不使用 CLI 的 agents 字段。
-          </p>
-        </section>
+      <div className="rail-foot">
+        <div className="rail-foot-head">
+          <span className="rail-foot-title">运行环境</span>
+          <div className="flex items-center gap-1">
+            <EnvironmentBadge
+              report={report}
+              isLoading={envLoading}
+              isError={envError}
+            />
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-6"
+              onClick={onRecheck}
+              disabled={rechecking}
+              aria-label="重新检测环境"
+              title="重新检测环境"
+            >
+              <RotateCcw
+                className={cn("size-3.5", rechecking && "animate-spin")}
+                aria-hidden="true"
+              />
+            </Button>
+          </div>
+        </div>
+        <EnvironmentMetrics report={report} />
       </div>
     </aside>
   );

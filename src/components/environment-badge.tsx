@@ -1,5 +1,3 @@
-import { AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
-import { Badge } from "./ui/badge";
 import { environmentSummary } from "../lib/environment-display";
 import type { EnvReport } from "../lib/types";
 
@@ -16,39 +14,27 @@ export function EnvironmentBadge({
 }: EnvironmentBadgeProps) {
   if (isLoading) {
     return (
-      <Badge variant="muted" className="h-6 px-2.5" data-testid="environment-badge">
-        <Loader2 className="size-3 animate-spin" aria-hidden="true" />
+      <span className="env-badge" data-testid="environment-badge">
+        <span className="env-dot" data-tone="muted" />
         检测中
-      </Badge>
+      </span>
     );
   }
 
   if (isError || !report) {
     return (
-      <Badge
-        variant="destructive"
-        className="h-6 px-2.5"
-        data-testid="environment-badge"
-      >
-        <AlertCircle className="size-3" aria-hidden="true" />
+      <span className="env-badge" data-testid="environment-badge">
+        <span className="env-dot" data-tone="destructive" />
         环境异常
-      </Badge>
+      </span>
     );
   }
 
   const summary = environmentSummary(report);
   return (
-    <Badge
-      variant={summary.tone}
-      className="h-6 px-2.5"
-      data-testid="environment-badge"
-    >
-      {summary.tone === "success" ? (
-        <CheckCircle2 className="size-3" aria-hidden="true" />
-      ) : (
-        <AlertCircle className="size-3" aria-hidden="true" />
-      )}
+    <span className="env-badge" data-testid="environment-badge">
+      <span className="env-dot" data-tone={summary.tone} />
       {summary.label}
-    </Badge>
+    </span>
   );
 }

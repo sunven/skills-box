@@ -1,12 +1,6 @@
-import {
-  ArrowUpCircle,
-  Boxes,
-  Download,
-  RefreshCw,
-  RotateCcw,
-} from "lucide-react";
+import { ArrowUpCircle, Download, RefreshCw, SlidersHorizontal } from "lucide-react";
 import { Button } from "./ui/button";
-import { EnvironmentBadge } from "./environment-badge";
+import { environmentSummary } from "../lib/environment-display";
 import type { EnvReport, UpdateCheckReport } from "../lib/types";
 import { formatEpochDateTime } from "../lib/update-view";
 
@@ -15,8 +9,6 @@ interface AppHeaderProps {
   isLoading: boolean;
   isError: boolean;
   mutationsEnabled: boolean;
-  rechecking: boolean;
-  onRecheck: () => void;
   onInstall: () => void;
   updateReport?: UpdateCheckReport | null;
   updateError?: { message: string; detail?: string } | null;
@@ -25,6 +17,25 @@ interface AppHeaderProps {
   onCheckUpdates: () => void;
   onUpdateAll: () => void;
   updateCandidateCount: number;
+  filtersOpen: boolean;
+  onToggleFilters: () => void;
+}
+
+function BrandMark() {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      className="size-[18px]"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M2.8 6.4 10 2.8l7.2 3.6v7.2L10 17.2l-7.2-3.6V6.4Z" />
+      <path d="M2.8 6.4 10 10l7.2-3.6M10 10v7.2" />
+    </svg>
+  );
 }
 
 export function AppHeader({
@@ -32,8 +43,6 @@ export function AppHeader({
   isLoading,
   isError,
   mutationsEnabled,
-  rechecking,
-  onRecheck,
   onInstall,
   updateReport,
   updateError,
@@ -42,6 +51,8 @@ export function AppHeader({
   onCheckUpdates,
   onUpdateAll,
   updateCandidateCount,
+  filtersOpen,
+  onToggleFilters,
 }: AppHeaderProps) {
   const lastCheck = updateReport?.lastSuccessAtEpochMs ?? null;
   const failedSources =
@@ -68,74 +79,73 @@ export function AppHeader({
   ]
     .filter(Boolean)
     .join("\n");
+  const env = isLoading
+    ? { label: "环境检测中", tone: "muted" as const }
+    : isError || !report
+      ? { label: "环境异常", tone: "destructive" as const }
+      : environmentSummary(report);
 
   return (
-    <header className="flex items-center justify-between gap-4 border-b border-border bg-card px-5 py-3">
+    <header className="topbar">
       <div className="flex min-w-0 items-center gap-3">
-        <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-          <Boxes className="size-5" aria-hidden="true" />
-        </div>
-        <div className="min-w-0">
-          <div className="flex items-baseline gap-2">
-            <h1 className="text-lg font-semibold tracking-tight">Skills Box</h1>
-            <span className="text-xs text-muted-foreground">全局 Skills 工作台</span>
-          </div>
-          <p className="truncate text-xs text-muted-foreground">
-            管理跨 agent 共享的全局 skill
-          </p>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="rail-toggle"
+          aria-label="打开筛选"
+          aria-expanded={filtersOpen}
+          onClick={onToggleFilters}
+        >
+          <SlidersHorizontal />
+        </Button>
+        <div className="brand">
+          <span className="brand-mark">
+            <BrandMark />
+          </span>
+          <span className="brand-name">Skills Box</span>
+          <span
+            className="env-dot"
+            data-tone={env.tone}
+            title={env.label}
+            aria-label={env.label}
+          />
+          <span className="brand-scope">
+            {report?.lock.path ?? "~/.agents/.skill-lock.json"} ·{" "}
+            {report?.agents.length ?? 0} 个 agent
+          </span>
         </div>
       </div>
 
-      <div className="flex shrink-0 items-center gap-2">
-        <EnvironmentBadge
-          report={report}
-          isLoading={isLoading}
-          isError={isError}
-        />
+      <div className="topbar-actions">
         <span
           data-testid="last-update-check"
+          data-error={updateError ? "true" : undefined}
           title={lastCheckTooltip}
-          className={
-            updateError
-              ? "max-w-[13rem] truncate text-[10.5px] text-destructive"
-              : "max-w-[13rem] truncate text-[10.5px] text-muted-foreground"
-          }
+          className="topbar-stamp"
         >
           {updateError ? `更新检查失败：${updateError.message}` : lastCheckLabel}
         </span>
         <Button
           variant="ghost"
           size="sm"
-          onClick={onRecheck}
-          disabled={rechecking}
-          aria-label="重新检测环境"
-          title="重新检测环境"
-        >
-          <RotateCcw
-            className={rechecking ? "size-3.5 animate-spin" : "size-3.5"}
-            aria-hidden="true"
-          />
-          重新检测
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
           disabled={!updatesEnabled || checkingUpdates}
           aria-busy={checkingUpdates}
           onClick={onCheckUpdates}
+          aria-label="检查更新"
           title="只读检查更新；不会运行 skills check / skills update"
         >
           <RefreshCw
             className={checkingUpdates ? "size-3.5 animate-spin" : "size-3.5"}
             aria-hidden="true"
           />
-          检查更新
+          <span className="btn-label">检查更新</span>
         </Button>
         <Button
           variant="outline"
           size="sm"
           disabled={!updateReport}
           onClick={onUpdateAll}
+          aria-label={`更新全部 (${updateCandidateCount})`}
           title={
             updateReport
               ? "查看更新候选与跳过项，备份后逐个执行更新"
@@ -143,8 +153,10 @@ export function AppHeader({
           }
         >
           <ArrowUpCircle className="size-3.5" aria-hidden="true" />
-          更新全部
-          {updateCandidateCount > 0 ? ` (${updateCandidateCount})` : ""}
+          <span className="btn-label">
+            更新全部
+            {updateCandidateCount > 0 ? ` (${updateCandidateCount})` : ""}
+          </span>
         </Button>
         <Button
           size="sm"

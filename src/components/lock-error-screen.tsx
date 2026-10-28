@@ -20,23 +20,26 @@ export function LockErrorScreen({
       className="flex flex-1 items-center justify-center overflow-auto p-8"
     >
       <div className="max-w-xl text-center">
-        <div className="mx-auto flex size-14 items-center justify-center rounded-2xl border border-destructive/20 bg-red-50 text-destructive shadow-sm">
-          <AlertTriangle className="size-6" aria-hidden="true" />
-        </div>
-        <h2 className="mt-4 text-lg font-semibold tracking-tight text-destructive">
+        <AlertTriangle
+          className="mx-auto size-6 text-destructive"
+          aria-hidden="true"
+        />
+        <h2 className="mt-3 text-lg font-semibold tracking-tight text-destructive">
           Skill lock 无法读取
         </h2>
         <p className="mt-2 text-sm text-foreground">{error.message}</p>
         {error.detail ? (
-          <p className="mt-1 break-words font-mono text-[11px] text-muted-foreground">
+          <p className="mono mt-1 break-words text-muted-foreground">
             {error.code ? `${error.code} · ` : ""}
             {error.detail}
           </p>
         ) : null}
         {error.hint ? (
-          <p className="mt-2 text-xs text-muted-foreground">{error.hint}</p>
+          <p className="mt-2 text-[12.5px] text-muted-foreground">
+            {error.hint}
+          </p>
         ) : null}
-        <p className="mx-auto mt-4 max-w-md rounded-lg border border-destructive/20 bg-red-50/60 px-3 py-2 text-xs leading-relaxed text-destructive">
+        <p className="mx-auto mt-4 max-w-md rounded-md border border-destructive/25 bg-destructive-soft px-3 py-2 text-[12.5px] leading-relaxed text-destructive">
           为避免数据丢失，变更操作已禁用；列表不会以空库存代替，也不会显示任何
           skill。修复 lock 后重新读取。
         </p>
