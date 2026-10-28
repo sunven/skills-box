@@ -248,6 +248,7 @@ impl EnvResolver {
             cli,
             agents,
             lock,
+            interrupted: crate::interrupted::inspect(&self.paths),
             issues,
             warnings,
             checked_at_epoch_ms: epoch_ms(),

@@ -2,18 +2,19 @@
 //! single-writer mutation permits, and cancellable preview tasks.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
-use tokio::sync::Semaphore;
+use tokio::sync::{Notify, Semaphore};
 
 use crate::backup::{BackupAction, BackupStore};
 use crate::baseline::{BaselineStore, LocalModification};
 use crate::cli::{CliRuntimeProvider, preview_command};
 use crate::error::{AppError, codes};
+use crate::interrupted::{InterruptedMutation, MarkerStore, MutationKind};
 use crate::lock::LockFile;
 use crate::logs::{OperationEntry, OperationLog};
 use crate::paths::AppPaths;
@@ -193,6 +194,29 @@ pub struct CancelAck {
     pub message: Option<String>,
 }
 
+/// Snapshot of the one in-flight mutation, returned to the exit dialog and
+/// attached to the `exit-requested` event.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveMutationInfo {
+    pub task_id: String,
+    pub kind: MutationKind,
+    pub skills: Vec<String>,
+    pub started_at_epoch_ms: u64,
+    pub snapshot_paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShutdownReport {
+    /// The mutation that was active when shutdown started, if any.
+    pub active: Option<ActiveMutationInfo>,
+    pub cancelled_tasks: usize,
+    /// True when a mutation did not reach a final state within the grace
+    /// period; the process group may still have been killed by the executor.
+    pub timed_out: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct TaskManagerConfig {
     pub preview_timeout: Duration,
@@ -217,10 +241,13 @@ struct Inner {
     executor: Arc<dyn ProcessExecutor>,
     conflicts: Arc<dyn ConflictProvider>,
     paths: AppPaths,
+    marker: MarkerStore,
     tasks: Mutex<HashMap<TaskId, TaskEntry>>,
     next_id: AtomicU64,
     mutation_slots: Arc<Semaphore>,
     config: TaskManagerConfig,
+    shutting_down: AtomicBool,
+    finished_notify: Notify,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -229,11 +256,21 @@ enum TaskState {
     Finished,
 }
 
+#[derive(Debug, Clone)]
+struct MutationState {
+    kind: MutationKind,
+    skills: Vec<String>,
+    started_at_epoch_ms: u64,
+    snapshot_paths: Vec<String>,
+}
+
 struct TaskEntry {
     state: TaskState,
     cancel: CancelToken,
     /// Install tasks become non-cancellable immediately before the CLI spawns.
     cancellable: bool,
+    /// Present for install/update/uninstall (never for preview).
+    mutation: Option<MutationState>,
 }
 
 #[derive(Debug)]
@@ -285,11 +322,14 @@ impl TaskManager {
                 runtime,
                 executor,
                 conflicts,
+                marker: MarkerStore::new(&paths),
                 paths,
                 tasks: Mutex::new(HashMap::new()),
                 next_id: AtomicU64::new(1),
                 mutation_slots: Arc::new(Semaphore::new(1)),
                 config,
+                shutting_down: AtomicBool::new(false),
+                finished_notify: Notify::new(),
             }),
         }
     }
@@ -297,10 +337,154 @@ impl TaskManager {
     /// Try to become the single active mutation. Concurrent callers get
     /// `task.busy` immediately (no queueing) so the UI can report it.
     pub fn try_acquire_mutation(&self) -> Result<MutationPermit, AppError> {
+        self.ensure_not_shutting_down()?;
         Arc::clone(&self.inner.mutation_slots)
             .try_acquire_owned()
             .map(|permit| MutationPermit { _permit: permit })
             .map_err(|_| AppError::task_busy())
+    }
+
+    fn ensure_not_shutting_down(&self) -> Result<(), AppError> {
+        if self.inner.shutting_down.load(Ordering::SeqCst) {
+            return Err(AppError::task_shutting_down());
+        }
+        Ok(())
+    }
+
+    /// The single in-flight install/update/uninstall, if any. Preview tasks are
+    /// read-only and intentionally excluded: closing the window during a
+    /// preview does not risk a half-written skill store.
+    pub fn active_mutation(&self) -> Option<ActiveMutationInfo> {
+        let tasks = self.lock_tasks();
+        tasks.iter().find_map(|(task_id, entry)| {
+            if entry.state != TaskState::Running {
+                return None;
+            }
+            entry
+                .mutation
+                .as_ref()
+                .map(|mutation| ActiveMutationInfo {
+                    task_id: task_id.clone(),
+                    kind: mutation.kind,
+                    skills: mutation.skills.clone(),
+                    started_at_epoch_ms: mutation.started_at_epoch_ms,
+                    snapshot_paths: mutation.snapshot_paths.clone(),
+                })
+        })
+    }
+
+    pub fn has_running_mutation(&self) -> bool {
+        self.active_mutation().is_some()
+    }
+
+    /// Write the interruption marker before the first disk write. Failures are
+    /// non-fatal: the operation still runs, only crash forensics degrade.
+    fn begin_marker(&self, task_id: &str) {
+        let record = {
+            let tasks = self.lock_tasks();
+            let Some(mutation) = tasks.get(task_id).and_then(|entry| entry.mutation.as_ref())
+            else {
+                return;
+            };
+            InterruptedMutation {
+                task_id: task_id.to_string(),
+                kind: mutation.kind,
+                skills: mutation.skills.clone(),
+                started_at_epoch_ms: mutation.started_at_epoch_ms,
+                snapshot_paths: mutation.snapshot_paths.clone(),
+            }
+        };
+        let _ = self.inner.marker.begin(&record);
+    }
+
+    /// Record a mandatory backup snapshot as soon as it exists so the next
+    /// startup report can point at it.
+    fn record_snapshot(&self, task_id: &str, snapshot: &Path) {
+        let record = {
+            let mut tasks = self.lock_tasks();
+            let Some(entry) = tasks.get_mut(task_id) else {
+                return;
+            };
+            let Some(mutation) = entry.mutation.as_mut() else {
+                return;
+            };
+            let snapshot = snapshot.to_string_lossy().into_owned();
+            if !mutation.snapshot_paths.contains(&snapshot) {
+                mutation.snapshot_paths.push(snapshot);
+            }
+            InterruptedMutation {
+                task_id: task_id.to_string(),
+                kind: mutation.kind,
+                skills: mutation.skills.clone(),
+                started_at_epoch_ms: mutation.started_at_epoch_ms,
+                snapshot_paths: mutation.snapshot_paths.clone(),
+            }
+        };
+        let _ = self.inner.marker.begin(&record);
+    }
+
+    /// Cancel every running task (preview included). Mutation tokens bypass the
+    /// user-facing `cancellable` seal: a confirmed app exit must kill the
+    /// process group even while a CLI is writing.
+    pub fn cancel_all_tasks(&self) -> usize {
+        let mut tasks = self.lock_tasks();
+        let mut cancelled = 0;
+        for entry in tasks.values_mut() {
+            if entry.state == TaskState::Running {
+                entry.cancel.cancel();
+                cancelled += 1;
+            }
+        }
+        cancelled
+    }
+
+    /// Stop for application exit: keep the marker (so the next launch warns),
+    /// cancel all tasks and wait briefly for mutation process groups to be
+    /// reaped. The executor escalates SIGTERM -> 3s -> SIGKILL, so six seconds
+    /// covers the kill plus pipe cleanup.
+    pub async fn shutdown_mutations(&self) -> ShutdownReport {
+        self.inner.shutting_down.store(true, Ordering::SeqCst);
+        let active = self.active_mutation();
+        let cancelled_tasks = self.cancel_all_tasks();
+        if active.is_none() {
+            return ShutdownReport {
+                active,
+                cancelled_tasks,
+                timed_out: false,
+            };
+        }
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(6);
+        let timed_out = loop {
+            if !self.has_running_mutation() {
+                break false;
+            }
+            let notified = self.inner.finished_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if !self.has_running_mutation() {
+                break false;
+            }
+            tokio::select! {
+                _ = notified => {}
+                _ = tokio::time::sleep_until(deadline) => break true,
+            }
+        };
+        ShutdownReport {
+            active,
+            cancelled_tasks,
+            timed_out,
+        }
+    }
+
+    /// Remove the startup interruption marker after the user acknowledges it.
+    pub fn dismiss_interrupted_marker(&self) {
+        self.inner.marker.clear();
+    }
+
+    /// Read the startup interruption report for tests and diagnostics.
+    pub fn interrupted_report(&self) -> Option<crate::interrupted::InterruptedReport> {
+        self.inner.marker.inspect()
     }
 
     /// Validate the source synchronously, then run a read-only preview task.
@@ -310,6 +494,7 @@ impl TaskManager {
         source: &str,
         on_event: EventSink,
     ) -> Result<TaskId, AppError> {
+        self.ensure_not_shutting_down()?;
         let spec = validate_source(source)?;
         let task_id = format!("task-{}", self.inner.next_id.fetch_add(1, Ordering::SeqCst));
         let cancel = CancelToken::new();
@@ -321,6 +506,7 @@ impl TaskManager {
                     state: TaskState::Running,
                     cancel: cancel.clone(),
                     cancellable: true,
+                    mutation: None,
                 },
             );
         }
@@ -343,6 +529,7 @@ impl TaskManager {
         request: InstallRequest,
         on_event: EventSink,
     ) -> Result<TaskId, AppError> {
+        self.ensure_not_shutting_down()?;
         let paths = self.inner.paths.clone();
         let plan = tokio::task::spawn_blocking(move || {
             let plan = validate_request(&paths, &request)?;
@@ -367,9 +554,16 @@ impl TaskManager {
                     state: TaskState::Running,
                     cancel: cancel.clone(),
                     cancellable: true,
+                    mutation: Some(MutationState {
+                        kind: MutationKind::Install,
+                        skills: plan.skills.clone(),
+                        started_at_epoch_ms: now_ms(),
+                        snapshot_paths: Vec::new(),
+                    }),
                 },
             );
         }
+        self.begin_marker(&task_id);
 
         let manager = self.clone();
         let spawned_id = task_id.clone();
@@ -426,6 +620,7 @@ impl TaskManager {
         skill_ids: Vec<String>,
         on_event: EventSink,
     ) -> Result<TaskId, AppError> {
+        self.ensure_not_shutting_down()?;
         let names = install::validate_skill_names(&skill_ids)?;
         // Hold the write slot while planning so the lock/inventory snapshot
         // cannot be read in the middle of another mutation.
@@ -456,9 +651,16 @@ impl TaskManager {
                     // Update may be cancelled between skills; the run loop
                     // disables acceptance while one skill is being written.
                     cancellable: true,
+                    mutation: Some(MutationState {
+                        kind: MutationKind::Update,
+                        skills: plan.items.iter().map(|item| item.name.clone()).collect(),
+                        started_at_epoch_ms: now_ms(),
+                        snapshot_paths: Vec::new(),
+                    }),
                 },
             );
         }
+        self.begin_marker(&task_id);
 
         let manager = self.clone();
         let spawned_id = task_id.clone();
@@ -479,6 +681,7 @@ impl TaskManager {
         skill_id: String,
         on_event: EventSink,
     ) -> Result<TaskId, AppError> {
+        self.ensure_not_shutting_down()?;
         // Hold the write slot while planning so the lock/inventory snapshot
         // cannot be read in the middle of another mutation.
         let permit = self.try_acquire_mutation()?;
@@ -507,9 +710,16 @@ impl TaskManager {
                     cancel: cancel.clone(),
                     // Uninstall may be cancelled until the CLI is spawned.
                     cancellable: true,
+                    mutation: Some(MutationState {
+                        kind: MutationKind::Uninstall,
+                        skills: vec![plan.name.clone()],
+                        started_at_epoch_ms: now_ms(),
+                        snapshot_paths: Vec::new(),
+                    }),
                 },
             );
         }
+        self.begin_marker(&task_id);
 
         let manager = self.clone();
         let spawned_id = task_id.clone();
@@ -831,6 +1041,8 @@ impl TaskManager {
             return;
         }
 
+        self.record_snapshot(&task_id, &snapshot);
+
         emit(
             &sink,
             TaskEvent::progress(
@@ -1114,6 +1326,7 @@ impl TaskManager {
             };
             let backup_display = paths.display(&backup.path);
             backup_paths.push(backup_display.clone());
+            self.record_snapshot(&task_id, &backup.path);
 
             if cancel.is_cancelled() {
                 let _ = log.append(&OperationEntry::new(
@@ -1449,6 +1662,7 @@ impl TaskManager {
             }
         };
         let backup_display = paths.display(&backup.path);
+        self.record_snapshot(&task_id, &backup.path);
 
         if cancel.is_cancelled() {
             let _ = log.append(&OperationEntry::new(
@@ -1683,7 +1897,7 @@ impl TaskManager {
     }
 
     fn finish(&self, task_id: &str, sink: &EventSink, outcome: FinishOutcome) {
-        let cancel_requested = {
+        let (cancel_requested, clear_marker) = {
             let mut tasks = self.lock_tasks();
             let Some(entry) = tasks.get_mut(task_id) else {
                 return;
@@ -1692,8 +1906,17 @@ impl TaskManager {
                 return;
             }
             entry.state = TaskState::Finished;
-            entry.cancel.is_cancelled()
+            (
+                entry.cancel.is_cancelled(),
+                // A confirmed application exit keeps the marker so the next
+                // launch can warn and point at the retained snapshots.
+                entry.mutation.is_some() && !self.inner.shutting_down.load(Ordering::SeqCst),
+            )
         };
+        if clear_marker {
+            self.inner.marker.clear();
+        }
+        self.inner.finished_notify.notify_waiters();
         let outcome = if cancel_requested {
             match outcome {
                 // A cancellation that races with the final event keeps the
@@ -2983,5 +3206,158 @@ mod tests {
         assert!(canonical.join("SKILL.md").is_file());
         assert_eq!(fs::read(paths.lock_path()).unwrap(), lock_before);
         assert_eq!(executor.call_count(), 0, "detach must not spawn a CLI");
+    }
+
+    // ------------------------------------------------------------------
+    // Interrupted-mutation marker and exit protection (ticket 10)
+    // ------------------------------------------------------------------
+
+    fn hanging_install_fixture() -> (tempfile::TempDir, PathBuf, AppPaths, Arc<ScriptedExecutor>, TaskManager) {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        fs::create_dir_all(home.join(".qoder")).unwrap();
+        let paths = AppPaths::new(&home, tmp.path().join("app-data"));
+        paths.ensure_dirs().unwrap();
+        let executor = Arc::new(ScriptedExecutor::new().expect_any(ScriptedResponse::hang()));
+        let manager = TaskManager::new(
+            Arc::new(FakeRuntime::ok()),
+            executor.clone(),
+            Arc::new(FakeConflicts::default()),
+            paths.clone(),
+            TaskManagerConfig {
+                preview_timeout: Duration::from_secs(60),
+                install_timeout: Duration::from_secs(5),
+            },
+        );
+        (tmp, home, paths, executor, manager)
+    }
+
+    async fn wait_for_phase(receiver: &mut tokio::sync::mpsc::UnboundedReceiver<TaskEvent>, phase: TaskPhase) {
+        loop {
+            let event = receiver.recv().await.unwrap();
+            if event.phase == phase {
+                return;
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn mutation_writes_the_interruption_marker_and_clears_it_on_completion() {
+        let fixture = install_fixture(InstallResponse::success(INSTALL_SUCCESS, || {}));
+        let marker = fixture.paths.interrupted_marker_path();
+        let (sink, mut receiver) = sink();
+        fixture
+            .manager
+            .start_install(install_request(&["find-skills"], &["qoder"]), sink)
+            .await
+            .unwrap();
+
+        let record = crate::interrupted::MarkerStore::new(&fixture.paths).read();
+        let crate::interrupted::MarkerRead::Present(record) = record else {
+            panic!("mutation marker should exist while the task runs");
+        };
+        assert_eq!(record.kind, MutationKind::Install);
+        assert_eq!(record.skills, vec!["find-skills"]);
+        assert!(marker.exists());
+
+        let final_event = tokio::time::timeout(Duration::from_secs(2), final_event(&mut receiver))
+            .await
+            .expect("install should finish");
+        assert_eq!(final_event.phase, TaskPhase::Completed);
+        assert!(!marker.exists(), "normal completion must clear the marker");
+    }
+
+    #[tokio::test]
+    async fn active_mutation_reports_kind_skills_and_the_lock_snapshot() {
+        let (_tmp, _home, paths, executor, manager) = hanging_install_fixture();
+        let (event_sink, mut receiver) = sink();
+        let task_id = manager
+            .start_install(install_request(&["find-skills"], &["qoder"]), event_sink)
+            .await
+            .unwrap();
+        wait_for_phase(&mut receiver, TaskPhase::RunningCli).await;
+
+        let active = manager.active_mutation().expect("mutation is running");
+        assert_eq!(active.task_id, task_id);
+        assert_eq!(active.kind, MutationKind::Install);
+        assert_eq!(active.skills, vec!["find-skills"]);
+        assert_eq!(active.snapshot_paths.len(), 1);
+        assert!(Path::new(&active.snapshot_paths[0]).exists());
+        assert!(manager.has_running_mutation());
+        assert_eq!(executor.call_count(), 1);
+
+        manager.cancel_all_tasks();
+        let final_event = tokio::time::timeout(Duration::from_secs(2), final_event(&mut receiver))
+            .await
+            .expect("cancelled install should finish");
+        assert_eq!(final_event.phase, TaskPhase::Cancelled);
+        assert!(!manager.has_running_mutation());
+        assert!(!paths.interrupted_marker_path().exists());
+    }
+
+    #[tokio::test]
+    async fn confirmed_exit_cancels_a_sealed_mutation_and_keeps_the_marker() {
+        let (_tmp, _home, paths, _executor, manager) = hanging_install_fixture();
+        let (event_sink, mut receiver) = sink();
+        manager
+            .start_install(install_request(&["find-skills"], &["qoder"]), event_sink)
+            .await
+            .unwrap();
+        wait_for_phase(&mut receiver, TaskPhase::RunningCli).await;
+
+        // The task is sealed: a user-facing cancel is rejected, but shutdown
+        // must still cancel it.
+        let error = manager.cancel_task("task-1").unwrap_err();
+        assert_eq!(error.code, codes::TASK_CANNOT_CANCEL);
+
+        let report = manager.shutdown_mutations().await;
+        assert_eq!(report.cancelled_tasks, 1);
+        assert!(!report.timed_out);
+        let active = report.active.as_ref().expect("active mutation is reported");
+        assert_eq!(active.kind, MutationKind::Install);
+        assert_eq!(active.snapshot_paths.len(), 1);
+        assert!(!manager.has_running_mutation());
+
+        // The marker and the mandatory lock snapshot survive.
+        let startup = manager
+            .interrupted_report()
+            .expect("next startup must report the interruption");
+        assert_eq!(startup.kind, Some(MutationKind::Install));
+        assert_eq!(startup.skills, vec!["find-skills"]);
+        assert!(startup.lock_is_healthy());
+        assert_eq!(startup.snapshots_present.len(), 1);
+        assert!(startup.snapshots_are_intact());
+        assert!(paths.interrupted_marker_path().exists());
+
+        // No new task may start while the app is exiting.
+        let (again_sink, _again_receiver) = sink();
+        let error = manager
+            .start_install(install_request(&["other"], &["qoder"]), again_sink)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, codes::TASK_SHUTTING_DOWN);
+
+        // Dismissing the warning removes the marker but keeps the snapshot.
+        manager.dismiss_interrupted_marker();
+        assert!(manager.interrupted_report().is_none());
+        assert!(Path::new(&startup.snapshots_present[0]).exists());
+    }
+
+    #[tokio::test]
+    async fn cancelled_preview_never_leaves_an_interruption_marker() {
+        let (manager, _executor) = manager(
+            ScriptedExecutor::new().expect_any(ScriptedResponse::hang()),
+            HashMap::new(),
+            Duration::from_secs(60),
+        );
+        let (event_sink, mut receiver) = sink();
+        let task_id = manager.start_preview("owner/repo", event_sink).await.unwrap();
+        wait_for_phase(&mut receiver, TaskPhase::Cloning).await;
+        manager.cancel_task(&task_id).unwrap();
+        let final_event = tokio::time::timeout(Duration::from_secs(2), final_event(&mut receiver))
+            .await
+            .unwrap();
+        assert_eq!(final_event.phase, TaskPhase::Cancelled);
+        assert!(manager.active_mutation().is_none());
     }
 }

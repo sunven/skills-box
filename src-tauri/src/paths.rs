@@ -82,6 +82,15 @@ impl AppPaths {
         self.app_data.join("baselines")
     }
 
+    /// Runtime coordination files (the interrupted-mutation marker).
+    pub fn runtime_dir(&self) -> PathBuf {
+        self.app_data.join("runtime")
+    }
+
+    pub fn interrupted_marker_path(&self) -> PathBuf {
+        self.runtime_dir().join("interrupted-mutation.json")
+    }
+
     /// Empty working directory handed to CLI child processes. Keeping cwd out
     /// of any project avoids project-scoped agent/skill discovery.
     pub fn cli_cwd(&self) -> PathBuf {
@@ -95,6 +104,7 @@ impl AppPaths {
             self.logs_dir(),
             self.cache_dir(),
             self.baselines_dir(),
+            self.runtime_dir(),
             self.cli_cwd(),
         ] {
             std::fs::create_dir_all(&dir)?;
@@ -172,6 +182,7 @@ mod tests {
             &paths.logs_dir(),
             &paths.cache_dir(),
             &paths.baselines_dir(),
+            &paths.runtime_dir(),
             &paths.cli_cwd(),
         ] {
             assert!(dir.is_dir(), "{} should be a directory", dir.display());

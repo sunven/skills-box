@@ -55,6 +55,7 @@ pub mod codes {
     pub const TASK_BUSY: &str = "task.busy";
     pub const TASK_NOT_FOUND: &str = "task.not_found";
     pub const TASK_CANNOT_CANCEL: &str = "task.cannot_cancel";
+    pub const TASK_SHUTTING_DOWN: &str = "task.shutting_down";
     pub const SKILL_CONFLICT: &str = "skill.conflict";
     pub const BACKUP_FAILED: &str = "backup.failed";
     pub const VERIFY_FAILED: &str = "verify.failed";
@@ -397,6 +398,11 @@ impl AppError {
             "任务已结束或已进入不可取消阶段。",
         )
         .retryable(false)
+    }
+
+    pub fn task_shutting_down() -> Self {
+        Self::new(codes::TASK_SHUTTING_DOWN, "应用正在退出，无法开始新的任务。")
+            .retryable(false)
     }
 
     pub fn skill_conflict(name: &str, detail: impl Into<String>) -> Self {

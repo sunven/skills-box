@@ -15,9 +15,9 @@ pub use install::{
     snapshot_lock, validate_request, verify_install,
 };
 pub use manager::{
-    CancelAck, EventSink, MutationPermit, PREVIEW_TIMEOUT, PreviewSkill, PreviewSummary, TaskEvent,
-    TaskId, TaskManager, TaskManagerConfig, TaskOverall, TaskPhase, TaskResult, TaskSkillResult,
-    TaskSkillStatus,
+    ActiveMutationInfo, CancelAck, EventSink, MutationPermit, PREVIEW_TIMEOUT, PreviewSkill,
+    PreviewSummary, ShutdownReport, TaskEvent, TaskId, TaskManager, TaskManagerConfig,
+    TaskOverall, TaskPhase, TaskResult, TaskSkillResult, TaskSkillStatus,
 };
 pub use parser::{ParsedSkill, PreviewParseOutcome, parse_preview_output};
 pub use source::{SourceSpec, validate_source};

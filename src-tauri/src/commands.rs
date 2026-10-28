@@ -3,6 +3,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use tauri::ipc::Channel;
@@ -16,7 +17,7 @@ use crate::env::EnvReport;
 use crate::error::AppError;
 use crate::inventory::InventorySnapshot;
 use crate::paths::AppPaths;
-use crate::tasks::{CancelAck, EventSink, InstallRequest, TaskEvent, TaskId};
+use crate::tasks::{ActiveMutationInfo, CancelAck, EventSink, InstallRequest, TaskEvent, TaskId};
 use crate::timeouts::READ_TIMEOUT;
 use crate::update::UpdateCheckReport;
 
@@ -170,6 +171,37 @@ pub async fn cancel_task(
     task_id: String,
 ) -> Result<CancelAck, AppError> {
     state.tasks.cancel_task(&task_id)
+}
+
+/// Current in-flight mutation for the exit confirmation dialog. `None` means
+/// closing the window is safe (previews are read-only).
+#[tauri::command]
+pub fn get_active_mutation(state: State<'_, AppState>) -> Option<ActiveMutationInfo> {
+    state.tasks.active_mutation()
+}
+
+/// Acknowledge the startup interruption warning. The marker is removed; the
+/// retained backup snapshots are never deleted.
+#[tauri::command]
+pub fn dismiss_interrupted_mutation(state: State<'_, AppState>) -> Result<(), AppError> {
+    state.tasks.dismiss_interrupted_marker();
+    Ok(())
+}
+
+/// Confirmed exit. Keeps the interruption marker, force-cancels even a sealed
+/// mutation (the executor kills its whole process group), waits briefly, then
+/// exits. The lock snapshot is retained for the next-startup verification.
+#[tauri::command]
+pub async fn quit_app(app: AppHandle, state: State<'_, AppState>) -> Result<(), AppError> {
+    state.exiting.store(true, Ordering::SeqCst);
+    let tasks = state.tasks.clone();
+    let report = tasks.shutdown_mutations().await;
+    if report.timed_out {
+        // The executor already sent SIGKILL; the marker still needs to stay.
+        eprintln!("skills-box: shutdown timed out waiting for a mutation to finish");
+    }
+    app.exit(0);
+    Ok(())
 }
 
 /// Serialized update execution. The frontend sends only update-candidate skill
