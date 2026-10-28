@@ -1398,6 +1398,7 @@ mod tests {
 
     const INSTALL_SUCCESS: &str = include_str!("../../tests/fixtures/cli/install-success.txt");
     const INSTALL_PARTIAL: &str = include_str!("../../tests/fixtures/cli/install-partial.txt");
+    const INSTALL_COPY: &str = include_str!("../../tests/fixtures/cli/install-copy.txt");
     const INSTALL_FATAL_CLONE: &str =
         include_str!("../../tests/fixtures/cli/install-fatal-clone.txt");
 
@@ -1775,7 +1776,7 @@ mod tests {
         let paths = AppPaths::new(&home, tmp.path().join("app-data"));
         paths.ensure_dirs().unwrap();
         let executor = Arc::new(InstallExecutor::new(InstallResponse::success(
-            INSTALL_SUCCESS,
+            INSTALL_COPY,
             post_state(
                 home.clone(),
                 vec![PostSkill::copy("find-skills", ".qoder/skills")],

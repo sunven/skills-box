@@ -595,6 +595,7 @@ mod tests {
 
     const SUCCESS: &str = include_str!("../../tests/fixtures/cli/install-success.txt");
     const PARTIAL: &str = include_str!("../../tests/fixtures/cli/install-partial.txt");
+    const COPY: &str = include_str!("../../tests/fixtures/cli/install-copy.txt");
     const FAILED: &str = include_str!("../../tests/fixtures/cli/install-failed.txt");
     const EMPTY: &str = include_str!("../../tests/fixtures/cli/install-empty.txt");
     const FATAL_CLONE: &str = include_str!("../../tests/fixtures/cli/install-fatal-clone.txt");
@@ -826,6 +827,12 @@ mod tests {
         };
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].name.as_deref(), Some("find-skills"));
+        assert_eq!(results[0].status, CliSkillStatus::Installed);
+
+        // `mode: "copy"` is informational only; mount truth comes from lstat.
+        let InstallOutput::Results(results) = parse_install_output(COPY) else {
+            panic!("copy fixture must parse");
+        };
         assert_eq!(results[0].status, CliSkillStatus::Installed);
 
         let InstallOutput::Results(results) = parse_install_output(PARTIAL) else {
