@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import App from "./App";
 import { createQueryClient } from "./lib/query-client";
 import type {
+  InstallRequest,
   InventorySnapshot,
   PreviewSummary,
   TaskEvent,
@@ -20,8 +21,10 @@ import {
 
 interface MockState {
   channel: Channel<TaskEvent> | null;
+  installChannel: Channel<TaskEvent> | null;
   index: number;
   startCalls: Array<{ source: string }>;
+  installCalls: Array<{ request: InstallRequest }>;
   cancelCalls: Array<{ taskId: string }>;
 }
 
@@ -33,8 +36,10 @@ interface SetupOptions {
 function setup(options: SetupOptions = {}): MockState {
   const state: MockState = {
     channel: null,
+    installChannel: null,
     index: 0,
     startCalls: [],
+    installCalls: [],
     cancelCalls: [],
   };
   mockIPC((command, payload) => {
@@ -49,6 +54,15 @@ function setup(options: SetupOptions = {}): MockState {
       if (options.startError) throw options.startError;
       state.channel = args.onEvent;
       return "task-1";
+    }
+    if (command === "start_install") {
+      const args = payload as {
+        request: InstallRequest;
+        onEvent: Channel<TaskEvent>;
+      };
+      state.installCalls.push({ request: args.request });
+      state.installChannel = args.onEvent;
+      return "task-2";
     }
     if (command === "cancel_task") {
       state.cancelCalls.push(payload as { taskId: string });
@@ -75,6 +89,10 @@ async function openWizard(): Promise<HTMLElement> {
 function emit(state: MockState, event: TaskEvent) {
   const channel = state.channel;
   if (!channel) throw new Error("preview channel is not available");
+  emitOn(state, channel, event);
+}
+
+function emitOn(state: MockState, channel: Channel<TaskEvent>, event: TaskEvent) {
   const internals = (
     window as unknown as {
       __TAURI_INTERNALS__: {
@@ -175,7 +193,7 @@ describe("install wizard steps 1-2", () => {
     expect(state.startCalls).toEqual([{ source: "owner/repo/sub" }]);
   });
 
-  it("renders preview progress, conflicts, selection and the confirm placeholder", async () => {
+  it("renders preview progress, conflicts, selection, agents and the confirm page", async () => {
     const state = setup();
     const dialog = await openWizard();
     await startPreview(state, dialog);
@@ -223,16 +241,30 @@ describe("install wizard steps 1-2", () => {
     expect(next).toBeEnabled();
     fireEvent.click(next);
 
-    const placeholder = within(dialog).getByTestId("wizard-confirm-placeholder");
-    expect(within(placeholder).getByText("acme/skills")).toBeInTheDocument();
-    expect(within(placeholder).getByText("1 个 · alpha")).toBeInTheDocument();
     expect(
-      within(dialog).getByRole("button", { name: "继续（后续版本）" }),
-    ).toBeDisabled();
-    expect(within(dialog).getByText(/写入阶段不可取消/)).toBeInTheDocument();
+      within(dialog).getByText(/只显示本机检测到的 agent/),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByTestId("shared-agents")).toHaveTextContent(
+      "共享 canonical",
+    );
+    expect(within(dialog).getByText(/后台始终追加/)).toHaveTextContent(
+      "-a universal",
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "下一步" }));
+
+    const confirm = within(dialog).getByTestId("install-confirm");
+    expect(confirm).toHaveTextContent("acme/skills");
+    expect(confirm).toHaveTextContent("1 个 · alpha");
+    expect(confirm).toHaveTextContent("~/.agents/skills");
+    expect(within(dialog).getByTestId("writing-warning")).toHaveTextContent(
+      "写入阶段不可取消",
+    );
+    expect(
+      within(dialog).getByRole("button", { name: "开始安装" }),
+    ).toBeEnabled();
   });
 
-  it("auto-skips selection for a single installable skill but still shows confirm", async () => {
+  it("auto-skips selection for a single installable skill but still shows agents and confirm", async () => {
     const state = setup();
     const dialog = await openWizard();
     await startPreview(state, dialog);
@@ -244,12 +276,16 @@ describe("install wizard steps 1-2", () => {
       ),
     );
 
-    const placeholder = await within(dialog).findByTestId("wizard-confirm-placeholder");
-    expect(within(placeholder).getByText("1 个 · solo")).toBeInTheDocument();
-    expect(within(dialog).queryByLabelText("选择 solo")).not.toBeInTheDocument();
     expect(
-      within(dialog).getByRole("button", { name: "继续（后续版本）" }),
-    ).toBeDisabled();
+      await within(dialog).findByText(/只显示本机检测到的 agent/),
+    ).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("选择 solo")).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "下一步" }));
+    const confirm = within(dialog).getByTestId("install-confirm");
+    expect(confirm).toHaveTextContent("1 个 · solo");
+    expect(within(dialog).getByTestId("writing-warning")).toHaveTextContent(
+      "写入阶段不可取消",
+    );
   });
 
   it("shows an empty state and disables install when the repo has no SKILL.md", async () => {
@@ -295,9 +331,10 @@ describe("install wizard steps 1-2", () => {
     });
     expect(next).toBeEnabled();
     fireEvent.click(next);
+    fireEvent.click(within(dialog).getByRole("button", { name: "下一步" }));
 
-    const placeholder = within(dialog).getByTestId("wizard-confirm-placeholder");
-    expect(within(placeholder).getByText("2 个 · manual-a、manual-b")).toBeInTheDocument();
+    const confirm = within(dialog).getByTestId("install-confirm");
+    expect(confirm).toHaveTextContent("2 个 · manual-a、manual-b");
   });
 
   it("blocks manual names that collide with installed skills", async () => {

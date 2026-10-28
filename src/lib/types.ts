@@ -145,6 +145,13 @@ export interface CancelAck {
   message?: string;
 }
 
+/** The frontend sends only semantic values; Rust validates and appends universal. */
+export interface InstallRequest {
+  source: string;
+  skills: string[];
+  agents: string[];
+}
+
 export interface AgentAttachment {
   agentId: string;
   agentName: string;

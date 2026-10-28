@@ -1,19 +1,28 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Loader2, PackageOpen, X } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
-import { asAppError, cancelTask, startPreview } from "../lib/api";
+import {
+  asAppError,
+  cancelTask,
+  startInstall,
+  startPreview,
+} from "../lib/api";
 import type {
+  DetectedAgent,
   InventorySkill,
   PreviewSkill,
   PreviewSummary,
   TaskEvent,
   TaskPhase,
+  TaskResult,
 } from "../lib/types";
 
 interface InstallWizardProps {
   open: boolean;
   inventorySkills: InventorySkill[];
+  agents: DetectedAgent[];
   onClose: () => void;
 }
 
@@ -34,13 +43,18 @@ const PHASE_LABELS: Record<TaskPhase, string> = {
   preparing: "准备中",
   cloning: "正在克隆仓库",
   running_cli: "正在执行 CLI",
-  verifying: "正在解析结果",
+  verifying: "正在校验结果",
   completed: "已完成",
   failed: "失败",
   cancelled: "已取消",
 };
 
-type Step = 1 | 2 | 3;
+type Step = 1 | 2 | 3 | 4 | 5;
+
+interface AgentCount {
+  managed: number;
+  unmanaged: number;
+}
 
 function isFinalPhase(phase: TaskPhase | null): boolean {
   return phase !== null && FINAL_PHASES.has(phase);
@@ -70,10 +84,68 @@ function conflictLabel(skill: PreviewSkill): string {
   return skill.conflict.management === "unmanaged" ? "未受管" : "已安装";
 }
 
+function countAgentSkills(skills: InventorySkill[]): Map<string, AgentCount> {
+  const counts = new Map<string, AgentCount>();
+  for (const skill of skills) {
+    for (const attachment of skill.attachments) {
+      const current = counts.get(attachment.agentId) ?? {
+        managed: 0,
+        unmanaged: 0,
+      };
+      if (skill.management === "unmanaged") current.unmanaged += 1;
+      else current.managed += 1;
+      counts.set(attachment.agentId, current);
+    }
+  }
+  return counts;
+}
+
+function defaultAgentSelection(
+  agents: DetectedAgent[],
+  skills: InventorySkill[],
+): Set<string> {
+  const withManaged = new Set<string>();
+  for (const skill of skills) {
+    if (skill.management === "unmanaged") continue;
+    for (const attachment of skill.attachments) {
+      withManaged.add(attachment.agentId);
+    }
+  }
+  return new Set(
+    agents
+      .filter((agent) => !agent.universal && withManaged.has(agent.id))
+      .map((agent) => agent.id),
+  );
+}
+
+function skillStatusLabel(status: TaskResult["skills"][number]["status"]): string {
+  switch (status) {
+    case "installed":
+      return "已安装";
+    case "skipped":
+      return "未找到";
+    case "failed":
+      return "失败";
+  }
+}
+
+function overallHeading(overall: TaskResult["overall"]): string {
+  switch (overall) {
+    case "success":
+      return "安装完成";
+    case "partial":
+      return "安装部分失败";
+    case "failed":
+      return "安装失败";
+    case "cancelled":
+      return "安装已取消";
+  }
+}
+
 function StepBars({ step }: { step: Step }) {
   return (
     <div className="mt-3 flex gap-1.5" aria-hidden="true">
-      {[1, 2, 3, 4].map((index) => (
+      {[1, 2, 3, 4, 5].map((index) => (
         <span
           key={index}
           className={
@@ -96,6 +168,7 @@ function TaskProgress({
   total,
   cancelling,
   canCancel,
+  cancelLabel,
   onCancel,
 }: {
   phase: TaskPhase | null;
@@ -104,6 +177,7 @@ function TaskProgress({
   total: number;
   cancelling: boolean;
   canCancel: boolean;
+  cancelLabel: string;
   onCancel: () => void;
 }) {
   const safeTotal = total > 0 ? total : 1;
@@ -129,7 +203,7 @@ function TaskProgress({
             onClick={onCancel}
             disabled={cancelling}
           >
-            取消预览
+            {cancelLabel}
           </Button>
         ) : null}
       </div>
@@ -149,13 +223,19 @@ function TaskProgress({
 export function InstallWizard({
   open,
   inventorySkills,
+  agents,
   onClose,
 }: InstallWizardProps) {
+  const queryClient = useQueryClient();
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const onCloseRef = useRef(onClose);
   const taskIdRef = useRef<string | null>(null);
   const phaseRef = useRef<TaskPhase | null>(null);
+  const installRunningRef = useRef(false);
+  const lastInstallRef = useRef<{ skills: string[]; agents: string[] } | null>(
+    null,
+  );
   const runSeq = useRef(0);
 
   const [step, setStep] = useState<Step>(1);
@@ -165,14 +245,18 @@ export function InstallWizard({
   const [completed, setCompleted] = useState(0);
   const [total, setTotal] = useState(1);
   const [lastMessage, setLastMessage] = useState("");
-  const [starting, setStarting] = useState(false);
+  const [previewRunning, setPreviewRunning] = useState(false);
+  const [installRunning, setInstallRunning] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [startError, setStartError] = useState<WizardError | null>(null);
   const [taskError, setTaskError] = useState<WizardError | null>(null);
   const [cancelledNotice, setCancelledNotice] = useState(false);
+  const [installCancelled, setInstallCancelled] = useState(false);
   const [preview, setPreview] = useState<PreviewSummary | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [manualInput, setManualInput] = useState("");
+  const [selectedAgents, setSelectedAgents] = useState<Set<string>>(new Set());
+  const [installResult, setInstallResult] = useState<TaskResult | null>(null);
 
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -183,11 +267,28 @@ export function InstallWizard({
   useEffect(() => {
     phaseRef.current = phase;
   }, [phase]);
+  useEffect(() => {
+    installRunningRef.current = installRunning;
+  }, [installRunning]);
+
+  const invalidateMutationQueries = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ["inventory"] });
+    void queryClient.invalidateQueries({ queryKey: ["skill"] });
+  }, [queryClient]);
 
   const closeWizard = useCallback(() => {
     const activeTask = taskIdRef.current;
     const activePhase = phaseRef.current;
-    if (activeTask && activePhase && !isFinalPhase(activePhase)) {
+    if (installRunningRef.current) {
+      // Before the CLI spawns the task can still be cancelled. Once writing
+      // starts the modal stays open and the backend refuses cancellation.
+      if (activePhase !== "preparing") return;
+      if (activeTask) {
+        void cancelTask(activeTask).catch(() => {
+          // Best effort; the backend rejects cancellation after the seal.
+        });
+      }
+    } else if (activeTask && activePhase && !isFinalPhase(activePhase)) {
       void cancelTask(activeTask).catch(() => {
         // Closing is best-effort cancellation; the read-only task times out.
       });
@@ -206,14 +307,19 @@ export function InstallWizard({
     setCompleted(0);
     setTotal(1);
     setLastMessage("");
-    setStarting(false);
+    setPreviewRunning(false);
+    setInstallRunning(false);
     setCancelling(false);
     setStartError(null);
     setTaskError(null);
     setCancelledNotice(false);
+    setInstallCancelled(false);
     setPreview(null);
     setSelected(new Set());
     setManualInput("");
+    setSelectedAgents(new Set());
+    setInstallResult(null);
+    lastInstallRef.current = null;
     const previousFocus = document.activeElement as HTMLElement | null;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -244,9 +350,6 @@ export function InstallWizard({
     };
   }, [open, closeWizard]);
 
-  const running = starting || (phase !== null && !isFinalPhase(phase));
-  const canCancel = running && Boolean(taskId) && !cancelling;
-
   const manualNames = useMemo(() => parseManualNames(manualInput), [manualInput]);
   const inventoryByName = useMemo(() => {
     const map = new Map<string, InventorySkill>();
@@ -273,6 +376,27 @@ export function InstallWizard({
       ? manualNames.length === 0 || manualConflicts.length > 0
       : selected.size === 0 || normalSkillsAllConflicted);
 
+  const editableAgents = useMemo(
+    () => agents.filter((agent) => !agent.universal),
+    [agents],
+  );
+  const sharedAgents = useMemo(
+    () => agents.filter((agent) => agent.universal),
+    [agents],
+  );
+  const agentCounts = useMemo(
+    () => countAgentSkills(inventorySkills),
+    [inventorySkills],
+  );
+  const selectedAgentObjects = useMemo(
+    () => editableAgents.filter((agent) => selectedAgents.has(agent.id)),
+    [editableAgents, selectedAgents],
+  );
+
+  const writingLocked = installRunning && phase !== "preparing";
+  const canCancelTask =
+    Boolean(taskId) && !cancelling && (previewRunning || phase === "preparing");
+
   const handleTaskEvent = (event: TaskEvent) => {
     setPhase(event.phase);
     if (event.completed !== undefined) setCompleted(event.completed);
@@ -280,7 +404,7 @@ export function InstallWizard({
     if (event.message) setLastMessage(event.message);
 
     if (event.phase === "completed") {
-      setStarting(false);
+      setPreviewRunning(false);
       setCancelling(false);
       const resultPreview = event.result?.preview ?? null;
       setPreview(resultPreview);
@@ -289,6 +413,7 @@ export function InstallWizard({
           (skill) => !skill.conflict,
         );
         setSelected(new Set(installable.map((skill) => skill.name)));
+        setSelectedAgents(defaultAgentSelection(agents, inventorySkills));
         if (
           !resultPreview.parseFailed &&
           resultPreview.skills.length === 1 &&
@@ -304,7 +429,7 @@ export function InstallWizard({
       return;
     }
     if (event.phase === "failed") {
-      setStarting(false);
+      setPreviewRunning(false);
       setCancelling(false);
       setTaskError(
         event.error ?? {
@@ -316,7 +441,7 @@ export function InstallWizard({
       return;
     }
     if (event.phase === "cancelled") {
-      setStarting(false);
+      setPreviewRunning(false);
       setCancelling(false);
       setCancelledNotice(true);
       setStep(1);
@@ -324,7 +449,7 @@ export function InstallWizard({
   };
 
   const handlePreview = async () => {
-    if (running) return;
+    if (previewRunning || installRunning) return;
     const source = sourceInput.trim();
     if (!source) {
       setStartError({
@@ -339,9 +464,12 @@ export function InstallWizard({
     setCancelledNotice(false);
     setPreview(null);
     setSelected(new Set());
+    setSelectedAgents(new Set());
+    setInstallResult(null);
+    lastInstallRef.current = null;
     setManualInput("");
     setStep(1);
-    setStarting(true);
+    setPreviewRunning(true);
     setPhase("preparing");
     setCompleted(0);
     setTotal(1);
@@ -368,7 +496,85 @@ export function InstallWizard({
         },
       );
       setPhase(null);
-      setStarting(false);
+      setPreviewRunning(false);
+    }
+  };
+
+  const handleInstallEvent = (event: TaskEvent) => {
+    setPhase(event.phase);
+    if (event.completed !== undefined) setCompleted(event.completed);
+    if (event.total !== undefined) setTotal(event.total);
+    if (event.message) setLastMessage(event.message);
+
+    if (event.phase === "completed") {
+      setInstallRunning(false);
+      setCancelling(false);
+      setInstallResult(event.result ?? null);
+      invalidateMutationQueries();
+      return;
+    }
+    if (event.phase === "failed") {
+      setInstallRunning(false);
+      setCancelling(false);
+      setTaskError(
+        event.error ?? {
+          code: "cli.failed",
+          message: "安装失败，请重试。",
+        },
+      );
+      invalidateMutationQueries();
+      return;
+    }
+    if (event.phase === "cancelled") {
+      setInstallRunning(false);
+      setCancelling(false);
+      setInstallCancelled(true);
+    }
+  };
+
+  const handleStartInstall = async (names: string[]) => {
+    if (!preview || installRunning || previewRunning || names.length === 0) {
+      return;
+    }
+    const requestAgents = Array.from(selectedAgents);
+    lastInstallRef.current = { skills: names, agents: requestAgents };
+    const seq = ++runSeq.current;
+    setStep(5);
+    setInstallRunning(true);
+    setTaskError(null);
+    setStartError(null);
+    setInstallCancelled(false);
+    setInstallResult(null);
+    setTaskId(null);
+    setPhase("preparing");
+    setCompleted(0);
+    setTotal(names.length);
+    setLastMessage("正在准备安装…");
+
+    try {
+      const id = await startInstall(
+        { source: preview.source, skills: names, agents: requestAgents },
+        (event) => {
+          if (runSeq.current !== seq) return;
+          handleInstallEvent(event);
+        },
+      );
+      if (runSeq.current !== seq) {
+        void cancelTask(id).catch(() => {
+          // The wizard was closed while the invoke was in flight.
+        });
+        return;
+      }
+      setTaskId(id);
+    } catch (error) {
+      if (runSeq.current !== seq) return;
+      setTaskError(
+        asAppError(error) ?? {
+          message: "无法开始安装，请稍后重试。",
+        },
+      );
+      setPhase(null);
+      setInstallRunning(false);
     }
   };
 
@@ -385,7 +591,7 @@ export function InstallWizard({
     } catch (error) {
       setTaskError(
         asAppError(error) ?? {
-          message: "无法取消预览。",
+          message: "无法取消任务。",
         },
       );
     } finally {
@@ -402,10 +608,41 @@ export function InstallWizard({
     });
   };
 
+  const toggleAgent = (id: string) => {
+    setSelectedAgents((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
   const handleNext = () => {
     if (nextDisabled) return;
+    // Agent defaults were computed when the preview completed; going back to
+    // this step must not discard the user's changes.
     setStep(3);
   };
+
+  const retryNames =
+    installResult?.skills
+      .filter((skill) => skill.status !== "installed")
+      .map((skill) => skill.name) ?? [];
+  const lastInstall = lastInstallRef.current;
+  const agentSummary =
+    [
+      ...selectedAgentObjects.map((agent) => agent.displayName),
+      ...(sharedAgents.length > 0
+        ? [`共享 canonical（${sharedAgents.map((agent) => agent.displayName).join("、")}）`]
+        : []),
+    ].join("、") || "仅共享 canonical";
+  const targetPaths = [
+    { label: "共享 canonical", path: "~/.agents/skills" },
+    ...selectedAgentObjects.map((agent) => ({
+      label: agent.displayName,
+      path: agent.globalSkillsDir ?? "—",
+    })),
+  ];
 
   if (!open) return null;
 
@@ -414,7 +651,11 @@ export function InstallWizard({
       ? "选择来源"
       : step === 2
         ? "选择 skill"
-        : "确认（下一步）";
+        : step === 3
+          ? "选择 agent"
+          : step === 4
+            ? "确认"
+            : "执行安装";
 
   return (
     <div
@@ -446,6 +687,8 @@ export function InstallWizard({
             size="sm"
             aria-label="关闭安装向导"
             onClick={closeWizard}
+            disabled={writingLocked}
+            title={writingLocked ? "写入阶段不可取消" : undefined}
             className="size-7 shrink-0 p-0"
           >
             <X className="size-4" aria-hidden="true" />
@@ -467,12 +710,12 @@ export function InstallWizard({
                   onKeyDown={(event) => {
                     if (event.key === "Enter") void handlePreview();
                   }}
-                  disabled={running}
+                  disabled={previewRunning || installRunning}
                   autoFocus
                 />
                 <Button
                   onClick={() => void handlePreview()}
-                  disabled={running}
+                  disabled={previewRunning || installRunning}
                   className="shrink-0"
                 >
                   预览仓库
@@ -510,14 +753,15 @@ export function InstallWizard({
                 </div>
               ) : null}
 
-              {running || phase === "preparing" ? (
+              {previewRunning ? (
                 <TaskProgress
                   phase={phase}
                   message={lastMessage}
                   completed={completed}
                   total={total}
                   cancelling={cancelling}
-                  canCancel={canCancel}
+                  canCancel={canCancelTask}
+                  cancelLabel="取消预览"
                   onCancel={() => void handleCancel()}
                 />
               ) : null}
@@ -688,8 +932,91 @@ export function InstallWizard({
             </>
           ) : null}
 
-          {step === 3 && preview ? (
-            <div data-testid="wizard-confirm-placeholder">
+          {step === 3 ? (
+            <>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                只显示本机检测到的 agent。默认勾选已含受管 skill 的 agent；仅有未受管目录的 agent 默认不勾选。
+              </p>
+              <ul className="mt-3 space-y-1.5">
+                {editableAgents.map((agent) => {
+                  const counts = agentCounts.get(agent.id);
+                  const managed = counts?.managed ?? 0;
+                  const unmanaged = counts?.unmanaged ?? 0;
+                  const onlyUnmanaged = managed === 0 && unmanaged > 0;
+                  return (
+                    <li key={agent.id}>
+                      <label
+                        data-testid="agent-option"
+                        data-agent-id={agent.id}
+                        data-only-unmanaged={onlyUnmanaged ? "true" : "false"}
+                        className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-border px-3 py-2 transition-colors hover:border-primary/40 aria-[checked=true]:border-primary/50 aria-[checked=true]:bg-primary/5"
+                        aria-checked={selectedAgents.has(agent.id)}
+                      >
+                        <input
+                          type="checkbox"
+                          className="mt-0.5"
+                          checked={selectedAgents.has(agent.id)}
+                          onChange={() => toggleAgent(agent.id)}
+                          aria-label={`选择 ${agent.displayName}`}
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="flex flex-wrap items-center gap-1.5">
+                            <span className="text-xs font-medium">
+                              {agent.displayName}
+                            </span>
+                            {onlyUnmanaged ? (
+                              <span className="rounded border border-warning/40 bg-warning-soft px-1.5 py-0.5 text-[10px] text-warning">
+                                仅含未受管 skill
+                              </span>
+                            ) : managed > 0 ? (
+                              <span className="rounded border border-border-strong bg-card px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                                已含受管 skill
+                              </span>
+                            ) : null}
+                          </span>
+                          <span className="mt-0.5 block font-mono text-[10.5px] text-muted-foreground">
+                            {agent.globalSkillsDir ?? "—"}
+                          </span>
+                          {onlyUnmanaged ? (
+                            <span className="mt-0.5 block text-[10.5px] text-muted-foreground">
+                              目录中只有未受管 skill，默认不勾选
+                            </span>
+                          ) : null}
+                        </span>
+                      </label>
+                    </li>
+                  );
+                })}
+              </ul>
+
+              {sharedAgents.length > 0 ? (
+                <div
+                  data-testid="shared-agents"
+                  className="mt-3 rounded-lg border border-border bg-muted/40 px-3 py-2 text-[11px]"
+                >
+                  <p className="font-medium">共享 canonical</p>
+                  <p className="mt-1 leading-relaxed text-muted-foreground">
+                    {sharedAgents.map((agent) => agent.displayName).join("、")}
+                    {" · 直接读取 ~/.agents/skills，无需单独挂载"}
+                  </p>
+                </div>
+              ) : null}
+
+              {agents.length === 0 ? (
+                <p className="mt-3 rounded-md border border-border bg-muted/50 px-2.5 py-1.5 text-[11px] text-muted-foreground">
+                  未检测到 agent，安装将只写入共享 canonical。
+                </p>
+              ) : null}
+
+              <p className="mt-2 rounded-md border border-border bg-muted/50 px-2.5 py-1.5 text-[11px] leading-relaxed text-muted-foreground">
+                后台始终追加 <span className="font-mono">-a universal</span>
+                ，确保写入共享 canonical，避免单 agent 默认 copy。
+              </p>
+            </>
+          ) : null}
+
+          {step === 4 && preview ? (
+            <div data-testid="install-confirm">
               <div className="rounded-lg border border-border bg-muted/40 p-3 text-xs">
                 <div className="flex justify-between gap-4 py-0.5">
                   <span className="text-muted-foreground">来源</span>
@@ -702,23 +1029,184 @@ export function InstallWizard({
                   </strong>
                 </div>
                 <div className="flex justify-between gap-4 py-0.5">
-                  <span className="text-muted-foreground">目标</span>
-                  <strong>~/.agents/skills + agent 链接</strong>
+                  <span className="text-muted-foreground">Agents</span>
+                  <strong>{agentSummary}</strong>
                 </div>
               </div>
-              <p className="mt-3 rounded-md border border-border bg-muted/50 px-2.5 py-1.5 text-[11px] leading-relaxed text-muted-foreground">
-                下一步将选择 agent、确认目标并执行安装（后续版本）。写入阶段不可取消。
+
+              <div className="mt-3 rounded-lg border border-border p-3 text-xs">
+                <p className="font-medium">目标路径</p>
+                <ul className="mt-1.5 space-y-1">
+                  {targetPaths.map((target) => (
+                    <li
+                      key={`${target.label}-${target.path}`}
+                      className="flex justify-between gap-4"
+                    >
+                      <span className="text-muted-foreground">{target.label}</span>
+                      <span className="font-mono text-[10.5px]">{target.path}</span>
+                    </li>
+                  ))}
+                </ul>
+                {sharedAgents.length > 0 ? (
+                  <p className="mt-1.5 text-[10.5px] text-muted-foreground">
+                    共享 canonical 的 agent（
+                    {sharedAgents.map((agent) => agent.displayName).join("、")}
+                    ）直接读取共享目录。
+                  </p>
+                ) : null}
+              </div>
+
+              <p
+                data-testid="writing-warning"
+                className="mt-3 rounded-md border border-warning/30 bg-warning-soft px-2.5 py-1.5 text-[11px] leading-relaxed text-warning"
+              >
+                写入阶段不可取消。安装前会快照 lock；每个来源只执行一次 CLI；完成后逐项校验 canonical、agent 挂载与 lock。
               </p>
             </div>
+          ) : null}
+
+          {step === 5 ? (
+            <>
+              {installRunning ? (
+                <>
+                  <TaskProgress
+                    phase={phase}
+                    message={lastMessage}
+                    completed={completed}
+                    total={total}
+                    cancelling={cancelling}
+                    canCancel={
+                      Boolean(taskId) && phase === "preparing" && !cancelling
+                    }
+                    cancelLabel="取消安装"
+                    onCancel={() => void handleCancel()}
+                  />
+                  <p
+                    data-testid="install-lock-note"
+                    className="mt-2 rounded-md border border-border bg-muted/50 px-2.5 py-1.5 text-[11px] text-muted-foreground"
+                  >
+                    {phase === "preparing"
+                      ? "正在写入前准备；取消后不会调用 CLI。"
+                      : "写入阶段不可取消。"}
+                  </p>
+                </>
+              ) : null}
+
+              {installCancelled ? (
+                <p
+                  role="status"
+                  data-testid="install-cancelled"
+                  className="mt-3 rounded-md border border-border bg-muted/50 px-2.5 py-1.5 text-[11px] text-muted-foreground"
+                >
+                  安装已取消，未写入任何文件。
+                </p>
+              ) : null}
+
+              {taskError ? (
+                <div
+                  role="alert"
+                  data-testid="install-error"
+                  className="mt-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive"
+                >
+                  <p className="font-medium">{taskError.message}</p>
+                  {taskError.detail ? (
+                    <p className="mt-0.5 line-clamp-4 text-[10.5px] opacity-70">
+                      {taskError.detail}
+                    </p>
+                  ) : null}
+                  {taskError.hint ? (
+                    <p className="mt-0.5 text-[10.5px] opacity-80">
+                      {taskError.hint}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {installResult ? (
+                <div data-testid="install-result" data-overall={installResult.overall}>
+                  <div className="flex items-baseline gap-2">
+                    <h3 className="text-sm font-semibold">
+                      {overallHeading(installResult.overall)}
+                    </h3>
+                    <span className="text-[11px] text-muted-foreground">
+                      {lastMessage}
+                    </span>
+                  </div>
+                  <ul className="mt-2 space-y-1.5">
+                    {installResult.skills.map((skill) => (
+                      <li
+                        key={skill.name}
+                        data-testid="install-skill-result"
+                        data-skill-name={skill.name}
+                        data-skill-status={skill.status}
+                        className="rounded-lg border border-border px-3 py-2"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-medium">{skill.name}</span>
+                          <span
+                            className={
+                              skill.status === "installed"
+                                ? "rounded border border-success/30 bg-success-soft px-1.5 py-0.5 text-[10px] text-success"
+                                : "rounded border border-warning/30 bg-warning-soft px-1.5 py-0.5 text-[10px] text-warning"
+                            }
+                          >
+                            {skillStatusLabel(skill.status)}
+                          </span>
+                          {skill.status !== "installed" ? (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="ml-auto h-7"
+                              disabled={installRunning}
+                              onClick={() => void handleStartInstall([skill.name])}
+                            >
+                              重试
+                            </Button>
+                          ) : null}
+                        </div>
+                        {skill.error ? (
+                          <p className="mt-1 text-[10.5px] leading-relaxed text-muted-foreground">
+                            {skill.error.message}
+                            {skill.error.detail ? ` · ${skill.error.detail}` : ""}
+                          </p>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+
+                  {installResult.warnings.length > 0 ? (
+                    <ul
+                      data-testid="install-warnings"
+                      className="mt-2 space-y-1 rounded-lg border border-warning/30 bg-warning-soft px-3 py-2 text-[10.5px] text-warning"
+                    >
+                      {installResult.warnings.map((warning) => (
+                        <li key={`${warning.code}-${warning.message}`}>
+                          {warning.message}
+                          {warning.detail ? ` · ${warning.detail}` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+
+                  {installResult.backupPath ? (
+                    <p className="mt-2 font-mono text-[10px] text-muted-foreground">
+                      lock 快照：{installResult.backupPath}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+            </>
           ) : null}
         </div>
 
         <div className="flex items-center justify-between gap-2 border-t border-border px-5 py-3">
           <div className="text-[10.5px] text-muted-foreground">
-            Esc 关闭 · 公开 GitHub · 仅默认分支
+            {step === 5 && writingLocked
+              ? "写入阶段不可取消"
+              : "Esc 关闭 · 公开 GitHub · 仅默认分支"}
           </div>
           <div className="flex items-center gap-2">
-            {step > 1 ? (
+            {step === 2 || step === 3 ? (
               <Button
                 variant="ghost"
                 size="sm"
@@ -735,11 +1223,55 @@ export function InstallWizard({
             {step === 3 ? (
               <Button
                 size="sm"
-                disabled
-                title="选择 agent、确认与执行将在后续版本提供"
+                onClick={() => setStep(4)}
+                disabled={preview === null}
               >
-                继续（后续版本）
+                下一步
               </Button>
+            ) : null}
+            {step === 4 ? (
+              <>
+                <Button variant="ghost" size="sm" onClick={() => setStep(3)}>
+                  上一步
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => void handleStartInstall(effectiveNames)}
+                  disabled={installRunning || effectiveNames.length === 0}
+                >
+                  开始安装
+                </Button>
+              </>
+            ) : null}
+            {step === 5 && !installRunning ? (
+              <>
+                {installResult && retryNames.length > 0 ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void handleStartInstall(retryNames)}
+                  >
+                    重试失败项
+                  </Button>
+                ) : null}
+                {taskError && lastInstall ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void handleStartInstall(lastInstall.skills)}
+                  >
+                    重试
+                  </Button>
+                ) : null}
+                {taskError || installCancelled ? (
+                  <Button variant="ghost" size="sm" onClick={() => setStep(4)}>
+                    返回确认
+                  </Button>
+                ) : null}
+                <Button size="sm" onClick={closeWizard}>
+                  {installResult?.overall === "success" ? "完成" : "关闭"}
+                </Button>
+              </>
             ) : null}
           </div>
         </div>
