@@ -109,18 +109,41 @@ impl ProcessExecutor for TokioExecutor {
     }
 }
 
-/// Graceful stop: SIGTERM the whole process group, wait up to 3 seconds, then
-/// SIGKILL. `process_group(0)` makes the direct child the group leader, so
-/// npx → npm → skills → git descendants are all covered.
+/// Graceful stop: SIGTERM the whole process group, wait up to 3 seconds for
+/// the whole group to drain, then SIGKILL. `process_group(0)` makes the direct
+/// child the group leader, so npx → npm → skills → git descendants are all
+/// covered. The leader may exit on SIGTERM while a descendant ignores it, so
+/// the grace period probes the group itself instead of only `child.wait()`.
 async fn stop_child(child: &mut Child, pid: Option<u32>) {
     terminate_group(pid, libc::SIGTERM);
-    if tokio::time::timeout(Duration::from_secs(3), child.wait())
-        .await
-        .is_err()
-    {
-        terminate_group(pid, libc::SIGKILL);
+    let Some(pid) = pid else {
         let _ = child.wait().await;
+        return;
+    };
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        // Reap the leader first: an unreaped zombie leader keeps the group
+        // visible to `killpg` and would otherwise force a needless SIGKILL.
+        let _ = child.try_wait();
+        if !group_alive(pid) || tokio::time::Instant::now() >= deadline {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
     }
+
+    if group_alive(pid) {
+        terminate_group(Some(pid), libc::SIGKILL);
+        // SIGKILL is immediate, but give the kernel a moment to tear down the
+        // group before reporting the task as cancelled.
+        for _ in 0..40 {
+            if !group_alive(pid) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+    let _ = child.wait().await;
 }
 
 async fn collect_pipes(
@@ -139,6 +162,12 @@ fn terminate_group(pid: Option<u32>, signal: i32) {
             libc::killpg(pid as libc::pid_t, signal);
         }
     }
+}
+
+/// True while at least one process in the group still exists.
+fn group_alive(pid: u32) -> bool {
+    // Safe: signal 0 only performs existence/permission checks.
+    unsafe { libc::killpg(pid as libc::pid_t, 0) == 0 }
 }
 
 #[cfg(test)]
@@ -269,6 +298,60 @@ mod tests {
         assert_eq!(
             group_alive, -1,
             "process group {pid} should no longer exist"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancellation_escalates_to_sigkill_when_descendants_ignore_sigterm() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pid_file = tmp.path().join("child.pid");
+        // The leader exits on SIGTERM, but the inner shell ignores it and keeps
+        // the process group alive; cancellation must escalate to SIGKILL.
+        let script = format!(
+            "echo $$ > '{}'; sh -c 'trap \"\" TERM; while true; do sleep 1; done' & wait",
+            pid_file.display()
+        );
+        let cancel = CancelToken::new();
+        let task = tokio::spawn({
+            let cancel = cancel.clone();
+            async move {
+                TokioExecutor
+                    .run(
+                        CommandSpec::new(
+                            "/bin/sh",
+                            vec!["-c".to_string(), script],
+                            tmp.path(),
+                            BTreeMap::new(),
+                            Duration::from_secs(60),
+                        ),
+                        cancel,
+                    )
+                    .await
+            }
+        });
+
+        let mut pid: Option<i32> = None;
+        for _ in 0..100 {
+            if let Ok(text) = std::fs::read_to_string(&pid_file)
+                && let Ok(value) = text.trim().parse::<i32>()
+            {
+                pid = Some(value);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let pid = pid.expect("child pid file should be written");
+        cancel.cancel();
+
+        let error = tokio::time::timeout(Duration::from_secs(8), task)
+            .await
+            .expect("cancellation should escalate and finish")
+            .expect("task should not panic")
+            .unwrap_err();
+        assert_eq!(error, ExecError::Cancelled);
+        assert!(
+            !group_alive(pid as u32),
+            "process group {pid} should be gone after SIGKILL escalation"
         );
     }
 
