@@ -1,5 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
+  ActiveMutationInfo,
   AppDataKind,
   CancelAck,
   DetachResult,
@@ -65,6 +66,24 @@ export function startPreview(
 
 export function cancelTask(taskId: string): Promise<CancelAck> {
   return invoke<CancelAck>("cancel_task", { taskId });
+}
+
+/** The single in-flight mutation; `null` means closing the window is safe. */
+export function getActiveMutation(): Promise<ActiveMutationInfo | null> {
+  return invoke<ActiveMutationInfo | null>("get_active_mutation");
+}
+
+/** Acknowledge the startup interruption warning; snapshots are retained. */
+export function dismissInterruptedMutation(): Promise<void> {
+  return invoke<void>("dismiss_interrupted_mutation");
+}
+
+/**
+ * Confirmed exit: Rust keeps the interruption marker, kills the CLI process
+ * group even in the sealed write phase, waits briefly, then exits.
+ */
+export function quitApp(): Promise<void> {
+  return invoke<void>("quit_app");
 }
 
 /**

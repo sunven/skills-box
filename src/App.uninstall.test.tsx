@@ -235,7 +235,9 @@ async function openUninstall(name: string) {
       detail().getByRole("button", { name: "彻底卸载" }),
     ).toBeInTheDocument();
   });
-  fireEvent.click(detail().getByRole("button", { name: "彻底卸载" }));
+  const opener = detail().getByRole("button", { name: "彻底卸载" });
+  opener.focus();
+  fireEvent.click(opener);
   return screen.getByRole("dialog", { name: `彻底卸载 · ${name}` });
 }
 
@@ -294,6 +296,9 @@ describe("uninstall", () => {
       expect(
         screen.queryByRole("dialog", { name: "彻底卸载 · copy-only" }),
       ).not.toBeInTheDocument(),
+    );
+    expect(document.activeElement).toBe(
+      detail().getByRole("button", { name: "彻底卸载" }),
     );
   });
 

@@ -164,7 +164,11 @@ describe("detach from one agent", () => {
       pane.getByRole("button", { name: "彻底卸载" }),
     ).toBeInTheDocument();
 
-    fireEvent.click(pane.getByRole("button", { name: "断开 Claude Code" }));
+    const detachButton = pane.getByRole("button", {
+      name: "断开 Claude Code",
+    });
+    detachButton.focus();
+    fireEvent.click(detachButton);
 
     const dialog = screen.getByRole("dialog", { name: /断开 agent 挂载/ });
     expect(within(dialog).getByText("Claude Code")).toBeInTheDocument();
@@ -184,6 +188,7 @@ describe("detach from one agent", () => {
 
     fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
     expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(detachButton);
 
     fireEvent.click(pane.getByRole("button", { name: "断开 Qoder" }));
     const copyDialog = screen.getByRole("dialog", { name: /断开 agent 挂载/ });

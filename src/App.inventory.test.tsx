@@ -331,6 +331,7 @@ describe("anomaly banner and modal", () => {
     expect(banner).toHaveTextContent("1 个断链");
     expect(screen.queryByText("ghost")).not.toBeInTheDocument();
 
+    banner.focus();
     fireEvent.click(banner);
     const dialog = screen.getByRole("dialog", { name: "异常与只读提示" });
     expect(within(dialog).getByText("失效 lock 条目")).toBeInTheDocument();
@@ -349,6 +350,7 @@ describe("anomaly banner and modal", () => {
     expect(
       screen.queryByRole("dialog", { name: "异常与只读提示" }),
     ).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(banner);
   });
 });
 
