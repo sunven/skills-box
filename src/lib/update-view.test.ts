@@ -16,12 +16,21 @@ import {
   markSkillsCurrent,
   mergeUpdateReports,
   summarizeFullCheck,
+  selectUpdateDialog,
   summarizePersistedState,
   updateBadgeTitle,
   updateBadgeVariant,
   withUpdateAnomalies,
 } from "./update-view";
-import { makeAnomalies, makeSkill } from "../test/inventory-fixtures";
+import {
+  attachment,
+  claudeAgent,
+  codexAgent,
+  geminiAgent,
+  makeAnomalies,
+  makeSkill,
+  makeUpdateViewSkill,
+} from "../test/inventory-fixtures";
 
 function updateResult(
   name: string,
@@ -406,5 +415,81 @@ describe("last check summaries", () => {
       skippedSourceCount: 1,
       warnings: [],
     });
+  });
+});
+
+
+describe("selectUpdateDialog", () => {
+  it("preserves single/all eligibility and filters universal copy agents", () => {
+    const skill = {
+      ...makeUpdateViewSkill({
+        name: "alpha",
+        management: "managed",
+        localModification: "clean",
+        attachments: [
+          attachment("claude-code", "copy"),
+          attachment("gemini-cli", "copy"),
+          attachment("codex", "copy"),
+        ],
+      }),
+      update: "update" as const,
+    };
+    const summary = computeUpdateSummary([skill]);
+    const agents = [claudeAgent, geminiAgent, codexAgent];
+
+    const all = selectUpdateDialog({
+      mode: "all",
+      skills: [skill],
+      agents,
+      summary,
+      singleName: null,
+    });
+    expect(all.initialNames).toEqual(["alpha"]);
+    expect(all.copyCandidateCount).toBe(1);
+    expect(all.singleCopyAgents).toEqual([]);
+
+    const single = selectUpdateDialog({
+      mode: "single",
+      skills: [skill],
+      agents,
+      summary,
+      singleName: "alpha",
+    });
+    expect(single.initialNames).toEqual(["alpha"]);
+    expect(single.singleCopyAgents).toEqual(["Claude Code"]);
+    expect(single.singleAffectedAgents).toEqual(["Claude Code"]);
+  });
+
+  it("skips modified candidates in all mode but allows single confirmation", () => {
+    const modified = {
+      ...makeUpdateViewSkill({
+        name: "modified",
+        management: "managed",
+        localModification: "modified",
+      }),
+      update: "update" as const,
+    };
+    const summary = computeUpdateSummary([modified]);
+    const agents = [claudeAgent];
+
+    const all = selectUpdateDialog({
+      mode: "all",
+      skills: [modified],
+      agents,
+      summary,
+      singleName: null,
+    });
+    expect(all.initialNames).toEqual([]);
+    expect(all.grouped.get("local_modified")?.[0]?.name).toBe("modified");
+
+    const single = selectUpdateDialog({
+      mode: "single",
+      skills: [modified],
+      agents,
+      summary,
+      singleName: "modified",
+    });
+    expect(single.initialNames).toEqual(["modified"]);
+    expect(single.singleNeedsConfirmation).toBe(true);
   });
 });

@@ -32,7 +32,6 @@ import type {
   DetachResult,
   InventoryAgent,
   SkillDetail,
-  UpdateSkillResult,
 } from "../lib/types";
 import {
   ATTACHMENT_LABELS,
@@ -40,13 +39,12 @@ import {
   UPDATE_LABELS,
   formatEpochMs,
   formatUpdatedAt,
-  hasBrokenAttachment,
-  hasLocalModificationWarning,
   shortHash,
 } from "../lib/inventory-view";
 import { formatEpochDateTime, updateBadgeTitle } from "../lib/update-view";
 import type { UpdateViewSkill } from "../lib/types";
 import { useSkillDetailQuery } from "../hooks/use-skill-detail";
+import { selectDetailView } from "../lib/detail-view";
 import { cn } from "../lib/utils";
 
 // The Markdown stack is only needed after a skill is selected; keep it out of
@@ -61,7 +59,6 @@ const NO_AGENTS: InventoryAgent[] = [];
 
 interface DetailPaneProps {
   skill: UpdateViewSkill;
-  updateResult?: UpdateSkillResult | null;
   agents?: InventoryAgent[];
   checkingUpdates?: boolean;
   onCheckUpdates?: (skillIds: string[]) => void;
@@ -257,7 +254,6 @@ function AgentAttachmentRow({
 
 export const DetailPane = memo(function DetailPane({
   skill,
-  updateResult,
   agents = NO_AGENTS,
   checkingUpdates = false,
   onCheckUpdates,
@@ -310,34 +306,23 @@ export const DetailPane = memo(function DetailPane({
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [onClose]);
 
-  const current = detail ?? skill;
-  const management = current.management;
-  const update = skill.update;
-  const updateInfo = updateResult ?? skill.updateResult ?? null;
-  const localModification = current.localModification;
-  const attachments = current.attachments;
-  const warnings = detail?.warnings ?? [];
-  const broken = hasBrokenAttachment({
-    ...skill,
-    attachments,
-  });
-  const unattached = attachments.length === 0 && management !== "unmanaged";
-  const attachableAgents = useMemo(
-    () =>
-      agents.filter(
-        (agent) =>
-          agent.detected &&
-          !agent.universal &&
-          !agent.shared &&
-          !attachments.some((attachment) => attachment.agentId === agent.id),
-      ),
-    [agents, attachments],
+  const detailView = useMemo(
+    () => selectDetailView(skill, detail, agents),
+    [skill, detail, agents],
   );
-  const localWarning = hasLocalModificationWarning({
-    ...skill,
+  const {
     management,
+    update,
+    updateResult: updateInfo,
     localModification,
-  });
+    attachments,
+    warnings,
+    broken,
+    unattached,
+    attachableAgents,
+    localWarning,
+    frontmatterWarning,
+  } = detailView;
   const directoryLabel =
     management === "copy_only" ? "agent 路径" : "canonical 路径";
 
@@ -388,18 +373,8 @@ export const DetailPane = memo(function DetailPane({
       : detail?.sourceType
         ? ` · ${detail.sourceType}`
         : "";
-  const frontmatterWarning = warnings.some((warning) =>
-    warning.includes("frontmatter"),
-  );
-
   const hasAlerts =
-    query.isPending ||
-    Boolean(detailError) ||
-    management === "unmanaged" ||
-    management === "copy_only" ||
-    localModification === "modified" ||
-    localModification === "unknown" ||
-    warnings.length > 0;
+    query.isPending || Boolean(detailError) || detailView.hasAlerts;
 
   return (
     <>
@@ -428,7 +403,7 @@ export const DetailPane = memo(function DetailPane({
             <X className="size-4" aria-hidden="true" />
           </Button>
           <div className="detail-title-line">
-            <h2 className="detail-title">{detail?.name ?? skill.name}</h2>
+            <h2 className="detail-title">{detailView.name}</h2>
             <UpdateStatus
               skill={{ ...skill, updateResult: updateInfo ?? undefined }}
             />
@@ -907,8 +882,8 @@ export const DetailPane = memo(function DetailPane({
 
         <DetachDialog
           open={detachTarget !== null}
-          skillName={detail?.name ?? skill.name}
-          canonicalPath={detail?.canonicalPath ?? null}
+          skillName={detailView.name}
+          canonicalPath={detailView.canonicalPath}
           target={detachTarget}
           otherAttachments={attachments.filter(
             (attachment) => attachment.agentId !== detachTarget?.agentId,

@@ -8,6 +8,7 @@ import type {
   AnomalyGroup,
   AnomalySummary,
   AnomalyView,
+  InventoryAgent,
   InventorySkill,
   UpdateCheckOutcome,
   UpdateCheckReport,
@@ -48,6 +49,121 @@ export interface UpdateSkipItem {
 export interface UpdateSummary {
   candidates: UpdateViewSkill[];
   skipped: UpdateSkipItem[];
+}
+
+export type UpdateMode = "single" | "all";
+
+export const UPDATE_REASON_ORDER: UpdateSkipReason[] = [
+  "local_modified",
+  "local_unknown",
+  "unknown",
+  "not_checked",
+  "path_missing",
+  "error",
+  "copy_only",
+];
+
+export interface UpdateDialogView {
+  mode: UpdateMode;
+  summary: UpdateSummary;
+  grouped: Map<UpdateSkipReason, UpdateSkipItem[]>;
+  initialNames: string[];
+  singleSkill?: UpdateViewSkill;
+  singleEligible: boolean;
+  singleNeedsConfirmation: boolean;
+  singleCopyAgents: string[];
+  singleAffectedAgents: string[];
+  copyCandidates: Set<string>;
+  copyCandidateCount: number;
+}
+
+export function selectUpdateDialog(input: {
+  mode: UpdateMode;
+  skills: UpdateViewSkill[];
+  agents: InventoryAgent[];
+  summary: UpdateSummary;
+  singleName: string | null;
+}): UpdateDialogView {
+  const universalIds = new Set(
+    input.agents.filter((agent) => agent.universal).map((agent) => agent.id),
+  );
+  const singleSkill =
+    input.mode === "single"
+      ? input.skills.find((skill) => skill.name === input.singleName)
+      : undefined;
+  const singleEligible = Boolean(
+    singleSkill &&
+      singleSkill.management === "managed" &&
+      singleSkill.update === "update",
+  );
+  const singleNeedsConfirmation = Boolean(
+    singleSkill &&
+      (singleSkill.localModification === "modified" ||
+        singleSkill.localModification === "unknown"),
+  );
+  const singleCopyAgents = singleSkill
+    ? copyAgentNames(singleSkill, universalIds)
+    : [];
+  const singleAffectedAgents = singleSkill
+    ? affectedAgentNames(singleSkill, universalIds)
+    : [];
+  const initialNames =
+    input.mode === "single"
+      ? singleEligible && singleSkill
+        ? [singleSkill.name]
+        : []
+      : input.summary.candidates.map((skill) => skill.name);
+  const grouped = new Map<UpdateSkipReason, UpdateSkipItem[]>();
+  for (const item of input.summary.skipped) {
+    const list = grouped.get(item.reason) ?? [];
+    list.push(item);
+    grouped.set(item.reason, list);
+  }
+  const copyCandidates = new Set(
+    input.summary.candidates
+      .filter((skill) => copyAgentNames(skill, universalIds).length > 0)
+      .map((skill) => skill.name),
+  );
+  const copyCandidateCount = copyCandidates.size;
+
+  return {
+    mode: input.mode,
+    summary: input.summary,
+    grouped,
+    initialNames,
+    singleSkill,
+    singleEligible,
+    singleNeedsConfirmation,
+    singleCopyAgents,
+    singleAffectedAgents,
+    copyCandidates,
+    copyCandidateCount,
+  };
+}
+
+function copyAgentNames(
+  skill: UpdateViewSkill,
+  universalIds: Set<string>,
+): string[] {
+  return skill.attachments
+    .filter(
+      (attachment) =>
+        attachment.mode === "copy" && !universalIds.has(attachment.agentId),
+    )
+    .map((attachment) => attachment.agentName);
+}
+
+function affectedAgentNames(
+  skill: UpdateViewSkill,
+  universalIds: Set<string>,
+): string[] {
+  return skill.attachments
+    .filter(
+      (attachment) =>
+        (attachment.mode === "link" || attachment.mode === "copy") &&
+        !universalIds.has(attachment.agentId),
+    )
+    .map((attachment) => attachment.agentName);
 }
 
 export function applyUpdateReport(

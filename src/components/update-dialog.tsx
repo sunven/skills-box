@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
@@ -17,20 +17,11 @@ import {
   revealAppData,
   startUpdate,
 } from "../lib/api";
-import type {
-  InventoryAgent,
-  TaskEvent,
-  TaskResult,
-  UpdateCheckReport,
-} from "../lib/types";
-import type {
-  UpdateSkipItem,
-  UpdateSkipReason,
-} from "../lib/update-view";
-import type { UpdateViewSkill } from "../lib/types";
+import type { TaskEvent, TaskResult, UpdateCheckReport } from "../lib/types";
 import {
-  computeUpdateSummary,
+  UPDATE_REASON_ORDER,
   markSkillsCurrent,
+  type UpdateDialogView,
 } from "../lib/update-view";
 import {
   LOCAL_MODIFICATION_LABELS,
@@ -43,64 +34,13 @@ import {
   useTaskRunner,
 } from "../lib/task-runner";
 
-type UpdateMode = "single" | "all";
-
 interface UpdateDialogProps {
   open: boolean;
-  mode: UpdateMode;
-  skills: UpdateViewSkill[];
-  agents?: InventoryAgent[];
+  view: UpdateDialogView;
   onClose: () => void;
 }
 
-const REASON_ORDER: UpdateSkipReason[] = [
-  "local_modified",
-  "local_unknown",
-  "unknown",
-  "not_checked",
-  "path_missing",
-  "error",
-  "copy_only",
-];
-
-function copyAgents(
-  skill: UpdateViewSkill,
-  universalIds: Set<string>,
-): string[] {
-  return skill.attachments
-    .filter(
-      (attachment) =>
-        attachment.mode === "copy" && !universalIds.has(attachment.agentId),
-    )
-    .map((attachment) => attachment.agentName);
-}
-
-function affectedAgents(
-  skill: UpdateViewSkill,
-  universalIds: Set<string>,
-): string[] {
-  return skill.attachments
-    .filter(
-      (attachment) =>
-        (attachment.mode === "link" || attachment.mode === "copy") &&
-        !universalIds.has(attachment.agentId),
-    )
-    .map((attachment) => attachment.agentName);
-}
-
-function manageableSingle(skill: UpdateViewSkill | undefined): boolean {
-  return Boolean(
-    skill && skill.management === "managed" && skill.update === "update",
-  );
-}
-
-export function UpdateDialog({
-  open,
-  mode,
-  skills,
-  agents = [],
-  onClose,
-}: UpdateDialogProps) {
+export function UpdateDialog({ open, view, onClose }: UpdateDialogProps) {
   const queryClient = useQueryClient();
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -169,51 +109,19 @@ export function UpdateDialog({
     onEvent: handleTaskEvent,
   });
 
-  const singleSkill = mode === "single" ? skills[0] : undefined;
-  const universalIds = useMemo(
-    () =>
-      new Set(
-        agents
-          .filter((agent) => agent.universal)
-          .map((agent) => agent.id),
-      ),
-    [agents],
-  );
-  const summary = useMemo(() => computeUpdateSummary(skills), [skills]);
-  const grouped = useMemo(() => {
-    const map = new Map<UpdateSkipReason, UpdateSkipItem[]>();
-    for (const item of summary.skipped) {
-      const list = map.get(item.reason) ?? [];
-      list.push(item);
-      map.set(item.reason, list);
-    }
-    return map;
-  }, [summary]);
-  const copyCandidateCount = useMemo(
-    () =>
-      summary.candidates.filter(
-        (skill) => copyAgents(skill, universalIds).length > 0,
-      ).length,
-    [summary, universalIds],
-  );
-  const singleEligible = manageableSingle(singleSkill);
-  const singleNeedsConfirmation = Boolean(
-    singleSkill &&
-      (singleSkill.localModification === "modified" ||
-        singleSkill.localModification === "unknown"),
-  );
-  const singleCopyAgents = singleSkill
-    ? copyAgents(singleSkill, universalIds)
-    : [];
-  const singleAffectedAgents = singleSkill
-    ? affectedAgents(singleSkill, universalIds)
-    : [];
-  const initialNames =
-    mode === "single"
-      ? singleEligible && singleSkill
-        ? [singleSkill.name]
-        : []
-      : summary.candidates.map((skill) => skill.name);
+  const {
+    mode,
+    summary,
+    grouped,
+    initialNames,
+    singleSkill,
+    singleEligible,
+    singleNeedsConfirmation,
+    singleCopyAgents,
+    singleAffectedAgents,
+    copyCandidates,
+    copyCandidateCount,
+  } = view;
   const canStart =
     !running &&
     initialNames.length > 0 &&
@@ -478,7 +386,7 @@ export function UpdateDialog({
                         <span className="ml-1 text-muted-foreground">
                           {skill.source ?? "来源未知"}
                         </span>
-                        {copyAgents(skill, universalIds).length > 0 ? (
+                        {copyCandidates.has(skill.name) ? (
                           <span className="ml-1 rounded-sm bg-warning-soft px-1 py-0.5 text-[11px] font-medium text-warning">
                             copy → symlink
                           </span>
@@ -508,7 +416,7 @@ export function UpdateDialog({
                   </p>
                 ) : (
                   <div className="mt-2 space-y-2">
-                    {REASON_ORDER.filter((reason) => grouped.has(reason)).map(
+                    {UPDATE_REASON_ORDER.filter((reason) => grouped.has(reason)).map(
                       (reason) => {
                         const items = grouped.get(reason)!;
                         return (

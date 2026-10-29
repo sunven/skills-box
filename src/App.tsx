@@ -39,39 +39,16 @@ import {
   revealAppData,
 } from "./lib/api";
 import { listenForExitRequest } from "./lib/lifecycle";
-import {
-  computeAgentOptions,
-  computeSourceOptions,
-  computeStatusCounts,
-  defaultFilters,
-  selectVisibleSkills,
-  type InventoryFilters,
-  type SortKey,
-  type StatusFilter,
-} from "./lib/inventory-view";
-import {
-  applyUpdateReport,
-  computeUpdateSummary,
-  summarizeFullCheck,
-  summarizePersistedState,
-  withUpdateAnomalies,
-} from "./lib/update-view";
+import { defaultFilters, type SortKey, type StatusFilter } from "./lib/inventory-view";
+import { buildWorkspaceView } from "./lib/workspace-view";
 import type {
   ActiveMutationInfo,
-  AnomalySummary,
   DetectedAgent,
   EnvReport,
   InventoryAgent,
   UpdateViewSkill,
 } from "./lib/types";
 
-const EMPTY_ANOMALIES: AnomalySummary = {
-  total: 0,
-  stale: { count: 0, examples: [] },
-  unmanaged: { count: 0, examples: [] },
-  broken: { count: 0, examples: [] },
-  modified: { count: 0, examples: [] },
-};
 const EMPTY_INVENTORY_AGENTS: InventoryAgent[] = [];
 const EMPTY_DETECTED_AGENTS: DetectedAgent[] = [];
 const EMPTY_WARNINGS: string[] = [];
@@ -90,21 +67,6 @@ function App() {
   const snapshot = inventoryQuery.data;
   const updateData = updateReportQuery.data ?? null;
   const lastFullCheck = lastFullCheckQuery.data ?? null;
-
-  const lastCheck = useMemo(() => {
-    if (lastFullCheck) return summarizeFullCheck(lastFullCheck);
-    if (updateCheckStateQuery.data) {
-      return summarizePersistedState(updateCheckStateQuery.data);
-    }
-    return null;
-  }, [lastFullCheck, updateCheckStateQuery.data]);
-  const hasManagedSkills = useMemo(
-    () =>
-      (snapshot?.skills ?? []).some(
-        (skill) => skill.management === "managed",
-      ),
-    [snapshot],
-  );
 
   const [exitRequest, setExitRequest] = useState<ActiveMutationInfo | null>(
     null,
@@ -131,53 +93,46 @@ function App() {
     null,
   );
 
-  const skills = useMemo(
-    () => applyUpdateReport(snapshot?.skills ?? [], updateData),
-    [snapshot, updateData],
-  );
-  const anomalies = useMemo(
-    () => withUpdateAnomalies(snapshot?.anomalies ?? EMPTY_ANOMALIES, skills),
-    [snapshot, skills],
-  );
-  const updateSummary = useMemo(() => computeUpdateSummary(skills), [skills]);
   // Filtering runs on a deferred query so typing stays urgent while the list
   // and the detail drawer re-render at a lower priority.
   const deferredQuery = useDeferredValue(query);
-  const filters = useMemo<InventoryFilters>(
-    () => ({ query: deferredQuery, source, agent, status }),
-    [deferredQuery, source, agent, status],
-  );
-  const visibleSkills = useMemo(
-    () => selectVisibleSkills(skills, filters, sort),
-    [skills, filters, sort],
-  );
-  const statusCounts = useMemo(() => computeStatusCounts(skills), [skills]);
-  const sourceOptions = useMemo(() => computeSourceOptions(skills), [skills]);
-  const agentOptions = useMemo(
-    () => computeAgentOptions(skills, snapshot?.agents ?? []),
-    [skills, snapshot],
-  );
-  const selectedSkill = useMemo(
+  const view = useMemo(
     () =>
-      visibleSkills.find((skill) => skill.name === selectedName) ?? null,
-    [visibleSkills, selectedName],
+      buildWorkspaceView({
+        snapshot,
+        updateReport: updateData,
+        lastFullCheck,
+        updateCheckState: updateCheckStateQuery.data ?? null,
+        filters: { query: deferredQuery, source, agent, status },
+        sort,
+        selectedName,
+        updateMode,
+        updateSkillName,
+      }),
+    [
+      snapshot,
+      updateData,
+      lastFullCheck,
+      updateCheckStateQuery.data,
+      deferredQuery,
+      source,
+      agent,
+      status,
+      sort,
+      selectedName,
+      updateMode,
+      updateSkillName,
+    ],
   );
-  const updateDialogSkills = useMemo(() => {
-    if (updateMode === "single") {
-      const skill = skills.find((entry) => entry.name === updateSkillName);
-      return skill ? [skill] : [];
-    }
-    return skills;
-  }, [skills, updateMode, updateSkillName]);
 
   useEffect(() => {
     if (selectedName === null) return;
-    if (!visibleSkills.some((skill) => skill.name === selectedName)) {
-      const fallback = visibleSkills[0]?.name ?? null;
+    if (!view.visibleSkills.some((skill) => skill.name === selectedName)) {
+      const fallback = view.visibleSkills[0]?.name ?? null;
       setSelectedName(fallback);
       if (fallback === null) setDetailOpen(false);
     }
-  }, [visibleSkills, selectedName]);
+  }, [view.visibleSkills, selectedName]);
 
   // Rust vetoes window close / Cmd+Q while a mutation is running and emits
   // this event with the active task so the renderer can explain the risk.
@@ -249,7 +204,7 @@ function App() {
   }, [mutateCheckUpdates]);
 
   useAutoUpdateCheck({
-    enabled: inventoryQuery.isSuccess && !lockError && hasManagedSkills,
+    enabled: inventoryQuery.isSuccess && !lockError && view.hasManagedSkills,
     checking: checkUpdates.isPending,
     lastFullAttemptAt: lastFullAttemptQuery.data,
     onCheck: runAutoCheck,
@@ -299,10 +254,10 @@ function App() {
 
   const handleUninstallSkill = useCallback(
     (name: string) => {
-      const target = skills.find((entry) => entry.name === name);
+      const target = view.skills.find((entry) => entry.name === name);
       if (target) setUninstallSkill(target);
     },
-    [skills],
+    [view.skills],
   );
 
   const handleSourceChange = (value: string) => {
@@ -329,7 +284,7 @@ function App() {
         mutationsEnabled={mutationsEnabled}
         onInstall={() => setInstallOpen(true)}
         updateReport={updateData}
-        lastCheck={lastCheck}
+        lastCheck={view.lastCheck}
         updateError={updateError}
         checkingUpdates={checkUpdates.isPending}
         updatesEnabled={!lockError}
@@ -338,7 +293,7 @@ function App() {
           setUpdateSkillName(null);
           setUpdateMode("all");
         }}
-        updateCandidateCount={updateSummary.candidates.length}
+        updateCandidateCount={view.candidateCount}
         filtersOpen={filtersOpen}
         onToggleFilters={() => setFiltersOpen((open) => !open)}
       />
@@ -368,9 +323,9 @@ function App() {
               data-open={filtersOpen ? "true" : "false"}
             >
               <FilterSidebar
-                sources={sourceOptions}
-                agents={agentOptions}
-                statusCounts={statusCounts}
+                sources={view.sourceOptions}
+                agents={view.agentOptions}
+                statusCounts={view.statusCounts}
                 activeSource={source}
                 activeAgent={agent}
                 activeStatus={status}
@@ -387,14 +342,14 @@ function App() {
               />
             </div>
             <SkillListPane
-              totalSkills={skills.length}
-              visibleSkills={visibleSkills}
-              anomalies={anomalies}
-              sourceCount={sourceOptions.length}
-              candidateCount={updateSummary.candidates.length}
+              totalSkills={view.totalSkills}
+              visibleSkills={view.visibleSkills}
+              anomalies={view.anomalies}
+              sourceCount={view.sourceCount}
+              candidateCount={view.candidateCount}
               query={query}
               sort={sort}
-              selectedName={selectedSkill?.name ?? null}
+              selectedName={view.selectedSkill?.name ?? null}
               isLoading={inventoryQuery.isPending}
               error={inventoryQuery.error}
               onQueryChange={setQuery}
@@ -404,10 +359,9 @@ function App() {
               onOpenAnomalies={() => setAnomaliesOpen(true)}
               onRetry={handleRetryInventory}
             />
-            {detailOpen && selectedSkill ? (
+            {detailOpen && view.selectedSkill ? (
               <DetailPane
-                skill={selectedSkill}
-                updateResult={selectedSkill.updateResult}
+                skill={view.selectedSkill}
                 agents={snapshot?.agents ?? EMPTY_INVENTORY_AGENTS}
                 checkingUpdates={checkUpdates.isPending}
                 onCheckUpdates={handleCheckUpdates}
@@ -427,20 +381,20 @@ function App() {
         </>
       )}
       <AnomalyDialog
-        anomalies={anomalies}
+        anomalies={view.anomalies}
         open={anomaliesOpen}
         onClose={() => setAnomaliesOpen(false)}
       />
-      <UpdateDialog
-        open={updateMode !== null}
-        mode={updateMode ?? "all"}
-        skills={updateDialogSkills}
-        agents={snapshot?.agents ?? EMPTY_INVENTORY_AGENTS}
-        onClose={() => {
-          setUpdateMode(null);
-          setUpdateSkillName(null);
-        }}
-      />
+      {view.updateDialog ? (
+        <UpdateDialog
+          open
+          view={view.updateDialog}
+            onClose={() => {
+            setUpdateMode(null);
+            setUpdateSkillName(null);
+          }}
+        />
+      ) : null}
       <UninstallDialog
         open={uninstallSkill !== null}
         skill={uninstallSkill}
@@ -449,14 +403,14 @@ function App() {
       <ManageAgentsDialog
         open={manageAgentsOpen}
         agents={snapshot?.agents ?? EMPTY_INVENTORY_AGENTS}
-        skills={skills}
+        skills={view.skills}
         warnings={snapshot?.warnings ?? EMPTY_WARNINGS}
         onClose={() => setManageAgentsOpen(false)}
         onChanged={handleRecheck}
       />
       <InstallWizard
         open={installOpen}
-        inventorySkills={skills}
+        inventorySkills={view.skills}
         agents={report?.agents ?? EMPTY_DETECTED_AGENTS}
         onClose={() => setInstallOpen(false)}
       />
