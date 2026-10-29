@@ -295,9 +295,49 @@ describe("skill detail drawer", () => {
     expect(pane.getByTestId("detail-last-update-check")).toHaveTextContent(
       "尚未检查",
     );
+    expect(pane.queryByRole("button", { name: "展开" })).not.toBeInTheDocument();
     // The local-modification notice is still pinned above the tabs.
     expect(pane.getByTestId("detail-alerts")).toHaveTextContent(
       /检测到本地改动/,
+    );
+  });
+
+  it("clamps long descriptions to three lines and expands on demand", async () => {
+    const longDescription = `长描述：${"这是一段用于验证三行折叠的描述。".repeat(20)}`;
+    mockCommands({
+      snapshot: makeSnapshot({
+        skills: [
+          makeSkill({
+            name: "alpha",
+            description: longDescription,
+            source: "acme/skills",
+            attachments,
+          }),
+        ],
+      }),
+      detail: baseDetail({ description: longDescription }),
+    });
+    renderApp();
+    await selectAlpha();
+
+    const pane = detailPane();
+    const description = pane.getByTestId("detail-description");
+    expect(description).toHaveTextContent(longDescription);
+    expect(description).toHaveAttribute("data-expanded", "false");
+
+    const expand = await pane.findByRole("button", { name: "展开" });
+    expect(expand).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(expand);
+
+    expect(description).toHaveAttribute("data-expanded", "true");
+    const collapse = pane.getByRole("button", { name: "收起" });
+    expect(collapse).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(collapse);
+
+    expect(description).toHaveAttribute("data-expanded", "false");
+    expect(pane.getByRole("button", { name: "展开" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
     );
   });
 

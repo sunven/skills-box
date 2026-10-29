@@ -96,6 +96,70 @@ function HashValue({ hash }: { hash: string }) {
   );
 }
 
+const DESCRIPTION_COLLAPSE_LENGTH = 200;
+
+function ClampedDescription({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+  const textRef = useRef<HTMLParagraphElement>(null);
+  const measureRef = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    setExpanded(false);
+  }, [text]);
+
+  useEffect(() => {
+    const element = textRef.current;
+    const measure = measureRef.current;
+    if (!element || !measure) return;
+    const update = () => {
+      const clampedHeight = element.clientHeight;
+      const fullHeight = measure.clientHeight;
+      const measured =
+        clampedHeight > 0 && fullHeight > 0
+          ? fullHeight > clampedHeight + 1
+          : text.length > DESCRIPTION_COLLAPSE_LENGTH;
+      setOverflowing(measured);
+    };
+    update();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(update);
+    observer.observe(element);
+    observer.observe(measure);
+    return () => observer.disconnect();
+  }, [expanded, text]);
+
+  return (
+    <div className="detail-desc-wrap">
+      <p
+        ref={textRef}
+        className="detail-desc"
+        data-testid="detail-description"
+        data-expanded={expanded ? "true" : "false"}
+      >
+        {text}
+      </p>
+      <span
+        ref={measureRef}
+        className="detail-desc-measure"
+        aria-hidden="true"
+      >
+        {text}
+      </span>
+      {overflowing || expanded ? (
+        <button
+          type="button"
+          className="detail-desc-toggle"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? "收起" : "展开"}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 function UpdateStatus({ skill }: { skill: UpdateViewSkill }) {
   const tone =
     skill.update === "update"
@@ -368,9 +432,9 @@ export function DetailPane({
               </Badge>
             ) : null}
           </div>
-          <p className="detail-desc">
-            {detail?.description ?? skill.description ?? "—"}
-          </p>
+          <ClampedDescription
+            text={detail?.description ?? skill.description ?? "—"}
+          />
         </div>
 
         {hasAlerts ? (

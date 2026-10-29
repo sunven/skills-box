@@ -804,11 +804,49 @@
   line-height: 1.25;
 }
 
+.detail-desc-wrap {
+  position: relative;
+}
+
 .detail-desc {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
   margin-top: 5px;
   color: var(--muted-foreground);
   font-size: 13px;
   line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.detail-desc[data-expanded="true"] {
+  display: block;
+  overflow: visible;
+}
+
+.detail-desc-measure {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  visibility: hidden;
+  pointer-events: none;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.detail-desc-toggle {
+  margin-top: 2px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.detail-desc-toggle:hover {
+  color: var(--foreground);
 }
 
 .detail-actions {
