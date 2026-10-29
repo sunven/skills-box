@@ -1,5 +1,6 @@
 import { Badge } from "./ui/badge";
 import { agentInitials } from "../lib/agent-style";
+import { agentLogoUrl } from "../lib/agent-logos";
 import type { InventorySkill } from "../lib/types";
 import {
   ATTACHMENT_LABELS,
@@ -30,6 +31,7 @@ function AgentAvatars({ skill }: AgentAvatarsProps) {
       {shown.map((attachment) => {
         const broken = attachment.mode === "broken";
         const label = ATTACHMENT_LABELS[attachment.mode];
+        const logo = agentLogoUrl(attachment.agentId);
         return (
           <span
             key={attachment.agentId}
@@ -39,7 +41,17 @@ function AgentAvatars({ skill }: AgentAvatarsProps) {
             aria-label={`${attachment.agentName}（${label}${broken ? "，断链" : ""}）`}
             className="agent-token"
           >
-            {agentInitials(attachment.agentName)}
+            {logo ? (
+              <img
+                src={logo}
+                alt=""
+                aria-hidden="true"
+                draggable={false}
+                className="agent-token-logo"
+              />
+            ) : (
+              agentInitials(attachment.agentName)
+            )}
           </span>
         );
       })}

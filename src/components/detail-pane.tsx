@@ -17,6 +17,7 @@ import { DetachDialog, type DetachDialogError } from "./detach-dialog";
 import { SkillMarkdown } from "./skill-markdown";
 import { asAppError, detachAgent, openSkillFolder, openSkillMd } from "../lib/api";
 import { agentInitials } from "../lib/agent-style";
+import { agentLogoUrl } from "../lib/agent-logos";
 import type {
   AgentAttachment,
   DetachResult,
@@ -125,6 +126,7 @@ function AgentAttachmentRow({
   onDetach: (attachment: AgentAttachment) => void;
 }) {
   const broken = attachment.mode === "broken";
+  const logo = agentLogoUrl(attachment.agentId);
   return (
     <li
       data-testid="detail-agent-row"
@@ -132,7 +134,16 @@ function AgentAttachmentRow({
       data-broken={broken ? "true" : "false"}
     >
       <span className="agent-token" aria-hidden="true">
-        {agentInitials(attachment.agentName)}
+        {logo ? (
+          <img
+            src={logo}
+            alt=""
+            draggable={false}
+            className="agent-token-logo"
+          />
+        ) : (
+          agentInitials(attachment.agentName)
+        )}
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">

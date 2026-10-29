@@ -358,6 +358,33 @@
   font-weight: 500;
 }
 
+.agent-logo {
+  display: block;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border-radius: 3px;
+  object-fit: contain;
+}
+
+.agent-logo-slot {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+.agent-logo-fallback {
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border-strong);
+  background: var(--card);
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 7px;
+  font-weight: 500;
+  line-height: 1;
+}
+
 .filter-name {
   min-width: 0;
   flex: 1;
@@ -684,6 +711,19 @@
   color: var(--destructive);
 }
 
+.agent-token-logo {
+  display: block;
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  object-fit: contain;
+}
+
+.agent-token[data-mode="broken"] .agent-token-logo {
+  filter: grayscale(1);
+  opacity: 0.6;
+}
+
 .mount-more {
   margin-left: 2px;
   color: var(--muted-foreground);
@@ -831,6 +871,11 @@
   width: 24px;
   height: 24px;
   font-size: 11px;
+}
+
+.attach-row .agent-token-logo {
+  width: 18px;
+  height: 18px;
 }
 
 .attach-name {

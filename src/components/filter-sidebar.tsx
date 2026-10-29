@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { RotateCcw, X } from "lucide-react";
 import { Button } from "./ui/button";
+import { AgentLogo } from "./agent-logo";
 import { EnvironmentBadge } from "./environment-badge";
 import { EnvironmentMetrics } from "./environment-metrics";
 import { cn } from "../lib/utils";
@@ -38,6 +39,7 @@ interface FilterRowProps {
   onClick: () => void;
   title?: string;
   countTone?: "accent";
+  leading?: ReactNode;
   trailing?: ReactNode;
 }
 
@@ -48,6 +50,7 @@ function FilterRow({
   onClick,
   title,
   countTone,
+  leading,
   trailing,
 }: FilterRowProps) {
   return (
@@ -58,6 +61,7 @@ function FilterRow({
       title={title}
       className="filter-row"
     >
+      {leading}
       <span className="filter-name">{label}</span>
       {trailing}
       <span
@@ -142,6 +146,7 @@ export function FilterSidebar({
             count={statusCounts.all}
             active={activeAgent === "all"}
             onClick={() => onAgentChange("all")}
+            leading={<span className="agent-logo-slot" aria-hidden="true" />}
           />
           {agents.length === 0 ? (
             <p className="filter-note">未检测到 agent</p>
@@ -153,6 +158,12 @@ export function FilterSidebar({
                 count={agent.count}
                 active={activeAgent === agent.id}
                 onClick={() => onAgentChange(agent.id)}
+                leading={
+                  <AgentLogo
+                    agentId={agent.id}
+                    agentName={agent.displayName}
+                  />
+                }
                 trailing={
                   agent.shared ? (
                     <span className="text-[11.5px] text-muted-foreground">
