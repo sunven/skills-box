@@ -18,6 +18,8 @@ import type {
 } from "./types";
 import { UPDATE_LABELS } from "./inventory-view";
 
+export const updateReportQueryKey = ["updateReport"] as const;
+
 export type UpdateBadgeVariant = "success" | "warning" | "muted" | "destructive";
 
 export type UpdateSkipReason =

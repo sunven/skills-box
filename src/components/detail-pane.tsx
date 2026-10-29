@@ -9,7 +9,6 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { useQueryClient } from "@tanstack/react-query";
 import {
   ArrowUpCircle,
   Link2,
@@ -23,12 +22,12 @@ import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { AttachDialog } from "./attach-dialog";
 import { DetachDialog } from "./detach-dialog";
-import { asAppError, detachAgent, fallbackError } from "../lib/api";
+import { asAppError, detachAgent } from "../lib/api";
 import { agentInitials } from "../lib/agent-style";
 import { agentLogoUrl } from "../lib/agent-logos";
+import { promiseDriver, useMutation } from "../lib/mutation";
 import type {
   AgentAttachment,
-  AppError,
   DetachResult,
   InventoryAgent,
   SkillDetail,
@@ -263,16 +262,19 @@ export const DetailPane = memo(function DetailPane({
 }: DetailPaneProps) {
   const skillId = skill.name;
   const query = useSkillDetailQuery(skillId);
-  const queryClient = useQueryClient();
   const detail = query.data ?? null;
   const [tab, setTab] = useState<DetailTab>("actions");
   const [detachTarget, setDetachTarget] = useState<AgentAttachment | null>(null);
-  const [detachPending, setDetachPending] = useState(false);
-  const [detachError, setDetachError] = useState<AppError | null>(null);
   const [detachNotice, setDetachNotice] = useState<DetachResult | null>(null);
   const [attachOpen, setAttachOpen] = useState(false);
   const closeRef = useRef<HTMLButtonElement>(null);
   const detailError = asAppError(query.error);
+  const detachMutation = useMutation({
+    action: "detach",
+    skillId,
+    fallbackFailure: "断开失败，请刷新后重试。",
+    fallbackStart: "断开失败，请刷新后重试。",
+  });
 
   // Selecting another skill restarts the drawer UI. Adjusting state during
   // rendering avoids an extra commit that would flash the previous skill's
@@ -282,11 +284,13 @@ export const DetailPane = memo(function DetailPane({
     setActiveSkillId(skillId);
     setTab("actions");
     setDetachTarget(null);
-    setDetachPending(false);
-    setDetachError(null);
     setDetachNotice(null);
     setAttachOpen(false);
   }
+
+  useEffect(() => {
+    detachMutation.reset();
+  }, [skillId, detachMutation.reset]);
 
   useEffect(() => {
     const previousFocus = document.activeElement as HTMLElement | null;
@@ -327,35 +331,35 @@ export const DetailPane = memo(function DetailPane({
     management === "copy_only" ? "agent 路径" : "canonical 路径";
 
   const openDetach = (attachment: AgentAttachment) => {
-    setDetachError(null);
+    detachMutation.reset();
     setDetachTarget(attachment);
   };
 
-  const refreshAfterMutation = () => {
-    // A failed attempt may still have changed the disk; always re-read the
-    // detail and inventory so the UI never shows an assumed state.
-    void queryClient.invalidateQueries({ queryKey: ["skill", skill.name] });
-    void queryClient.invalidateQueries({ queryKey: ["inventory"] });
-    void queryClient.invalidateQueries({ queryKey: ["skill-dir", skill.name] });
-    void queryClient.invalidateQueries({ queryKey: ["skill-file", skill.name] });
-  };
-
   const confirmDetach = async () => {
-    if (!detachTarget || !skill) return;
-    setDetachPending(true);
-    setDetachError(null);
-    try {
-      const result = await detachAgent(skill.name, detachTarget.agentId);
-      setDetachNotice(result);
-      setDetachTarget(null);
-    } catch (error) {
-      setDetachError(
-        asAppError(error) ?? fallbackError("断开失败，请刷新后重试。"),
-      );
-    } finally {
-      setDetachPending(false);
-      refreshAfterMutation();
-    }
+    const target = detachTarget;
+    if (!target) return;
+    await detachMutation.start(
+      promiseDriver({
+        total: 0,
+        message: `正在断开 ${target.agentName}…`,
+        indeterminate: true,
+        run: async () => {
+          const detached = await detachAgent(skill.name, target.agentId);
+          setDetachNotice(detached);
+          setDetachTarget(null);
+          return {
+            rows: [
+              {
+                name: detached.agentName,
+                status: "success" as const,
+                statusLabel: "已断开",
+              },
+            ],
+            backupPath: detached.backupPath,
+          };
+        },
+      }),
+    );
   };
 
   const handleTabKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -888,12 +892,15 @@ export const DetailPane = memo(function DetailPane({
           otherAttachments={attachments.filter(
             (attachment) => attachment.agentId !== detachTarget?.agentId,
           )}
-          pending={detachPending}
-          error={detachError}
+          pending={detachMutation.state.running}
+          progressMessage={detachMutation.state.message}
+          error={
+            detachMutation.state.startError ?? detachMutation.state.error
+          }
           onClose={() => {
-            if (detachPending) return;
+            if (detachMutation.state.running) return;
             setDetachTarget(null);
-            setDetachError(null);
+            detachMutation.reset();
           }}
           onConfirm={() => void confirmDetach()}
         />
@@ -903,7 +910,6 @@ export const DetailPane = memo(function DetailPane({
           agents={agents}
           attachments={attachments}
           onClose={() => setAttachOpen(false)}
-          onChanged={refreshAfterMutation}
         />
       </aside>
     </>

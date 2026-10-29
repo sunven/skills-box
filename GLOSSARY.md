@@ -136,6 +136,10 @@ _Avoid_: job, command
 One execution of one mutation task, ending in a single outcome. The task is the serialized operation; the session is one run of it.
 _Avoid_: job, runner, transaction
 
+**Mutation surface**:
+The shared frontend lifecycle for every mutation dialog: drivers normalize CLI task streams and native promises into one outcome, progress/error/result UI and refresh policy.
+_Avoid_: task runner, mutation store, dialog runner
+
 **Anomaly**:
 A state that does not match the canonical model, such as an orphan folder, broken link, or stale lock entry; v1 surfaces it read-only.
 _Avoid_: error, corruption

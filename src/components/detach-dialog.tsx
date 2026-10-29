@@ -1,6 +1,7 @@
 import { useRef } from "react";
 import { HardDrive, ShieldAlert, Unlink, X } from "lucide-react";
 import { Button } from "./ui/button";
+import { MutationProgress } from "./mutation/mutation-progress";
 import { useModalFocus } from "../hooks/use-modal-focus";
 import { ATTACHMENT_LABELS } from "../lib/inventory-view";
 import type { AgentAttachment, AppError } from "../lib/types";
@@ -12,6 +13,7 @@ interface DetachDialogProps {
   target: AgentAttachment | null;
   otherAttachments: AgentAttachment[];
   pending: boolean;
+  progressMessage?: string;
   error: AppError | null;
   onClose: () => void;
   onConfirm: () => void;
@@ -28,6 +30,7 @@ export function DetachDialog({
   target,
   otherAttachments,
   pending,
+  progressMessage,
   error,
   onClose,
   onConfirm,
@@ -145,6 +148,18 @@ export function DetachDialog({
               的挂载。
             </div>
           )}
+
+          {pending ? (
+            <MutationProgress
+              phase={null}
+              label="执行中"
+              message={progressMessage ?? "正在断开挂载…"}
+              completed={0}
+              total={0}
+              indeterminate
+              cancelling={false}
+            />
+          ) : null}
 
           {error ? (
             <div

@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Loader2, PackageOpen, X } from "lucide-react";
+import { AlertTriangle, PackageOpen, X } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
+import { MutationError } from "./mutation/mutation-error";
+import { MutationProgress } from "./mutation/mutation-progress";
+import { MutationResult } from "./mutation/mutation-result";
 import { useModalFocus } from "../hooks/use-modal-focus";
 import {
   cancelTask,
@@ -16,14 +18,9 @@ import type {
   PreviewSkill,
   PreviewSummary,
   TaskEvent,
-  TaskPhase,
 } from "../lib/types";
-import {
-  TASK_PHASE_LABELS,
-  TASK_SKILL_STATUS_LABELS,
-  taskOverallHeading,
-  useTaskRunner,
-} from "../lib/task-runner";
+import { useTaskEvents } from "../lib/task-runner";
+import { taskEventDriver, useMutation } from "../lib/mutation";
 
 interface InstallWizardProps {
   open: boolean;
@@ -107,75 +104,12 @@ function StepBars({ step }: { step: Step }) {
   );
 }
 
-export function TaskProgress({
-  phase,
-  message,
-  completed,
-  total,
-  cancelling,
-  canCancel,
-  cancelLabel,
-  onCancel,
-}: {
-  phase: TaskPhase | null;
-  message: string;
-  completed: number;
-  total: number;
-  cancelling: boolean;
-  canCancel: boolean;
-  cancelLabel: string;
-  onCancel: () => void;
-}) {
-  const safeTotal = total > 0 ? total : 1;
-  const percent = Math.min(100, Math.round((completed / safeTotal) * 100));
-  return (
-    <div
-      className="mt-3 panel-well"
-      data-testid="task-progress"
-    >
-      <div className="flex items-center gap-2 text-[12.5px]">
-        <Loader2
-          className="size-3.5 animate-spin text-muted-foreground"
-          aria-hidden="true"
-        />
-        <span className="font-medium">
-          {phase ? TASK_PHASE_LABELS[phase] : TASK_PHASE_LABELS.preparing}
-        </span>
-        <span className="num text-[12px] text-muted-foreground">
-          {completed}/{safeTotal}
-        </span>
-        {canCancel ? (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="ml-auto h-7"
-            onClick={onCancel}
-            disabled={cancelling}
-          >
-            {cancelLabel}
-          </Button>
-        ) : null}
-      </div>
-      <div className="mt-2 h-1 overflow-hidden rounded-full bg-border">
-        <div
-          className="h-full rounded-full bg-foreground transition-[width]"
-          style={{ width: `${percent}%` }}
-        />
-      </div>
-      {message ? (
-        <p className="mt-1.5 text-[12px] text-muted-foreground">{message}</p>
-      ) : null}
-    </div>
-  );
-}
-
 export function InstallWizard({
   open,
   inventorySkills,
   agents,
   onClose,
 }: InstallWizardProps) {
-  const queryClient = useQueryClient();
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const onCloseRef = useRef(onClose);
@@ -194,11 +128,6 @@ export function InstallWizard({
   useEffect(() => {
     onCloseRef.current = onClose;
   }, [onClose]);
-
-  const invalidateMutationQueries = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: ["inventory"] });
-    void queryClient.invalidateQueries({ queryKey: ["skill"] });
-  }, [queryClient]);
 
   // Preview is read-only; only its completed summary drives the wizard steps.
   const handlePreviewEvent = useCallback((event: TaskEvent) => {
@@ -233,32 +162,19 @@ export function InstallWizard({
     }
   }, []);
 
-  const handleInstallEvent = useCallback(
-    (event: TaskEvent) => {
-      if (
-        event.phase === "completed" ||
-        event.phase === "failed" ||
-        event.phase === "cancelled"
-      ) {
-        invalidateMutationQueries();
-      }
-    },
-    [invalidateMutationQueries],
-  );
-
-  const previewRunner = useTaskRunner({
+  const previewDriver = useTaskEvents({
     fallbackFailure: "预览失败，请重试。",
     fallbackStart: "无法开始预览，请稍后重试。",
     onEvent: handlePreviewEvent,
   });
-  const installRunner = useTaskRunner({
+  const installMutation = useMutation({
+    action: "install",
     fallbackFailure: "安装失败，请重试。",
     fallbackStart: "无法开始安装，请稍后重试。",
-    onEvent: handleInstallEvent,
   });
 
-  const previewState = previewRunner.state;
-  const installState = installRunner.state;
+  const previewState = previewDriver.state;
+  const installState = installMutation.state;
   const previewRunning = previewState.running;
   const installRunning = installState.running;
   const previewPhase = previewState.phase;
@@ -277,8 +193,8 @@ export function InstallWizard({
   }, [open, step, agents, inventorySkills]);
 
   const closeWizard = useCallback(() => {
-    const previewTask = previewRunner.stateRef.current;
-    const installTask = installRunner.stateRef.current;
+    const previewTask = previewDriver.stateRef.current;
+    const installTask = installMutation.stateRef.current;
     if (installTask.running) {
       // Before the CLI spawns the task can still be cancelled. Once writing
       // starts the modal stays open and the backend refuses cancellation.
@@ -293,20 +209,20 @@ export function InstallWizard({
         // Closing is best-effort cancellation; the read-only task times out.
       });
     }
-    previewRunner.reset();
-    installRunner.reset();
+    previewDriver.reset();
+    installMutation.reset();
     onCloseRef.current();
   }, [
-    installRunner.reset,
-    installRunner.stateRef,
-    previewRunner.reset,
-    previewRunner.stateRef,
+    installMutation.reset,
+    installMutation.stateRef,
+    previewDriver.reset,
+    previewDriver.stateRef,
   ]);
 
   useEffect(() => {
     if (!open) return;
-    previewRunner.reset();
-    installRunner.reset();
+    previewDriver.reset();
+    installMutation.reset();
     setStep(1);
     setSourceInput("");
     setPreview(null);
@@ -315,7 +231,7 @@ export function InstallWizard({
     setSelectedAgents(new Set());
     lastInstallRef.current = null;
     agentsTouchedRef.current = false;
-  }, [open, installRunner.reset, previewRunner.reset]);
+  }, [open, installMutation.reset, previewDriver.reset]);
 
   useModalFocus({
     open,
@@ -373,12 +289,12 @@ export function InstallWizard({
     if (previewRunning || installRunning) return;
     const source = sourceInput.trim();
     if (!source) {
-      previewRunner.setStartError(
+      previewDriver.setStartError(
         fallbackError("请输入公开 GitHub 仓库，例如 owner/repo。"),
       );
       return;
     }
-    installRunner.reset();
+    installMutation.reset();
     setPreview(null);
     setSelected(new Set());
     setSelectedAgents(new Set());
@@ -386,7 +302,7 @@ export function InstallWizard({
     agentsTouchedRef.current = false;
     setManualInput("");
     setStep(1);
-    previewRunner.start({
+    previewDriver.start({
       total: 1,
       message: "正在准备预览…",
       launch: (onEvent) => startPreview(source, onEvent),
@@ -402,22 +318,29 @@ export function InstallWizard({
     setStep(5);
     // `retry` is only set by the explicit retry buttons. A plain install
     // still rejects every same-name managed/stale/copy-only row.
-    installRunner.start({
-      total: names.length,
-      message: "正在准备安装…",
-      launch: (onEvent) =>
-        startInstall(
-          { source: preview.source, skills: names, agents: requestAgents, retry },
-          onEvent,
-        ),
-    });
+    void installMutation.start(
+      taskEventDriver({
+        total: names.length,
+        message: "正在准备安装…",
+        launch: (onEvent) =>
+          startInstall(
+            {
+              source: preview.source,
+              skills: names,
+              agents: requestAgents,
+              retry,
+            },
+            onEvent,
+          ),
+      }),
+    );
   };
 
   const handleCancel = () => {
     if (installRunning) {
-      void installRunner.cancel("任务已结束，无法取消。");
+      void installMutation.cancel("任务已结束，无法取消。");
     } else {
-      void previewRunner.cancel("任务已结束，无法取消。");
+      void previewDriver.cancel("任务已结束，无法取消。");
     }
   };
 
@@ -447,10 +370,6 @@ export function InstallWizard({
     setStep(3);
   };
 
-  const retryNames =
-    installResult?.skills
-      .filter((skill) => skill.status !== "installed")
-      .map((skill) => skill.name) ?? [];
   const lastInstall = lastInstallRef.current;
   const agentSummary = [
     ...selectedAgentObjects.map((agent) => agent.displayName),
@@ -545,36 +464,11 @@ export function InstallWizard({
                 示例：mattpocock/skills · 将读取仓库内的 SKILL.md 列表。不支持子目录、#ref、GitLab、SSH、本地路径或 Notion。
               </p>
 
-              {previewState.startError ? (
-                <div
-                  role="alert"
-                  className="notice mt-3" data-tone="negative"
-                >
-                  <p className="font-medium">{previewState.startError.message}</p>
-                  {previewState.startError.code ? (
-                    <p className="mt-0.5 font-mono text-[11.5px]">
-                      {previewState.startError.code}
-                    </p>
-                  ) : null}
-                </div>
-              ) : null}
-
-              {previewState.taskError ? (
-                <div
-                  role="alert"
-                  className="notice mt-3" data-tone="negative"
-                >
-                  <p className="font-medium">{previewState.taskError.message}</p>
-                  {previewState.taskError.detail ? (
-                    <p className="mt-0.5 text-[12px]">
-                      {previewState.taskError.detail}
-                    </p>
-                  ) : null}
-                </div>
-              ) : null}
+              <MutationError error={previewState.startError} showCode />
+              <MutationError error={previewState.taskError} />
 
               {previewRunning ? (
-                <TaskProgress
+                <MutationProgress
                   phase={previewState.phase}
                   message={previewState.message}
                   completed={previewState.completed}
@@ -886,7 +780,7 @@ export function InstallWizard({
             <>
               {installRunning ? (
                 <>
-                  <TaskProgress
+                  <MutationProgress
                     phase={installState.phase}
                     message={installState.message}
                     completed={installState.completed}
@@ -921,120 +815,26 @@ export function InstallWizard({
                 </p>
               ) : null}
 
-              {installState.startError ? (
-                <div
-                  role="alert"
-                  data-testid="install-start-error"
-                  className="notice mt-3" data-tone="negative"
-                >
-                  <p className="font-medium">{installState.startError.message}</p>
-                  {installState.startError.detail ? (
-                    <p className="mt-0.5 text-[12px]">
-                      {installState.startError.detail}
-                    </p>
-                  ) : null}
-                  {installState.startError.hint ? (
-                    <p className="mt-0.5 text-[12px]">
-                      {installState.startError.hint}
-                    </p>
-                  ) : null}
-                </div>
-              ) : null}
-
-              {installState.taskError ? (
-                <div
-                  role="alert"
-                  data-testid="install-error"
-                  className="notice mt-3" data-tone="negative"
-                >
-                  <p className="font-medium">{installState.taskError.message}</p>
-                  {installState.taskError.detail ? (
-                    <p className="mt-0.5 text-[12px]">
-                      {installState.taskError.detail}
-                    </p>
-                  ) : null}
-                  {installState.taskError.hint ? (
-                    <p className="mt-0.5 text-[12px]">
-                      {installState.taskError.hint}
-                    </p>
-                  ) : null}
-                </div>
-              ) : null}
+              <MutationError
+                error={installState.startError}
+                testId="install-start-error"
+              />
+              <MutationError error={installState.error} testId="install-error" />
 
               {installResult ? (
-                <div data-testid="install-result" data-overall={installResult.overall}>
-                  <div className="flex items-baseline gap-2">
-                    <h3 className="text-sm font-semibold">
-                      {taskOverallHeading("install", installResult.overall)}
-                    </h3>
-                    <span className="text-[12px] text-muted-foreground">
-                      {installState.message}
-                    </span>
-                  </div>
-                  <ul className="mt-2 space-y-1.5">
-                    {installResult.skills.map((skill) => (
-                      <li
-                        key={skill.name}
-                        data-testid="install-skill-result"
-                        data-skill-name={skill.name}
-                        data-skill-status={skill.status}
-                        className="rounded-md border border-border px-3 py-2.5"
-                      >
-                        <div className="flex items-center gap-2">
-                          <span className="text-[13px] font-medium">{skill.name}</span>
-                          <span
-                            className={
-                              skill.status === "installed"
-                                ? "ml-auto rounded-sm bg-success-soft px-1.5 py-0.5 text-[11.5px] font-medium text-success"
-                                : "ml-auto rounded-sm bg-warning-soft px-1.5 py-0.5 text-[11.5px] font-medium text-warning"
-                            }
-                          >
-                            {TASK_SKILL_STATUS_LABELS[skill.status]}
-                          </span>
-                          {skill.status !== "installed" ? (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="ml-auto h-7"
-                              disabled={installRunning}
-                              onClick={() =>
-                                void handleStartInstall([skill.name], true)
-                              }
-                            >
-                              重试
-                            </Button>
-                          ) : null}
-                        </div>
-                        {skill.error ? (
-                          <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">
-                            {skill.error.message}
-                            {skill.error.detail ? ` · ${skill.error.detail}` : ""}
-                          </p>
-                        ) : null}
-                      </li>
-                    ))}
-                  </ul>
-
-                  {installResult.warnings.length > 0 ? (
-                    <ul
-                      data-testid="install-warnings"
-                      className="notice mt-2 list-disc pl-8" data-tone="warning"
-                    >
-                      {installResult.warnings.map((warning) => (
-                        <li key={warning.code ?? warning.message}>
-                          {warning.message}
-                          {warning.detail ? ` · ${warning.detail}` : ""}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : null}
-
-                  {installResult.backupPath ? (
-                    <p className="mono mt-2 text-muted-foreground">
-                      lock 快照：{installResult.backupPath}
-                    </p>
-                  ) : null}
-                </div>
+                <MutationResult
+                  action="install"
+                  result={installResult}
+                  message={installState.message}
+                  testIdPrefix="install"
+                  backupLabel="lock 快照"
+                  showLog={false}
+                  retryMode="incomplete"
+                  onRetry={(names) => handleStartInstall(names, true)}
+                  onRetryRow={(name) => handleStartInstall([name], true)}
+                  warningsTestId="install-warnings"
+                  disabled={installRunning}
+                />
               ) : null}
             </>
           ) : null}
@@ -1086,16 +886,7 @@ export function InstallWizard({
             ) : null}
             {step === 5 && !installRunning ? (
               <>
-                {installResult && retryNames.length > 0 ? (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => void handleStartInstall(retryNames, true)}
-                  >
-                    重试失败项
-                  </Button>
-                ) : null}
-                {installState.taskError && lastInstall ? (
+                {installState.error && lastInstall ? (
                   <Button
                     variant="ghost"
                     size="sm"
@@ -1106,13 +897,13 @@ export function InstallWizard({
                     重试
                   </Button>
                 ) : null}
-                {installState.taskError || installCancelled ? (
+                {installState.error || installCancelled ? (
                   <Button variant="ghost" size="sm" onClick={() => setStep(4)}>
                     返回确认
                   </Button>
                 ) : null}
                 <Button size="sm" onClick={closeWizard}>
-                  {installResult?.overall === "success" ? "完成" : "关闭"}
+                  {installResult?.outcome === "success" ? "完成" : "关闭"}
                 </Button>
               </>
             ) : null}

@@ -2,9 +2,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link2, X } from "lucide-react";
 import { Button } from "./ui/button";
 import { AgentLogo } from "./agent-logo";
+import { MutationError } from "./mutation/mutation-error";
+import { MutationProgress } from "./mutation/mutation-progress";
+import { MutationResult } from "./mutation/mutation-result";
 import { useModalFocus } from "../hooks/use-modal-focus";
 import { asAppError, attachAgent, fallbackError } from "../lib/api";
-import type { AgentAttachment, AppError, InventoryAgent } from "../lib/types";
+import { promiseDriver, useMutation } from "../lib/mutation";
+import type { MutationRow } from "../lib/mutation";
+import type { AgentAttachment, InventoryAgent } from "../lib/types";
 
 interface AttachDialogProps {
   open: boolean;
@@ -12,7 +17,6 @@ interface AttachDialogProps {
   agents: InventoryAgent[];
   attachments: AgentAttachment[];
   onClose: () => void;
-  onChanged: () => void;
 }
 
 /**
@@ -26,13 +30,25 @@ export function AttachDialog({
   agents,
   attachments,
   onClose,
-  onChanged,
 }: AttachDialogProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<AppError | null>(null);
+  const mutation = useMutation({
+    action: "attach",
+    skillId: skillName,
+    fallbackFailure: "挂载失败。",
+    fallbackStart: "挂载失败。",
+  });
+  const {
+    running,
+    message,
+    completed,
+    total,
+    result,
+    error,
+    startError,
+  } = mutation.state;
 
   const attachedIds = useMemo(
     () => new Set(attachments.map((attachment) => attachment.agentId)),
@@ -55,15 +71,14 @@ export function AttachDialog({
     panelRef,
     initialFocusRef: closeRef,
     onClose,
-    canClose: () => !pending,
+    canClose: () => !mutation.stateRef.current.running,
   });
 
   useEffect(() => {
     if (!open) return;
     setSelected(new Set());
-    setPending(false);
-    setError(null);
-  }, [open]);
+    mutation.reset();
+  }, [open, mutation.reset]);
 
   if (!open) return null;
 
@@ -78,39 +93,46 @@ export function AttachDialog({
 
   const confirm = async () => {
     const targets = eligible.filter((agent) => selected.has(agent.id));
-    if (targets.length === 0) {
-      setError(fallbackError("请选择至少一个 agent。"));
-      return;
-    }
-    setPending(true);
-    setError(null);
-    const failures: string[] = [];
-    for (const agent of targets) {
-      try {
-        await attachAgent(skillName, agent.id);
-      } catch (cause) {
-        const mapped = asAppError(cause);
-        failures.push(
-          `${agent.displayName}：${mapped?.message ?? "挂载失败"}${
-            mapped?.detail ? `（${mapped.detail}）` : ""
-          }`,
-        );
-      }
-    }
-    setPending(false);
-    onChanged();
-    if (failures.length === 0) {
+    if (targets.length === 0 || running) return;
+    const outcome = await mutation.start(
+      promiseDriver({
+        total: targets.length,
+        message: "正在挂载…",
+        indeterminate: false,
+        run: async (report) => {
+          const rows: MutationRow[] = [];
+          for (let index = 0; index < targets.length; index += 1) {
+            const agent = targets[index]!;
+            report({
+              completed: index,
+              total: targets.length,
+              message: `正在挂载到 ${agent.displayName}…`,
+            });
+            try {
+              await attachAgent(skillName, agent.id);
+              rows.push({
+                name: agent.displayName,
+                status: "success",
+                statusLabel: "已挂载",
+              });
+            } catch (cause) {
+              rows.push({
+                name: agent.displayName,
+                status: "failed",
+                statusLabel: "挂载失败",
+                error: asAppError(cause) ?? fallbackError("挂载失败。"),
+              });
+            }
+            report({ completed: index + 1, total: targets.length });
+          }
+          return { rows };
+        },
+      }),
+    );
+    if (outcome?.outcome === "success") {
       onClose();
       return;
     }
-    setError({
-      message:
-        failures.length === targets.length
-          ? "挂载失败。"
-          : "部分 agent 挂载失败。",
-      detail: failures.join("\n"),
-      retryable: false,
-    });
     setSelected(new Set());
   };
 
@@ -118,7 +140,7 @@ export function AttachDialog({
     <div
       className="modal-overlay"
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget && !pending) onClose();
+        if (event.target === event.currentTarget && !running) onClose();
       }}
     >
       <div
@@ -145,7 +167,7 @@ export function AttachDialog({
             variant="ghost"
             size="icon"
             aria-label="关闭挂载对话框"
-            disabled={pending}
+            disabled={running}
             onClick={onClose}
             className="size-7 shrink-0"
           >
@@ -167,7 +189,7 @@ export function AttachDialog({
                       type="checkbox"
                       className="size-4 accent-[var(--primary)]"
                       checked={selected.has(agent.id)}
-                      disabled={pending}
+                      disabled={running}
                       aria-label={`挂载到 ${agent.displayName}`}
                       onChange={() => toggle(agent.id)}
                     />
@@ -199,23 +221,30 @@ export function AttachDialog({
             </ul>
           )}
 
-          {error ? (
-            <div
-              role="alert"
-              data-testid="attach-error"
-              className="notice mt-3"
-              data-tone="negative"
-            >
-              <div>
-                <p className="font-medium">{error.message}</p>
-                {error.detail ? (
-                  <p className="mono mt-0.5 whitespace-pre-wrap break-all">
-                    {error.detail}
-                  </p>
-                ) : null}
-              </div>
-            </div>
+          {running ? (
+            <MutationProgress
+              phase={null}
+              label="执行中"
+              message={message}
+              completed={completed}
+              total={total}
+              cancelling={false}
+            />
           ) : null}
+
+          {result && result.outcome !== "success" ? (
+            <MutationResult
+              action="attach"
+              result={result}
+              testIdPrefix="attach"
+              showLog={false}
+            />
+          ) : null}
+          <MutationError
+            error={startError ?? error}
+            testId="attach-error"
+            monoDetail
+          />
         </div>
 
         <div className="modal-foot">
@@ -223,16 +252,16 @@ export function AttachDialog({
             挂载由 Skills Box 原生创建（符号链接），不调用 skills CLI。
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" disabled={pending} onClick={onClose}>
+            <Button variant="ghost" size="sm" disabled={running} onClick={onClose}>
               取消
             </Button>
             <Button
               size="sm"
-              aria-busy={pending}
-              disabled={pending || eligible.length === 0 || selected.size === 0}
+              aria-busy={running}
+              disabled={running || eligible.length === 0 || selected.size === 0}
               onClick={() => void confirm()}
             >
-              {pending ? "正在挂载…" : `挂载${selected.size > 0 ? `（${selected.size}）` : ""}`}
+              {running ? "正在挂载…" : `挂载${selected.size > 0 ? `（${selected.size}）` : ""}`}
             </Button>
           </div>
         </div>

@@ -1,0 +1,590 @@
+//! One mutation surface for task state, results and refresh.
+//!
+//! CLI actions stream `TaskEvent`s and native actions complete a promise, but
+//! every dialog needs the same lifecycle: start → progress → outcome, the same
+//! failure shapes, and the cache invalidation that follows. This module
+//! normalizes both drivers into one state machine so dialogs only keep their
+//! confirmation, selection and wizard state.
+
+import { useCallback, useReducer, useRef } from "react";
+import type { MutableRefObject } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import type { QueryClient, QueryKey } from "@tanstack/react-query";
+import { asAppError, cancelTask, fallbackError } from "./api";
+import { TASK_SKILL_STATUS_LABELS } from "./task-runner";
+import type {
+  AppError,
+  TaskEvent,
+  TaskPhase,
+  TaskResult,
+  TaskSkillStatus,
+  UpdateCheckReport,
+} from "./types";
+import { markSkillsCurrent, updateReportQueryKey } from "./update-view";
+
+export type MutationAction =
+  | "install"
+  | "update"
+  | "uninstall"
+  | "attach"
+  | "detach"
+  | "manage_add"
+  | "manage_remove";
+
+export type MutationOutcome = TaskResult["overall"];
+
+export type MutationRowStatus = "success" | "skipped" | "failed";
+
+export interface MutationRow {
+  name: string;
+  /** Normalized tone used for colors and retry eligibility. */
+  status: MutationRowStatus;
+  /** Backend vocabulary for the row ("已更新", "已卸载", …). */
+  statusLabel: string;
+  /** Original CLI status; native rows leave it unset. */
+  taskStatus?: TaskSkillStatus;
+  error?: AppError;
+  backupPath?: string;
+}
+
+export interface MutationResultView {
+  outcome: MutationOutcome;
+  rows: MutationRow[];
+  warnings: AppError[];
+  backupPath?: string;
+  logPath?: string;
+}
+
+const HEADING_LABELS: Record<
+  MutationAction,
+  Record<MutationOutcome, string>
+> = {
+  install: {
+    success: "安装完成",
+    partial: "安装部分失败",
+    failed: "安装失败",
+    cancelled: "安装已取消",
+  },
+  update: {
+    success: "更新完成",
+    partial: "更新部分失败",
+    failed: "更新失败",
+    cancelled: "更新已取消",
+  },
+  uninstall: {
+    success: "卸载完成",
+    partial: "卸载部分完成",
+    failed: "卸载失败",
+    cancelled: "卸载已取消",
+  },
+  attach: {
+    success: "挂载完成",
+    partial: "挂载部分失败",
+    failed: "挂载失败",
+    cancelled: "挂载已取消",
+  },
+  detach: {
+    success: "断开完成",
+    partial: "断开部分失败",
+    failed: "断开失败",
+    cancelled: "断开已取消",
+  },
+  manage_add: {
+    success: "已添加 agent",
+    partial: "添加部分失败",
+    failed: "添加失败",
+    cancelled: "添加已取消",
+  },
+  manage_remove: {
+    success: "已删除 agent",
+    partial: "删除部分失败",
+    failed: "删除失败",
+    cancelled: "删除已取消",
+  },
+};
+
+export function mutationHeading(
+  action: MutationAction,
+  outcome: MutationOutcome,
+): string {
+  return HEADING_LABELS[action][outcome];
+}
+
+function normalizedRowStatus(status: TaskSkillStatus): MutationRowStatus {
+  switch (status) {
+    case "failed":
+      return "failed";
+    case "skipped":
+      return "skipped";
+    default:
+      return "success";
+  }
+}
+
+export function normalizeTaskResult(result: TaskResult): MutationResultView {
+  return {
+    outcome: result.overall,
+    rows: result.skills.map((skill) => ({
+      name: skill.name,
+      status: normalizedRowStatus(skill.status),
+      statusLabel: TASK_SKILL_STATUS_LABELS[skill.status],
+      taskStatus: skill.status,
+      error: skill.error,
+      backupPath: skill.backupPath,
+    })),
+    warnings: result.warnings,
+    backupPath: result.backupPath,
+    logPath: result.logPath,
+  };
+}
+
+export interface PromiseMutationResult {
+  rows: MutationRow[];
+  warnings?: AppError[];
+  backupPath?: string;
+  logPath?: string;
+  /** Optional terminal message; the progress message is kept otherwise. */
+  message?: string;
+}
+
+export function normalizePromiseResult(
+  value: PromiseMutationResult,
+): MutationResultView {
+  const failed = value.rows.filter((row) => row.status === "failed").length;
+  const succeeded = value.rows.some((row) => row.status === "success");
+  return {
+    outcome: failed === 0 ? "success" : succeeded ? "partial" : "failed",
+    rows: value.rows,
+    warnings: value.warnings ?? [],
+    backupPath: value.backupPath,
+    logPath: value.logPath,
+  };
+}
+
+export interface TaskEventDriver {
+  kind: "task";
+  total: number;
+  message: string;
+  launch: (onEvent: (event: TaskEvent) => void) => Promise<string>;
+}
+
+export interface PromiseProgress {
+  completed?: number;
+  total?: number;
+  message?: string;
+}
+
+export interface PromiseDriver {
+  kind: "promise";
+  total: number;
+  message: string;
+  indeterminate: boolean;
+  run: (
+    report: (progress: PromiseProgress) => void,
+  ) => Promise<PromiseMutationResult>;
+}
+
+export type MutationDriver = TaskEventDriver | PromiseDriver;
+
+export function taskEventDriver(
+  options: Omit<TaskEventDriver, "kind">,
+): TaskEventDriver {
+  return { kind: "task", ...options };
+}
+
+export function promiseDriver(
+  options: Omit<PromiseDriver, "kind">,
+): PromiseDriver {
+  return { kind: "promise", ...options };
+}
+
+export interface MutationState {
+  running: boolean;
+  phase: TaskPhase | null;
+  completed: number;
+  total: number;
+  message: string;
+  indeterminate: boolean;
+  cancelling: boolean;
+  taskId: string | null;
+  result: MutationResultView | null;
+  error: AppError | null;
+  startError: AppError | null;
+}
+
+export function initialMutationState(): MutationState {
+  return {
+    running: false,
+    phase: null,
+    completed: 0,
+    total: 1,
+    message: "",
+    indeterminate: false,
+    cancelling: false,
+    taskId: null,
+    result: null,
+    error: null,
+    startError: null,
+  };
+}
+
+export type MutationRunAction =
+  | {
+      type: "start";
+      total: number;
+      message: string;
+      indeterminate: boolean;
+    }
+  | { type: "taskId"; taskId: string }
+  | {
+      type: "progress";
+      phase: TaskPhase | null;
+      completed?: number;
+      total?: number;
+      message?: string;
+    }
+  | {
+      type: "terminal";
+      phase: TaskPhase | null;
+      message?: string;
+      result: MutationResultView | null;
+    }
+  | {
+      type: "failed";
+      phase: TaskPhase | null;
+      message?: string;
+      error: AppError;
+    }
+  | { type: "startFailed"; error: AppError }
+  | { type: "cancelling"; value: boolean }
+  | { type: "cancelRejected"; message: string }
+  | { type: "cancelFailed"; error: AppError }
+  | { type: "reset" };
+
+export function mutationRunReducer(
+  state: MutationState,
+  action: MutationRunAction,
+): MutationState {
+  switch (action.type) {
+    case "start":
+      return {
+        ...initialMutationState(),
+        running: true,
+        total: action.total,
+        message: action.message,
+        indeterminate: action.indeterminate,
+      };
+    case "taskId":
+      return { ...state, taskId: action.taskId };
+    case "progress":
+      return {
+        ...state,
+        phase: action.phase ?? state.phase,
+        completed: action.completed ?? state.completed,
+        total: action.total ?? state.total,
+        message: action.message || state.message,
+      };
+    case "terminal":
+      return {
+        ...state,
+        running: false,
+        cancelling: false,
+        phase: action.phase,
+        message: action.message || state.message,
+        result: action.result,
+        error: null,
+      };
+    case "failed":
+      return {
+        ...state,
+        running: false,
+        cancelling: false,
+        phase: action.phase,
+        message: action.message || state.message,
+        error: action.error,
+      };
+    case "startFailed":
+      return {
+        ...state,
+        running: false,
+        phase: null,
+        startError: action.error,
+      };
+    case "cancelling":
+      return { ...state, cancelling: action.value };
+    case "cancelRejected":
+      return { ...state, error: fallbackError(action.message) };
+    case "cancelFailed":
+      return { ...state, error: action.error };
+    case "reset":
+      return initialMutationState();
+  }
+}
+
+/**
+ * Query prefixes refreshed after an action settles. Attach/detach stay scoped
+ * to the mutated skill so an open drawer does not refetch every detail.
+ */
+export function mutationRefreshKeys(
+  action: MutationAction,
+  skillId?: string,
+): QueryKey[] {
+  switch (action) {
+    case "install":
+      return [["inventory"], ["skill"]];
+    case "update":
+    case "uninstall":
+      return [["inventory"], ["skill"], ["updateReport"]];
+    case "attach":
+    case "detach":
+      return skillId
+        ? [
+            ["inventory"],
+            ["skill", skillId],
+            ["skill-dir", skillId],
+            ["skill-file", skillId],
+          ]
+        : [["inventory"], ["skill"], ["skill-dir"], ["skill-file"]];
+    case "manage_add":
+    case "manage_remove":
+      return [];
+  }
+}
+
+export interface MutationRefreshOptions {
+  action: MutationAction;
+  skillId?: string;
+  /** Manage actions must re-run the environment check, not just the caches. */
+  onEnvironmentRecheck?: () => void;
+}
+
+export function refreshMutationQueries(
+  queryClient: QueryClient,
+  options: MutationRefreshOptions,
+  result: MutationResultView | null,
+): void {
+  if (options.action === "update" && result) {
+    const updatedNames = result.rows
+      .filter(
+        (row) =>
+          row.status === "success" &&
+          (row.taskStatus === undefined || row.taskStatus === "updated"),
+      )
+      .map((row) => row.name);
+    if (updatedNames.length > 0) {
+      queryClient.setQueryData<UpdateCheckReport | undefined>(
+        updateReportQueryKey,
+        (previous) => markSkillsCurrent(previous, updatedNames),
+      );
+    }
+  }
+  for (const queryKey of mutationRefreshKeys(options.action, options.skillId)) {
+    void queryClient.invalidateQueries({ queryKey });
+  }
+  if (options.action === "manage_add" || options.action === "manage_remove") {
+    options.onEnvironmentRecheck?.();
+  }
+}
+
+export interface MutationOptions extends MutationRefreshOptions {
+  /** Shown when a task fails or a native promise rejects without an error. */
+  fallbackFailure: string;
+  /** Shown when a task invoke rejects before a task exists. */
+  fallbackStart: string;
+}
+
+export interface MutationHandle {
+  state: MutationState;
+  /** Latest state for one-time callbacks (focus traps, close handlers). */
+  stateRef: MutableRefObject<MutationState>;
+  /** Resolves with the normalized outcome, or `null` on failure/reset. */
+  start: (driver: MutationDriver) => Promise<MutationResultView | null>;
+  cancel: (fallbackMessage?: string) => Promise<void>;
+  reset: () => void;
+}
+
+export function useMutation(options: MutationOptions): MutationHandle {
+  const queryClient = useQueryClient();
+  const [state, dispatch] = useReducer(
+    mutationRunReducer,
+    undefined,
+    initialMutationState,
+  );
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const runSeq = useRef(0);
+  const resolverRef = useRef<
+    ((result: MutationResultView | null) => void) | null
+  >(null);
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
+
+  const settle = useCallback(
+    (seq: number, result: MutationResultView | null) => {
+      if (runSeq.current !== seq) return;
+      const resolve = resolverRef.current;
+      resolverRef.current = null;
+      refreshMutationQueries(queryClient, optionsRef.current, result);
+      resolve?.(result);
+    },
+    [queryClient],
+  );
+
+  const handleTaskEvent = useCallback(
+    (seq: number, event: TaskEvent) => {
+      if (runSeq.current !== seq) return;
+      const fallback = optionsRef.current.fallbackFailure;
+      switch (event.phase) {
+        case "completed":
+        case "cancelled": {
+          const result = event.result
+            ? normalizeTaskResult(event.result)
+            : null;
+          dispatch({
+            type: "terminal",
+            phase: event.phase,
+            message: event.message,
+            result,
+          });
+          settle(seq, result);
+          return;
+        }
+        case "failed":
+          dispatch({
+            type: "failed",
+            phase: event.phase,
+            message: event.message,
+            error: event.error ?? fallbackError(fallback),
+          });
+          settle(seq, null);
+          return;
+        default:
+          dispatch({
+            type: "progress",
+            phase: event.phase,
+            completed: event.completed,
+            total: event.total,
+            message: event.message,
+          });
+      }
+    },
+    [settle],
+  );
+
+  const start = useCallback(
+    (driver: MutationDriver): Promise<MutationResultView | null> => {
+      const seq = ++runSeq.current;
+      const previous = resolverRef.current;
+      resolverRef.current = null;
+      previous?.(null);
+      dispatch({
+        type: "start",
+        total: driver.total,
+        message: driver.message,
+        indeterminate: driver.kind === "promise" && driver.indeterminate,
+      });
+
+      return new Promise<MutationResultView | null>((resolve) => {
+        resolverRef.current = resolve;
+
+        if (driver.kind === "task") {
+          void (async () => {
+            try {
+              const taskId = await driver.launch((event) =>
+                handleTaskEvent(seq, event),
+              );
+              if (runSeq.current !== seq) {
+                void cancelTask(taskId).catch(() => {
+                  // The dialog moved on; the backend will finish or reject it.
+                });
+                return;
+              }
+              dispatch({ type: "taskId", taskId });
+            } catch (error) {
+              if (runSeq.current !== seq) return;
+              dispatch({
+                type: "startFailed",
+                error:
+                  asAppError(error) ??
+                  fallbackError(optionsRef.current.fallbackStart),
+              });
+              resolverRef.current = null;
+              resolve(null);
+            }
+          })();
+          return;
+        }
+
+        void (async () => {
+          try {
+            const value = await driver.run((progress) => {
+              if (runSeq.current !== seq) return;
+              dispatch({
+                type: "progress",
+                phase: null,
+                completed: progress.completed,
+                total: progress.total,
+                message: progress.message,
+              });
+            });
+            if (runSeq.current !== seq) return;
+            const result = normalizePromiseResult(value);
+            dispatch({
+              type: "terminal",
+              phase: null,
+              message: value.message,
+              result,
+            });
+            settle(seq, result);
+          } catch (error) {
+            if (runSeq.current !== seq) return;
+            dispatch({
+              type: "failed",
+              phase: null,
+              error:
+                asAppError(error) ??
+                fallbackError(optionsRef.current.fallbackFailure),
+            });
+            settle(seq, null);
+          }
+        })();
+      });
+    },
+    [handleTaskEvent, settle],
+  );
+
+  const cancel = useCallback(
+    async (fallbackMessage = "无法取消任务。") => {
+      const current = stateRef.current;
+      if (!current.taskId || current.cancelling) return;
+      dispatch({ type: "cancelling", value: true });
+      try {
+        const ack = await cancelTask(current.taskId);
+        if (!ack.accepted) {
+          dispatch({
+            type: "cancelRejected",
+            message: ack.message ?? fallbackMessage,
+          });
+        }
+      } catch (error) {
+        dispatch({
+          type: "cancelFailed",
+          error: asAppError(error) ?? fallbackError(fallbackMessage),
+        });
+      } finally {
+        dispatch({ type: "cancelling", value: false });
+      }
+    },
+    [],
+  );
+
+  const reset = useCallback(() => {
+    runSeq.current += 1;
+    const resolve = resolverRef.current;
+    resolverRef.current = null;
+    resolve?.(null);
+    dispatch({ type: "reset" });
+  }, []);
+
+  return { state, stateRef, start, cancel, reset };
+}

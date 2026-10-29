@@ -3,7 +3,6 @@ import type { TaskEvent, TaskResult, TaskSkillStatus } from "./types";
 import {
   initialTaskRunState,
   TASK_SKILL_STATUS_LABELS,
-  taskOverallHeading,
   taskRunReducer,
 } from "./task-runner";
 
@@ -140,7 +139,7 @@ describe("shared task runner", () => {
     });
   });
 
-  it("shares the same status and overall labels for all three dialogs", () => {
+  it("shares the same status labels for every CLI action", () => {
     const statuses: TaskSkillStatus[] = [
       "installed",
       "updated",
@@ -152,10 +151,5 @@ describe("shared task runner", () => {
       expect(TASK_SKILL_STATUS_LABELS[status]).not.toBe("");
     }
     expect(TASK_SKILL_STATUS_LABELS.skipped).toBe("跳过");
-
-    expect(taskOverallHeading("install", "success")).toBe("安装完成");
-    expect(taskOverallHeading("update", "partial")).toBe("更新部分失败");
-    expect(taskOverallHeading("uninstall", "failed")).toBe("卸载失败");
-    expect(taskOverallHeading("preview", "cancelled")).toBe("预览已取消");
   });
 });

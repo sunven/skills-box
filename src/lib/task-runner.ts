@@ -3,7 +3,6 @@ import type { MutableRefObject } from "react";
 import { asAppError, cancelTask, fallbackError } from "./api";
 import type {
   AppError,
-  TaskAction,
   TaskEvent,
   TaskPhase,
   TaskResult,
@@ -11,10 +10,9 @@ import type {
 } from "./types";
 
 /**
- * Shared mutation-task state machine for the install, update and uninstall
- * dialogs. The backend streams {@link TaskEvent}s; every dialog needs exactly
- * the same progress/cancel/result transitions, so they live here instead of
- * being copied three times.
+ * Low-level state machine for one backend task stream. The install preview
+ * and the mutation pipeline both consume it; it owns nothing but task events
+ * and cancellation, so result normalization and refresh stay above it.
  */
 export interface TaskRunState {
   taskId: string | null;
@@ -27,7 +25,6 @@ export interface TaskRunState {
   result: TaskResult | null;
   taskError: AppError | null;
   startError: AppError | null;
-  revealError: string | null;
 }
 
 export function initialTaskRunState(): TaskRunState {
@@ -42,7 +39,6 @@ export function initialTaskRunState(): TaskRunState {
     result: null,
     taskError: null,
     startError: null,
-    revealError: null,
   };
 }
 
@@ -56,7 +52,6 @@ export type TaskRunAction =
   | { type: "startFailed"; error: AppError }
   | { type: "startError"; error: AppError | null }
   | { type: "taskError"; error: AppError | null }
-  | { type: "revealError"; message: string | null }
   | { type: "reset" };
 
 export function taskRunReducer(
@@ -77,7 +72,6 @@ export function taskRunReducer(
         result: null,
         taskError: null,
         startError: null,
-        revealError: null,
       };
     case "taskId":
       return { ...state, taskId: action.taskId };
@@ -125,24 +119,17 @@ export function taskRunReducer(
       return { ...state, startError: action.error };
     case "taskError":
       return { ...state, taskError: action.error };
-    case "revealError":
-      return { ...state, revealError: action.message };
     case "reset":
       return initialTaskRunState();
   }
 }
 
-/** The backend is the only source of error codes; no client-invented codes. */
-export function eventError(event: TaskEvent, fallbackMessage: string): AppError {
-  return event.error ?? fallbackError(fallbackMessage);
-}
-
 /**
- * Launch one task and keep exactly one event stream alive. A stale launch
+ * Run one task and guard its event stream by generation. A stale launch
  * (dialog closed or restarted) cancels its task id when the invoke resolves
- * late and drops every event from the old {@link MutableRefObject} generation.
+ * late and drops every event from the previous generation.
  */
-export async function launchTask(options: {
+async function launchTask(options: {
   runSeq: MutableRefObject<number>;
   launch: (onEvent: (event: TaskEvent) => void) => Promise<string>;
   onEvent: (event: TaskEvent) => void;
@@ -170,39 +157,39 @@ export async function launchTask(options: {
   }
 }
 
-export interface TaskRunnerStart {
+export interface TaskEventStart {
   total: number;
   message: string;
   launch: (onEvent: (event: TaskEvent) => void) => Promise<string>;
 }
 
-export interface TaskRunnerOptions {
+export interface TaskEventDriverOptions {
   /** Shown when a terminal event arrives without a backend error. */
   fallbackFailure: string;
   /** Shown when the invoke itself rejects without a backend error. */
   fallbackStart: string;
-  /** Dialog-specific side effects for the current task generation. */
+  /** Caller-specific side effects for the current task generation. */
   onEvent?: (event: TaskEvent) => void;
 }
 
-export interface TaskRunner {
+export interface TaskEventHandle {
   state: TaskRunState;
   /** Latest state for one-time callbacks (focus traps, close handlers). */
   stateRef: MutableRefObject<TaskRunState>;
-  start: (start: TaskRunnerStart) => void;
+  start: (start: TaskEventStart) => void;
   cancel: (fallbackMessage?: string) => Promise<void>;
   reset: () => void;
-  setRevealError: (message: string | null) => void;
-  setTaskError: (error: AppError | null) => void;
   setStartError: (error: AppError | null) => void;
 }
 
 /**
- * Reducer + launch/cancel controller shared by every mutation dialog. It owns
- * the event-generation guard so a late invoke or event can never leak into a
+ * Reducer + launch/cancel controller for one task stream. It owns the
+ * event-generation guard so a late invoke or event can never leak into a
  * restarted or closed dialog.
  */
-export function useTaskRunner(options: TaskRunnerOptions): TaskRunner {
+export function useTaskEvents(
+  options: TaskEventDriverOptions,
+): TaskEventHandle {
   const [state, dispatch] = useReducer(
     taskRunReducer,
     undefined,
@@ -225,7 +212,7 @@ export function useTaskRunner(options: TaskRunnerOptions): TaskRunner {
   }, []);
 
   const start = useCallback(
-    ({ total, message, launch }: TaskRunnerStart) => {
+    ({ total, message, launch }: TaskEventStart) => {
       dispatch({ type: "start", total, message });
       void launchTask({
         runSeq,
@@ -270,14 +257,6 @@ export function useTaskRunner(options: TaskRunnerOptions): TaskRunner {
     dispatch({ type: "reset" });
   }, []);
 
-  const setRevealError = useCallback((message: string | null) => {
-    dispatch({ type: "revealError", message });
-  }, []);
-
-  const setTaskError = useCallback((error: AppError | null) => {
-    dispatch({ type: "taskError", error });
-  }, []);
-
   const setStartError = useCallback((error: AppError | null) => {
     dispatch({ type: "startError", error });
   }, []);
@@ -288,8 +267,6 @@ export function useTaskRunner(options: TaskRunnerOptions): TaskRunner {
     start,
     cancel,
     reset,
-    setRevealError,
-    setTaskError,
     setStartError,
   };
 }
@@ -312,39 +289,3 @@ export const TASK_SKILL_STATUS_LABELS: Record<TaskSkillStatus, string> = {
   skipped: "跳过",
   failed: "失败",
 };
-
-/** Result heading shared by the three mutation dialogs. */
-export function taskOverallHeading(
-  action: TaskAction,
-  overall: TaskResult["overall"],
-): string {
-  const labels: Record<TaskAction, Record<TaskResult["overall"], string>> = {
-    preview: {
-      success: "预览完成",
-      partial: "预览部分完成",
-      failed: "预览失败",
-      cancelled: "预览已取消",
-    },
-    install: {
-      success: "安装完成",
-      partial: "安装部分失败",
-      failed: "安装失败",
-      cancelled: "安装已取消",
-    },
-    update: {
-      success: "更新完成",
-      partial: "更新部分失败",
-      failed: "更新失败",
-      cancelled: "更新已取消",
-    },
-    uninstall: {
-      success: "卸载完成",
-      partial: "卸载部分完成",
-      failed: "卸载失败",
-      cancelled: "卸载已取消",
-    },
-  };
-  return labels[action][overall];
-}
-
-export type TaskEventError = AppError;

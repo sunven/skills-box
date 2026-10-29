@@ -3,13 +3,11 @@ import { Plus, Settings2, Trash2, X } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { AgentLogo } from "./agent-logo";
+import { MutationError } from "./mutation/mutation-error";
+import { MutationProgress } from "./mutation/mutation-progress";
 import { useModalFocus } from "../hooks/use-modal-focus";
-import {
-  addExtraAgent,
-  asAppError,
-  fallbackError,
-  removeExtraAgent,
-} from "../lib/api";
+import { addExtraAgent, fallbackError, removeExtraAgent } from "../lib/api";
+import { promiseDriver, useMutation } from "../lib/mutation";
 import type { AppError, InventoryAgent, InventorySkill } from "../lib/types";
 
 interface ManageAgentsDialogProps {
@@ -19,10 +17,6 @@ interface ManageAgentsDialogProps {
   warnings: string[];
   onClose: () => void;
   onChanged: () => void;
-}
-
-function toError(error: unknown, fallback: string): AppError {
-  return asAppError(error) ?? fallbackError(fallback);
 }
 
 /**
@@ -43,12 +37,23 @@ export function ManageAgentsDialog({
   const [id, setId] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [skillsDir, setSkillsDir] = useState("");
-  const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState<AppError | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
-  const [deleteError, setDeleteError] = useState<AppError | null>(null);
+  const addMutation = useMutation({
+    action: "manage_add",
+    onEnvironmentRecheck: onChanged,
+    fallbackFailure: "添加额外 agent 失败。",
+    fallbackStart: "添加额外 agent 失败。",
+  });
+  const removeMutation = useMutation({
+    action: "manage_remove",
+    onEnvironmentRecheck: onChanged,
+    fallbackFailure: "删除额外 agent 失败。",
+    fallbackStart: "删除额外 agent 失败。",
+  });
+  const adding = addMutation.state.running;
 
   const extras = useMemo(
     () => agents.filter((agent) => agent.origin !== "catalog"),
@@ -67,7 +72,7 @@ export function ManageAgentsDialog({
     return counts;
   }, [skills]);
 
-  const busy = adding || deleting !== null;
+  const busy = adding || removeMutation.state.running;
 
   useModalFocus({
     open,
@@ -111,45 +116,66 @@ export function ManageAgentsDialog({
       });
       return;
     }
-    setAdding(true);
     setAddError(null);
     setNotice(null);
-    try {
-      const added = await addExtraAgent({
-        id: trimmedId,
-        displayName: trimmedName,
-        skillsDir: trimmedDir,
-      });
-      setNotice(
-        `已添加 ${added.displayName}（${added.skillsDir}）。检测到目录后即可作为安装目标。`,
-      );
-      resetAddForm();
-      onChanged();
-    } catch (error) {
-      setAddError(toError(error, "添加额外 agent 失败。"));
-    } finally {
-      setAdding(false);
-    }
+    await addMutation.start(
+      promiseDriver({
+        total: 0,
+        message: "正在保存额外 agent…",
+        indeterminate: true,
+        run: async () => {
+          const added = await addExtraAgent({
+            id: trimmedId,
+            displayName: trimmedName,
+            skillsDir: trimmedDir,
+          });
+          setNotice(
+            `已添加 ${added.displayName}（${added.skillsDir}）。检测到目录后即可作为安装目标。`,
+          );
+          resetAddForm();
+          return {
+            rows: [
+              {
+                name: added.displayName,
+                status: "success" as const,
+                statusLabel: "已添加",
+              },
+            ],
+          };
+        },
+      }),
+    );
   };
 
   const handleDelete = async (agentId: string) => {
     setDeleting(agentId);
-    setDeleteError(null);
     setNotice(null);
-    try {
-      const result = await removeExtraAgent(agentId);
-      setNotice(
-        result.detached.length > 0
-          ? `已删除 ${result.displayName}，并断开 ${result.detached.length} 个挂载。`
-          : `已删除 ${result.displayName}。`,
-      );
-      setConfirming(null);
-      onChanged();
-    } catch (error) {
-      setDeleteError(toError(error, "删除额外 agent 失败。"));
-    } finally {
-      setDeleting(null);
-    }
+    await removeMutation.start(
+      promiseDriver({
+        total: 0,
+        message: "正在删除额外 agent…",
+        indeterminate: true,
+        run: async () => {
+          const result = await removeExtraAgent(agentId);
+          setNotice(
+            result.detached.length > 0
+              ? `已删除 ${result.displayName}，并断开 ${result.detached.length} 个挂载。`
+              : `已删除 ${result.displayName}。`,
+          );
+          setConfirming(null);
+          return {
+            rows: [
+              {
+                name: result.displayName,
+                status: "success" as const,
+                statusLabel: "已删除",
+              },
+            ],
+          };
+        },
+      }),
+    );
+    setDeleting(null);
   };
 
   return (
@@ -220,6 +246,22 @@ export function ManageAgentsDialog({
             </div>
           ) : null}
 
+          {busy ? (
+            <MutationProgress
+              phase={null}
+              label="执行中"
+              message={
+                adding
+                  ? addMutation.state.message
+                  : removeMutation.state.message
+              }
+              completed={0}
+              total={0}
+              indeterminate
+              cancelling={false}
+            />
+          ) : null}
+
           <section className="detail-section">
             <h4 className="detail-section-title">
               额外 agent <span className="count">{extras.length} 个</span>
@@ -280,7 +322,7 @@ export function ManageAgentsDialog({
                                 disabled={deleting !== null}
                                 onClick={() => {
                                   setConfirming(null);
-                                  setDeleteError(null);
+                                  removeMutation.reset();
                                 }}
                               >
                                 取消
@@ -304,7 +346,7 @@ export function ManageAgentsDialog({
                               disabled={busy}
                               onClick={() => {
                                 setConfirming(agent.id);
-                                setDeleteError(null);
+                                removeMutation.reset();
                               }}
                             >
                               <Trash2 aria-hidden="true" />
@@ -319,24 +361,14 @@ export function ManageAgentsDialog({
               </ul>
             )}
 
-            {deleteError ? (
-              <div
-                role="alert"
-                data-testid="manage-agents-error"
-                className="notice mt-3"
-                data-tone="negative"
-              >
-                <div>
-                  <p className="font-medium">{deleteError.message}</p>
-                  {deleteError.detail ? (
-                    <p className="mono mt-0.5 break-all">{deleteError.detail}</p>
-                  ) : null}
-                  {deleteError.hint ? (
-                    <p className="mt-0.5">{deleteError.hint}</p>
-                  ) : null}
-                </div>
-              </div>
-            ) : null}
+            <MutationError
+              error={
+                removeMutation.state.startError ??
+                removeMutation.state.error
+              }
+              testId="manage-agents-error"
+              monoDetail
+            />
           </section>
 
           <section className="detail-section mt-4">
@@ -386,24 +418,15 @@ export function ManageAgentsDialog({
                   {adding ? "正在保存…" : "添加"}
                 </Button>
               </div>
-              {addError ? (
-                <div
-                  role="alert"
-                  data-testid="manage-agents-add-error"
-                  className="notice"
-                  data-tone="negative"
-                >
-                  <div>
-                    <p className="font-medium">{addError.message}</p>
-                    {addError.detail ? (
-                      <p className="mono mt-0.5 break-all">{addError.detail}</p>
-                    ) : null}
-                    {addError.hint ? (
-                      <p className="mt-0.5">{addError.hint}</p>
-                    ) : null}
-                  </div>
-                </div>
-              ) : null}
+              <MutationError
+                error={
+                  addError ??
+                  addMutation.state.startError ??
+                  addMutation.state.error
+                }
+                testId="manage-agents-add-error"
+                monoDetail
+              />
             </form>
           </section>
         </div>

@@ -1,22 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CheckCircle2, Trash2, X } from "lucide-react";
+import { AlertTriangle, Trash2, X } from "lucide-react";
 import { Button } from "./ui/button";
-import { TaskProgress } from "./install-wizard";
+import { MutationError } from "./mutation/mutation-error";
+import { MutationProgress } from "./mutation/mutation-progress";
+import { MutationResult } from "./mutation/mutation-result";
 import { useModalFocus } from "../hooks/use-modal-focus";
-import {
-  asAppError,
-  fallbackError,
-  revealAppData,
-  startUninstall,
-} from "../lib/api";
-import type { TaskEvent, UpdateViewSkill } from "../lib/types";
+import { startUninstall } from "../lib/api";
+import type { UpdateViewSkill } from "../lib/types";
 import { ATTACHMENT_LABELS } from "../lib/inventory-view";
-import {
-  TASK_SKILL_STATUS_LABELS,
-  taskOverallHeading,
-  useTaskRunner,
-} from "../lib/task-runner";
+import { taskEventDriver, useMutation } from "../lib/mutation";
 
 interface UninstallDialogProps {
   open: boolean;
@@ -29,7 +21,6 @@ export function UninstallDialog({
   skill,
   onClose,
 }: UninstallDialogProps) {
-  const queryClient = useQueryClient();
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const onCloseRef = useRef(onClose);
@@ -37,87 +28,51 @@ export function UninstallDialog({
 
   const [confirmed, setConfirmed] = useState(false);
 
-  const invalidateQueries = useCallback(() => {
-    // Inventory carries anomaly counts; detail is invalidated because the
-    // selected row may disappear or lose attachments.
-    void queryClient.invalidateQueries({ queryKey: ["inventory"] });
-    void queryClient.invalidateQueries({ queryKey: ["skill"] });
-    void queryClient.invalidateQueries({ queryKey: ["updateReport"] });
-  }, [queryClient]);
-
-  const handleTaskEvent = useCallback(
-    (event: TaskEvent) => {
-      if (
-        event.phase === "completed" ||
-        event.phase === "cancelled" ||
-        event.phase === "failed"
-      ) {
-        invalidateQueries();
-      }
-    },
-    [invalidateQueries],
-  );
-
-  const {
-    state: {
-      taskId,
-      running,
-      phase,
-      completed,
-      total,
-      message,
-      cancelling,
-      result,
-      taskError,
-      startError,
-      revealError,
-    },
-    stateRef,
-    start,
-    cancel,
-    reset,
-    setRevealError,
-  } = useTaskRunner({
+  const mutation = useMutation({
+    action: "uninstall",
     fallbackFailure: "卸载失败，请重试。",
     fallbackStart: "无法开始卸载，请稍后重试。",
-    onEvent: handleTaskEvent,
   });
+  const {
+    taskId,
+    running,
+    phase,
+    completed,
+    total,
+    message,
+    cancelling,
+    result,
+    error,
+    startError,
+  } = mutation.state;
 
   const launch = useCallback(() => {
-    if (!skill || stateRef.current.running) return;
-    start({
-      total: 1,
-      message: "正在准备卸载…",
-      launch: (onEvent) => startUninstall(skill.name, onEvent),
-    });
-  }, [skill, start, stateRef]);
+    if (!skill || mutation.stateRef.current.running) return;
+    void mutation.start(
+      taskEventDriver({
+        total: 1,
+        message: "正在准备卸载…",
+        launch: (onEvent) => startUninstall(skill.name, onEvent),
+      }),
+    );
+  }, [skill, mutation.start, mutation.stateRef]);
 
   useEffect(() => {
     if (!open) return;
-    reset();
+    mutation.reset();
     setConfirmed(false);
-  }, [open, skill?.name, reset]);
+  }, [open, skill?.name, mutation.reset]);
 
   useModalFocus({
     open,
     panelRef,
     initialFocusRef: closeRef,
     onClose,
-    canClose: () => !stateRef.current.running,
+    canClose: () => !mutation.stateRef.current.running,
   });
 
-  const handleCancelTask = () => cancel("当前操作正在写入，无法取消。");
-
-  const doReveal = async (kind: "backups" | "logs") => {
-    setRevealError(null);
-    try {
-      await revealAppData(kind);
-    } catch (error) {
-      setRevealError(
-        (asAppError(error) ?? fallbackError("无法打开目录。")).message,
-      );
-    }
-  };
+  const handleCancelTask = () =>
+    mutation.cancel("当前操作正在写入，无法取消。");
 
   if (!open || !skill) return null;
 
@@ -270,7 +225,7 @@ export function UninstallDialog({
 
           {running ? (
             <>
-              <TaskProgress
+              <MutationProgress
                 phase={phase}
                 message={message}
                 completed={completed}
@@ -286,155 +241,19 @@ export function UninstallDialog({
             </>
           ) : null}
 
-          {startError ? (
-            <div
-              role="alert"
-              data-testid="uninstall-start-error"
-              className="notice mt-3"
-              data-tone="negative"
-            >
-              <div>
-                <p className="font-medium">{startError.message}</p>
-                {startError.detail ? (
-                  <p className="mt-0.5">{startError.detail}</p>
-                ) : null}
-                {startError.hint ? (
-                  <p className="mt-0.5">{startError.hint}</p>
-                ) : null}
-              </div>
-            </div>
-          ) : null}
-
-          {taskError ? (
-            <div
-              role="alert"
-              data-testid="uninstall-error"
-              className="notice mt-3"
-              data-tone="negative"
-            >
-              <div>
-                <p className="font-medium">{taskError.message}</p>
-                {taskError.detail ? (
-                  <p className="mt-0.5">{taskError.detail}</p>
-                ) : null}
-                {taskError.hint ? <p className="mt-0.5">{taskError.hint}</p> : null}
-              </div>
-            </div>
-          ) : null}
+          <MutationError error={startError} testId="uninstall-start-error" />
+          <MutationError error={error} testId="uninstall-error" />
 
           {result ? (
-            <div data-testid="uninstall-result" data-overall={result.overall}>
-              <div className="flex items-baseline gap-2">
-                <h3 className="flex items-center gap-1.5 text-sm font-semibold">
-                  {result.overall === "success" ? (
-                    <CheckCircle2
-                      className="size-4 text-success"
-                      aria-hidden="true"
-                    />
-                  ) : null}
-                  {taskOverallHeading("uninstall", result.overall)}
-                </h3>
-                <span className="text-[12px] text-muted-foreground">
-                  {message}
-                </span>
-              </div>
-              <p className="mt-1 text-[12px] text-muted-foreground">
-                不自动回滚；备份与日志保留在应用数据目录。
-              </p>
-
-              <ul className="mt-2.5 space-y-2">
-                {result.skills.map((skillResult) => (
-                  <li
-                    key={skillResult.name}
-                    data-testid="uninstall-skill-result"
-                    data-skill-name={skillResult.name}
-                    data-skill-status={skillResult.status}
-                    className="rounded-md border border-border px-3 py-2.5"
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="text-[13px] font-medium">
-                        {skillResult.name}
-                      </span>
-                      <span
-                        className={
-                          skillResult.status === "removed"
-                            ? "ml-auto rounded-sm bg-success-soft px-1.5 py-0.5 text-[11.5px] font-medium text-success"
-                            : skillResult.status === "failed"
-                              ? "ml-auto rounded-sm bg-destructive-soft px-1.5 py-0.5 text-[11.5px] font-medium text-destructive"
-                              : "ml-auto rounded-sm bg-warning-soft px-1.5 py-0.5 text-[11.5px] font-medium text-warning"
-                        }
-                      >
-                        {TASK_SKILL_STATUS_LABELS[skillResult.status]}
-                      </span>
-                    </div>
-                    {skillResult.error ? (
-                      <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">
-                        {skillResult.error.message}
-                        {skillResult.error.detail
-                          ? ` · ${skillResult.error.detail}`
-                          : ""}
-                      </p>
-                    ) : null}
-                    {skillResult.backupPath ? (
-                      <p className="mono mt-1 text-muted-foreground">
-                        备份：{skillResult.backupPath}
-                      </p>
-                    ) : null}
-                  </li>
-                ))}
-              </ul>
-
-              {result.warnings.length > 0 ? (
-                <ul className="notice mt-2 list-disc pl-8" data-tone="warning">
-                  {result.warnings.map((warning) => (
-                    <li key={warning.code ?? warning.message}>
-                      {warning.message}
-                      {warning.detail ? ` · ${warning.detail}` : ""}
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-
-              <div className="mt-2.5 space-y-1">
-                {result.backupPath ? (
-                  <p
-                    data-testid="uninstall-backup-path"
-                    className="mono break-all text-muted-foreground"
-                  >
-                    备份：{result.backupPath}
-                  </p>
-                ) : null}
-                {result.logPath ? (
-                  <p
-                    data-testid="uninstall-log-path"
-                    className="mono break-all text-muted-foreground"
-                  >
-                    日志：{result.logPath}
-                  </p>
-                ) : null}
-              </div>
-              <div className="mt-2.5 flex flex-wrap gap-1.5">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void doReveal("backups")}
-                >
-                  打开备份目录
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void doReveal("logs")}
-                >
-                  打开日志目录
-                </Button>
-              </div>
-              {revealError ? (
-                <p className="mt-1.5 text-[12px] text-destructive">
-                  {revealError}
-                </p>
-              ) : null}
-            </div>
+            <MutationResult
+              action="uninstall"
+              result={result}
+              message={message}
+              testIdPrefix="uninstall"
+              copy="不自动回滚；备份与日志保留在应用数据目录。"
+              showReveal
+              warningsTestId="uninstall-warnings"
+            />
           ) : null}
         </div>
 
@@ -478,7 +297,7 @@ export function UninstallDialog({
             ) : null}
             {!running && result ? (
               <Button size="sm" onClick={onClose}>
-                {result.overall === "success" ? "完成" : "关闭"}
+                {result.outcome === "success" ? "完成" : "关闭"}
               </Button>
             ) : null}
           </div>

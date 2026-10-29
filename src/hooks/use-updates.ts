@@ -2,9 +2,11 @@ import { useCallback, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { checkUpdates, getUpdateCheckState } from "../lib/api";
 import type { UpdateCheckReport } from "../lib/types";
-import { mergeUpdateReports } from "../lib/update-view";
+import {
+  mergeUpdateReports,
+  updateReportQueryKey,
+} from "../lib/update-view";
 
-export const updateReportQueryKey = ["updateReport"] as const;
 export const updateCheckStateQueryKey = ["updateCheckState"] as const;
 export const lastFullCheckQueryKey = ["lastFullCheck"] as const;
 export const lastFullAttemptQueryKey = ["lastFullAttempt"] as const;

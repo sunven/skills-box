@@ -1,38 +1,26 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   ArrowUpCircle,
-  CheckCircle2,
   HardDrive,
   ShieldAlert,
   X,
 } from "lucide-react";
 import { Button } from "./ui/button";
-import { TaskProgress } from "./install-wizard";
+import { MutationError } from "./mutation/mutation-error";
+import { MutationProgress } from "./mutation/mutation-progress";
+import { MutationResult } from "./mutation/mutation-result";
 import { useModalFocus } from "../hooks/use-modal-focus";
-import {
-  asAppError,
-  fallbackError,
-  revealAppData,
-  startUpdate,
-} from "../lib/api";
-import type { TaskEvent, TaskResult, UpdateCheckReport } from "../lib/types";
+import { startUpdate } from "../lib/api";
 import {
   UPDATE_REASON_ORDER,
-  markSkillsCurrent,
   type UpdateDialogView,
 } from "../lib/update-view";
 import {
   LOCAL_MODIFICATION_LABELS,
   shortHash,
 } from "../lib/inventory-view";
-import { updateReportQueryKey } from "../hooks/use-updates";
-import {
-  TASK_SKILL_STATUS_LABELS,
-  taskOverallHeading,
-  useTaskRunner,
-} from "../lib/task-runner";
+import { taskEventDriver, useMutation } from "../lib/mutation";
 
 interface UpdateDialogProps {
   open: boolean;
@@ -41,7 +29,6 @@ interface UpdateDialogProps {
 }
 
 export function UpdateDialog({ open, view, onClose }: UpdateDialogProps) {
-  const queryClient = useQueryClient();
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const onCloseRef = useRef(onClose);
@@ -49,65 +36,23 @@ export function UpdateDialog({ open, view, onClose }: UpdateDialogProps) {
 
   const [confirmed, setConfirmed] = useState(false);
 
-  const invalidateQueries = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: ["inventory"] });
-    void queryClient.invalidateQueries({ queryKey: ["skill"] });
-    void queryClient.invalidateQueries({ queryKey: ["updateReport"] });
-  }, [queryClient]);
-
-  const applyResultToReport = useCallback(
-    (taskResult: TaskResult) => {
-      const updatedNames = taskResult.skills
-        .filter((skill) => skill.status === "updated")
-        .map((skill) => skill.name);
-      if (updatedNames.length > 0) {
-        queryClient.setQueryData<UpdateCheckReport | undefined>(
-          updateReportQueryKey,
-          (previous) => markSkillsCurrent(previous, updatedNames),
-        );
-      }
-    },
-    [queryClient],
-  );
-
-  // The shared runner owns progress, cancellation and result transitions; this
-  // callback only reconciles the report/inventory caches.
-  const handleTaskEvent = useCallback(
-    (event: TaskEvent) => {
-      if (event.phase === "completed" || event.phase === "cancelled") {
-        if (event.result) applyResultToReport(event.result);
-        invalidateQueries();
-        return;
-      }
-      if (event.phase === "failed") invalidateQueries();
-    },
-    [applyResultToReport, invalidateQueries],
-  );
-
-  const {
-    state: {
-      taskId,
-      running,
-      phase,
-      completed,
-      total,
-      message,
-      cancelling,
-      result,
-      taskError,
-      startError,
-      revealError,
-    },
-    stateRef,
-    start,
-    cancel,
-    reset,
-    setRevealError,
-  } = useTaskRunner({
+  const mutation = useMutation({
+    action: "update",
     fallbackFailure: "更新失败，请重试。",
     fallbackStart: "无法开始更新，请稍后重试。",
-    onEvent: handleTaskEvent,
   });
+  const {
+    taskId,
+    running,
+    phase,
+    completed,
+    total,
+    message,
+    cancelling,
+    result,
+    error,
+    startError,
+  } = mutation.state;
 
   const {
     mode,
@@ -129,48 +74,34 @@ export function UpdateDialog({ open, view, onClose }: UpdateDialogProps) {
 
   const launch = useCallback(
     (names: string[]) => {
-      if (names.length === 0 || stateRef.current.running) return;
-      start({
-        total: names.length,
-        message: "正在准备更新…",
-        launch: (onEvent) => startUpdate(names, onEvent),
-      });
+      if (names.length === 0 || mutation.stateRef.current.running) return;
+      void mutation.start(
+        taskEventDriver({
+          total: names.length,
+          message: "正在准备更新…",
+          launch: (onEvent) => startUpdate(names, onEvent),
+        }),
+      );
     },
-    [start, stateRef],
+    [mutation.start, mutation.stateRef],
   );
-
-  const retryNames =
-    result?.skills
-      .filter((skill) => skill.status === "failed")
-      .map((skill) => skill.name) ?? [];
 
   useEffect(() => {
     if (!open) return;
-    reset();
+    mutation.reset();
     setConfirmed(false);
-  }, [open, mode, reset]);
+  }, [open, mode, mutation.reset]);
 
   useModalFocus({
     open,
     panelRef,
     initialFocusRef: closeRef,
     onClose,
-    canClose: () => !stateRef.current.running,
+    canClose: () => !mutation.stateRef.current.running,
   });
 
   const handleCancelTask = () =>
-    cancel("当前 skill 正在写入，无法取消。");
-
-  const doReveal = async (kind: "backups" | "logs") => {
-    setRevealError(null);
-    try {
-      await revealAppData(kind);
-    } catch (error) {
-      setRevealError(
-        (asAppError(error) ?? fallbackError("无法打开目录。")).message,
-      );
-    }
-  };
+    mutation.cancel("当前 skill 正在写入，无法取消。");
 
   if (!open) return null;
 
@@ -466,7 +397,7 @@ export function UpdateDialog({ open, view, onClose }: UpdateDialogProps) {
 
           {running ? (
             <>
-              <TaskProgress
+              <MutationProgress
                 phase={phase}
                 message={message}
                 completed={completed}
@@ -482,162 +413,23 @@ export function UpdateDialog({ open, view, onClose }: UpdateDialogProps) {
             </>
           ) : null}
 
-          {startError ? (
-            <div
-              role="alert"
-              data-testid="update-start-error"
-              className="notice mt-3" data-tone="negative"
-            >
-              <p className="font-medium">{startError.message}</p>
-              {startError.detail ? (
-                <p className="mt-0.5 text-[12px]">
-                  {startError.detail}
-                </p>
-              ) : null}
-            </div>
-          ) : null}
-
-          {taskError ? (
-            <div
-              role="alert"
-              data-testid="update-error"
-              className="notice mt-3" data-tone="negative"
-            >
-              <p className="font-medium">{taskError.message}</p>
-              {taskError.detail ? (
-                <p className="mt-0.5 text-[12px]">
-                  {taskError.detail}
-                </p>
-              ) : null}
-              {taskError.hint ? (
-                <p className="mt-0.5 text-[12px]">
-                  {taskError.hint}
-                </p>
-              ) : null}
-            </div>
-          ) : null}
+          <MutationError error={startError} testId="update-start-error" />
+          <MutationError error={error} testId="update-error" />
 
           {result ? (
-            <div data-testid="update-result" data-overall={result.overall}>
-              <div className="flex items-baseline gap-2">
-                <h3 className="flex items-center gap-1.5 text-sm font-semibold">
-                  {result.overall === "success" ? (
-                    <CheckCircle2
-                      className="size-4 text-success"
-                      aria-hidden="true"
-                    />
-                  ) : null}
-                  {taskOverallHeading("update", result.overall)}
-                </h3>
-                <span className="text-[12px] text-muted-foreground">
-                  {message}
-                </span>
-              </div>
-              <p className="mt-1 text-[12px] text-muted-foreground">
-                不自动回滚；失败项可单独重试。备份与日志保留在应用数据目录。
-              </p>
-
-              <ul className="mt-2 space-y-2">
-                {result.skills.map((skill) => (
-                  <li
-                    key={skill.name}
-                    data-testid="update-skill-result"
-                    data-skill-name={skill.name}
-                    data-skill-status={skill.status}
-                    className="rounded-md border border-border px-3 py-2.5"
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-medium">{skill.name}</span>
-                      <span
-                        className={
-                          skill.status === "updated"
-                            ? "ml-auto rounded-sm bg-success-soft px-1.5 py-0.5 text-[11.5px] font-medium text-success"
-                            : skill.status === "failed"
-                              ? "ml-auto rounded-sm bg-destructive-soft px-1.5 py-0.5 text-[11.5px] font-medium text-destructive"
-                              : "ml-auto rounded-sm bg-warning-soft px-1.5 py-0.5 text-[11.5px] font-medium text-warning"
-                        }
-                      >
-                        {TASK_SKILL_STATUS_LABELS[skill.status]}
-                      </span>
-                      {skill.status === "failed" ? (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="ml-auto h-7"
-                          disabled={running}
-                          onClick={() => void launch([skill.name])}
-                        >
-                          重试
-                        </Button>
-                      ) : null}
-                    </div>
-                    {skill.error ? (
-                      <p className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground">
-                        {skill.error.message}
-                        {skill.error.detail ? ` · ${skill.error.detail}` : ""}
-                      </p>
-                    ) : null}
-                    {skill.backupPath ? (
-                      <p className="mono mt-1 text-muted-foreground">
-                        备份：{skill.backupPath}
-                      </p>
-                    ) : null}
-                  </li>
-                ))}
-              </ul>
-
-              {result.warnings.length > 0 ? (
-                <ul
-                  data-testid="update-warnings"
-                  className="notice mt-2 list-disc pl-8" data-tone="warning"
-                >
-                  {result.warnings.map((warning) => (
-                    <li key={warning.code ?? warning.message}>
-                      {warning.message}
-                      {warning.detail ? ` · ${warning.detail}` : ""}
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-
-              <div className="mt-2 space-y-0.5">
-                {result.backupPath ? (
-                  <p
-                    data-testid="update-backup-path"
-                    className="mono break-all text-muted-foreground"
-                  >
-                    备份：{result.backupPath}
-                  </p>
-                ) : null}
-                {result.logPath ? (
-                  <p
-                    data-testid="update-log-path"
-                    className="mono break-all text-muted-foreground"
-                  >
-                    日志：{result.logPath}
-                  </p>
-                ) : null}
-              </div>
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void doReveal("backups")}
-                >
-                  打开备份目录
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void doReveal("logs")}
-                >
-                  打开日志目录
-                </Button>
-              </div>
-              {revealError ? (
-                <p className="mt-1.5 text-[12px] text-destructive">{revealError}</p>
-              ) : null}
-            </div>
+            <MutationResult
+              action="update"
+              result={result}
+              message={message}
+              testIdPrefix="update"
+              copy="不自动回滚；失败项可单独重试。备份与日志保留在应用数据目录。"
+              showReveal
+              retryMode="failed"
+              onRetry={(names) => launch(names)}
+              onRetryRow={(name) => launch([name])}
+              warningsTestId="update-warnings"
+              disabled={running}
+            />
           ) : null}
         </div>
 
@@ -685,20 +477,9 @@ export function UpdateDialog({ open, view, onClose }: UpdateDialogProps) {
               </Button>
             ) : null}
             {!running && result ? (
-              <>
-                {retryNames.length > 0 ? (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => void launch(retryNames)}
-                  >
-                    重试失败项
-                  </Button>
-                ) : null}
-                <Button size="sm" onClick={onClose}>
-                  {result.overall === "success" ? "完成" : "关闭"}
-                </Button>
-              </>
+              <Button size="sm" onClick={onClose}>
+                {result.outcome === "success" ? "完成" : "关闭"}
+              </Button>
             ) : null}
           </div>
         </div>
