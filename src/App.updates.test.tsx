@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
@@ -5,14 +6,17 @@ import { afterEach, describe, expect, it } from "vitest";
 import App from "./App";
 import { createQueryClient } from "./lib/query-client";
 import type {
+  ActiveMutationInfo,
   AppError,
   InventorySnapshot,
   UpdateCheckReport,
+  UpdateCheckState,
   UpdateSkillResult,
   UpdateSourceResult,
   UpdateState,
 } from "./lib/types";
 import { healthyReport } from "./test/fixtures";
+import { formatEpochDateTime } from "./lib/update-view";
 import {
   detailForSkill,
   makeDirListing,
@@ -26,7 +30,12 @@ import {
 } from "./test/inventory-fixtures";
 
 const LAST_SUCCESS = 1793163988000;
-const LAST_SUCCESS_LABEL = "2026-10-28 05:06";
+const LAST_SUCCESS_LABEL = "2026-10-28 13:06";
+const RUN_AT = Date.now();
+const RUN_AT_LABEL = formatEpochDateTime(RUN_AT);
+const SCOPED_CHECKED_AT = RUN_AT + 60_000;
+const PERSISTED_SUCCESS = LAST_SUCCESS - 60_000;
+const PERSISTED_SUCCESS_LABEL = "2026-10-28 13:05";
 
 interface Call {
   command: string;
@@ -79,7 +88,7 @@ function report(
   return {
     skills,
     sources: [sourceResult("acme/skills", { skillCount: skills.length })],
-    checkedAtEpochMs: LAST_SUCCESS,
+    checkedAtEpochMs: RUN_AT,
     lastSuccessAtEpochMs: LAST_SUCCESS,
     skippedSourceCount: 0,
     cachedSourceCount: 0,
@@ -87,6 +96,29 @@ function report(
     ...overrides,
   };
 }
+
+function emptyReport(
+  overrides: Partial<UpdateCheckReport> = {},
+): UpdateCheckReport {
+  return {
+    skills: [],
+    sources: [],
+    checkedAtEpochMs: RUN_AT,
+    lastSuccessAtEpochMs: LAST_SUCCESS,
+    skippedSourceCount: 0,
+    cachedSourceCount: 0,
+    warnings: [],
+    ...overrides,
+  };
+}
+
+const activeUpdateMutation: ActiveMutationInfo = {
+  taskId: "task-auto",
+  kind: "update",
+  skills: ["alpha"],
+  startedAtEpochMs: LAST_SUCCESS,
+  snapshotPaths: [],
+};
 
 function baseSnapshot(): InventorySnapshot {
   return makeSnapshot({
@@ -129,10 +161,16 @@ function baseSnapshot(): InventorySnapshot {
 function mockCommands(options: {
   snapshot?: InventorySnapshot;
   reports?: Array<UpdateCheckReport | (() => UpdateCheckReport)>;
+  autoReport?: UpdateCheckReport | (() => UpdateCheckReport) | null;
   checkError?: Partial<AppError> & { message: string };
+  initialState?: UpdateCheckState | null;
+  activeMutation?: ActiveMutationInfo | null;
 }): Call[] {
   const calls: Call[] = [];
   const snapshot = options.snapshot ?? baseSnapshot();
+  const autoReport =
+    options.autoReport === undefined ? emptyReport() : options.autoReport;
+  let autoPending = autoReport !== null;
   let reportIndex = 0;
   mockIPC((command, payload) => {
     calls.push({ command, payload });
@@ -141,6 +179,10 @@ function mockCommands(options: {
         return healthyReport();
       case "get_inventory":
         return snapshot;
+      case "get_update_check_state":
+        return options.initialState ?? null;
+      case "get_active_mutation":
+        return options.activeMutation ?? null;
       case "get_skill_detail": {
         const skillId = (payload as { skillId: string }).skillId;
         const skill = snapshot.skills.find((entry) => entry.name === skillId);
@@ -148,6 +190,10 @@ function mockCommands(options: {
       }
       case "check_updates": {
         if (options.checkError) throw options.checkError;
+        if (autoPending && autoReport !== null) {
+          autoPending = false;
+          return typeof autoReport === "function" ? autoReport() : autoReport;
+        }
         const reports = options.reports ?? [];
         const entry = reports[Math.min(reportIndex, reports.length - 1)];
         reportIndex += 1;
@@ -172,13 +218,14 @@ function mockCommands(options: {
   return calls;
 }
 
-function renderApp() {
+function renderApp({ strict = false }: { strict?: boolean } = {}) {
   const queryClient = createQueryClient();
-  return render(
+  const tree = (
     <QueryClientProvider client={queryClient}>
       <App />
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
+  return render(strict ? <StrictMode>{tree}</StrictMode> : tree);
 }
 
 function rows(): HTMLElement[] {
@@ -222,32 +269,17 @@ afterEach(() => {
 });
 
 describe("manual update checking", () => {
-  it("does not auto-check and overlays live badges, counts and last-check time", async () => {
+  it("auto-checks once on mount and overlays live badges, counts and last-check time", async () => {
     const calls = mockCommands({
-      reports: [
-        report([
-          updateResult("alpha", "update"),
-          updateResult("beta", "current"),
-          updateResult("gamma", "update"),
-          updateResult("delta", "current"),
-        ]),
-      ],
+      autoReport: report([
+        updateResult("alpha", "update"),
+        updateResult("beta", "current"),
+        updateResult("gamma", "update"),
+        updateResult("delta", "current"),
+      ]),
     });
     renderApp();
     await screen.findByText("alpha");
-
-    expect(checkCalls(calls)).toHaveLength(0);
-    window.dispatchEvent(new Event("focus"));
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(checkCalls(calls)).toHaveLength(0);
-    expect(screen.getByTestId("last-update-check")).toHaveTextContent(
-      "尚未检查更新",
-    );
-    expect(
-      within(row("alpha")).getByTestId("update-badge"),
-    ).toHaveTextContent("未知");
-
-    fireEvent.click(header().getByRole("button", { name: "检查更新" }));
 
     await waitFor(() => {
       expect(
@@ -268,15 +300,24 @@ describe("manual update checking", () => {
     expect(checkCalls(calls)).toHaveLength(1);
     expect(checkCalls(calls)[0]?.payload).toEqual({ skillIds: null });
     expect(screen.getByTestId("last-update-check")).toHaveTextContent(
-      `上次检查：${LAST_SUCCESS_LABEL}`,
+      `上次检查：${RUN_AT_LABEL}`,
     );
     expect(screen.getByTestId("last-update-check")).toHaveAttribute(
       "title",
       expect.stringContaining("上次成功检查"),
     );
+    expect(screen.getByTestId("last-update-check")).toHaveAttribute(
+      "title",
+      expect.stringContaining("启动和每 6 小时自动检查"),
+    );
     expect(
       header().getByRole("button", { name: /更新全部 \(1\)/ }),
     ).toBeInTheDocument();
+
+    // Window focus must not start a second check.
+    window.dispatchEvent(new Event("focus"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(checkCalls(calls)).toHaveLength(1);
 
     // Sidebar counts and status filters follow the effective badges.
     expect(within(sidebarButton(/^可更新/)).getByText("1")).toBeInTheDocument();
@@ -288,6 +329,107 @@ describe("manual update checking", () => {
     expect(rowNames()).toEqual(["beta"]);
     fireEvent.click(sidebarButton(/^未知/));
     expect(rowNames()).toEqual(["gamma", "delta"]);
+  });
+
+  it("starts at most one automatic check under StrictMode", async () => {
+    const calls = mockCommands({
+      autoReport: report([updateResult("alpha", "current")]),
+    });
+    renderApp({ strict: true });
+    await screen.findByText("alpha");
+
+    await waitFor(() => {
+      expect(
+        within(row("alpha")).getByTestId("update-badge"),
+      ).toHaveTextContent("已是最新");
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(checkCalls(calls)).toHaveLength(1);
+  });
+
+  it("skips the automatic check while a mutation is active", async () => {
+    const calls = mockCommands({
+      autoReport: null,
+      activeMutation: activeUpdateMutation,
+    });
+    renderApp();
+    await screen.findByText("alpha");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(checkCalls(calls)).toHaveLength(0);
+    expect(screen.getByTestId("last-update-check")).toHaveTextContent(
+      "尚未检查更新",
+    );
+  });
+
+  it("does not auto-check when there is no managed skill", async () => {
+    const calls = mockCommands({
+      autoReport: null,
+      snapshot: makeSnapshot({
+        skills: [
+          makeSkill({
+            name: "copy",
+            management: "copy_only",
+            canonicalPath: null,
+          }),
+          makeSkill({
+            name: "loose",
+            management: "unmanaged",
+            canonicalPath: null,
+          }),
+        ],
+      }),
+    });
+    renderApp();
+    await screen.findByText("copy");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(checkCalls(calls)).toHaveLength(0);
+    expect(screen.getByTestId("last-update-check")).toHaveTextContent(
+      "尚未检查更新",
+    );
+  });
+
+  it("shows the persisted last check before a new check can start", async () => {
+    const persisted: UpdateCheckState = {
+      version: 1,
+      lastAttemptAt: LAST_SUCCESS,
+      lastSuccessAt: PERSISTED_SUCCESS,
+      lastOutcome: "partial",
+      failedSourceCount: 1,
+      cachedSourceCount: 2,
+      skippedSourceCount: 0,
+    };
+    mockCommands({
+      autoReport: null,
+      activeMutation: activeUpdateMutation,
+      initialState: persisted,
+    });
+    renderApp();
+    await screen.findByText("alpha");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("last-update-check")).toHaveTextContent(
+        `上次检查：${LAST_SUCCESS_LABEL}（部分失败）`,
+      );
+    });
+    const stamp = screen.getByTestId("last-update-check");
+    expect(stamp).toHaveAttribute(
+      "title",
+      expect.stringContaining(`上次成功检查：${PERSISTED_SUCCESS_LABEL}`),
+    );
+    expect(stamp).toHaveAttribute(
+      "title",
+      expect.stringContaining("1 个来源本次检查失败"),
+    );
+    expect(stamp).toHaveAttribute(
+      "title",
+      expect.stringContaining("2 个来源来自 6 小时缓存"),
+    );
+    expect(stamp).toHaveAttribute(
+      "title",
+      expect.stringContaining("启动和每 6 小时自动检查"),
+    );
   });
 
   it("marks path-missing and check failures as red anomalies in the modal", async () => {
@@ -397,7 +539,10 @@ describe("manual update checking", () => {
   it("scopes a detail check, merges the patch and recovers after a failure", async () => {
     const calls = mockCommands({
       reports: [
-        report([updateResult("alpha", "update"), updateResult("beta", "current")]),
+        report([
+          updateResult("alpha", "update"),
+          updateResult("beta", "current"),
+        ]),
         report(
           [
             updateResult("alpha", "error", {
@@ -410,6 +555,7 @@ describe("manual update checking", () => {
             }),
           ],
           {
+            checkedAtEpochMs: SCOPED_CHECKED_AT,
             sources: [
               sourceResult("acme/skills", {
                 status: "error",
@@ -464,6 +610,10 @@ describe("manual update checking", () => {
     expect(
       within(row("beta")).getByTestId("update-badge"),
     ).toHaveTextContent("已是最新");
+    // Scoped checks never advance the header's full-check time.
+    expect(screen.getByTestId("last-update-check")).toHaveTextContent(
+      `上次检查：${RUN_AT_LABEL}`,
+    );
 
     fireEvent.click(detail().getByRole("button", { name: "检查更新" }));
     await waitFor(() => {
@@ -474,10 +624,11 @@ describe("manual update checking", () => {
     expect(detail().queryByTestId("update-check-error")).not.toBeInTheDocument();
 
     const scoped = checkCalls(calls);
-    expect(scoped).toHaveLength(3);
+    expect(scoped).toHaveLength(4);
     expect(scoped[0]?.payload).toEqual({ skillIds: null });
-    expect(scoped[1]?.payload).toEqual({ skillIds: ["alpha"] });
+    expect(scoped[1]?.payload).toEqual({ skillIds: null });
     expect(scoped[2]?.payload).toEqual({ skillIds: ["alpha"] });
+    expect(scoped[3]?.payload).toEqual({ skillIds: ["alpha"] });
   });
 
   it("summarizes update-all candidates and skipped items without mutating", async () => {
@@ -635,7 +786,8 @@ describe("manual update checking", () => {
       "title",
       expect.stringContaining("1 个来源来自 6 小时缓存"),
     );
-    expect(checkCalls(calls)).toHaveLength(1);
+    expect(checkCalls(calls)).toHaveLength(2);
+    expect(checkCalls(calls)[1]?.payload).toEqual({ skillIds: null });
   });
 
   it("surfaces a command-level failure and keeps the inventory usable", async () => {

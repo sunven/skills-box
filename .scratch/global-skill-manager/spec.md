@@ -40,7 +40,7 @@ Date: 2026-10-28
 - skills.sh 搜索发现与市场浏览。
 - 私有仓库、鉴权、GitLab、SSH、local、Notion、subdir、tag/commit 锁定。
 - Windows / Linux。
-- skill 自动更新、后台轮询、启动自动检查。
+- skill 自动更新、后台轮询（v1.1 起启动/周期自动**检查**已引入，见 [auto-update-check/spec.md](../auto-update-check/spec.md)；自动**更新**仍不在范围）。
 - 遥测。
 - npm `experimental_sync`、`skills use` 启动 agent。
 - 备份恢复 UI、历史操作面板、诊断面板。
@@ -68,7 +68,7 @@ Date: 2026-10-28
 
 1. **盘点**：打开 app，看到所有全局 skill；按来源、agent、更新状态、异常筛选；查看某个 skill 的来源、挂载、路径、SKILL.md 与本地改动。
 2. **安装**：粘贴公开 GitHub 仓库，预览仓库内 skill；选择 skill 与 agent；安装后确认 canonical 与挂载正确。
-3. **更新**：手动检查更新；更新单个或全部；本地改动/未知/异常被跳过或要求确认；断链状态被保留。
+3. **更新**：启动后自动检查上游更新（v1.1），也可手动检查；更新单个或全部；本地改动/未知/异常被跳过或要求确认；断链状态被保留。
 4. **断开**：把某个 skill 从单个 agent 移除，但保留 canonical 与 lock。
 5. **卸载**：彻底删除共享副本、所有挂载与 lock 条目；先备份。
 6. **排障**：理解未受管、copy-only、stale lock、断链、路径缺失与网络失败，不被误导为「没有 skill / 已是最新」。
@@ -387,7 +387,7 @@ CLI stderr 放 `detail`；前端默认只显示归一化 message。部分失败�
 | lock 损坏 / 非 v3 | 全屏错误；禁用变更；不显示空列表 |
 | CLI 缺失 | 环境横幅；只读 inventory；变更禁用 |
 | 网络离线 / 限流 | 列表可用；检查失败；保留上次徽章 |
-| 缓存过期 | 手动检查；6h TTL；不自动请求 |
+| 缓存过期 | v1 手动检查；v1.1 起启动/每 6h 自动检查；6h TTL，缓存新鲜时不发请求 |
 | 外部 CLI 修改 | 无 watcher；手动刷新；操作前校验、操作后验证 |
 | 权限不足 | 单行/详情错误；不崩溃 |
 | 空库存 / 无结果 / 无选中 | 独立空态 |

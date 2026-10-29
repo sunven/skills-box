@@ -94,6 +94,8 @@ sandbox：临时 `HOME` + `XDG_STATE_HOME`，npm 缓存也在 sandbox 内；真�
 
 状态含义：`自动` = 自动化证据通过；`自动+待签` = 自动化通过，但该条的 GUI/真实手工部分仍需用户确认；`待签` = 只能人工。
 
+> 2026-10-29：v1.1 引入只读的启动/周期自动更新检查（见 [auto-update-check/spec.md](../auto-update-check/spec.md)）。M24 的 6h TTL、来源上限与并发上限继续适用；本矩阵记录的是 v1 验收结果。
+
 | ID | P | 场景 | 结果 | 证据 / 命令 |
 |---|---|---|---|---|
 | M01 | P0 | Finder 启动与环境 | 自动+待签 | release `.app` LaunchServices 启动截图；环境 Node/npx/git/skills/lock 正确；Finder 双击待签 |

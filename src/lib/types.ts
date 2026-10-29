@@ -301,6 +301,19 @@ export interface UpdateCheckReport {
   warnings: string[];
 }
 
+export type UpdateCheckOutcome = "ok" | "partial" | "failed";
+
+/** Persisted summary of the last full check; scoped checks never write it. */
+export interface UpdateCheckState {
+  version: number;
+  lastAttemptAt: number;
+  lastSuccessAt: number | null;
+  lastOutcome: UpdateCheckOutcome;
+  failedSourceCount: number;
+  cachedSourceCount: number;
+  skippedSourceCount: number;
+}
+
 /** Anomaly summary extended with read-only update anomalies. */
 export interface AnomalyView extends AnomalySummary {
   pathMissing: AnomalyGroup;

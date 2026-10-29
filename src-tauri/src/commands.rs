@@ -21,6 +21,7 @@ use crate::paths::AppPaths;
 use crate::tasks::{ActiveMutationInfo, CancelAck, EventSink, InstallRequest, TaskEvent, TaskId};
 use crate::timeouts::READ_TIMEOUT;
 use crate::update::UpdateCheckReport;
+use crate::update::state::UpdateCheckState;
 
 /// Run one read operation under the spec's 30-second hard cap. A stuck local
 /// scan or IPC bridge becomes a retryable `skill.read_timeout` instead of a
@@ -226,6 +227,12 @@ pub async fn check_updates(
     skill_ids: Option<Vec<String>>,
 ) -> Result<UpdateCheckReport, AppError> {
     state.updates.check(skill_ids).await
+}
+
+/// Last persisted full-check summary, if any. Read-only; no network or CLI.
+#[tauri::command]
+pub fn get_update_check_state(state: State<'_, AppState>) -> Option<UpdateCheckState> {
+    state.updates.read_state()
 }
 
 #[tauri::command]

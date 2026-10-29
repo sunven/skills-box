@@ -4,6 +4,7 @@ import type {
   AnomalySummary,
   InventorySkill,
   UpdateCheckReport,
+  UpdateCheckState,
   UpdateSkillResult,
   UpdateState,
 } from "./types";
@@ -13,6 +14,8 @@ import {
   formatEpochDateTime,
   markSkillsCurrent,
   mergeUpdateReports,
+  summarizeFullCheck,
+  summarizePersistedState,
   updateBadgeTitle,
   updateBadgeVariant,
   withUpdateAnomalies,
@@ -267,7 +270,7 @@ describe("badges and formatting", () => {
   });
 
   it("formats epoch times deterministically and handles invalid values", () => {
-    expect(formatEpochDateTime(1793163988000)).toBe("2026-10-28 05:06");
+    expect(formatEpochDateTime(1793163988000)).toBe("2026-10-28 13:06");
     expect(formatEpochDateTime(null)).toBe("—");
     expect(formatEpochDateTime(Number.NaN)).toBe("—");
   });
@@ -288,5 +291,115 @@ describe("badges and formatting", () => {
       patched.skills.find((entry) => entry.name === "beta")!.state,
     ).toBe("update");
     expect(markSkillsCurrent(undefined, ["alpha"])).toBeUndefined();
+  });
+});
+
+describe("last check summaries", () => {
+  it("derives outcome and counts from a full report", () => {
+    const full = report([], {
+      sources: [
+        {
+          source: "acme/skills",
+          ref: "main",
+          status: "ok",
+          skillCount: 1,
+          cached: false,
+          truncated: false,
+          lastSuccessAtEpochMs: 1793163988000,
+          error: null,
+          note: null,
+        },
+        {
+          source: "acme/other",
+          ref: null,
+          status: "error",
+          skillCount: 1,
+          cached: false,
+          truncated: false,
+          lastSuccessAtEpochMs: null,
+          error: {
+            code: "network.offline",
+            message: "offline",
+            retryable: true,
+          },
+          note: null,
+        },
+        {
+          source: "acme/cached",
+          ref: null,
+          status: "cached",
+          skillCount: 1,
+          cached: true,
+          truncated: false,
+          lastSuccessAtEpochMs: 1793163980000,
+          error: null,
+          note: null,
+        },
+      ],
+      skippedSourceCount: 1,
+      cachedSourceCount: 1,
+      checkedAtEpochMs: 1793163990000,
+      lastSuccessAtEpochMs: 1793163988000,
+      warnings: ["警告"],
+    });
+
+    expect(summarizeFullCheck(full)).toEqual({
+      lastAttemptAt: 1793163990000,
+      lastSuccessAt: 1793163988000,
+      outcome: "partial",
+      failedSourceCount: 1,
+      cachedSourceCount: 1,
+      skippedSourceCount: 1,
+      warnings: ["警告"],
+    });
+  });
+
+  it("marks a report with only errors as failed", () => {
+    const full = report([], {
+      sources: [
+        {
+          source: "acme/skills",
+          ref: null,
+          status: "error",
+          skillCount: 1,
+          cached: false,
+          truncated: false,
+          lastSuccessAtEpochMs: null,
+          error: {
+            code: "network.offline",
+            message: "offline",
+            retryable: true,
+          },
+          note: null,
+        },
+      ],
+      lastSuccessAtEpochMs: null,
+    });
+
+    const summary = summarizeFullCheck(full);
+    expect(summary.outcome).toBe("failed");
+    expect(summary.lastSuccessAt).toBeNull();
+  });
+
+  it("maps a persisted state without warnings", () => {
+    const state: UpdateCheckState = {
+      version: 1,
+      lastAttemptAt: 1793163990000,
+      lastSuccessAt: null,
+      lastOutcome: "failed",
+      failedSourceCount: 2,
+      cachedSourceCount: 0,
+      skippedSourceCount: 1,
+    };
+
+    expect(summarizePersistedState(state)).toEqual({
+      lastAttemptAt: 1793163990000,
+      lastSuccessAt: null,
+      outcome: "failed",
+      failedSourceCount: 2,
+      cachedSourceCount: 0,
+      skippedSourceCount: 1,
+      warnings: [],
+    });
   });
 });

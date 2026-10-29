@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { AnomalyDialog } from "./components/anomaly-panel";
 import { AppHeader } from "./components/app-header";
@@ -12,12 +12,20 @@ import { LockErrorScreen } from "./components/lock-error-screen";
 import { SkillListPane } from "./components/skill-list-pane";
 import { UninstallDialog } from "./components/uninstall-dialog";
 import { UpdateDialog } from "./components/update-dialog";
+import { useAutoUpdateCheck } from "./hooks/use-auto-update-check";
 import { environmentQueryKey, useEnvironmentQuery, useRecheckEnvironment } from "./hooks/use-environment";
 import { useInventoryQuery } from "./hooks/use-inventory";
-import { useCheckUpdates, useUpdateReportQuery } from "./hooks/use-updates";
+import {
+  useCheckUpdates,
+  useLastFullAttemptQuery,
+  useLastFullCheckQuery,
+  useUpdateCheckStateQuery,
+  useUpdateReportQuery,
+} from "./hooks/use-updates";
 import {
   asAppError,
   dismissInterruptedMutation,
+  getActiveMutation,
   quitApp,
   revealAppData,
 } from "./lib/api";
@@ -35,6 +43,8 @@ import {
 import {
   applyUpdateReport,
   computeUpdateSummary,
+  summarizeFullCheck,
+  summarizePersistedState,
   withUpdateAnomalies,
   type UpdateViewSkill,
 } from "./lib/update-view";
@@ -54,10 +64,29 @@ function App() {
   const recheck = useRecheckEnvironment();
   const inventoryQuery = useInventoryQuery();
   const updateReportQuery = useUpdateReportQuery();
+  const updateCheckStateQuery = useUpdateCheckStateQuery();
+  const lastFullCheckQuery = useLastFullCheckQuery();
+  const lastFullAttemptQuery = useLastFullAttemptQuery();
   const checkUpdates = useCheckUpdates();
   const report = environment.data;
   const snapshot = inventoryQuery.data;
   const updateData = updateReportQuery.data ?? null;
+  const lastFullCheck = lastFullCheckQuery.data ?? null;
+
+  const lastCheck = useMemo(() => {
+    if (lastFullCheck) return summarizeFullCheck(lastFullCheck);
+    if (updateCheckStateQuery.data) {
+      return summarizePersistedState(updateCheckStateQuery.data);
+    }
+    return null;
+  }, [lastFullCheck, updateCheckStateQuery.data]);
+  const hasManagedSkills = useMemo(
+    () =>
+      (snapshot?.skills ?? []).some(
+        (skill) => skill.management === "managed",
+      ),
+    [snapshot],
+  );
 
   const [exitRequest, setExitRequest] = useState<ActiveMutationInfo | null>(
     null,
@@ -185,6 +214,25 @@ function App() {
       : null;
   const mutationsEnabled = (report?.mutationsEnabled ?? false) && !lockError;
 
+  const runAutoCheck = useCallback(async () => {
+    if (checkUpdates.isPending) return false;
+    try {
+      const active = await getActiveMutation();
+      if (active) return false;
+    } catch {
+      return false;
+    }
+    checkUpdates.mutate();
+    return true;
+  }, [checkUpdates]);
+
+  useAutoUpdateCheck({
+    enabled: inventoryQuery.isSuccess && !lockError && hasManagedSkills,
+    checking: checkUpdates.isPending,
+    lastFullAttemptAt: lastFullAttemptQuery.data,
+    onCheck: runAutoCheck,
+  });
+
   // A manual environment refresh is also a full read-model refresh: the
   // inventory may have changed under us, and cached detail/update results are
   // no longer trustworthy.
@@ -243,6 +291,7 @@ function App() {
         mutationsEnabled={mutationsEnabled}
         onInstall={() => setInstallOpen(true)}
         updateReport={updateData}
+        lastCheck={lastCheck}
         updateError={updateError}
         checkingUpdates={checkUpdates.isPending}
         updatesEnabled={!lockError}

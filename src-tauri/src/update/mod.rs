@@ -8,6 +8,7 @@
 
 pub mod cache;
 pub mod github;
+pub mod state;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -21,6 +22,7 @@ use crate::lock::{LockEntry, LockFile};
 use crate::paths::AppPaths;
 use cache::{CachedSourceTree, UpdateCache, is_fresh};
 use github::{GitHubTreeClient, RemoteTree, ReqwestGitHubClient};
+use state::{UpdateCheckState, UpdateCheckStateStore};
 
 pub const UPDATE_CHECK_CACHE_TTL_MS: u64 = 6 * 60 * 60 * 1000;
 pub const UPDATE_CHECK_MAX_SOURCES: usize = 20;
@@ -120,13 +122,16 @@ pub struct UpdateService {
     client: Arc<dyn GitHubTreeClient>,
     clock: Arc<dyn Clock>,
     cache: UpdateCache,
+    state: UpdateCheckStateStore,
     config: UpdateCheckConfig,
 }
 
 impl UpdateService {
     pub fn new(paths: AppPaths) -> Self {
+        let state = UpdateCheckStateStore::new(&paths);
         Self {
             cache: UpdateCache::new(&paths),
+            state,
             paths,
             client: Arc::new(ReqwestGitHubClient::new()),
             clock: Arc::new(SystemClock),
@@ -140,8 +145,10 @@ impl UpdateService {
         clock: Arc<dyn Clock>,
         config: UpdateCheckConfig,
     ) -> Self {
+        let state = UpdateCheckStateStore::new(&paths);
         Self {
             cache: UpdateCache::new(&paths),
+            state,
             paths,
             client,
             clock,
@@ -154,6 +161,7 @@ impl UpdateService {
         skill_ids: Option<Vec<String>>,
     ) -> Result<UpdateCheckReport, AppError> {
         let lock = LockFile::read(&self.paths.lock_path())?;
+        let full_check = skill_ids.is_none();
         let now = self.clock.now_epoch_ms();
         let selected = skill_ids.map(|ids| ids.into_iter().collect::<BTreeSet<_>>());
         if selected.as_ref().is_some_and(BTreeSet::is_empty) {
@@ -244,7 +252,7 @@ impl UpdateService {
             .max();
         warnings.dedup();
 
-        Ok(UpdateCheckReport {
+        let mut report = UpdateCheckReport {
             skills: skill_results,
             sources: source_results,
             checked_at_epoch_ms: now,
@@ -252,7 +260,21 @@ impl UpdateService {
             skipped_source_count,
             cached_source_count,
             warnings,
-        })
+        };
+        if full_check {
+            let state = UpdateCheckState::from_report(&report);
+            if let Err(error) = self.state.store(&state) {
+                report
+                    .warnings
+                    .push(format!("无法写入更新检查状态：{error}"));
+            }
+        }
+        Ok(report)
+    }
+
+    /// Last persisted full-check summary, if the file exists and is valid.
+    pub fn read_state(&self) -> Option<UpdateCheckState> {
+        self.state.load()
     }
 
     fn collect_targets(
@@ -735,6 +757,7 @@ mod tests {
     use crate::error::codes;
     use crate::process::fake::ScriptedExecutor;
     use crate::update::github::GitHubFetchError;
+    use crate::update::state::{UPDATE_CHECK_STATE_VERSION, UpdateCheckOutcome};
     use std::collections::HashMap;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -1238,6 +1261,14 @@ mod tests {
         assert_eq!(second.skills[0].last_success_at_epoch_ms, Some(1_000_000));
         assert_eq!(second.last_success_at_epoch_ms, Some(1_000_000));
         assert_eq!(second.cached_source_count, 1);
+        let state = service.read_state().unwrap();
+        assert_eq!(
+            state.last_attempt_at,
+            1_000_000 + UPDATE_CHECK_CACHE_TTL_MS - 1
+        );
+        assert_eq!(state.last_success_at, Some(1_000_000));
+        assert_eq!(state.last_outcome, UpdateCheckOutcome::Ok);
+        assert_eq!(state.cached_source_count, 1);
 
         clock.set(1_000_000 + UPDATE_CHECK_CACHE_TTL_MS);
         let third = service.check(None).await.unwrap();
@@ -1572,6 +1603,10 @@ mod tests {
                 .iter()
                 .any(|warning| warning.contains("来源上限"))
         );
+        let state = service.read_state().unwrap();
+        assert_eq!(state.last_outcome, UpdateCheckOutcome::Partial);
+        assert_eq!(state.failed_source_count, 0);
+        assert_eq!(state.skipped_source_count, 5);
     }
 
     #[tokio::test]
@@ -1629,6 +1664,156 @@ mod tests {
         let report = service.check(None).await.unwrap();
         assert_eq!(state_of(&report, "alpha"), UpdateState::Current);
         assert_eq!(executor.call_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn full_checks_persist_state_and_scoped_checks_do_not() {
+        let fixture = Fixture::new();
+        fixture.write_entries(&[
+            LockSpec::github(
+                "alpha",
+                "acme/skills",
+                Some("main"),
+                "skills/alpha/SKILL.md",
+                ALPHA_TREE,
+            ),
+            LockSpec::github(
+                "beta",
+                "acme/skills",
+                Some("main"),
+                "sub/note.txt",
+                ALPHA_TREE,
+            ),
+        ]);
+        let clock = Arc::new(TestClock::new(1_000_000));
+        let client =
+            Arc::new(FakeGitHub::default().with_tree("acme/skills", Some("main"), fixture_tree()));
+        let service = fixture.service(
+            Arc::clone(&client),
+            Arc::clone(&clock),
+            UpdateCheckConfig::default(),
+        );
+
+        let full = service.check(None).await.unwrap();
+        let state = service.read_state().unwrap();
+        assert_eq!(state.version, UPDATE_CHECK_STATE_VERSION);
+        assert_eq!(state.last_attempt_at, full.checked_at_epoch_ms);
+        assert_eq!(state.last_success_at, full.last_success_at_epoch_ms);
+        assert_eq!(state.last_outcome, UpdateCheckOutcome::Ok);
+        assert_eq!(state.failed_source_count, 0);
+        assert_eq!(state.cached_source_count, 0);
+        assert_eq!(state.skipped_source_count, 0);
+
+        clock.set(1_000_000 + UPDATE_CHECK_CACHE_TTL_MS + 1);
+        client.set_error(
+            "acme/skills",
+            Some("main"),
+            GitHubFetchError::offline("connection refused"),
+        );
+        let scoped = service
+            .check(Some(vec!["alpha".to_string()]))
+            .await
+            .unwrap();
+        assert_eq!(scoped.skills.len(), 1);
+        assert_eq!(service.read_state(), Some(state));
+    }
+
+    #[tokio::test]
+    async fn state_marks_partial_and_failed_outcomes() {
+        let partial_fixture = Fixture::new();
+        partial_fixture.write_entries(&[
+            LockSpec::github(
+                "alpha",
+                "acme/skills",
+                Some("main"),
+                "skills/alpha/SKILL.md",
+                ALPHA_TREE,
+            ),
+            LockSpec::github(
+                "beta",
+                "offline/repo",
+                None,
+                "skills/beta/SKILL.md",
+                ALPHA_TREE,
+            ),
+        ]);
+        let client = Arc::new(
+            FakeGitHub::default()
+                .with_tree("acme/skills", Some("main"), fixture_tree())
+                .with_error(
+                    "offline/repo",
+                    None,
+                    GitHubFetchError::offline("connection refused"),
+                ),
+        );
+        let service = partial_fixture.service(
+            client,
+            Arc::new(TestClock::new(1_000)),
+            UpdateCheckConfig::default(),
+        );
+        let report = service.check(None).await.unwrap();
+        assert_eq!(report.last_success_at_epoch_ms, Some(1_000));
+        let state = service.read_state().unwrap();
+        assert_eq!(state.last_outcome, UpdateCheckOutcome::Partial);
+        assert_eq!(state.failed_source_count, 1);
+        assert_eq!(state.last_success_at, Some(1_000));
+
+        let failed_fixture = Fixture::new();
+        failed_fixture.write_entries(&[LockSpec::github(
+            "alpha",
+            "offline/repo",
+            None,
+            "skills/alpha/SKILL.md",
+            ALPHA_TREE,
+        )]);
+        let client = Arc::new(FakeGitHub::default().with_error(
+            "offline/repo",
+            None,
+            GitHubFetchError::offline("connection refused"),
+        ));
+        let service = failed_fixture.service(
+            client,
+            Arc::new(TestClock::new(2_000)),
+            UpdateCheckConfig::default(),
+        );
+        let report = service.check(None).await.unwrap();
+        assert_eq!(report.last_success_at_epoch_ms, None);
+        let state = service.read_state().unwrap();
+        assert_eq!(state.last_outcome, UpdateCheckOutcome::Failed);
+        assert_eq!(state.failed_source_count, 1);
+        assert_eq!(state.last_success_at, None);
+    }
+
+    #[tokio::test]
+    async fn state_write_failure_adds_a_warning_and_keeps_the_report() {
+        let fixture = Fixture::new();
+        fixture.write_entries(&[LockSpec::github(
+            "alpha",
+            "acme/skills",
+            Some("main"),
+            "skills/alpha/SKILL.md",
+            ALPHA_TREE,
+        )]);
+        let state_path = fixture.paths.update_check_state_path();
+        std::fs::create_dir_all(&state_path).unwrap();
+        std::fs::write(state_path.join("blocker"), "blocked").unwrap();
+        let client =
+            Arc::new(FakeGitHub::default().with_tree("acme/skills", Some("main"), fixture_tree()));
+        let service = fixture.service(
+            client,
+            Arc::new(TestClock::new(1_000)),
+            UpdateCheckConfig::default(),
+        );
+
+        let report = service.check(None).await.unwrap();
+        assert_eq!(state_of(&report, "alpha"), UpdateState::Current);
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("无法写入更新检查状态"))
+        );
+        assert_eq!(service.read_state(), None);
     }
 
     #[tokio::test]

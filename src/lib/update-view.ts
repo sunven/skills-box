@@ -9,7 +9,9 @@ import type {
   AnomalySummary,
   AnomalyView,
   InventorySkill,
+  UpdateCheckOutcome,
   UpdateCheckReport,
+  UpdateCheckState,
   UpdateSkillResult,
   UpdateState,
 } from "./types";
@@ -131,6 +133,56 @@ function maxNullable(
   if (left == null) return right ?? null;
   if (right == null) return left;
   return Math.max(left, right);
+}
+
+export interface LastCheckSummary {
+  lastAttemptAt: number;
+  lastSuccessAt: number | null;
+  outcome: UpdateCheckOutcome;
+  failedSourceCount: number;
+  cachedSourceCount: number;
+  skippedSourceCount: number;
+  warnings: string[];
+}
+
+export function summarizeFullCheck(
+  report: UpdateCheckReport,
+): LastCheckSummary {
+  const failedSourceCount = report.sources.filter(
+    (source) => source.status === "error",
+  ).length;
+  const successfulSourceCount = report.sources.filter(
+    (source) => source.status === "ok" || source.status === "cached",
+  ).length;
+  const outcome: UpdateCheckOutcome =
+    failedSourceCount > 0 && successfulSourceCount === 0
+      ? "failed"
+      : failedSourceCount > 0 || report.skippedSourceCount > 0
+        ? "partial"
+        : "ok";
+  return {
+    lastAttemptAt: report.checkedAtEpochMs,
+    lastSuccessAt: report.lastSuccessAtEpochMs,
+    outcome,
+    failedSourceCount,
+    cachedSourceCount: report.cachedSourceCount,
+    skippedSourceCount: report.skippedSourceCount,
+    warnings: report.warnings,
+  };
+}
+
+export function summarizePersistedState(
+  state: UpdateCheckState,
+): LastCheckSummary {
+  return {
+    lastAttemptAt: state.lastAttemptAt,
+    lastSuccessAt: state.lastSuccessAt,
+    outcome: state.lastOutcome,
+    failedSourceCount: state.failedSourceCount,
+    cachedSourceCount: state.cachedSourceCount,
+    skippedSourceCount: state.skippedSourceCount,
+    warnings: [],
+  };
 }
 
 /**
@@ -289,7 +341,10 @@ export function formatEpochDateTime(value: number | null): string {
   if (value == null) return "—";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "—";
-  return date.toISOString().slice(0, 16).replace("T", " ");
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(
+    date.getDate(),
+  )} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 export function anomalyGroup(examples: string[]): AnomalyGroup {

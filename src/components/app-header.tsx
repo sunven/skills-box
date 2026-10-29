@@ -2,7 +2,7 @@ import { ArrowUpCircle, Download, RefreshCw, SlidersHorizontal } from "lucide-re
 import { Button } from "./ui/button";
 import { environmentSummary } from "../lib/environment-display";
 import type { EnvReport, UpdateCheckReport } from "../lib/types";
-import { formatEpochDateTime } from "../lib/update-view";
+import { formatEpochDateTime, type LastCheckSummary } from "../lib/update-view";
 
 interface AppHeaderProps {
   report?: EnvReport;
@@ -11,6 +11,7 @@ interface AppHeaderProps {
   mutationsEnabled: boolean;
   onInstall: () => void;
   updateReport?: UpdateCheckReport | null;
+  lastCheck?: LastCheckSummary | null;
   updateError?: { message: string; detail?: string } | null;
   checkingUpdates: boolean;
   updatesEnabled: boolean;
@@ -45,6 +46,7 @@ export function AppHeader({
   mutationsEnabled,
   onInstall,
   updateReport,
+  lastCheck,
   updateError,
   checkingUpdates,
   updatesEnabled,
@@ -54,28 +56,32 @@ export function AppHeader({
   filtersOpen,
   onToggleFilters,
 }: AppHeaderProps) {
-  const lastCheck = updateReport?.lastSuccessAtEpochMs ?? null;
-  const failedSources =
-    updateReport?.sources.filter((source) => source.status === "error").length ??
-    0;
+  const failedSources = lastCheck?.failedSourceCount ?? 0;
+  const outcomeSuffix =
+    lastCheck?.outcome === "failed"
+      ? "（失败）"
+      : lastCheck?.outcome === "partial"
+        ? failedSources > 0
+          ? "（部分失败）"
+          : "（有来源未检查）"
+        : "";
   const lastCheckLabel = lastCheck
-    ? `上次检查：${formatEpochDateTime(lastCheck)}`
-    : failedSources > 0
-      ? "检查失败（尚无成功记录）"
-      : "尚未检查更新";
+    ? `上次检查：${formatEpochDateTime(lastCheck.lastAttemptAt)}${outcomeSuffix}`
+    : "尚未检查更新";
   const lastCheckTooltip = [
-    lastCheck
-      ? `上次成功检查：${formatEpochDateTime(lastCheck)}`
-      : "尚未成功检查更新",
+    lastCheck?.lastSuccessAt != null
+      ? `上次成功检查：${formatEpochDateTime(lastCheck.lastSuccessAt)}`
+      : "尚无成功检查记录",
     failedSources > 0 ? `${failedSources} 个来源本次检查失败` : null,
-    updateReport?.cachedSourceCount
-      ? `${updateReport.cachedSourceCount} 个来源来自 6 小时缓存`
+    lastCheck?.cachedSourceCount
+      ? `${lastCheck.cachedSourceCount} 个来源来自 6 小时缓存`
       : null,
-    updateReport?.skippedSourceCount
-      ? `${updateReport.skippedSourceCount} 个来源因上限未检查`
+    lastCheck?.skippedSourceCount
+      ? `${lastCheck.skippedSourceCount} 个来源因上限未检查`
       : null,
-    ...(updateReport?.warnings ?? []),
+    ...(lastCheck?.warnings ?? []),
     updateError?.message ?? null,
+    "启动和每 6 小时自动检查，也可手动触发",
   ]
     .filter(Boolean)
     .join("\n");
@@ -119,11 +125,15 @@ export function AppHeader({
       <div className="topbar-actions">
         <span
           data-testid="last-update-check"
-          data-error={updateError ? "true" : undefined}
+          data-error={!checkingUpdates && updateError ? "true" : undefined}
           title={lastCheckTooltip}
           className="topbar-stamp"
         >
-          {updateError ? `更新检查失败：${updateError.message}` : lastCheckLabel}
+          {checkingUpdates
+            ? "正在检查…"
+            : updateError
+              ? `更新检查失败：${updateError.message}`
+              : lastCheckLabel}
         </span>
         <Button
           variant="ghost"

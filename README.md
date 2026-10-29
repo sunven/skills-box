@@ -21,5 +21,6 @@ cd src-tauri && cargo test
 ## Context
 
 - Product spec: `.scratch/global-skill-manager/spec.md`
+- Auto update check spec: `.scratch/auto-update-check/spec.md`
 - Domain glossary: `GLOSSARY.md`
 - Architecture decision: `docs/adr/0001-cli-mutations-native-reads.md`

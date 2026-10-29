@@ -78,6 +78,12 @@ impl AppPaths {
         self.app_data.join("cache")
     }
 
+    /// Persisted summary of the last full update check. Kept outside `cache/`
+    /// because it is user-visible state, not disposable data.
+    pub fn update_check_state_path(&self) -> PathBuf {
+        self.app_data.join("update-check.json")
+    }
+
     pub fn baselines_dir(&self) -> PathBuf {
         self.app_data.join("baselines")
     }
@@ -194,6 +200,10 @@ mod tests {
         assert_eq!(
             paths.lock_path(),
             tmp.path().join("home/.agents/.skill-lock.json")
+        );
+        assert_eq!(
+            paths.update_check_state_path(),
+            tmp.path().join("app-data/update-check.json")
         );
     }
 

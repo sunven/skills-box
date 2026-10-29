@@ -12,6 +12,7 @@ import type {
   SkillFileContent,
   TaskEvent,
   UpdateCheckReport,
+  UpdateCheckState,
 } from "./types";
 
 /**
@@ -123,13 +124,18 @@ export function startInstall(
 
 /**
  * Read-only update check. Rust reads the lock and GitHub trees directly; the
- * skills CLI is never spawned for checking. No automatic/background callers —
- * only explicit user actions may invoke this.
+ * skills CLI is never spawned for checking. Runs automatically at launch and
+ * every six hours while the app is open, and by explicit user actions.
  */
 export function checkUpdates(skillIds?: string[]): Promise<UpdateCheckReport> {
   return invoke<UpdateCheckReport>("check_updates", {
     skillIds: skillIds ?? null,
   });
+}
+
+/** Persisted summary of the last full check, for the pre-check header state. */
+export function getUpdateCheckState(): Promise<UpdateCheckState | null> {
+  return invoke<UpdateCheckState | null>("get_update_check_state");
 }
 
 /**

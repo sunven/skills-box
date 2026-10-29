@@ -80,9 +80,25 @@ _Avoid_: remove, delete
 The record that ties a skill name to its source, path, hash, and install/update times.
 _Avoid_: manifest, metadata file
 
+**Update check**:
+The read-only comparison of each managed skill's recorded tree hash against its source, run automatically or on demand. It never changes skill files.
+_Avoid_: update, sync, refresh
+
+**Check attempt**:
+One run of an update check, whether automatic or manual. A run that only uses cached source trees is still a check attempt.
+_Avoid_: scan, poll
+
+**Last check**:
+The recorded time of the most recent check attempt over all managed skills. A check scoped to one skill does not advance it.
+_Avoid_: last sync, last refresh
+
+**Last upstream success**:
+The most recent time a source was successfully read from upstream. Cache hits do not advance it.
+_Avoid_: last check, last fetch
+
 **Update**:
-Refresh a skill's canonical folder from its source and re-establish its attachments, manually triggered by the user.
-_Avoid_: sync, upgrade
+Refresh a skill's canonical folder from its source and re-establish its attachments. Manually triggered by the user after an update check; never automatic.
+_Avoid_: auto-update, sync, upgrade
 
 **Update candidate**:
 A skill whose upstream tree hash differs from the hash recorded in its lock entry.
