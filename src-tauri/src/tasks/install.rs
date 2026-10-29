@@ -15,6 +15,7 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use crate::agents::{DetectionContext, catalog, resolve_global_skills_dir};
+use crate::attachment_target::{self, AgentDirectoryState, TargetState};
 use crate::baseline::{BaselineStore, write_warning};
 use crate::cli::CliRuntime;
 use crate::env::capture_process_env;
@@ -296,7 +297,7 @@ pub fn ensure_extra_attachments(
             .iter()
             .filter(|target| !target.universal && !crate::agents::is_catalog_agent(&target.id))
         {
-            if let Err(error) = ensure_extra_link(&canonical, &target.skills_dir, name) {
+            if let Err(error) = ensure_extra_link(&canonical, target, name) {
                 errors.entry(name.clone()).or_insert(error);
             }
         }
@@ -306,67 +307,39 @@ pub fn ensure_extra_attachments(
 
 fn ensure_extra_link(
     canonical: &std::path::Path,
-    skills_dir: &std::path::Path,
+    target: &InstallTarget,
     name: &str,
 ) -> Result<(), AppError> {
-    match fs::symlink_metadata(skills_dir) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            return Err(AppError::agent_attach_failed(format!(
-                "额外 agent 的 skills 目录本身是符号链接：{}",
-                skills_dir.display()
-            )));
-        }
-        Ok(metadata) if !metadata.is_dir() => {
-            return Err(AppError::agent_attach_failed(format!(
-                "额外 agent 的 skills 路径不是目录：{}",
-                skills_dir.display()
-            )));
-        }
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            fs::create_dir_all(skills_dir).map_err(|error| {
-                AppError::agent_attach_failed(format!("无法创建 {}：{error}", skills_dir.display()))
-            })?;
-        }
-        Err(error) => {
-            return Err(AppError::agent_attach_failed(format!(
-                "无法检查 {}：{error}",
-                skills_dir.display()
-            )));
-        }
+    let agent = AgentDir {
+        id: target.id.clone(),
+        display_name: target.display_name.clone(),
+        universal: target.universal,
+        skills_dir: target.skills_dir.clone(),
+    };
+    let resolved = attachment_target::resolve_install_link(canonical, &agent, name)?;
+    if matches!(resolved.directory_state, AgentDirectoryState::Missing(_)) {
+        fs::create_dir_all(&resolved.agent.skills_dir).map_err(|error| {
+            AppError::agent_attach_failed(format!(
+                "无法创建 {}：{error}",
+                resolved.agent.skills_dir.display()
+            ))
+        })?;
     }
-
-    let attachment = skills_dir.join(name);
-    match fs::symlink_metadata(&attachment) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            let expected = fs::canonicalize(canonical).unwrap_or_else(|_| canonical.to_path_buf());
-            match fs::canonicalize(&attachment) {
-                Ok(resolved) if resolved == expected => Ok(()),
-                Ok(resolved) => Err(AppError::agent_attach_failed(format!(
-                    "{} 已存在且指向 {}，已停止（不覆盖现有内容）。",
-                    attachment.display(),
-                    resolved.display()
-                ))),
-                Err(error) => Err(AppError::agent_attach_failed(format!(
-                    "{} 是断链，已停止（不覆盖现有内容）：{error}",
-                    attachment.display()
-                ))),
-            }
-        }
-        Ok(_) => Err(AppError::agent_attach_failed(format!(
-            "{} 已存在且不是符号链接，已停止（不覆盖现有内容）。",
-            attachment.display()
-        ))),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound =>
+    match resolved.target_state {
+        TargetState::SymlinkToCanonical => Ok(()),
+        TargetState::Absent =>
         {
             #[cfg(unix)]
-            std::os::unix::fs::symlink(canonical, &attachment).map_err(|error| {
-                AppError::agent_attach_failed(format!("无法创建 {}：{error}", attachment.display()))
+            std::os::unix::fs::symlink(canonical, &resolved.target).map_err(|error| {
+                AppError::agent_attach_failed(format!(
+                    "无法创建 {}：{error}",
+                    resolved.target.display()
+                ))
             })
         }
-        Err(error) => Err(AppError::agent_attach_failed(format!(
-            "无法检查 {}：{error}",
-            attachment.display()
+        TargetState::Other => Err(AppError::agent_attach_failed(format!(
+            "{} 已存在，已停止（不覆盖现有内容）。",
+            resolved.target.display()
         ))),
     }
 }

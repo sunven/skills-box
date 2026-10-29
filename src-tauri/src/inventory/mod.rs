@@ -68,20 +68,6 @@ pub struct AgentAttachment {
     pub detachable: bool,
 }
 
-/// Detach eligibility shared by the inventory and detail read models. The
-/// backend re-validates the same rules before touching the disk.
-pub fn attachment_is_detachable(
-    management: ManagementState,
-    has_canonical: bool,
-    universal: bool,
-    mode: AttachmentMode,
-) -> bool {
-    management == ManagementState::Managed
-        && has_canonical
-        && !universal
-        && matches!(mode, AttachmentMode::Link | AttachmentMode::Copy)
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InventorySkill {

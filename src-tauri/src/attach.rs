@@ -9,17 +9,16 @@
 //! must be exactly one entry inside that agent's skills directory and the
 //! directory itself may not be a symlink.
 
-use std::fs;
-use std::path::PathBuf;
-
 use serde::Serialize;
+use std::fs;
 
+use crate::attachment_target::{self, AgentDirectoryState};
 use crate::error::AppError;
-use crate::inventory::{self, AgentDir, AttachmentMode, ManagementState};
+use crate::inventory::{self, AgentDir};
 use crate::lock::LockFile;
 use crate::logs::{OperationEntry, OperationLog};
 use crate::paths::AppPaths;
-use crate::security::{self, normalize_absolute};
+use crate::security;
 
 const ATTACH_ACTION: &str = "attach";
 
@@ -47,48 +46,22 @@ pub fn attach_agent(
 
     let located = inventory::locate_with_agents(paths, agents, skill_id)?
         .ok_or_else(|| AppError::skill_not_found(skill_id))?;
-    match located.management {
-        ManagementState::Managed => {}
-        ManagementState::CopyOnly => return Err(AppError::skill_copy_only(skill_id)),
-        ManagementState::Unmanaged => return Err(AppError::skill_unmanaged(skill_id)),
-    }
-    let canonical = located
-        .canonical_path
-        .clone()
-        .ok_or_else(|| AppError::skill_copy_only(skill_id))?;
-    if !fs::metadata(&canonical)
-        .map(|metadata| metadata.is_dir())
-        .unwrap_or(false)
-    {
-        return Err(AppError::verify_canonical_missing(skill_id, &canonical));
-    }
+    let resolved = attachment_target::resolve_attach(paths, &located, agents, agent_id)?;
+    let agent = &resolved.agent;
+    let canonical = &resolved.canonical;
+    let target = &resolved.target;
 
-    let agent = agents
-        .iter()
-        .find(|agent| agent.id == agent_id)
-        .ok_or_else(|| AppError::agent_not_detected(agent_id))?;
-    if agent.universal || same_dir(&agent.skills_dir, &paths.canonical_skills_dir()) {
-        return Err(AppError::agent_native(&agent.display_name));
+    if matches!(resolved.directory_state, AgentDirectoryState::Missing(_)) {
+        fs::create_dir_all(&agent.skills_dir).map_err(|error| {
+            AppError::agent_attach_failed(format!(
+                "无法创建 {}：{error}",
+                agent.skills_dir.display()
+            ))
+        })?;
     }
-    if let Some(existing) = located
-        .attachments
-        .iter()
-        .find(|attachment| attachment.agent_id == agent_id)
-    {
-        return match existing.mode {
-            AttachmentMode::Native => Err(AppError::agent_native(&agent.display_name)),
-            AttachmentMode::Broken => {
-                Err(AppError::agent_broken(&agent.display_name, &existing.path))
-            }
-            AttachmentMode::Link | AttachmentMode::Copy => {
-                Err(AppError::agent_already_attached(&agent.display_name))
-            }
-        };
-    }
-
-    let target = prepare_target(&agent.skills_dir, skill_id, &canonical)?;
-    prepare_directory(&agent.skills_dir)?;
-    if fs::symlink_metadata(&target).is_ok() {
+    // The resolver checked the target; keep a final check after the directory
+    // may have been created so a race still produces the historical message.
+    if fs::symlink_metadata(target).is_ok() {
         return Err(AppError::agent_attach_failed(format!(
             "{} 已存在，已停止（不覆盖现有内容）。",
             target.display()
@@ -97,12 +70,12 @@ pub fn attach_agent(
 
     #[cfg(unix)]
     {
-        std::os::unix::fs::symlink(&canonical, &target).map_err(|error| {
+        std::os::unix::fs::symlink(canonical, target).map_err(|error| {
             AppError::agent_attach_failed(format!("无法创建符号链接 {}：{error}", target.display()))
         })?;
     }
 
-    let created = fs::symlink_metadata(&target)
+    let created = fs::symlink_metadata(target)
         .map(|metadata| metadata.file_type().is_symlink())
         .unwrap_or(false);
     if !created {
@@ -126,69 +99,17 @@ pub fn attach_agent(
         skill_id: skill_id.to_string(),
         agent_id: agent_id.to_string(),
         agent_name: agent.display_name.clone(),
-        attachment_path: paths.display(&target),
-        canonical_path: paths.display(&canonical),
+        attachment_path: paths.display(target),
+        canonical_path: paths.display(canonical),
         log_path,
     })
-}
-
-fn prepare_directory(agent_dir: &std::path::Path) -> Result<(), AppError> {
-    match fs::symlink_metadata(agent_dir) {
-        Ok(metadata) if metadata.file_type().is_symlink() => Err(AppError::path_invalid(format!(
-            "agent skills 目录本身是符号链接：{}",
-            agent_dir.display()
-        ))),
-        Ok(metadata) if !metadata.is_dir() => Err(AppError::path_invalid(format!(
-            "agent skills 路径不是目录：{}",
-            agent_dir.display()
-        ))),
-        Ok(_) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => fs::create_dir_all(agent_dir)
-            .map_err(|error| {
-                AppError::agent_attach_failed(format!("无法创建 {}：{error}", agent_dir.display()))
-            }),
-        Err(error) => Err(AppError::agent_attach_failed(format!(
-            "无法检查 {}：{error}",
-            agent_dir.display()
-        ))),
-    }
-}
-
-fn prepare_target(
-    agent_dir: &std::path::Path,
-    skill_id: &str,
-    canonical: &std::path::Path,
-) -> Result<PathBuf, AppError> {
-    let root = normalize_absolute(agent_dir)
-        .ok_or_else(|| AppError::path_invalid("agent skills 目录必须是绝对路径。"))?;
-    let target = normalize_absolute(&root.join(skill_id))
-        .ok_or_else(|| AppError::path_invalid("挂载目标路径无效。"))?;
-    if target.parent() != Some(root.as_path()) {
-        return Err(AppError::path_outside_allowed_root(format!(
-            "{} 不是 agent 目录的直接子项",
-            target.display()
-        )));
-    }
-    if normalize_absolute(canonical).as_deref() == Some(target.as_path()) {
-        return Err(AppError::path_invalid(format!(
-            "挂载目标不能是 canonical 目录：{}",
-            target.display()
-        )));
-    }
-    Ok(target)
-}
-
-fn same_dir(left: &std::path::Path, right: &std::path::Path) -> bool {
-    match (fs::canonicalize(left), fs::canonicalize(right)) {
-        (Ok(left), Ok(right)) => left == right,
-        _ => left == right,
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::error::codes;
+    use std::path::PathBuf;
 
     struct Fixture {
         _tmp: tempfile::TempDir,

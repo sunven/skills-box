@@ -1,5 +1,6 @@
 pub mod agents;
 pub mod attach;
+pub mod attachment_target;
 pub mod backup;
 pub mod baseline;
 pub mod cli;

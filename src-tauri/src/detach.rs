@@ -17,13 +17,14 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use crate::attachment_target;
 use crate::backup::{BackupAction, BackupAttachment, BackupStore};
 use crate::error::AppError;
-use crate::inventory::{self, AgentDir, AttachmentMode, ManagementState};
+use crate::inventory::{self, AgentDir, AttachmentMode};
 use crate::lock::LockFile;
 use crate::logs::{OperationEntry, OperationLog};
 use crate::paths::AppPaths;
-use crate::security::{self, normalize_absolute};
+use crate::security;
 
 const DETACH_ACTION: &str = "detach";
 
@@ -60,42 +61,15 @@ pub fn detach_agent(
 
     let located = inventory::locate_with_agents(paths, agents, skill_id)?
         .ok_or_else(|| AppError::skill_not_found(skill_id))?;
-    match located.management {
-        ManagementState::Managed => {}
-        ManagementState::CopyOnly => return Err(AppError::skill_copy_only(skill_id)),
-        ManagementState::Unmanaged => return Err(AppError::skill_unmanaged(skill_id)),
-    }
-    let canonical = located
-        .canonical_path
-        .clone()
-        .ok_or_else(|| AppError::skill_copy_only(skill_id))?;
+    let resolved = attachment_target::resolve_detach(paths, &located, agents, agent_id)?;
+    let agent = &resolved.agent;
+    let canonical = &resolved.canonical;
+    let target = &resolved.target;
+    let attachment = resolved
+        .existing
+        .as_ref()
+        .expect("resolve_detach always returns an attachment");
 
-    let agent = agents
-        .iter()
-        .find(|agent| agent.id == agent_id)
-        .ok_or_else(|| AppError::agent_not_detected(agent_id))?;
-    // Universal agents read the canonical store directly. Even when a legacy
-    // physical link exists, removing it does not detach the skill from them.
-    if agent.universal || same_dir(&agent.skills_dir, &paths.canonical_skills_dir()) {
-        return Err(AppError::agent_native(&agent.display_name));
-    }
-    let attachment = located
-        .attachments
-        .iter()
-        .find(|attachment| attachment.agent_id == agent_id)
-        .ok_or_else(|| AppError::agent_not_attached(&agent.display_name))?;
-    match attachment.mode {
-        AttachmentMode::Native => return Err(AppError::agent_native(&agent.display_name)),
-        AttachmentMode::Broken => {
-            return Err(AppError::agent_broken(
-                &agent.display_name,
-                &attachment.path,
-            ));
-        }
-        AttachmentMode::Link | AttachmentMode::Copy => {}
-    }
-
-    let target = validate_target(&agent.skills_dir, skill_id, &canonical)?;
     let log = OperationLog::new(paths);
     let log_path = paths.display(log.path());
     let remaining_agents: Vec<String> = located
@@ -109,8 +83,8 @@ pub fn detach_agent(
         agent_id: agent_id.to_string(),
         agent_name: agent.display_name.clone(),
         mode: attachment.mode,
-        attachment_path: paths.display(&target),
-        canonical_path: paths.display(&canonical),
+        attachment_path: paths.display(target),
+        canonical_path: paths.display(canonical),
         backup_path: None,
         log_path,
         unattached: remaining_agents.is_empty(),
@@ -118,7 +92,7 @@ pub fn detach_agent(
     };
 
     // The physical entry decides how to delete: never follow a symlink.
-    let metadata = match fs::symlink_metadata(&target) {
+    let metadata = match fs::symlink_metadata(target) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Err(AppError::agent_not_attached(&agent.display_name)
@@ -155,7 +129,7 @@ pub fn detach_agent(
 
     match mode {
         AttachmentMode::Link => {
-            if let Err(error) = fs::remove_file(&target) {
+            if let Err(error) = fs::remove_file(target) {
                 let error = AppError::agent_detach_failed(format!(
                     "无法删除符号链接 {}：{error}",
                     target.display()
@@ -165,13 +139,14 @@ pub fn detach_agent(
             }
         }
         AttachmentMode::Copy => {
-            let target_real = fs::canonicalize(&target).map_err(|error| {
+            let target_real = fs::canonicalize(target).map_err(|error| {
                 AppError::agent_detach_failed(format!(
                     "无法解析 copy 目录 {}：{error}",
                     target.display()
                 ))
             })?;
-            let canonical_real = fs::canonicalize(&canonical).unwrap_or_else(|_| canonical.clone());
+            let canonical_real =
+                fs::canonicalize(canonical).unwrap_or_else(|_| canonical.to_path_buf());
             if target_real == canonical_real {
                 let error = AppError::path_invalid(format!(
                     "断链目标不能是 canonical 目录：{}",
@@ -181,7 +156,7 @@ pub fn detach_agent(
                 return Err(error);
             }
 
-            let dependents = find_copy_dependents(agents, &canonical, &target)?;
+            let dependents = find_copy_dependents(agents, canonical, target)?;
             if !dependents.is_empty() {
                 let list = dependents
                     .iter()
@@ -218,7 +193,7 @@ pub fn detach_agent(
 
             // Re-lstat immediately before deleting. A path that changed into
             // a symlink must never be followed by remove_dir_all.
-            let metadata = match fs::symlink_metadata(&target) {
+            let metadata = match fs::symlink_metadata(target) {
                 Ok(metadata) => metadata,
                 Err(error) => {
                     let error = AppError::agent_detach_failed(format!(
@@ -237,7 +212,7 @@ pub fn detach_agent(
                 log_failure(&log, skill_id, agent_id, Some(backup_display), &error);
                 return Err(error);
             }
-            if let Err(error) = fs::remove_dir_all(&target) {
+            if let Err(error) = fs::remove_dir_all(target) {
                 let error = AppError::agent_detach_failed(format!(
                     "无法删除 copy 目录 {}：{error}",
                     target.display()
@@ -249,7 +224,7 @@ pub fn detach_agent(
         AttachmentMode::Native | AttachmentMode::Broken => unreachable!("mode was filtered above"),
     }
 
-    if fs::symlink_metadata(&target).is_ok() {
+    if fs::symlink_metadata(target).is_ok() {
         let error =
             AppError::agent_detach_failed(format!("删除后目标仍然存在：{}", target.display()));
         log_failure(&log, skill_id, agent_id, result.backup_path.clone(), &error);
@@ -290,7 +265,7 @@ pub fn find_copy_dependents(
 
     let mut roots: Vec<(String, PathBuf)> = Vec::new();
     for agent in agents {
-        if same_dir(&agent.skills_dir, canonical_dir) {
+        if inventory::same_dir(&agent.skills_dir, canonical_dir) {
             continue;
         }
         roots.push((agent.display_name.clone(), agent.skills_dir.clone()));
@@ -341,50 +316,6 @@ pub fn find_copy_dependents(
     Ok(dependents)
 }
 
-fn validate_target(
-    agent_dir: &Path,
-    skill_id: &str,
-    canonical: &Path,
-) -> Result<PathBuf, AppError> {
-    let metadata = fs::symlink_metadata(agent_dir).map_err(|error| {
-        AppError::path_invalid(format!(
-            "无法检查 agent skills 目录 {}：{error}",
-            agent_dir.display()
-        ))
-    })?;
-    if metadata.file_type().is_symlink() {
-        return Err(AppError::path_invalid(format!(
-            "agent skills 目录本身是符号链接，已拒绝断开：{}",
-            agent_dir.display()
-        )));
-    }
-    if !metadata.is_dir() {
-        return Err(AppError::path_invalid(format!(
-            "agent skills 路径不是目录：{}",
-            agent_dir.display()
-        )));
-    }
-
-    let root = normalize_absolute(agent_dir)
-        .ok_or_else(|| AppError::path_invalid("agent skills 目录必须是绝对路径。"))?;
-    let target = normalize_absolute(&root.join(skill_id))
-        .ok_or_else(|| AppError::path_invalid("断链目标路径无效。"))?;
-    if target.parent() != Some(root.as_path()) {
-        return Err(AppError::path_outside_allowed_root(format!(
-            "{} 不是 agent 目录的直接子项",
-            target.display()
-        )));
-    }
-    let canonical_normalized = normalize_absolute(canonical);
-    if canonical_normalized.as_deref() == Some(target.as_path()) {
-        return Err(AppError::path_invalid(format!(
-            "断链目标不能是 canonical 目录：{}",
-            target.display()
-        )));
-    }
-    Ok(target)
-}
-
 fn log_failure(
     log: &OperationLog,
     skill_id: &str,
@@ -403,17 +334,10 @@ fn log_failure(
     ));
 }
 
-fn same_dir(left: &Path, right: &Path) -> bool {
-    match (fs::canonicalize(left), fs::canonicalize(right)) {
-        (Ok(left), Ok(right)) => left == right,
-        _ => left == right,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::inventory::{self, AgentDir};
+    use crate::inventory::{self, AgentDir, ManagementState};
     use std::os::unix::fs::symlink;
 
     struct Fixture {
@@ -796,7 +720,7 @@ mod tests {
     }
 
     #[test]
-    fn path_guards_reject_traversal_canonical_targets_and_symlinked_agent_roots() {
+    fn path_guards_reject_traversal_and_symlinked_agent_roots() {
         let fixture = Fixture::new();
         let canonical = fixture.managed_skill("alpha");
         fixture.link(&fixture.claude, "alpha", &canonical);
@@ -817,12 +741,6 @@ mod tests {
                 "skill id {skill:?}"
             );
         }
-        // A canonical target is rejected even when the agent root would make
-        // it look like a direct child.
-        let error = validate_target(&fixture.canonical_root, "alpha", &canonical).unwrap_err();
-        assert_eq!(error.code, crate::error::codes::PATH_INVALID);
-        assert!(error.detail.as_deref().unwrap().contains("canonical"));
-
         // An agent skills root that is a symlink makes containment ambiguous.
         let real = fixture._tmp.path().join("real-claude-skills");
         fs::create_dir_all(real.join("alpha")).unwrap();

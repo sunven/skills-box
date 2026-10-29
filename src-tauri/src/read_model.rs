@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::attachment_target::{self, DetachEligibility};
 use crate::baseline::{BaselineStore, LocalModification};
 use crate::detail::{SkillDetail, SkillMdStatus, directory_mtime_epoch_ms, read_skill_md};
 use crate::error::AppError;
@@ -176,8 +177,8 @@ impl ReadModel {
     pub fn detail(&self, skill_id: &str) -> Result<SkillDetail, AppError> {
         security::validate_skill_id(skill_id)?;
         let (catalog, agents) = self.catalog()?;
-        let universal = universal_map(&agents);
-        let view = build_view(&self.paths, &catalog, &universal, skill_id)
+        let blocked = blocked_agents(&agents, &catalog.canonical_dir);
+        let view = build_view(&self.paths, &catalog, &blocked, skill_id)
             .ok_or_else(|| AppError::skill_not_found(skill_id))?;
         Ok(view.to_detail(&self.paths))
     }
@@ -253,8 +254,8 @@ pub(crate) fn detail_with_agents(
 ) -> Result<SkillDetail, AppError> {
     security::validate_skill_id(skill_id)?;
     let catalog = inventory::build_catalog(paths, agents)?;
-    let universal = universal_map(agents);
-    let view = build_view(paths, &catalog, &universal, skill_id)
+    let blocked = blocked_agents(agents, &catalog.canonical_dir);
+    let view = build_view(paths, &catalog, &blocked, skill_id)
         .ok_or_else(|| AppError::skill_not_found(skill_id))?;
     Ok(view.to_detail(paths))
 }
@@ -270,11 +271,11 @@ pub(crate) fn resolve_root_with_agents(
 }
 
 fn build_snapshot(paths: &AppPaths, catalog: &Catalog, agents: &[AgentDir]) -> InventorySnapshot {
-    let universal = universal_map(agents);
+    let blocked = blocked_agents(agents, &catalog.canonical_dir);
     let mut skills = Vec::new();
     let mut stale = Vec::new();
     for name in &catalog.names {
-        match build_view(paths, catalog, &universal, name) {
+        match build_view(paths, catalog, &blocked, name) {
             Some(view) => skills.push(view.to_inventory(paths)),
             None => stale.push(name.clone()),
         }
@@ -295,7 +296,7 @@ fn build_snapshot(paths: &AppPaths, catalog: &Catalog, agents: &[AgentDir]) -> I
 fn build_view(
     paths: &AppPaths,
     catalog: &Catalog,
-    universal: &BTreeMap<&str, bool>,
+    blocked: &BTreeMap<&str, bool>,
     name: &str,
 ) -> Option<SkillView> {
     let located = inventory::locate_in_catalog(catalog, name)?;
@@ -329,15 +330,15 @@ fn build_view(
             agent_name: attachment.agent_name.clone(),
             path: paths.display(&attachment.path),
             mode: attachment.mode,
-            detachable: inventory::attachment_is_detachable(
+            detachable: attachment_target::detach_eligibility(
                 located.management,
                 canonical_path.is_some(),
-                universal
+                blocked
                     .get(attachment.agent_id.as_str())
                     .copied()
                     .unwrap_or(false),
-                attachment.mode,
-            ),
+                Some(attachment.mode),
+            ) == DetachEligibility::Detachable,
         })
         .collect();
     let broken_warnings: Vec<String> = located
@@ -467,10 +468,15 @@ impl SkillView {
     }
 }
 
-fn universal_map(agents: &[AgentDir]) -> BTreeMap<&str, bool> {
+fn blocked_agents<'a>(agents: &'a [AgentDir], canonical_dir: &Path) -> BTreeMap<&'a str, bool> {
     agents
         .iter()
-        .map(|agent| (agent.id.as_str(), agent.universal))
+        .map(|agent| {
+            (
+                agent.id.as_str(),
+                agent.universal || inventory::same_dir(&agent.skills_dir, canonical_dir),
+            )
+        })
         .collect()
 }
 
