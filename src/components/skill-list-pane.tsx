@@ -24,7 +24,6 @@ interface SkillListPaneProps {
   onClearFilters: () => void;
   onOpenAnomalies: () => void;
   onRetry: () => void;
-  titleIsPrimary: boolean;
 }
 
 function EmptyState({
@@ -66,14 +65,12 @@ export function SkillListPane({
   onClearFilters,
   onOpenAnomalies,
   onRetry,
-  titleIsPrimary,
 }: SkillListPaneProps) {
-  const Title = titleIsPrimary ? "h1" : "h2";
   return (
     <section aria-label="Skill 列表" className="canvas">
       <div className="canvas-head">
         <div className="min-w-0">
-          <Title className="canvas-title">全局 Skills</Title>
+          <h1 className="canvas-title">全局 Skills</h1>
           <p className="canvas-summary">
             <span className="n">{totalSkills}</span> 个 skill ·{" "}
             <span className="n">{sourceCount}</span> 个来源 ·{" "}

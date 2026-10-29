@@ -1,21 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-
-function useMediaQuery(query: string): boolean {
-  const [matches, setMatches] = useState(() =>
-    typeof window.matchMedia === "function"
-      ? window.matchMedia(query).matches
-      : false,
-  );
-  useEffect(() => {
-    if (typeof window.matchMedia !== "function") return;
-    const list = window.matchMedia(query);
-    const update = () => setMatches(list.matches);
-    update();
-    list.addEventListener("change", update);
-    return () => list.removeEventListener("change", update);
-  }, [query]);
-  return matches;
-}
 import { useQueryClient } from "@tanstack/react-query";
 import { AnomalyDialog } from "./components/anomaly-panel";
 import { AppHeader } from "./components/app-header";
@@ -90,7 +73,6 @@ function App() {
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
-  const isPhone = useMediaQuery("(max-width: 860px)");
   const [anomaliesOpen, setAnomaliesOpen] = useState(false);
   const [installOpen, setInstallOpen] = useState(false);
   const [updateMode, setUpdateMode] = useState<"single" | "all" | null>(null);
@@ -232,6 +214,11 @@ function App() {
     setDetailOpen(true);
   };
 
+  const handleCloseDetail = () => {
+    setDetailOpen(false);
+    setSelectedName(null);
+  };
+
   const handleSourceChange = (value: string) => {
     setSource(value);
     setFiltersOpen(false);
@@ -288,10 +275,7 @@ function App() {
             rechecking={recheck.isPending}
             onRecheck={handleRecheck}
           />
-          <main
-            className="app-body"
-            data-detail={detailOpen ? "true" : "false"}
-          >
+          <main className="app-body">
             <div
               className="rail-wrap"
               data-open={filtersOpen ? "true" : "false"}
@@ -331,24 +315,24 @@ function App() {
               onClearFilters={handleClearFilters}
               onOpenAnomalies={() => setAnomaliesOpen(true)}
               onRetry={handleRetryInventory}
-              titleIsPrimary={!(isPhone && detailOpen)}
             />
-            <DetailPane
-              skill={selectedSkill}
-              updateResult={selectedSkill?.updateResult}
-              checkingUpdates={checkUpdates.isPending}
-              onCheckUpdates={handleCheckUpdates}
-              onBack={() => setDetailOpen(false)}
-              titleIsPrimary={isPhone && detailOpen}
-              onUpdate={(name) => {
-                setUpdateSkillName(name);
-                setUpdateMode("single");
-              }}
-              onUninstall={(name) => {
-                const target = skills.find((entry) => entry.name === name);
-                if (target) setUninstallSkill(target);
-              }}
-            />
+            {detailOpen && selectedSkill ? (
+              <DetailPane
+                skill={selectedSkill}
+                updateResult={selectedSkill.updateResult}
+                checkingUpdates={checkUpdates.isPending}
+                onCheckUpdates={handleCheckUpdates}
+                onClose={handleCloseDetail}
+                onUpdate={(name) => {
+                  setUpdateSkillName(name);
+                  setUpdateMode("single");
+                }}
+                onUninstall={(name) => {
+                  const target = skills.find((entry) => entry.name === name);
+                  if (target) setUninstallSkill(target);
+                }}
+              />
+            ) : null}
           </main>
           {filtersOpen ? (
             <div

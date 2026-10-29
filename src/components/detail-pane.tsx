@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
-  ArrowLeft,
   ArrowUpCircle,
   FileText,
   FolderOpen,
@@ -10,6 +9,7 @@ import {
   RefreshCw,
   Trash2,
   Unlink,
+  X,
 } from "lucide-react";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -43,14 +43,13 @@ import { useSkillDetailQuery } from "../hooks/use-skill-detail";
 import { cn } from "../lib/utils";
 
 interface DetailPaneProps {
-  skill?: UpdateViewSkill | null;
+  skill: UpdateViewSkill;
   updateResult?: UpdateSkillResult | null;
   checkingUpdates?: boolean;
   onCheckUpdates?: (skillIds: string[]) => void;
   onUpdate?: (skillName: string) => void;
   onUninstall?: (skillName: string) => void;
-  onBack?: () => void;
-  titleIsPrimary?: boolean;
+  onClose: () => void;
 }
 
 type DetailView = "rendered" | "raw";
@@ -189,10 +188,9 @@ export function DetailPane({
   onCheckUpdates,
   onUpdate,
   onUninstall,
-  onBack,
-  titleIsPrimary = false,
+  onClose,
 }: DetailPaneProps) {
-  const skillId = skill?.name ?? null;
+  const skillId = skill.name;
   const query = useSkillDetailQuery(skillId);
   const queryClient = useQueryClient();
   const detail = query.data ?? null;
@@ -206,7 +204,26 @@ export function DetailPane({
   const [detachError, setDetachError] = useState<DetachDialogError | null>(null);
   const [detachNotice, setDetachNotice] = useState<DetachResult | null>(null);
   const actionErrorRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
   const detailError = asAppError(query.error);
+
+  useEffect(() => {
+    const previousFocus = document.activeElement as HTMLElement | null;
+    closeRef.current?.focus({ preventScroll: true });
+    return () => previousFocus?.focus({ preventScroll: true });
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      // A stacked confirmation dialog owns Escape while it is open.
+      if (document.querySelector(".modal-overlay")) return;
+      event.preventDefault();
+      onClose();
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
 
   useEffect(() => {
     setView("rendered");
@@ -221,30 +238,6 @@ export function DetailPane({
   useEffect(() => {
     if (actionError) actionErrorRef.current?.focus();
   }, [actionError]);
-
-  if (!skill) {
-    return (
-      <aside aria-label="详情" className="detail-pane">
-        <div className="detail-head">
-          <h2 className="sr-only">详情</h2>
-          {onBack ? (
-            <button type="button" className="detail-back" onClick={onBack}>
-              <ArrowLeft className="size-3.5" aria-hidden="true" />
-              返回列表
-            </button>
-          ) : null}
-        </div>
-        <div className="flex flex-1 items-center justify-center p-6">
-          <div className="max-w-[16rem] text-center">
-            <h3 className="text-sm font-medium text-foreground">未选择 skill</h3>
-            <p className="mt-1.5 text-[12.5px] leading-relaxed text-muted-foreground">
-              从列表中选择一个 skill 查看来源、挂载与本地改动。
-            </p>
-          </div>
-        </div>
-      </aside>
-    );
-  }
 
   const current = detail ?? skill;
   const management = current.management;
@@ -322,26 +315,36 @@ export function DetailPane({
   );
 
   return (
+    <>
+    <div
+      className="detail-scrim"
+      data-testid="detail-scrim"
+      aria-hidden="true"
+      onClick={onClose}
+    />
     <aside
       aria-label="详情"
       aria-busy={query.isPending}
+      data-testid="detail-drawer"
       className="detail-pane"
     >
       <div className="detail-head">
         <h2 className="sr-only">详情</h2>
-        {onBack ? (
-          <button type="button" className="detail-back" onClick={onBack}>
-            <ArrowLeft className="size-3.5" aria-hidden="true" />
-            返回列表
-          </button>
-        ) : null}
+        <Button
+          ref={closeRef}
+          variant="ghost"
+          size="icon"
+          className="detail-close size-7"
+          aria-label="关闭详情"
+          onClick={onClose}
+        >
+          <X className="size-4" aria-hidden="true" />
+        </Button>
         <div className="detail-title-line">
-          {titleIsPrimary ? (
-            <h1 className="detail-title">{detail?.name ?? skill.name}</h1>
-          ) : (
-            <h2 className="detail-title">{detail?.name ?? skill.name}</h2>
-          )}
-          <UpdateStatus skill={{ ...skill, updateResult: updateInfo ?? undefined }} />
+          <h2 className="detail-title">{detail?.name ?? skill.name}</h2>
+          <UpdateStatus
+            skill={{ ...skill, updateResult: updateInfo ?? undefined }}
+          />
           {management === "copy_only" ? (
             <span className="skill-note">仅副本</span>
           ) : null}
@@ -848,5 +851,6 @@ export function DetailPane({
         onConfirm={() => void confirmDetach()}
       />
     </aside>
+    </>
   );
 }

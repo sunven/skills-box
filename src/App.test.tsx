@@ -42,7 +42,7 @@ afterEach(() => {
 });
 
 describe("app shell", () => {
-  it("renders the three-column workspace with a healthy environment", async () => {
+  it("renders the workspace with a healthy environment", async () => {
     mockEnvironment(healthyReport());
     renderApp();
 
@@ -56,9 +56,11 @@ describe("app shell", () => {
     expect(screen.getByText("Lock v3 · 61 条")).toBeInTheDocument();
 
     expect(screen.getByRole("heading", { name: "筛选" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "详情" })).toBeInTheDocument();
     expect(screen.getByText("暂无 skill")).toBeInTheDocument();
-    expect(screen.getByText("未选择 skill")).toBeInTheDocument();
+    // The detail drawer stays closed until a skill is selected.
+    expect(
+      screen.queryByRole("complementary", { name: "详情" }),
+    ).not.toBeInTheDocument();
     expect(screen.getByText("Claude Code")).toBeInTheDocument();
 
     expect(
@@ -113,7 +115,6 @@ describe("app shell", () => {
 
       // The read-only shell must stay usable while the environment is broken.
       expect(screen.getByRole("heading", { name: "筛选" })).toBeInTheDocument();
-      expect(screen.getByRole("heading", { name: "详情" })).toBeInTheDocument();
       expect(screen.getByText("暂无 skill")).toBeInTheDocument();
     });
   }
@@ -128,7 +129,9 @@ describe("app shell", () => {
     expect(screen.getByText("后端命令不可用")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "安装 skill" })).toBeDisabled();
     expect(screen.getByRole("heading", { name: "筛选" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "详情" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("complementary", { name: "详情" }),
+    ).not.toBeInTheDocument();
   });
 
   it("renders a structured AppError rejection from the backend", async () => {

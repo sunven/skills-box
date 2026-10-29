@@ -614,8 +614,10 @@ describe("skill detail panel", () => {
   it("opens Finder and the editor through skillId-only commands and keeps focus", async () => {
     const calls = mockCommands({});
     renderApp();
-    const selectedRow = await selectAlpha();
-    expect(document.activeElement).toBe(selectedRow);
+    await selectAlpha();
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "关闭详情" }),
+    );
 
     const pane = detailPane();
     const finder = pane.getByRole("button", { name: "在 Finder 中查看" });
@@ -697,8 +699,10 @@ describe("skill detail panel", () => {
     });
     renderApp();
     await screen.findByText("alpha");
-    const selectedRow = selectAlphaSync();
-    expect(document.activeElement).toBe(selectedRow);
+    selectAlphaSync();
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "关闭详情" }),
+    );
 
     const pane = detailPane();
     expect(pane.getByRole("heading", { name: "alpha" })).toBeInTheDocument();
@@ -713,11 +717,12 @@ describe("skill detail panel", () => {
     expect(attempts).toBe(2);
   });
 
-  it("focuses the selected row and never steals focus into the detail pane", async () => {
+  it("moves focus into the drawer and restores it to the row on close", async () => {
     mockCommands({});
     renderApp();
     const selectedRow = await selectAlpha();
-    expect(document.activeElement).toBe(selectedRow);
+    const closeButton = screen.getByRole("button", { name: "关闭详情" });
+    expect(document.activeElement).toBe(closeButton);
 
     const pane = detailPane();
     const raw = pane.getByRole("button", { name: "原文" });
@@ -726,5 +731,11 @@ describe("skill detail panel", () => {
     expect(document.activeElement).toBe(raw);
     fireEvent.click(pane.getByRole("button", { name: "渲染" }));
     expect(document.activeElement).toBe(raw);
+
+    fireEvent.click(closeButton);
+    expect(
+      screen.queryByRole("complementary", { name: "详情" }),
+    ).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(selectedRow);
   });
 });

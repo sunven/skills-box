@@ -259,10 +259,70 @@ describe("inventory list", () => {
     expect(detail().getByRole("heading", { name: "beta" })).toBeInTheDocument();
 
     fireEvent.change(search, { target: { value: "no-such-skill" } });
-    expect(detail().getByText("未选择 skill")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("complementary", { name: "详情" }),
+    ).not.toBeInTheDocument();
 
     fireEvent.change(search, { target: { value: "" } });
-    expect(detail().getByText("未选择 skill")).toBeInTheDocument();
+    // The drawer only reopens on an explicit row click.
+    expect(
+      screen.queryByRole("complementary", { name: "详情" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("opens the detail drawer only for a selected skill and closes it again", async () => {
+    mockCommands(sampleSnapshot());
+    renderApp();
+    await screen.findByText("beta");
+    expect(
+      screen.queryByRole("complementary", { name: "详情" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(row("alpha"));
+    expect(
+      detail().getByRole("heading", { name: "alpha" }),
+    ).toBeInTheDocument();
+    expect(row("alpha")).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭详情" }));
+    expect(
+      screen.queryByRole("complementary", { name: "详情" }),
+    ).not.toBeInTheDocument();
+    expect(row("alpha")).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(row("alpha"));
+    expect(
+      detail().getByRole("heading", { name: "alpha" }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("detail-scrim"));
+    expect(
+      screen.queryByRole("complementary", { name: "详情" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(row("alpha"));
+    expect(
+      detail().getByRole("heading", { name: "alpha" }),
+    ).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(
+      screen.queryByRole("complementary", { name: "详情" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps the drawer open while Escape closes a stacked dialog", async () => {
+    mockCommands(sampleSnapshot());
+    renderApp();
+    await screen.findByText("beta");
+
+    fireEvent.click(row("alpha"));
+    fireEvent.click(
+      await detail().findByRole("button", { name: "彻底卸载" }),
+    );
+    expect(screen.getByTestId("uninstall-dialog")).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByTestId("uninstall-dialog")).not.toBeInTheDocument();
+    expect(screen.getByTestId("detail-drawer")).toHaveTextContent("alpha");
   });
 
   it("shows independent empty states for an empty inventory", async () => {
@@ -270,7 +330,9 @@ describe("inventory list", () => {
     renderApp();
 
     expect(await screen.findByText("暂无 skill")).toBeInTheDocument();
-    expect(detail().getByText("未选择 skill")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("complementary", { name: "详情" }),
+    ).not.toBeInTheDocument();
     expect(screen.queryByText(/^异常 \d+$/)).not.toBeInTheDocument();
     expect(screen.getByText("0 个")).toBeInTheDocument();
     expect(sidebar().getByText("暂无来源")).toBeInTheDocument();
