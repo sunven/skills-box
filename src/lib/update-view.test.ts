@@ -7,6 +7,7 @@ import type {
   UpdateCheckState,
   UpdateSkillResult,
   UpdateState,
+  UpdateViewSkill,
 } from "./types";
 import {
   applyUpdateReport,
@@ -73,9 +74,13 @@ function report(
 
 function skill(
   name: string,
-  overrides: Partial<InventorySkill> = {},
-): InventorySkill {
-  return makeSkill({ name, source: "acme/skills", ...overrides });
+  overrides: Partial<InventorySkill> & { update?: UpdateState } = {},
+): UpdateViewSkill {
+  const { update = "unknown", ...rest } = overrides;
+  return {
+    ...makeSkill({ name, source: "acme/skills", ...rest }),
+    update,
+  };
 }
 
 function group(count: number, examples: string[] = []): AnomalyGroup {

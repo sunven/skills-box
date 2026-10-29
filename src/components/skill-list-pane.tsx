@@ -4,12 +4,12 @@ import { AnomalyBanner } from "./anomaly-panel";
 import { SkillRow } from "./skill-row";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
-import type { AnomalyView, InventorySkill } from "../lib/types";
+import type { AnomalyView, UpdateViewSkill } from "../lib/types";
 import { SORT_OPTIONS, type SortKey } from "../lib/inventory-view";
 
 interface SkillListPaneProps {
   totalSkills: number;
-  visibleSkills: InventorySkill[];
+  visibleSkills: UpdateViewSkill[];
   anomalies: AnomalyView;
   sourceCount: number;
   candidateCount: number;

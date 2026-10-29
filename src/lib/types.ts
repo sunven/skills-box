@@ -227,7 +227,6 @@ export interface InventorySkill {
   description: string | null;
   source: string | null;
   management: ManagementState;
-  update: UpdateState;
   updatedAt: string | null;
   canonicalPath: string | null;
   attachments: AgentAttachment[];
@@ -309,6 +308,12 @@ export interface UpdateSkillResult {
   previousState: UpdateState | null;
   error: AppError | null;
   note: string | null;
+}
+
+/** Inventory row overlaid with the latest update report. */
+export interface UpdateViewSkill extends InventorySkill {
+  update: UpdateState;
+  updateResult?: UpdateSkillResult;
 }
 
 export interface UpdateSourceResult {
@@ -404,7 +409,6 @@ export interface SkillDetail {
   directoryMtimeEpochMs: number | null;
   hash: string | null;
   management: ManagementState;
-  update: UpdateState;
   localModification: LocalModification;
   localModificationDetail: string | null;
   attachments: AgentAttachment[];

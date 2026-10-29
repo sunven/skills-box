@@ -53,7 +53,6 @@ import {
   summarizeFullCheck,
   summarizePersistedState,
   withUpdateAnomalies,
-  type UpdateViewSkill,
 } from "./lib/update-view";
 import type {
   ActiveMutationInfo,
@@ -61,6 +60,7 @@ import type {
   DetectedAgent,
   EnvReport,
   InventoryAgent,
+  UpdateViewSkill,
 } from "./lib/types";
 
 const EMPTY_ANOMALIES: AnomalySummary = {

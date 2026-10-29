@@ -6,6 +6,8 @@ import type {
   InventoryAgent,
   InventorySkill,
   InventorySnapshot,
+  UpdateState,
+  UpdateViewSkill,
 } from "../lib/types";
 
 export const claudeAgent: InventoryAgent = {
@@ -73,7 +75,6 @@ export function makeSkill(
     description: null,
     source: null,
     management: "managed",
-    update: "unknown",
     updatedAt: null,
     canonicalPath: "~/.agents/skills/alpha",
     attachments: [],
@@ -81,6 +82,13 @@ export function makeSkill(
     warnings: [],
     ...overrides,
   };
+}
+
+export function makeUpdateViewSkill(
+  overrides: Partial<InventorySkill> & { name: string; update?: UpdateState },
+): UpdateViewSkill {
+  const { update = "unknown", ...rest } = overrides;
+  return { ...makeSkill(rest), update };
 }
 
 export function group(
@@ -120,8 +128,8 @@ export function emptySnapshot(): InventorySnapshot {
   return makeSnapshot();
 }
 
-export function sampleSkills(): InventorySkill[] {
-  return [
+export function sampleSkills(): UpdateViewSkill[] {
+  const skills: InventorySkill[] = [
     makeSkill({
       name: "alpha",
       description: "Alpha 的单行描述",
@@ -158,6 +166,7 @@ export function sampleSkills(): InventorySkill[] {
       attachments: [attachment("claude-code", "copy")],
     }),
   ];
+  return skills.map((skill) => ({ ...skill, update: "unknown" }));
 }
 
 export function sampleSnapshot(): InventorySnapshot {

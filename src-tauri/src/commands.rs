@@ -15,7 +15,7 @@ use crate::agents::extras::{ExtraAgent, RemoveExtraAgentResult, UserExtraAgent};
 use crate::attach::AttachResult;
 use crate::content::{self, SkillDirListing, SkillFileContent};
 use crate::detach::DetachResult;
-use crate::detail::{self, SkillDetail};
+use crate::detail::SkillDetail;
 use crate::env::EnvReport;
 use crate::error::{AppError, codes};
 use crate::inventory::InventorySnapshot;
@@ -47,16 +47,20 @@ pub async fn get_environment(
     state: State<'_, AppState>,
     refresh: Option<bool>,
 ) -> Result<EnvReport, AppError> {
-    state.environment.get(refresh.unwrap_or(false)).await
+    let refresh = refresh.unwrap_or(false);
+    if refresh {
+        state.read_model.invalidate();
+    }
+    state.environment.get(refresh).await
 }
 
 /// Full read-model projection. Filesystem scanning happens on the blocking
 /// pool so a large inventory never stalls the UI thread, under a 30s cap.
 #[tauri::command]
 pub async fn get_inventory(state: State<'_, AppState>) -> Result<InventorySnapshot, AppError> {
-    let paths = state.paths.clone();
+    let read_model = Arc::clone(&state.read_model);
     read_with_timeout("库存", READ_TIMEOUT, async move {
-        tauri::async_runtime::spawn_blocking(move || crate::inventory::read(&paths))
+        tauri::async_runtime::spawn_blocking(move || read_model.snapshot())
             .await
             .map_err(|error| {
                 AppError::new(codes::SKILL_READ_FAILED, "读取库存失败。")
@@ -72,9 +76,9 @@ pub async fn get_skill_detail(
     state: State<'_, AppState>,
     skill_id: String,
 ) -> Result<SkillDetail, AppError> {
-    let paths = state.paths.clone();
+    let read_model = Arc::clone(&state.read_model);
     read_with_timeout("skill 详情", READ_TIMEOUT, async move {
-        tauri::async_runtime::spawn_blocking(move || crate::detail::read(&paths, &skill_id))
+        tauri::async_runtime::spawn_blocking(move || read_model.detail(&skill_id))
             .await
             .map_err(|error| {
                 AppError::new(codes::SKILL_READ_FAILED, "读取 skill 详情失败。")
@@ -94,9 +98,10 @@ pub async fn list_skill_dir(
     path: String,
 ) -> Result<SkillDirListing, AppError> {
     let paths = state.paths.clone();
+    let read_model = Arc::clone(&state.read_model);
     blocking_read("skill 内容目录", move || {
-        let agents = crate::inventory::detected_agent_dirs(&paths);
-        content::list(&paths, &agents, &skill_id, &path)
+        let root = read_model.resolve_root(&skill_id)?;
+        content::list(&paths, &root, &path)
     })
     .await
 }
@@ -110,9 +115,10 @@ pub async fn read_skill_file(
     path: String,
 ) -> Result<SkillFileContent, AppError> {
     let paths = state.paths.clone();
+    let read_model = Arc::clone(&state.read_model);
     blocking_read("skill 文件", move || {
-        let agents = crate::inventory::detected_agent_dirs(&paths);
-        content::read_file(&paths, &agents, &skill_id, &path)
+        let root = read_model.resolve_root(&skill_id)?;
+        content::read_file(&paths, &root, &path)
     })
     .await
 }
@@ -123,12 +129,8 @@ pub async fn open_skill_folder(
     state: State<'_, AppState>,
     skill_id: String,
 ) -> Result<(), AppError> {
-    let paths = state.paths.clone();
-    let resolved = blocking_read("skill 路径", move || {
-        let agents = crate::inventory::detected_agent_dirs(&paths);
-        detail::resolve_skill_root(&paths, &agents, &skill_id)
-    })
-    .await?;
+    let read_model = Arc::clone(&state.read_model);
+    let resolved = blocking_read("skill 路径", move || read_model.resolve_root(&skill_id)).await?;
     app.opener()
         .open_path(resolved.to_string_lossy().to_string(), None::<&str>)
         .map_err(|error| AppError::open_failed(error.to_string()))
@@ -141,10 +143,10 @@ pub async fn open_skill_file(
     skill_id: String,
     path: String,
 ) -> Result<(), AppError> {
-    let paths = state.paths.clone();
+    let read_model = Arc::clone(&state.read_model);
     let resolved = blocking_read("skill 文件路径", move || {
-        let agents = crate::inventory::detected_agent_dirs(&paths);
-        content::resolve_open_path(&paths, &agents, &skill_id, &path)
+        let root = read_model.resolve_root(&skill_id)?;
+        content::resolve_open_path(&root, &path)
     })
     .await?;
     app.opener()

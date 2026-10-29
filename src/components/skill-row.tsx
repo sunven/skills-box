@@ -12,10 +12,8 @@ import {
   hasLocalModificationWarning,
   uniqueAttachments,
 } from "../lib/inventory-view";
-import {
-  updateBadgeTitle,
-  type UpdateViewSkill,
-} from "../lib/update-view";
+import { updateBadgeTitle } from "../lib/update-view";
+import type { UpdateViewSkill } from "../lib/types";
 
 interface AgentAvatarsProps {
   skill: InventorySkill;

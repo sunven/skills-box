@@ -4,6 +4,7 @@ import type {
   InventoryAgent,
   InventorySkill,
   UpdateState,
+  UpdateViewSkill,
 } from "./types";
 
 export type SortKey = "recent" | "name" | "source";
@@ -100,7 +101,7 @@ export function hasLocalModificationWarning(skill: InventorySkill): boolean {
   );
 }
 
-export function isAnomalyRow(skill: InventorySkill): boolean {
+export function isAnomalyRow(skill: UpdateViewSkill): boolean {
   return (
     skill.management === "unmanaged" ||
     // Copy-only rows have no canonical folder; spec §4.2 counts them as
@@ -114,7 +115,7 @@ export function isAnomalyRow(skill: InventorySkill): boolean {
 }
 
 export function matchesStatus(
-  skill: InventorySkill,
+  skill: UpdateViewSkill,
   status: StatusFilter,
 ): boolean {
   switch (status) {
@@ -133,7 +134,7 @@ export function matchesStatus(
   }
 }
 
-export function filterSkills<T extends InventorySkill>(
+export function filterSkills<T extends UpdateViewSkill>(
   skills: T[],
   filters: InventoryFilters,
 ): T[] {
@@ -187,7 +188,7 @@ export function sortSkills<T extends InventorySkill>(
   });
 }
 
-export function selectVisibleSkills<T extends InventorySkill>(
+export function selectVisibleSkills<T extends UpdateViewSkill>(
   skills: T[],
   filters: InventoryFilters,
   sort: SortKey = "recent",
@@ -195,7 +196,7 @@ export function selectVisibleSkills<T extends InventorySkill>(
   return sortSkills(filterSkills(skills, filters), sort);
 }
 
-export function computeStatusCounts(skills: InventorySkill[]): StatusCounts {
+export function computeStatusCounts(skills: UpdateViewSkill[]): StatusCounts {
   const counts: StatusCounts = {
     all: skills.length,
     update: 0,

@@ -43,11 +43,8 @@ import {
   hasLocalModificationWarning,
   shortHash,
 } from "../lib/inventory-view";
-import {
-  formatEpochDateTime,
-  updateBadgeTitle,
-  type UpdateViewSkill,
-} from "../lib/update-view";
+import { formatEpochDateTime, updateBadgeTitle } from "../lib/update-view";
+import type { UpdateViewSkill } from "../lib/types";
 import { useSkillDetailQuery } from "../hooks/use-skill-detail";
 import { cn } from "../lib/utils";
 

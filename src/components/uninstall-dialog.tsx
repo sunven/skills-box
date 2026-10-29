@@ -5,8 +5,7 @@ import { Button } from "./ui/button";
 import { TaskProgress } from "./install-wizard";
 import { useModalFocus } from "../hooks/use-modal-focus";
 import { asAppError, revealAppData, startUninstall } from "../lib/api";
-import type { TaskEvent } from "../lib/types";
-import type { UpdateViewSkill } from "../lib/update-view";
+import type { TaskEvent, UpdateViewSkill } from "../lib/types";
 import { ATTACHMENT_LABELS } from "../lib/inventory-view";
 import {
   TASK_SKILL_STATUS_LABELS,

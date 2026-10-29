@@ -15,8 +15,8 @@ import {
 } from "./inventory-view";
 import {
   attachment,
-  makeSkill,
   makeSnapshot,
+  makeUpdateViewSkill,
   sampleSkills,
 } from "../test/inventory-fixtures";
 
@@ -106,11 +106,11 @@ describe("inventory view model", () => {
   });
 
   it("treats unmanaged skills, copy-only skills and broken attachments as anomalies", () => {
-    const broken = makeSkill({
+    const broken = makeUpdateViewSkill({
       name: "broken",
       attachments: [attachment("claude-code", "broken")],
     });
-    const copyOnly = makeSkill({
+    const copyOnly = makeUpdateViewSkill({
       name: "copy-only",
       management: "copy_only",
       canonicalPath: null,
@@ -118,19 +118,19 @@ describe("inventory view model", () => {
     });
     expect(isAnomalyRow(broken)).toBe(true);
     expect(isAnomalyRow(copyOnly)).toBe(true);
-    expect(isAnomalyRow(makeSkill({ name: "ok" }))).toBe(false);
+    expect(isAnomalyRow(makeUpdateViewSkill({ name: "ok" }))).toBe(false);
   });
 
   it("treats managed local modifications and unknowns as anomalies, but not unmanaged ones", () => {
-    const modified = makeSkill({
+    const modified = makeUpdateViewSkill({
       name: "modified",
       localModification: "modified",
     });
-    const unknown = makeSkill({
+    const unknown = makeUpdateViewSkill({
       name: "unknown",
       localModification: "unknown",
     });
-    const unmanaged = makeSkill({
+    const unmanaged = makeUpdateViewSkill({
       name: "unmanaged",
       management: "unmanaged",
       localModification: "unknown",
@@ -141,7 +141,7 @@ describe("inventory view model", () => {
     expect(isAnomalyRow(modified)).toBe(true);
     expect(isAnomalyRow(unknown)).toBe(true);
 
-    const skills = [modified, unknown, unmanaged, makeSkill({ name: "ok" })];
+    const skills = [modified, unknown, unmanaged, makeUpdateViewSkill({ name: "ok" })];
     expect(
       filterSkills(skills, { ...defaults, status: "anomaly" }).map(
         (skill) => skill.name,
@@ -174,10 +174,10 @@ describe("inventory view model", () => {
 
   it("keeps null sources last and uses the name as a stable tie-breaker", () => {
     const skills = [
-      makeSkill({ name: "zed", source: null }),
-      makeSkill({ name: "mu", source: "b/repo" }),
-      makeSkill({ name: "nu", source: "b/repo" }),
-      makeSkill({ name: "alpha", source: "a/repo" }),
+      makeUpdateViewSkill({ name: "zed", source: null }),
+      makeUpdateViewSkill({ name: "mu", source: "b/repo" }),
+      makeUpdateViewSkill({ name: "nu", source: "b/repo" }),
+      makeUpdateViewSkill({ name: "alpha", source: "a/repo" }),
     ];
     expect(sortSkills(skills, "source").map((s) => s.name)).toEqual([
       "alpha",
@@ -200,7 +200,7 @@ describe("inventory view model", () => {
 
   it("filters and sorts a 100-skill inventory within the 50 ms budget", () => {
     const skills = Array.from({ length: 100 }, (_, index) =>
-      makeSkill({
+      makeUpdateViewSkill({
         name: `perf-skill-${String(index).padStart(3, "0")}`,
         description: `Performance fixture skill ${index}`,
         source: `acme/source-${String(index % 20).padStart(2, "0")}`,

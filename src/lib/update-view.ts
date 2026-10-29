@@ -12,14 +12,10 @@ import type {
   UpdateCheckOutcome,
   UpdateCheckReport,
   UpdateCheckState,
-  UpdateSkillResult,
+  UpdateViewSkill,
   UpdateState,
 } from "./types";
 import { UPDATE_LABELS } from "./inventory-view";
-
-export interface UpdateViewSkill extends InventorySkill {
-  updateResult?: UpdateSkillResult;
-}
 
 export type UpdateBadgeVariant = "success" | "warning" | "muted" | "destructive";
 
@@ -69,7 +65,7 @@ export function applyUpdateReport(
     const result = byName.get(skill.name);
     return {
       ...skill,
-      update: result?.state ?? skill.update,
+      update: result?.state ?? "unknown",
       updateResult: result,
     };
   });
@@ -249,7 +245,7 @@ export function updateBadgeTitle(skill: UpdateViewSkill): string | undefined {
 
 export function withUpdateAnomalies(
   anomalies: AnomalySummary,
-  skills: InventorySkill[],
+  skills: UpdateViewSkill[],
 ): AnomalyView {
   const pathMissing = anomalyGroup(
     skills

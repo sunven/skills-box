@@ -15,6 +15,7 @@ pub mod lock;
 pub mod logs;
 pub mod paths;
 pub mod process;
+pub mod read_model;
 pub mod security;
 pub mod tasks;
 pub mod timeouts;
@@ -29,12 +30,14 @@ use cli::CliRuntimeProvider;
 use env::EnvironmentService;
 use paths::AppPaths;
 use process::tokio_executor::TokioExecutor;
+use read_model::ReadModel;
 use tasks::{InventoryConflictProvider, TaskManager, TaskManagerConfig};
 use update::UpdateService;
 
 pub struct AppState {
     pub paths: AppPaths,
     pub environment: Arc<EnvironmentService>,
+    pub read_model: Arc<ReadModel>,
     pub tasks: TaskManager,
     pub updates: UpdateService,
     /// Set by `quit_app` so window/exit events stop preventing the exit.
@@ -53,6 +56,7 @@ impl AppState {
             TaskManagerConfig::default(),
         );
         Self {
+            read_model: Arc::new(ReadModel::new(paths.clone())),
             updates: UpdateService::new(paths.clone()),
             paths,
             environment,

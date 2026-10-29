@@ -374,7 +374,6 @@ const skills: InventorySkill[] = seeds.map((seed) => ({
   description: seed.description,
   source: seed.source,
   management: seed.management ?? "managed",
-  update: seed.update,
   updatedAt: seed.updatedAt,
   canonicalPath:
     seed.management === "copy_only"
@@ -680,7 +679,6 @@ export function skillDetail(name: string): SkillDetail {
     directoryMtimeEpochMs: NOW - 14 * DAY,
     hash: remoteHash(skill.name),
     management: skill.management,
-    update: skill.update,
     localModification: skill.localModification,
     localModificationDetail:
       skill.localModification === "modified"

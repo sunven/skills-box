@@ -11,29 +11,25 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-use crate::baseline::{BaselineStore, LocalModification};
+use crate::baseline::LocalModification;
 use crate::error::AppError;
-use crate::inventory::{
-    self, AgentAttachment, AgentDir, AttachmentLocation, AttachmentMode, ManagementState,
-    UpdateState, frontmatter,
-};
+use crate::inventory::{AgentAttachment, AgentDir, ManagementState};
 use crate::paths::AppPaths;
-use crate::security::{self, AllowedRoot};
 
 pub const SKILL_MD_LIMIT_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SkillMdStatus {
+pub(crate) enum SkillMdStatus {
     Ok,
     Missing,
     TooLarge,
     Unreadable,
 }
 
-struct SkillMdRead {
-    status: SkillMdStatus,
-    content: Option<String>,
-    error: Option<String>,
+pub(crate) struct SkillMdRead {
+    pub(crate) status: SkillMdStatus,
+    pub(crate) content: Option<String>,
+    pub(crate) error: Option<String>,
 }
 
 impl SkillMdRead {
@@ -81,7 +77,6 @@ pub struct SkillDetail {
     pub directory_mtime_epoch_ms: Option<u64>,
     pub hash: Option<String>,
     pub management: ManagementState,
-    pub update: UpdateState,
     pub local_modification: LocalModification,
     pub local_modification_detail: Option<String>,
     pub attachments: Vec<AgentAttachment>,
@@ -89,130 +84,20 @@ pub struct SkillDetail {
 }
 
 pub fn read(paths: &AppPaths, skill_id: &str) -> Result<SkillDetail, AppError> {
-    let agents = inventory::detected_agent_dirs(paths);
-    read_with_agents(paths, &agents, skill_id)
+    crate::read_model::ReadModel::new(paths.clone()).detail(skill_id)
 }
 
+/// One-shot injectable entry point for tests and fixtures. Production reads go
+/// through the shared `ReadModel` held by `AppState`.
 pub fn read_with_agents(
     paths: &AppPaths,
     agents: &[AgentDir],
     skill_id: &str,
 ) -> Result<SkillDetail, AppError> {
-    security::validate_skill_id(skill_id)?;
-    let located = inventory::locate_with_agents(paths, agents, skill_id)?
-        .ok_or_else(|| AppError::skill_not_found(skill_id))?;
-    let primary = located
-        .primary_path
-        .clone()
-        .ok_or_else(|| AppError::skill_not_found(skill_id))?;
-    let display_directory = Some(paths.display(&primary));
-    let skill_md = read_skill_md(&primary);
-
-    let lock_entry = located.lock_entry.as_ref();
-    let mut warnings = Vec::new();
-    let description = match skill_md.content.as_deref() {
-        Some(raw) => match frontmatter::parse(raw) {
-            Ok(Some(parsed)) => parsed.description,
-            Ok(None) => None,
-            Err(error) => {
-                push_unique(
-                    &mut warnings,
-                    format!("SKILL.md frontmatter 解析失败：{error}"),
-                );
-                None
-            }
-        },
-        None => None,
-    };
-
-    match skill_md.status {
-        SkillMdStatus::Ok => {}
-        SkillMdStatus::Missing => push_unique(&mut warnings, "未找到 SKILL.md".to_string()),
-        SkillMdStatus::TooLarge => push_unique(
-            &mut warnings,
-            "SKILL.md 超过 1 MiB，未加载内容。".to_string(),
-        ),
-        SkillMdStatus::Unreadable => push_unique(
-            &mut warnings,
-            format!(
-                "无法读取 SKILL.md：{}",
-                skill_md.error.as_deref().unwrap_or("未知错误")
-            ),
-        ),
-    }
-
-    for attachment in &located.attachments {
-        if attachment.mode == inventory::AttachmentMode::Broken {
-            push_unique(&mut warnings, format!("断链：{}", attachment.agent_name));
-        }
-    }
-
-    let baseline_store = BaselineStore::new(paths);
-    let assessment = baseline_store.assess(
-        skill_id,
-        Some(&primary),
-        lock_entry.map(|entry| entry.skill_folder_hash.as_str()),
-    );
-    let (local_modification, local_modification_detail) =
-        if located.management == ManagementState::Unmanaged {
-            (
-                LocalModification::Unknown,
-                Some("未受管：没有 lock 条目，无法判断本地改动。".to_string()),
-            )
-        } else {
-            (assessment.state, assessment.detail)
-        };
-
-    let attachments = located
-        .attachments
-        .iter()
-        .map(|attachment| AgentAttachment {
-            agent_id: attachment.agent_id.clone(),
-            agent_name: attachment.agent_name.clone(),
-            path: paths.display(&attachment.path),
-            mode: attachment.mode,
-            detachable: inventory::attachment_is_detachable(
-                located.management,
-                located.canonical_path.is_some(),
-                agents
-                    .iter()
-                    .find(|agent| agent.id == attachment.agent_id)
-                    .map(|agent| agent.universal)
-                    .unwrap_or(false),
-                attachment.mode,
-            ),
-        })
-        .collect();
-
-    Ok(SkillDetail {
-        id: skill_id.to_string(),
-        name: skill_id.to_string(),
-        description,
-        source: lock_entry.map(|entry| entry.source.clone()),
-        source_type: lock_entry.map(|entry| entry.source_type.clone()),
-        reference: lock_entry.and_then(|entry| entry.reference.clone()),
-        skill_path: lock_entry.and_then(|entry| entry.skill_path.clone()),
-        installed_at: lock_entry.map(|entry| entry.installed_at.clone()),
-        updated_at: lock_entry.map(|entry| entry.updated_at.clone()),
-        canonical_path: located
-            .canonical_path
-            .as_ref()
-            .map(|path| paths.display(path)),
-        directory_path: display_directory,
-        directory_mtime_epoch_ms: directory_mtime_epoch_ms(&primary),
-        hash: lock_entry
-            .map(|entry| entry.skill_folder_hash.clone())
-            .filter(|hash| !hash.is_empty()),
-        management: located.management,
-        update: UpdateState::Unknown,
-        local_modification,
-        local_modification_detail,
-        attachments,
-        warnings,
-    })
+    crate::read_model::detail_with_agents(paths, agents, skill_id)
 }
 
-fn read_skill_md(directory: &Path) -> SkillMdRead {
+pub(crate) fn read_skill_md(directory: &Path) -> SkillMdRead {
     let path = directory.join("SKILL.md");
 
     let link_metadata = match fs::symlink_metadata(&path) {
@@ -285,88 +170,15 @@ pub fn resolve_skill_root(
     agents: &[AgentDir],
     skill_id: &str,
 ) -> Result<PathBuf, AppError> {
-    security::validate_skill_id(skill_id)?;
-    let located = inventory::locate_with_agents(paths, agents, skill_id)?
-        .ok_or_else(|| AppError::skill_not_found(skill_id))?;
-    // A copy-only skill has no canonical folder. With more than one independent
-    // copy there is no single folder we can confidently open for the user.
-    if located.management == ManagementState::CopyOnly {
-        let copies: Vec<&AttachmentLocation> = located
-            .attachments
-            .iter()
-            .filter(|attachment| attachment.mode == AttachmentMode::Copy)
-            .collect();
-        if copies.len() > 1 {
-            let paths = copies
-                .iter()
-                .map(|attachment| {
-                    format!("{}（{}）", attachment.path.display(), attachment.agent_name)
-                })
-                .collect::<Vec<_>>()
-                .join("、");
-            return Err(AppError::skill_ambiguous(skill_id, paths));
-        }
-    }
-    let folder = located
-        .canonical_path
-        .or(located.primary_path)
-        .ok_or_else(|| AppError::skill_not_found(skill_id))?;
-    let roots = allowed_roots(paths, agents);
-    security::ensure_allowed(&folder, &roots)?;
-
-    let metadata = fs::metadata(&folder).map_err(|error| {
-        AppError::new(
-            crate::error::codes::SKILL_NOT_FOUND,
-            "skill 目录不存在。",
-        )
-        .detail(format!("{}（{error}）", folder.display()))
-    })?;
-    if !metadata.is_dir() {
-        return Err(AppError::path_invalid(format!(
-            "目标不是目录：{}",
-            folder.display()
-        )));
-    }
-    Ok(folder)
+    crate::read_model::resolve_root_with_agents(paths, agents, skill_id)
 }
 
-fn allowed_roots(paths: &AppPaths, agents: &[AgentDir]) -> Vec<AllowedRoot> {
-    let canonical = paths.canonical_skills_dir();
-    let mut roots = vec![AllowedRoot::canonical(canonical.clone())];
-    for agent in agents {
-        if same_dir(&agent.skills_dir, &canonical) {
-            continue;
-        }
-        if roots
-            .iter()
-            .any(|root| same_dir(&root.path, &agent.skills_dir))
-        {
-            continue;
-        }
-        roots.push(AllowedRoot::agent(agent.skills_dir.clone()));
-    }
-    roots
-}
-
-fn same_dir(left: &Path, right: &Path) -> bool {
-    match (fs::canonicalize(left), fs::canonicalize(right)) {
-        (Ok(left), Ok(right)) => left == right,
-        _ => left == right,
-    }
-}
-
-fn directory_mtime_epoch_ms(path: &Path) -> Option<u64> {
+pub(crate) fn directory_mtime_epoch_ms(path: &Path) -> Option<u64> {
     let modified = fs::metadata(path).ok()?.modified().ok()?;
     modified
         .duration_since(UNIX_EPOCH)
         .ok()
         .map(|duration| duration.as_millis() as u64)
-}
-
-fn push_unique(list: &mut Vec<String>, item: String) {
-    if !list.contains(&item) {
-        list.push(item);
-    }
 }
 
 #[cfg(test)]
@@ -485,11 +297,13 @@ mod tests {
         );
         assert_eq!(detail.hash.as_deref(), Some(hash.as_str()));
         assert_eq!(detail.management, ManagementState::Managed);
-        assert_eq!(detail.update, UpdateState::Unknown);
         assert_eq!(detail.local_modification, LocalModification::Clean);
         assert!(detail.directory_mtime_epoch_ms.is_some());
         assert_eq!(detail.attachments.len(), 1);
-        assert_eq!(detail.attachments[0].mode, inventory::AttachmentMode::Link);
+        assert_eq!(
+            detail.attachments[0].mode,
+            crate::inventory::AttachmentMode::Link
+        );
         assert!(
             detail.attachments[0].detachable,
             "managed canonical + non-universal link is detachable"
@@ -502,7 +316,6 @@ mod tests {
         let json = serde_json::to_value(&detail).unwrap();
         assert_eq!(json["localModification"], "clean");
         assert_eq!(json["management"], "managed");
-        assert_eq!(json["update"], "unknown");
         assert_eq!(json["ref"], "main");
         assert!(json.get("skillMd").is_none());
         assert_eq!(json["attachments"][0]["agentId"], "claude-code");
@@ -533,7 +346,10 @@ mod tests {
         assert_eq!(detail.local_modification, LocalModification::Unknown);
         assert!(detail.local_modification_detail.is_some());
         assert_eq!(detail.attachments.len(), 1);
-        assert_eq!(detail.attachments[0].mode, inventory::AttachmentMode::Copy);
+        assert_eq!(
+            detail.attachments[0].mode,
+            crate::inventory::AttachmentMode::Copy
+        );
     }
 
     #[test]
@@ -682,7 +498,8 @@ mod tests {
         let folder = resolve_skill_root(&fixture.paths, &fixture.agents, "alpha").unwrap();
         assert_eq!(folder, dir);
 
-        let traversal = resolve_skill_root(&fixture.paths, &fixture.agents, "../alpha").unwrap_err();
+        let traversal =
+            resolve_skill_root(&fixture.paths, &fixture.agents, "../alpha").unwrap_err();
         assert_eq!(traversal.code, codes::PATH_INVALID);
 
         let unknown = resolve_skill_root(&fixture.paths, &fixture.agents, "missing").unwrap_err();

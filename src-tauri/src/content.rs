@@ -12,9 +12,8 @@ use std::path::{Path, PathBuf};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
-use crate::detail::{SKILL_MD_LIMIT_BYTES, resolve_skill_root};
+use crate::detail::SKILL_MD_LIMIT_BYTES;
 use crate::error::AppError;
-use crate::inventory::AgentDir;
 use crate::paths::AppPaths;
 
 pub const CONTENT_MAX_ENTRIES: usize = 500;
@@ -91,16 +90,10 @@ pub struct SkillFileContent {
     pub error: Option<String>,
 }
 
-pub fn list(
-    paths: &AppPaths,
-    agents: &[AgentDir],
-    skill_id: &str,
-    relative: &str,
-) -> Result<SkillDirListing, AppError> {
-    let root = resolve_skill_root(paths, agents, skill_id)?;
-    let root_canonical = canonical_root(&root)?;
+pub fn list(paths: &AppPaths, root: &Path, relative: &str) -> Result<SkillDirListing, AppError> {
+    let root_canonical = canonical_root(root)?;
     let segments = validate_relative_path(relative)?;
-    let directory = resolve_segments(&root, &root_canonical, &segments)?;
+    let directory = resolve_segments(root, &root_canonical, &segments)?;
     let metadata = fs::metadata(&directory)
         .map_err(|error| AppError::path_invalid(format!("无法读取目录信息：{error}")))?;
     if !metadata.is_dir() {
@@ -156,7 +149,10 @@ pub fn list(
         } else if file_type.is_dir() {
             (SkillEntryKind::Dir, None)
         } else if file_type.is_file() {
-            (SkillEntryKind::File, item.metadata().ok().map(|meta| meta.len()))
+            (
+                SkillEntryKind::File,
+                item.metadata().ok().map(|meta| meta.len()),
+            )
         } else {
             continue;
         };
@@ -188,7 +184,7 @@ pub fn list(
         truncated = true;
     }
 
-    let display_root = paths.display(&root);
+    let display_root = paths.display(root);
     let display_path = if prefix.is_empty() {
         display_root
     } else {
@@ -206,18 +202,16 @@ pub fn list(
 
 pub fn read_file(
     paths: &AppPaths,
-    agents: &[AgentDir],
-    skill_id: &str,
+    root: &Path,
     relative: &str,
 ) -> Result<SkillFileContent, AppError> {
-    let root = resolve_skill_root(paths, agents, skill_id)?;
     let segments = validate_relative_path(relative)?;
     if segments.is_empty() {
         return Err(AppError::path_invalid("必须指定 skill 内的文件。"));
     }
-    let root_canonical = canonical_root(&root)?;
-    let path = resolve_segments(&root, &root_canonical, &segments)?;
-    let display_path = format!("{}/{}", paths.display(&root), segments.join("/"));
+    let root_canonical = canonical_root(root)?;
+    let path = resolve_segments(root, &root_canonical, &segments)?;
+    let display_path = format!("{}/{}", paths.display(root), segments.join("/"));
     let name = segments.last().expect("non-empty segments");
     let kind = file_kind(name);
     let limit = limit_for(kind);
@@ -360,19 +354,13 @@ pub fn read_file(
 
 /// Resolve and guard one file for `open_skill_file`. The returned path is
 /// canonical and is guaranteed to point at a regular file inside the skill.
-pub fn resolve_open_path(
-    paths: &AppPaths,
-    agents: &[AgentDir],
-    skill_id: &str,
-    relative: &str,
-) -> Result<PathBuf, AppError> {
-    let root = resolve_skill_root(paths, agents, skill_id)?;
+pub fn resolve_open_path(root: &Path, relative: &str) -> Result<PathBuf, AppError> {
     let segments = validate_relative_path(relative)?;
     if segments.is_empty() {
         return Err(AppError::path_invalid("必须指定 skill 内的文件。"));
     }
-    let root_canonical = canonical_root(&root)?;
-    let path = resolve_segments(&root, &root_canonical, &segments)?;
+    let root_canonical = canonical_root(root)?;
+    let path = resolve_segments(root, &root_canonical, &segments)?;
     let metadata = fs::metadata(&path)
         .map_err(|error| AppError::path_invalid(format!("无法读取文件信息：{error}")))?;
     if !metadata.is_file() {
@@ -519,13 +507,11 @@ fn file_value(
 mod tests {
     use super::*;
     use crate::error::codes;
-    use crate::inventory::AgentDir;
     use std::os::unix::fs::{PermissionsExt, symlink};
 
     struct Fixture {
         _tmp: tempfile::TempDir,
         paths: AppPaths,
-        agents: Vec<AgentDir>,
         canonical: PathBuf,
     }
 
@@ -534,20 +520,11 @@ mod tests {
             let tmp = tempfile::tempdir().unwrap();
             let home = tmp.path().join("home");
             fs::create_dir_all(home.join(".agents/skills")).unwrap();
-            fs::create_dir_all(home.join(".claude/skills")).unwrap();
             let canonical = home.join(".agents/skills");
-            let claude = home.join(".claude/skills");
             let paths = AppPaths::new(&home, tmp.path().join("app-data"));
-            let agents = vec![AgentDir {
-                id: "claude-code".to_string(),
-                display_name: "Claude Code".to_string(),
-                universal: false,
-                skills_dir: claude.clone(),
-            }];
             Self {
                 _tmp: tmp,
                 paths,
-                agents,
                 canonical,
             }
         }
@@ -595,12 +572,16 @@ mod tests {
             symlink(target, root.join(name)).unwrap();
         }
 
+        fn root(&self, name: &str) -> PathBuf {
+            self.canonical.join(name)
+        }
+
         fn list(&self, name: &str, relative: &str) -> Result<SkillDirListing, AppError> {
-            list(&self.paths, &self.agents, name, relative)
+            list(&self.paths, &self.root(name), relative)
         }
 
         fn read(&self, name: &str, relative: &str) -> Result<SkillFileContent, AppError> {
-            read_file(&self.paths, &self.agents, name, relative)
+            read_file(&self.paths, &self.root(name), relative)
         }
     }
 
@@ -623,7 +604,10 @@ mod tests {
             .iter()
             .map(|entry| entry.name.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(names, vec!["assets", "references", ".gitignore", "run.sh", "SKILL.md"]);
+        assert_eq!(
+            names,
+            vec!["assets", "references", ".gitignore", "run.sh", "SKILL.md"]
+        );
         assert!(!names.contains(&".git"));
         assert!(!names.contains(&"node_modules"));
         assert!(!names.contains(&".DS_Store"));
@@ -633,19 +617,31 @@ mod tests {
         assert_eq!(listing.max_entries, CONTENT_MAX_ENTRIES);
         assert_eq!(listing.max_depth, CONTENT_MAX_DEPTH);
 
-        let assets = listing.entries.iter().find(|entry| entry.name == "assets").unwrap();
+        let assets = listing
+            .entries
+            .iter()
+            .find(|entry| entry.name == "assets")
+            .unwrap();
         assert_eq!(assets.kind, SkillEntryKind::Dir);
         assert!(assets.expandable);
         assert_eq!(assets.size_bytes, None);
         assert!(!assets.symlink);
 
-        let run = listing.entries.iter().find(|entry| entry.name == "run.sh").unwrap();
+        let run = listing
+            .entries
+            .iter()
+            .find(|entry| entry.name == "run.sh")
+            .unwrap();
         assert_eq!(run.kind, SkillEntryKind::File);
         assert_eq!(run.path, "run.sh");
         assert_eq!(run.size_bytes, Some(10));
         assert!(!run.markdown);
 
-        let skill_md = listing.entries.iter().find(|entry| entry.name == "SKILL.md").unwrap();
+        let skill_md = listing
+            .entries
+            .iter()
+            .find(|entry| entry.name == "SKILL.md")
+            .unwrap();
         assert!(skill_md.markdown);
         assert!(!skill_md.expandable);
     }
@@ -661,16 +657,27 @@ mod tests {
         let listing = fixture.list("alpha", "references").unwrap();
         assert_eq!(listing.path, "references");
         assert_eq!(listing.display_path, "~/.agents/skills/alpha/references");
-        let nested = listing.entries.iter().find(|entry| entry.name == "nested").unwrap();
+        let nested = listing
+            .entries
+            .iter()
+            .find(|entry| entry.name == "nested")
+            .unwrap();
         assert_eq!(nested.path, "references/nested");
         assert!(nested.expandable);
-        let api = listing.entries.iter().find(|entry| entry.name == "api.md").unwrap();
+        let api = listing
+            .entries
+            .iter()
+            .find(|entry| entry.name == "api.md")
+            .unwrap();
         assert_eq!(api.path, "references/api.md");
         assert!(api.markdown);
 
         let nested_listing = fixture.list("alpha", "references/nested").unwrap();
         assert_eq!(nested_listing.path, "references/nested");
-        assert_eq!(nested_listing.display_path, "~/.agents/skills/alpha/references/nested");
+        assert_eq!(
+            nested_listing.display_path,
+            "~/.agents/skills/alpha/references/nested"
+        );
     }
 
     #[test]
@@ -728,11 +735,19 @@ mod tests {
         fixture.link(&dir, "broken.txt", &dir.join("missing.txt"));
 
         let listing = fixture.list("alpha", "").unwrap();
-        let inside = listing.entries.iter().find(|entry| entry.name == "inside.md").unwrap();
+        let inside = listing
+            .entries
+            .iter()
+            .find(|entry| entry.name == "inside.md")
+            .unwrap();
         assert_eq!(inside.kind, SkillEntryKind::File);
         assert!(inside.symlink);
         assert_eq!(inside.size_bytes, Some(6));
-        let inside_dir = listing.entries.iter().find(|entry| entry.name == "inside-dir").unwrap();
+        let inside_dir = listing
+            .entries
+            .iter()
+            .find(|entry| entry.name == "inside-dir")
+            .unwrap();
         assert_eq!(inside_dir.kind, SkillEntryKind::Dir);
         assert!(inside_dir.expandable);
         let outside_entry = listing
@@ -741,10 +756,17 @@ mod tests {
             .find(|entry| entry.name == "outside.txt")
             .unwrap();
         assert_eq!(outside_entry.kind, SkillEntryKind::Outside);
-        let broken = listing.entries.iter().find(|entry| entry.name == "broken.txt").unwrap();
+        let broken = listing
+            .entries
+            .iter()
+            .find(|entry| entry.name == "broken.txt")
+            .unwrap();
         assert_eq!(broken.kind, SkillEntryKind::Broken);
 
-        assert_eq!(fixture.read("alpha", "inside.md").unwrap().status, SkillFileStatus::Ok);
+        assert_eq!(
+            fixture.read("alpha", "inside.md").unwrap().status,
+            SkillFileStatus::Ok
+        );
         assert_eq!(
             fixture.list("alpha", "inside-dir").unwrap().path,
             "inside-dir"
@@ -753,7 +775,10 @@ mod tests {
             fixture.read("alpha", "outside.txt").unwrap_err().code,
             codes::PATH_OUTSIDE_ALLOWED_ROOT
         );
-        assert_eq!(fixture.read("alpha", "broken.txt").unwrap_err().code, codes::PATH_INVALID);
+        assert_eq!(
+            fixture.read("alpha", "broken.txt").unwrap_err().code,
+            codes::PATH_INVALID
+        );
     }
 
     #[test]
@@ -795,19 +820,33 @@ mod tests {
         let fixture = Fixture::new();
         let dir = fixture.managed_skill("alpha");
         fs::write(dir.join("pixel.png"), [0x89, b'P', b'N', b'G']).unwrap();
-        fs::write(dir.join("icon.svg"), "<svg xmlns=\"http://www.w3.org/2000/svg\"/>").unwrap();
+        fs::write(
+            dir.join("icon.svg"),
+            "<svg xmlns=\"http://www.w3.org/2000/svg\"/>",
+        )
+        .unwrap();
         let huge = File::create(dir.join("huge.png")).unwrap();
         huge.set_len(CONTENT_IMAGE_LIMIT_BYTES + 1).unwrap();
 
         let png = fixture.read("alpha", "pixel.png").unwrap();
         assert_eq!(png.status, SkillFileStatus::Ok);
         assert_eq!(png.kind, SkillFileKind::Image);
-        assert!(png.data_url.as_deref().unwrap().starts_with("data:image/png;base64,"));
+        assert!(
+            png.data_url
+                .as_deref()
+                .unwrap()
+                .starts_with("data:image/png;base64,")
+        );
         assert!(png.content.is_none());
 
         let svg = fixture.read("alpha", "icon.svg").unwrap();
         assert_eq!(svg.kind, SkillFileKind::Image);
-        assert!(svg.data_url.as_deref().unwrap().starts_with("data:image/svg+xml;base64,"));
+        assert!(
+            svg.data_url
+                .as_deref()
+                .unwrap()
+                .starts_with("data:image/svg+xml;base64,")
+        );
 
         let oversized = fixture.read("alpha", "huge.png").unwrap();
         assert_eq!(oversized.status, SkillFileStatus::TooLarge);
@@ -820,7 +859,10 @@ mod tests {
         let dir = fixture.managed_skill("alpha");
         fs::create_dir_all(dir.join("references")).unwrap();
 
-        assert_eq!(fixture.read("alpha", "").unwrap_err().code, codes::PATH_INVALID);
+        assert_eq!(
+            fixture.read("alpha", "").unwrap_err().code,
+            codes::PATH_INVALID
+        );
         assert_eq!(
             fixture.read("alpha", "references").unwrap_err().code,
             codes::PATH_INVALID
@@ -847,13 +889,14 @@ mod tests {
         fs::create_dir_all(dir.join("references")).unwrap();
         fs::write(dir.join("references/api.md"), "# API\n").unwrap();
 
-        let opened = resolve_open_path(&fixture.paths, &fixture.agents, "alpha", "references/api.md")
-            .unwrap();
-        assert_eq!(opened, fs::canonicalize(dir.join("references/api.md")).unwrap());
+        let opened = resolve_open_path(&fixture.root("alpha"), "references/api.md").unwrap();
+        assert_eq!(
+            opened,
+            fs::canonicalize(dir.join("references/api.md")).unwrap()
+        );
 
         for relative in ["", "references", "../alpha", ".git/config"] {
-            let error =
-                resolve_open_path(&fixture.paths, &fixture.agents, "alpha", relative).unwrap_err();
+            let error = resolve_open_path(&fixture.root("alpha"), relative).unwrap_err();
             assert_eq!(error.code, codes::PATH_INVALID, "{relative:?}");
         }
     }
@@ -864,7 +907,15 @@ mod tests {
         let dir = fixture.canonical_skill("gamma");
         fs::write(dir.join("notes.txt"), "notes\n").unwrap();
         let listing = fixture.list("gamma", "").unwrap();
-        assert!(listing.entries.iter().any(|entry| entry.name == "notes.txt"));
-        assert_eq!(fixture.read("gamma", "notes.txt").unwrap().status, SkillFileStatus::Ok);
+        assert!(
+            listing
+                .entries
+                .iter()
+                .any(|entry| entry.name == "notes.txt")
+        );
+        assert_eq!(
+            fixture.read("gamma", "notes.txt").unwrap().status,
+            SkillFileStatus::Ok
+        );
     }
 }

@@ -14,7 +14,6 @@ pub mod frontmatter;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
@@ -22,7 +21,7 @@ use crate::agents::extras::{self, AgentOrigin};
 use crate::agents::{
     AgentDefinition, DetectedAgent, DetectionContext, detect_agents, detect_definitions,
 };
-use crate::baseline::{BaselineStore, LocalModification};
+use crate::baseline::LocalModification;
 use crate::env::capture_process_env;
 use crate::env::child_env::{ChildEnvParams, build_child_env};
 use crate::error::AppError;
@@ -90,7 +89,6 @@ pub struct InventorySkill {
     pub description: Option<String>,
     pub source: Option<String>,
     pub management: ManagementState,
-    pub update: UpdateState,
     pub updated_at: Option<String>,
     pub canonical_path: Option<String>,
     pub attachments: Vec<AgentAttachment>,
@@ -191,147 +189,32 @@ pub fn detected_agent_dirs(paths: &AppPaths) -> Vec<AgentDir> {
 }
 
 pub fn read(paths: &AppPaths) -> Result<InventorySnapshot, AppError> {
-    let agents = detected_agent_dirs(paths);
-    read_with_agents(paths, &agents)
+    crate::read_model::ReadModel::new(paths.clone()).snapshot()
 }
 
-/// Injectable entry point for fixtures and tests.
+/// One-shot injectable entry point for tests and fixtures. Production reads go
+/// through the shared `ReadModel` held by `AppState`.
 pub fn read_with_agents(
     paths: &AppPaths,
     agents: &[AgentDir],
 ) -> Result<InventorySnapshot, AppError> {
-    let catalog = build_catalog(paths, agents)?;
-    let baseline_store = BaselineStore::new(paths);
-    let universal_by_agent: BTreeMap<&str, bool> = agents
-        .iter()
-        .map(|agent| (agent.id.as_str(), agent.universal))
-        .collect();
-    let mut skills = Vec::new();
-    let mut stale = Vec::new();
+    crate::read_model::snapshot_with_agents(paths, agents)
+}
 
-    for name in &catalog.names {
-        let canonical_path = catalog.canonical.get(name);
-        let aggregate = catalog.aggregates.get(name);
-        let lock_entry = catalog.lock.get(name);
-        let has_real_content = canonical_path.is_some()
-            || aggregate
-                .map(|aggregate| aggregate.has_real_content)
-                .unwrap_or(false);
-
-        let management = match lock_entry {
-            Some(_) if canonical_path.is_some() => ManagementState::Managed,
-            Some(_) if has_real_content => ManagementState::CopyOnly,
-            Some(_) => {
-                if !stale.contains(name) {
-                    stale.push(name.clone());
-                }
-                continue;
-            }
-            None => ManagementState::Unmanaged,
-        };
-
-        let primary = canonical_path
-            .cloned()
-            .or_else(|| aggregate.and_then(|aggregate| aggregate.primary.clone()));
-        let (description, warnings) = read_description(primary.as_deref());
-        let assessment = baseline_store.assess(
-            name,
-            primary.as_deref(),
-            lock_entry.map(|entry| entry.skill_folder_hash.as_str()),
-        );
-        let local_modification = if management == ManagementState::Unmanaged {
-            // Baselines are still recorded for later adoption, but unmanaged
-            // rows never surface local-modification warnings or anomalies.
-            LocalModification::Unknown
-        } else {
-            assessment.state
-        };
-
-        skills.push(InventorySkill {
-            name: name.clone(),
-            description,
-            source: lock_entry.map(|entry| entry.source.clone()),
-            management,
-            update: UpdateState::Unknown,
-            updated_at: lock_entry.map(|entry| entry.updated_at.clone()),
-            canonical_path: canonical_path.map(|path| paths.display(path)),
-            attachments: aggregate
-                .map(|aggregate| {
-                    aggregate
-                        .attachments
-                        .iter()
-                        .map(|attachment| AgentAttachment {
-                            agent_id: attachment.agent_id.clone(),
-                            agent_name: attachment.agent_name.clone(),
-                            path: paths.display(&attachment.path),
-                            mode: attachment.mode,
-                            detachable: attachment_is_detachable(
-                                management,
-                                canonical_path.is_some(),
-                                universal_by_agent
-                                    .get(attachment.agent_id.as_str())
-                                    .copied()
-                                    .unwrap_or(false),
-                                attachment.mode,
-                            ),
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
-            local_modification,
-            warnings,
-        });
-    }
-
-    let unmanaged_names: Vec<String> = skills
-        .iter()
-        .filter(|skill| skill.management == ManagementState::Unmanaged)
-        .map(|skill| skill.name.clone())
-        .collect();
-    let broken_examples: Vec<String> = skills
-        .iter()
-        .flat_map(|skill| {
-            skill
-                .attachments
-                .iter()
-                .filter(|attachment| attachment.mode == AttachmentMode::Broken)
-                .map(|attachment| format!("{} · {}", skill.name, attachment.agent_name))
-        })
-        .collect();
-    let modified_examples: Vec<String> = skills
-        .iter()
-        .filter(|skill| skill.management != ManagementState::Unmanaged)
-        .filter_map(|skill| match skill.local_modification {
-            LocalModification::Clean => None,
-            LocalModification::Modified => Some(format!("{} · 本地改动", skill.name)),
-            LocalModification::Unknown => Some(format!("{} · 本地改动?", skill.name)),
-        })
-        .collect();
-    let broken_count = broken_examples.len();
-    let modified_count = modified_examples.len();
-    let stale_group = group(stale.iter().cloned(), stale.len());
-    let unmanaged_group = group(unmanaged_names.iter().cloned(), unmanaged_names.len());
-    let broken_group = group(broken_examples.into_iter(), broken_count);
-    let modified_group = group(modified_examples.into_iter(), modified_count);
-    let anomalies = AnomalySummary {
-        total: stale_group.count
-            + unmanaged_group.count
-            + broken_group.count
-            + modified_group.count,
-        stale: stale_group,
-        unmanaged: unmanaged_group,
-        broken: broken_group,
-        modified: modified_group,
-    };
-
+/// Agent rows and extras warnings shared by the read model.
+pub(crate) fn agent_rows(
+    paths: &AppPaths,
+    agents: &[AgentDir],
+    canonical_dir: &Path,
+) -> (Vec<InventoryAgent>, Vec<String>) {
     let extra_agents = extras::load(paths);
-    let mut agent_rows: Vec<InventoryAgent> = agents
+    let mut rows: Vec<InventoryAgent> = agents
         .iter()
         .map(|agent| InventoryAgent {
             id: agent.id.clone(),
             display_name: agent.display_name.clone(),
             universal: agent.universal,
-            shared: same_dir(&agent.skills_dir, &catalog.canonical_dir),
+            shared: same_dir(&agent.skills_dir, canonical_dir),
             global_skills_dir: Some(paths.display(&agent.skills_dir)),
             origin: origin_of(&extra_agents, &agent.id),
             detected: true,
@@ -341,7 +224,7 @@ pub fn read_with_agents(
         if agents.iter().any(|agent| agent.id == extra.id) || extra_is_detected(paths, extra) {
             continue;
         }
-        agent_rows.push(InventoryAgent {
+        rows.push(InventoryAgent {
             id: extra.id.clone(),
             display_name: extra.display_name.clone(),
             universal: false,
@@ -351,16 +234,7 @@ pub fn read_with_agents(
             detected: false,
         });
     }
-    let mut warnings = catalog.warnings;
-    warnings.extend(extra_agents.warnings);
-
-    Ok(InventorySnapshot {
-        skills,
-        agents: agent_rows,
-        anomalies,
-        warnings,
-        generated_at_epoch_ms: epoch_ms(),
-    })
+    (rows, extra_agents.warnings)
 }
 
 fn origin_of(extra_agents: &extras::ExtraAgents, id: &str) -> AgentOrigin {
@@ -410,12 +284,7 @@ pub fn locate(paths: &AppPaths, name: &str) -> Result<Option<LocatedSkill>, AppE
     locate_with_agents(paths, &agents, name)
 }
 
-pub fn locate_with_agents(
-    paths: &AppPaths,
-    agents: &[AgentDir],
-    name: &str,
-) -> Result<Option<LocatedSkill>, AppError> {
-    let catalog = build_catalog(paths, agents)?;
+pub(crate) fn locate_in_catalog(catalog: &Catalog, name: &str) -> Option<LocatedSkill> {
     let canonical_path = catalog.canonical.get(name).cloned();
     let aggregate = catalog.aggregates.get(name);
     let lock_entry = catalog.lock.get(name).cloned();
@@ -427,8 +296,8 @@ pub fn locate_with_agents(
     let management = match (&lock_entry, canonical_path.is_some(), has_real_content) {
         (Some(_), true, _) => ManagementState::Managed,
         (Some(_), false, true) => ManagementState::CopyOnly,
-        (Some(_), false, false) => return Ok(None),
-        (None, false, false) => return Ok(None),
+        (Some(_), false, false) => return None,
+        (None, false, false) => return None,
         (None, _, _) => ManagementState::Unmanaged,
     };
 
@@ -436,7 +305,7 @@ pub fn locate_with_agents(
         .clone()
         .or_else(|| aggregate.and_then(|aggregate| aggregate.primary.clone()));
 
-    Ok(Some(LocatedSkill {
+    Some(LocatedSkill {
         name: name.to_string(),
         management,
         canonical_path,
@@ -445,20 +314,29 @@ pub fn locate_with_agents(
             .map(|aggregate| aggregate.attachments.clone())
             .unwrap_or_default(),
         lock_entry,
-    }))
+    })
+}
+
+pub fn locate_with_agents(
+    paths: &AppPaths,
+    agents: &[AgentDir],
+    name: &str,
+) -> Result<Option<LocatedSkill>, AppError> {
+    let catalog = build_catalog(paths, agents)?;
+    Ok(locate_in_catalog(&catalog, name))
 }
 
 #[derive(Debug)]
-struct Catalog {
-    lock: LockFile,
-    canonical_dir: PathBuf,
-    canonical: BTreeMap<String, PathBuf>,
-    aggregates: BTreeMap<String, Aggregate>,
-    names: BTreeSet<String>,
-    warnings: Vec<String>,
+pub(crate) struct Catalog {
+    pub(crate) lock: LockFile,
+    pub(crate) canonical_dir: PathBuf,
+    pub(crate) canonical: BTreeMap<String, PathBuf>,
+    pub(crate) aggregates: BTreeMap<String, Aggregate>,
+    pub(crate) names: BTreeSet<String>,
+    pub(crate) warnings: Vec<String>,
 }
 
-fn build_catalog(paths: &AppPaths, agents: &[AgentDir]) -> Result<Catalog, AppError> {
+pub(crate) fn build_catalog(paths: &AppPaths, agents: &[AgentDir]) -> Result<Catalog, AppError> {
     // Strict lock read happens first: corruption must never degrade into an
     // empty list or partial scan.
     let lock = LockFile::read(&paths.lock_path())?;
@@ -515,10 +393,10 @@ fn build_catalog(paths: &AppPaths, agents: &[AgentDir]) -> Result<Catalog, AppEr
 }
 
 #[derive(Debug, Default)]
-struct Aggregate {
-    attachments: Vec<AttachmentLocation>,
-    has_real_content: bool,
-    primary: Option<PathBuf>,
+pub(crate) struct Aggregate {
+    pub(crate) attachments: Vec<AttachmentLocation>,
+    pub(crate) has_real_content: bool,
+    pub(crate) primary: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -630,38 +508,7 @@ fn read_entries(dir: &Path) -> std::io::Result<Vec<(String, PathBuf)>> {
     Ok(entries)
 }
 
-fn read_description(primary: Option<&Path>) -> (Option<String>, Vec<String>) {
-    let Some(primary) = primary else {
-        return (None, vec!["未找到 SKILL.md".to_string()]);
-    };
-    let path = primary.join("SKILL.md");
-    let raw = match fs::read_to_string(&path) {
-        Ok(raw) => raw,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return (None, vec!["未找到 SKILL.md".to_string()]);
-        }
-        Err(error) => {
-            return (None, vec![format!("无法读取 SKILL.md：{error}")]);
-        }
-    };
-    match frontmatter::parse(&raw) {
-        Ok(Some(frontmatter)) => (frontmatter.description, Vec::new()),
-        Ok(None) => (None, Vec::new()),
-        Err(error) => (
-            None,
-            vec![format!("SKILL.md frontmatter 解析失败：{error}")],
-        ),
-    }
-}
-
-fn group(items: impl Iterator<Item = String>, count: usize) -> AnomalyGroup {
-    AnomalyGroup {
-        count,
-        examples: items.take(3).collect(),
-    }
-}
-
-fn same_dir(left: &Path, right: &Path) -> bool {
+pub(crate) fn same_dir(left: &Path, right: &Path) -> bool {
     match (fs::canonicalize(left), fs::canonicalize(right)) {
         (Ok(left), Ok(right)) => left == right,
         _ => left == right,
@@ -678,13 +525,6 @@ fn expand_tilde(raw: &str, home: &Path) -> Option<PathBuf> {
     } else {
         None
     }
-}
-
-fn epoch_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -866,7 +706,6 @@ mod tests {
 
         let alpha = skill(&snapshot, "alpha");
         assert_eq!(alpha.management, ManagementState::Managed);
-        assert_eq!(alpha.update, UpdateState::Unknown);
         assert_eq!(alpha.source.as_deref(), Some("acme/alpha"));
         assert_eq!(alpha.description.as_deref(), Some("managed alpha"));
         assert_eq!(
@@ -1052,7 +891,6 @@ mod tests {
         let json = serde_json::to_value(&snapshot).unwrap();
         assert_eq!(json["skills"][0]["name"], "alpha");
         assert_eq!(json["skills"][0]["management"], "managed");
-        assert_eq!(json["skills"][0]["update"], "unknown");
         // Random fixture lock hashes cannot be compared with the local tree.
         assert_eq!(json["skills"][0]["localModification"], "unknown");
         assert!(json["anomalies"]["modified"]["count"].is_number());

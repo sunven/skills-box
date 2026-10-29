@@ -21,8 +21,8 @@ import type {
 import type {
   UpdateSkipItem,
   UpdateSkipReason,
-  UpdateViewSkill,
 } from "../lib/update-view";
+import type { UpdateViewSkill } from "../lib/types";
 import {
   computeUpdateSummary,
   markSkillsCurrent,
