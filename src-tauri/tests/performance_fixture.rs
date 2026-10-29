@@ -158,8 +158,13 @@ fn one_hundred_skill_fixture_meets_the_inventory_budget() {
         .count();
     assert_eq!(managed, 80, "managed symlink skills");
     assert_eq!(copy_only, 20, "copy-only skills");
+    let detected_agents = snapshot
+        .agents
+        .iter()
+        .filter(|agent| agent.detected)
+        .count();
     assert_eq!(
-        snapshot.agents.len(),
+        detected_agents,
         AGENTS.len(),
         "four fixture agents must be detected"
     );

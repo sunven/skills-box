@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod attach;
 pub mod backup;
 pub mod baseline;
 pub mod cli;
@@ -111,6 +112,9 @@ pub fn run() {
             commands::start_install,
             commands::start_update,
             commands::detach_agent,
+            commands::attach_agent,
+            commands::add_extra_agent,
+            commands::remove_extra_agent,
             commands::start_uninstall,
             commands::check_updates,
             commands::get_update_check_state,

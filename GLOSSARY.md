@@ -64,9 +64,17 @@ _Avoid_: destination, target agents
 A coding agent with its own global skills directory, such as Claude Code or Codex.
 _Avoid_: client, target
 
+**Extra agent**:
+An agent defined outside the vendored CLI catalog, either shipped with the app or added by the user; skills-box attaches its skills natively instead of through the CLI. It appears in the UI only when its detection path exists.
+_Avoid_: custom agent, third-party agent
+
 **Agent attachment**:
 The representation of a global skill inside an agent's skills directory, either a symbolic link or a copy. The Chinese UI labels it 「挂载」.
 _Avoid_: installation, mount
+
+**Attach**:
+Create a global skill's attachment in one more agent without reinstalling, keeping the canonical store and lock entry intact. It is the inverse of detach and requires the canonical folder.
+_Avoid_: mount, enable
 
 **Detach**:
 Remove a skill from one agent while keeping the canonical store and the skill's lock entry intact.

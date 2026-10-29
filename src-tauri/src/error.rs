@@ -38,7 +38,14 @@ pub mod codes {
     pub const AGENT_BROKEN: &str = "agent.broken";
     pub const AGENT_DEPENDENCY_CONFLICT: &str = "agent.dependency_conflict";
     pub const AGENT_DETACH_FAILED: &str = "agent.detach_failed";
+    pub const AGENT_ALREADY_ATTACHED: &str = "agent.already_attached";
+    pub const AGENT_ATTACH_FAILED: &str = "agent.attach_failed";
     pub const AGENT_UNSUPPORTED_GLOBAL: &str = "agent.unsupported_global";
+    pub const EXTRA_AGENT_INVALID: &str = "extra.invalid";
+    pub const EXTRA_AGENT_DUPLICATE: &str = "extra.duplicate";
+    pub const EXTRA_AGENT_BUILTIN: &str = "extra.builtin";
+    pub const EXTRA_AGENT_NOT_FOUND: &str = "extra.not_found";
+    pub const EXTRA_AGENT_CONFIG: &str = "extra.config";
     pub const PATH_APP_DATA: &str = "path.app_data";
     pub const PATH_INVALID: &str = "path.invalid";
     pub const PATH_OUTSIDE_ALLOWED_ROOT: &str = "path.outside_allowed_root";
@@ -610,6 +617,58 @@ impl AppError {
         Self::new(codes::AGENT_DETACH_FAILED, "断开 agent 挂载失败。")
             .detail(detail)
             .hint("请检查该 agent 目录的权限后重试；canonical 与 lock 未被修改。")
+            .retryable(true)
+    }
+
+    pub fn agent_already_attached(name: &str) -> Self {
+        Self::new(
+            codes::AGENT_ALREADY_ATTACHED,
+            format!("agent「{name}」已经挂载了这个 skill。"),
+        )
+        .hint("请刷新库存后重试。")
+    }
+
+    pub fn agent_attach_failed(detail: impl Into<String>) -> Self {
+        Self::new(codes::AGENT_ATTACH_FAILED, "创建 agent 挂载失败。")
+            .detail(detail)
+            .hint("请检查该 agent 目录的权限后重试；canonical 与 lock 未被修改。")
+            .retryable(true)
+    }
+
+    pub fn extra_agent_invalid(detail: impl Into<String>) -> Self {
+        Self::new(codes::EXTRA_AGENT_INVALID, "额外 agent 定义无效。")
+            .detail(detail)
+            .hint("id 只能包含字母、数字、`-`、`_`、`.`，skills 目录必须是 `~/` 开头或绝对路径。")
+    }
+
+    pub fn extra_agent_duplicate(id: &str) -> Self {
+        Self::new(
+            codes::EXTRA_AGENT_DUPLICATE,
+            format!("agent 标识「{id}」已被占用。"),
+        )
+        .hint("请换一个 id；内置 catalog 与已有额外 agent 的 id 不可复用。")
+    }
+
+    pub fn extra_agent_builtin(name: &str) -> Self {
+        Self::new(
+            codes::EXTRA_AGENT_BUILTIN,
+            format!("内置额外 agent「{name}」不可删除。"),
+        )
+        .hint("如果该产品未安装，它会自动标记为「未检测到」并从安装目标中隐藏。")
+    }
+
+    pub fn extra_agent_not_found(id: &str) -> Self {
+        Self::new(
+            codes::EXTRA_AGENT_NOT_FOUND,
+            format!("未找到额外 agent「{id}」。"),
+        )
+        .hint("请刷新后重试。")
+    }
+
+    pub fn extra_agent_config(detail: impl Into<String>) -> Self {
+        Self::new(codes::EXTRA_AGENT_CONFIG, "保存额外 agent 配置失败。")
+            .detail(detail)
+            .hint("请检查应用数据目录的权限后重试。")
             .retryable(true)
     }
 

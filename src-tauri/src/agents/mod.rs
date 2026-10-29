@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 
 static CATALOG_JSON: &str = include_str!("catalog.json");
 
+pub mod extras;
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentCatalog {
@@ -82,9 +84,27 @@ pub fn catalog() -> &'static AgentCatalog {
     })
 }
 
-pub fn detect_agents(context: &DetectionContext) -> Vec<DetectedAgent> {
+/// Catalog membership decides who the pinned CLI attaches. Everything else is
+/// an extra agent and is linked by skills-box itself.
+pub fn is_catalog_agent(id: &str) -> bool {
     catalog()
         .agents
+        .iter()
+        .any(|definition| definition.id == id)
+}
+
+pub fn detect_agents(context: &DetectionContext) -> Vec<DetectedAgent> {
+    detect_definitions(context, &catalog().agents)
+}
+
+/// Detect an arbitrary definition list in the given order. Extra agents use
+/// this so they follow the same detection and path-resolution rules as the
+/// vendored catalog.
+pub fn detect_definitions(
+    context: &DetectionContext,
+    definitions: &[AgentDefinition],
+) -> Vec<DetectedAgent> {
+    definitions
         .iter()
         .filter(|definition| is_detected(definition, context))
         .map(|definition| DetectedAgent {

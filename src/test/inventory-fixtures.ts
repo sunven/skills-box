@@ -14,6 +14,8 @@ export const claudeAgent: InventoryAgent = {
   universal: false,
   shared: false,
   globalSkillsDir: "~/.claude/skills",
+  origin: "catalog",
+  detected: true,
 };
 
 export const geminiAgent: InventoryAgent = {
@@ -22,6 +24,8 @@ export const geminiAgent: InventoryAgent = {
   universal: true,
   shared: false,
   globalSkillsDir: "~/.gemini/skills",
+  origin: "catalog",
+  detected: true,
 };
 
 export const codexAgent: InventoryAgent = {
@@ -30,6 +34,8 @@ export const codexAgent: InventoryAgent = {
   universal: true,
   shared: true,
   globalSkillsDir: "~/.agents/skills",
+  origin: "catalog",
+  detected: true,
 };
 
 export const defaultAgents: InventoryAgent[] = [

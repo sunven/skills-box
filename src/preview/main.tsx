@@ -133,6 +133,31 @@ mockIPC(
       }
       case "get_active_mutation":
         return null;
+      case "attach_agent": {
+        const args = payload as { skillId: string; agentId: string };
+        return {
+          skillId: args.skillId,
+          agentId: args.agentId,
+          agentName: args.agentId === "workbuddy" ? "WorkBuddy" : args.agentId,
+          attachmentPath: `~/${args.agentId}/skills/${args.skillId}`,
+          canonicalPath: `~/.agents/skills/${args.skillId}`,
+          logPath: "~/Library/Application Support/com.sunven.skills-box/logs/preview.log",
+        };
+      }
+      case "add_extra_agent": {
+        const args = payload as {
+          agent: { id: string; displayName: string; skillsDir: string };
+        };
+        return { ...args.agent, builtin: false };
+      }
+      case "remove_extra_agent": {
+        const args = payload as { agentId: string };
+        return {
+          id: args.agentId,
+          displayName: "Acme Agent",
+          detached: ["agent-browser"],
+        };
+      }
       case "reveal_app_data":
       case "open_skill_folder":
       case "open_skill_file":
@@ -239,7 +264,10 @@ window.setTimeout(async () => {
     if (params.has("select") || params.has("selectMobile")) rows[0]!.click();
   }
   await pause(300);
-  if (params.has("file")) await driveContent();
+  if (params.has("file")) {
+    await selectDetailTab("内容");
+    await driveContent();
+  }
   if (params.get("tab") === "actions") await selectDetailTab("操作");
   if (params.has("scroll")) {
     const pane =
@@ -276,5 +304,17 @@ window.setTimeout(async () => {
           'button[aria-label^="断开 "]',
         );
     target?.click();
+  }
+  if (params.has("agents")) {
+    document
+      .querySelector<HTMLButtonElement>('button[aria-label="管理 agent"]')
+      ?.click();
+  }
+  if (params.has("attach")) {
+    await pause(350);
+    await selectDetailTab("操作");
+    document
+      .querySelector<HTMLButtonElement>('[data-testid="detail-attach"]')
+      ?.click();
   }
 }, 400);

@@ -18,7 +18,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
-use crate::agents::{DetectedAgent, DetectionContext, detect_agents};
+use crate::agents::extras::{self, AgentOrigin};
+use crate::agents::{
+    AgentDefinition, DetectedAgent, DetectionContext, detect_agents, detect_definitions,
+};
 use crate::baseline::{BaselineStore, LocalModification};
 use crate::env::capture_process_env;
 use crate::env::child_env::{ChildEnvParams, build_child_env};
@@ -105,6 +108,13 @@ pub struct InventoryAgent {
     /// store. Catalog `universal` alone is not enough (CLI over-reporting).
     pub shared: bool,
     pub global_skills_dir: Option<String>,
+    /// Where this agent is defined. `catalog` agents come from the vendored
+    /// CLI data; `builtin` and `user` agents are extra agents.
+    pub origin: AgentOrigin,
+    /// False only for extra agents whose detection path does not exist. They
+    /// are listed so a freshly added definition is visible, but they cannot be
+    /// installed to or attached.
+    pub detected: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -156,7 +166,8 @@ impl AgentDir {
 }
 
 /// Detect agents exactly like the environment report (same allowlisted env),
-/// then resolve their global directories for scanning.
+/// then resolve their global directories for scanning. Extra agents follow the
+/// same rules and are appended after the catalog order.
 pub fn detected_agent_dirs(paths: &AppPaths) -> Vec<AgentDir> {
     let parent = capture_process_env();
     let env = build_child_env(ChildEnvParams {
@@ -166,7 +177,14 @@ pub fn detected_agent_dirs(paths: &AppPaths) -> Vec<AgentDir> {
         parent: &parent,
     });
     let context = DetectionContext::new(paths.home(), paths.cli_cwd(), env);
-    detect_agents(&context)
+    let mut agents = detect_agents(&context);
+    let extra_definitions: Vec<AgentDefinition> = extras::load(paths)
+        .agents
+        .iter()
+        .map(extras::ExtraAgent::definition)
+        .collect();
+    agents.extend(detect_definitions(&context, &extra_definitions));
+    agents
         .iter()
         .filter_map(|agent| AgentDir::from_detected(agent, paths.home()))
         .collect()
@@ -306,22 +324,65 @@ pub fn read_with_agents(
         modified: modified_group,
     };
 
+    let extra_agents = extras::load(paths);
+    let mut agent_rows: Vec<InventoryAgent> = agents
+        .iter()
+        .map(|agent| InventoryAgent {
+            id: agent.id.clone(),
+            display_name: agent.display_name.clone(),
+            universal: agent.universal,
+            shared: same_dir(&agent.skills_dir, &catalog.canonical_dir),
+            global_skills_dir: Some(paths.display(&agent.skills_dir)),
+            origin: origin_of(&extra_agents, &agent.id),
+            detected: true,
+        })
+        .collect();
+    for extra in &extra_agents.agents {
+        if agents.iter().any(|agent| agent.id == extra.id) || extra_is_detected(paths, extra) {
+            continue;
+        }
+        agent_rows.push(InventoryAgent {
+            id: extra.id.clone(),
+            display_name: extra.display_name.clone(),
+            universal: false,
+            shared: false,
+            global_skills_dir: Some(extra.skills_dir.clone()),
+            origin: origin_of(&extra_agents, &extra.id),
+            detected: false,
+        });
+    }
+    let mut warnings = catalog.warnings;
+    warnings.extend(extra_agents.warnings);
+
     Ok(InventorySnapshot {
         skills,
-        agents: agents
-            .iter()
-            .map(|agent| InventoryAgent {
-                id: agent.id.clone(),
-                display_name: agent.display_name.clone(),
-                universal: agent.universal,
-                shared: same_dir(&agent.skills_dir, &catalog.canonical_dir),
-                global_skills_dir: Some(paths.display(&agent.skills_dir)),
-            })
-            .collect(),
+        agents: agent_rows,
         anomalies,
-        warnings: catalog.warnings,
+        warnings,
         generated_at_epoch_ms: epoch_ms(),
     })
+}
+
+fn origin_of(extra_agents: &extras::ExtraAgents, id: &str) -> AgentOrigin {
+    match extra_agents.agents.iter().find(|agent| agent.id == id) {
+        Some(agent) if agent.builtin => AgentOrigin::Builtin,
+        Some(_) => AgentOrigin::User,
+        None => AgentOrigin::Catalog,
+    }
+}
+
+fn extra_is_detected(paths: &AppPaths, extra: &extras::ExtraAgent) -> bool {
+    let Some(raw) = extra.definition().detect_paths.into_iter().next() else {
+        return false;
+    };
+    let path = if raw == "~" {
+        paths.home().to_path_buf()
+    } else if let Some(rest) = raw.strip_prefix("~/") {
+        paths.home().join(rest)
+    } else {
+        PathBuf::from(raw)
+    };
+    path.exists()
 }
 
 /// Resolve one inventory row to its real paths. Used by detail and open
@@ -922,7 +983,7 @@ mod tests {
         assert_eq!(gamma.local_modification, LocalModification::Unknown);
         assert_eq!(epsilon.local_modification, LocalModification::Unknown);
         assert_eq!(zeta.local_modification, LocalModification::Unknown);
-        assert_eq!(snapshot.agents.len(), 3);
+        assert_eq!(snapshot.agents.len(), 4);
         let codex = snapshot
             .agents
             .iter()
@@ -936,6 +997,19 @@ mod tests {
             .unwrap();
         assert!(gemini.universal);
         assert!(!gemini.shared, "universal flag alone must not imply shared");
+        // The builtin extra agent is listed even though its detection path
+        // does not exist under the fixture home.
+        let workbuddy = snapshot
+            .agents
+            .iter()
+            .find(|agent| agent.id == "workbuddy")
+            .unwrap();
+        assert!(!workbuddy.detected);
+        assert_eq!(workbuddy.origin, AgentOrigin::Builtin);
+        assert_eq!(
+            workbuddy.global_skills_dir.as_deref(),
+            Some("~/.workbuddy/skills")
+        );
     }
 
     #[test]
@@ -994,6 +1068,10 @@ mod tests {
             "managed link on a non-universal agent"
         );
         assert_eq!(json["agents"][2]["shared"], true);
+        assert_eq!(json["agents"][0]["origin"], "catalog");
+        assert_eq!(json["agents"][0]["detected"], true);
+        assert_eq!(json["agents"][3]["origin"], "builtin");
+        assert_eq!(json["agents"][3]["detected"], false);
         assert!(json["anomalies"]["stale"]["count"].is_number());
         assert!(json["generatedAtEpochMs"].is_number());
     }

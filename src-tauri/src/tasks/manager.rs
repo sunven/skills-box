@@ -631,6 +631,84 @@ impl TaskManager {
         .map_err(|error| AppError::agent_detach_failed(format!("断链任务失败：{error}")))?
     }
 
+    /// Serialized native attach (the inverse of detach). Takes the same
+    /// single-writer permit; no CLI process is spawned.
+    pub async fn attach_agent(
+        &self,
+        skill_id: String,
+        agent_id: String,
+    ) -> Result<crate::attach::AttachResult, AppError> {
+        self.ensure_not_shutting_down()?;
+        let permit = self.try_acquire_mutation()?;
+        let paths = self.inner.paths.clone();
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let agents = crate::inventory::detected_agent_dirs(&paths);
+            crate::attach::attach_agent(&paths, &agents, &skill_id, &agent_id)
+        })
+        .await
+        .map_err(|error| AppError::agent_attach_failed(format!("挂载任务失败：{error}")))?
+    }
+
+    /// Persist a user-defined extra agent. Serialized so an install never sees
+    /// a half-written configuration file.
+    pub async fn add_extra_agent(
+        &self,
+        entry: crate::agents::extras::UserExtraAgent,
+    ) -> Result<crate::agents::extras::ExtraAgent, AppError> {
+        self.ensure_not_shutting_down()?;
+        let permit = self.try_acquire_mutation()?;
+        let paths = self.inner.paths.clone();
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            crate::agents::extras::add_user_agent(&paths, &entry)
+        })
+        .await
+        .map_err(|error| AppError::extra_agent_config(format!("保存额外 agent 失败：{error}")))?
+    }
+
+    /// Detach every attached skill, then remove one user-defined extra agent.
+    /// A failed detach aborts before the definition is removed, so leftovers
+    /// never become invisible orphans.
+    pub async fn remove_extra_agent(
+        &self,
+        agent_id: String,
+    ) -> Result<crate::agents::extras::RemoveExtraAgentResult, AppError> {
+        self.ensure_not_shutting_down()?;
+        let permit = self.try_acquire_mutation()?;
+        let paths = self.inner.paths.clone();
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let extra = crate::agents::extras::find(&paths, &agent_id)
+                .ok_or_else(|| AppError::extra_agent_not_found(&agent_id))?;
+            if extra.builtin {
+                return Err(AppError::extra_agent_builtin(&extra.display_name));
+            }
+            let agents = crate::inventory::detected_agent_dirs(&paths);
+            let snapshot = crate::inventory::read_with_agents(&paths, &agents)?;
+            let mut detached = Vec::new();
+            for skill in &snapshot.skills {
+                let attached = skill
+                    .attachments
+                    .iter()
+                    .any(|attachment| attachment.agent_id == agent_id && attachment.detachable);
+                if !attached {
+                    continue;
+                }
+                let result = crate::detach::detach_agent(&paths, &agents, &skill.name, &agent_id)?;
+                detached.push(result.skill_id);
+            }
+            crate::agents::extras::remove_user_agent(&paths, &agent_id)?;
+            Ok(crate::agents::extras::RemoveExtraAgentResult {
+                id: agent_id,
+                display_name: extra.display_name,
+                detached,
+            })
+        })
+        .await
+        .map_err(|error| AppError::extra_agent_config(format!("删除额外 agent 失败：{error}")))?
+    }
+
     /// Plan and run a serialized update task. The selected ids are the
     /// frontend's update candidates; Rust independently re-checks management,
     /// canonical presence and lock source resolution. `skills update` and
@@ -1176,8 +1254,26 @@ impl TaskManager {
 
         let verification_paths = self.inner.paths.clone();
         let verification_plan = plan.clone();
+        let installed_names: Vec<String> = cli_results
+            .iter()
+            .filter(|result| result.status == install::CliSkillStatus::Installed)
+            .filter_map(|result| result.name.clone())
+            .collect();
         let verification = match tokio::task::spawn_blocking(move || {
-            verify_install(&verification_paths, &verification_plan, &cli_results)
+            let link_errors = install::ensure_extra_attachments(
+                &verification_paths,
+                &verification_plan,
+                &installed_names,
+            );
+            let mut verification =
+                verify_install(&verification_paths, &verification_plan, &cli_results);
+            for result in &mut verification.results {
+                if let Some(error) = link_errors.get(&result.name) {
+                    result.status = TaskSkillStatus::Failed;
+                    result.error = Some(error.clone());
+                }
+            }
+            verification
         })
         .await
         {
@@ -1821,8 +1917,16 @@ impl TaskManager {
 
         let verify_paths = paths.clone();
         let verify_plan = plan.clone();
+        let cli_succeeded = output.success();
         let verification = match tokio::task::spawn_blocking(move || {
-            uninstall_task::verify_uninstall(&verify_paths, &verify_plan)
+            let mut warnings = Vec::new();
+            if cli_succeeded {
+                uninstall_task::remove_extra_attachments(&verify_plan, &mut warnings);
+            }
+            let mut verification = uninstall_task::verify_uninstall(&verify_paths, &verify_plan);
+            warnings.append(&mut verification.warnings);
+            verification.warnings = warnings;
+            verification
         })
         .await
         {

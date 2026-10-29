@@ -170,6 +170,48 @@ pub struct UninstallVerification {
     pub warnings: Vec<AppError>,
 }
 
+/// The pinned CLI cannot see extra agents, so their links and copies survive
+/// `skills remove`. Remove them natively before verification; failures are
+/// warnings here and become a `verify.attachment_present` result afterwards.
+pub fn remove_extra_attachments(plan: &UninstallPlan, warnings: &mut Vec<AppError>) {
+    for attachment in &plan.attachments {
+        if crate::agents::is_catalog_agent(&attachment.agent_id) {
+            continue;
+        }
+        match attachment.mode {
+            AttachmentMode::Native | AttachmentMode::Broken => continue,
+            AttachmentMode::Link | AttachmentMode::Copy => {}
+        }
+        match fs::symlink_metadata(&attachment.path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => warnings.push(AppError::agent_detach_failed(format!(
+                "无法读取 {}：{error}",
+                attachment.path.display()
+            ))),
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                if let Err(error) = fs::remove_file(&attachment.path) {
+                    warnings.push(AppError::agent_detach_failed(format!(
+                        "无法删除符号链接 {}：{error}",
+                        attachment.path.display()
+                    )));
+                }
+            }
+            Ok(metadata) if metadata.is_dir() => {
+                if let Err(error) = fs::remove_dir_all(&attachment.path) {
+                    warnings.push(AppError::agent_detach_failed(format!(
+                        "无法删除 copy 目录 {}：{error}",
+                        attachment.path.display()
+                    )));
+                }
+            }
+            Ok(_) => warnings.push(AppError::agent_detach_failed(format!(
+                "目标既不是符号链接也不是目录：{}",
+                attachment.path.display()
+            ))),
+        }
+    }
+}
+
 /// Verify the filesystem and lock after `skills remove` exits. The CLI has no
 /// JSON output and exits 0 on partial or empty removals, so this is the only
 /// proof of success.

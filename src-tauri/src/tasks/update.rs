@@ -26,7 +26,7 @@ use crate::process::{CommandSpec, ExecOutput};
 
 use super::install::{
     INSTALL_TIMEOUT, InstallOutput, InstallPlan, InstallTarget, UNIVERSAL_AGENT_ID,
-    install_command, parse_install_output, verify_install,
+    ensure_extra_attachments, install_command, parse_install_output, verify_install,
 };
 use super::manager::{TaskSkillResult, TaskSkillStatus};
 use super::source::validate_source;
@@ -196,7 +196,11 @@ pub fn plan_updates(
 
         let mut targets: Vec<InstallTarget> = targets.into_values().collect();
         targets.sort_by(|left, right| left.id.cmp(&right.id));
-        let mut agent_ids: Vec<String> = targets.iter().map(|target| target.id.clone()).collect();
+        let mut agent_ids: Vec<String> = targets
+            .iter()
+            .filter(|target| crate::agents::is_catalog_agent(&target.id))
+            .map(|target| target.id.clone())
+            .collect();
         agent_ids.push(UNIVERSAL_AGENT_ID.to_string());
 
         let assessment = baseline_store.assess(
@@ -381,16 +385,25 @@ pub fn verify_update(
     }
 
     let plan = item.install_plan();
+    // Extra-agent links point at the canonical folder path, which survives the
+    // CLI rewrite, so this is normally a no-op; it still restores a link that
+    // vanished and reports a precise error when the path is occupied.
+    let link_error =
+        ensure_extra_attachments(paths, &plan, std::slice::from_ref(&item.name)).remove(&item.name);
     let verification = verify_install(paths, &plan, &cli_results);
-    let result = match verification.results.first() {
-        Some(result) if result.status == TaskSkillStatus::Installed => Ok(()),
-        Some(result) => Err(result.error.clone().unwrap_or_else(|| {
-            AppError::verify_failed(format!("更新后校验「{}」失败。", item.name))
-        })),
-        None => Err(AppError::verify_failed(format!(
-            "更新后未生成 skill「{}」的校验结果。",
-            item.name
-        ))),
+    let result = if let Some(error) = link_error {
+        Err(error)
+    } else {
+        match verification.results.first() {
+            Some(result) if result.status == TaskSkillStatus::Installed => Ok(()),
+            Some(result) => Err(result.error.clone().unwrap_or_else(|| {
+                AppError::verify_failed(format!("更新后校验「{}」失败。", item.name))
+            })),
+            None => Err(AppError::verify_failed(format!(
+                "更新后未生成 skill「{}」的校验结果。",
+                item.name
+            ))),
+        }
     };
     UpdateVerification {
         result,

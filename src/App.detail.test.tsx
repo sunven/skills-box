@@ -243,16 +243,19 @@ describe("skill detail drawer", () => {
       "断链：Gemini CLI",
     );
 
-    expect(tab("内容")).toHaveAttribute("aria-selected", "true");
-    expect(tab("操作")).toHaveAttribute("aria-selected", "false");
+    expect(tab("操作")).toHaveAttribute("aria-selected", "true");
+    expect(tab("内容")).toHaveAttribute("aria-selected", "false");
 
     // Arrow keys move between the tabs and take focus with them.
-    fireEvent.keyDown(tab("内容"), { key: "ArrowRight" });
-    expect(tab("操作")).toHaveAttribute("aria-selected", "true");
-    expect(document.activeElement).toBe(tab("操作"));
-    fireEvent.keyDown(tab("操作"), { key: "ArrowLeft" });
+    fireEvent.keyDown(tab("操作"), { key: "ArrowRight" });
     expect(tab("内容")).toHaveAttribute("aria-selected", "true");
     expect(document.activeElement).toBe(tab("内容"));
+    fireEvent.keyDown(tab("内容"), { key: "ArrowLeft" });
+    expect(tab("操作")).toHaveAttribute("aria-selected", "true");
+    expect(document.activeElement).toBe(tab("操作"));
+
+    fireEvent.click(tab("内容"));
+    expect(tab("内容")).toHaveAttribute("aria-selected", "true");
 
     // Root tree lists directories first and auto-selects SKILL.md.
     const rootRows = pane
@@ -345,6 +348,7 @@ describe("skill detail drawer", () => {
     mockCommands({});
     renderApp();
     await selectAlpha();
+    fireEvent.click(tab("内容"));
     const pane = detailPane();
 
     fireEvent.click(treeRow("references"));
@@ -426,6 +430,7 @@ describe("skill detail drawer", () => {
     });
     renderApp();
     await selectAlpha();
+    fireEvent.click(tab("内容"));
 
     const pane = detailPane();
     const rendered = pane.getByTestId("skill-markdown-rendered");
@@ -621,7 +626,12 @@ describe("skill detail drawer", () => {
         "SKILL.md",
       ),
     );
+    expect(tab("操作")).toHaveAttribute("aria-selected", "true");
+    fireEvent.click(tab("内容"));
     expect(tab("内容")).toHaveAttribute("aria-selected", "true");
+    expect(pane.getByTestId("content-preview-path")).toHaveTextContent(
+      "SKILL.md",
+    );
     expect(
       pane
         .getAllByTestId("tree-row")
@@ -636,6 +646,7 @@ describe("skill detail drawer", () => {
     const calls = mockCommands({});
     renderApp();
     await selectAlpha();
+    fireEvent.click(tab("内容"));
     const pane = detailPane();
 
     const finder = toolbar().getByRole("button", {
@@ -709,6 +720,7 @@ describe("skill detail drawer", () => {
     });
     renderApp();
     await selectAlpha();
+    fireEvent.click(tab("内容"));
     const pane = detailPane();
 
     fireEvent.click(
@@ -731,6 +743,7 @@ describe("skill detail drawer", () => {
     const calls = mockCommands({});
     renderApp();
     await selectAlpha();
+    fireEvent.click(tab("内容"));
     const count = (command: string) =>
       calls.filter((call) => call.command === command).length;
     const initialList = count("list_skill_dir");
@@ -759,6 +772,7 @@ describe("skill detail drawer", () => {
     });
     renderApp();
     await selectAlpha();
+    fireEvent.click(tab("内容"));
     const pane = detailPane();
 
     expect(pane.getByTestId("skill-markdown-rendered")).toBeInTheDocument();
@@ -833,6 +847,7 @@ describe("skill detail drawer", () => {
     mockCommands({});
     renderApp();
     const selectedRow = await selectAlpha();
+    fireEvent.click(tab("内容"));
     const closeButton = screen.getByRole("button", { name: "关闭详情" });
     expect(document.activeElement).toBe(closeButton);
 

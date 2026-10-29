@@ -8,6 +8,7 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import {
   ArrowUpCircle,
+  Link2,
   Loader2,
   RefreshCw,
   Trash2,
@@ -16,6 +17,7 @@ import {
 } from "lucide-react";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
+import { AttachDialog } from "./attach-dialog";
 import { DetachDialog, type DetachDialogError } from "./detach-dialog";
 import { SkillContentTab } from "./skill-content-tab";
 import { asAppError, detachAgent } from "../lib/api";
@@ -24,6 +26,7 @@ import { agentLogoUrl } from "../lib/agent-logos";
 import type {
   AgentAttachment,
   DetachResult,
+  InventoryAgent,
   SkillDetail,
   UpdateSkillResult,
 } from "../lib/types";
@@ -48,6 +51,7 @@ import { cn } from "../lib/utils";
 interface DetailPaneProps {
   skill: UpdateViewSkill;
   updateResult?: UpdateSkillResult | null;
+  agents?: InventoryAgent[];
   checkingUpdates?: boolean;
   onCheckUpdates?: (skillIds: string[]) => void;
   onUpdate?: (skillName: string) => void;
@@ -246,6 +250,7 @@ function AgentAttachmentRow({
 export function DetailPane({
   skill,
   updateResult,
+  agents = [],
   checkingUpdates = false,
   onCheckUpdates,
   onUpdate,
@@ -256,11 +261,12 @@ export function DetailPane({
   const query = useSkillDetailQuery(skillId);
   const queryClient = useQueryClient();
   const detail = query.data ?? null;
-  const [tab, setTab] = useState<DetailTab>("content");
+  const [tab, setTab] = useState<DetailTab>("actions");
   const [detachTarget, setDetachTarget] = useState<AgentAttachment | null>(null);
   const [detachPending, setDetachPending] = useState(false);
   const [detachError, setDetachError] = useState<DetachDialogError | null>(null);
   const [detachNotice, setDetachNotice] = useState<DetachResult | null>(null);
+  const [attachOpen, setAttachOpen] = useState(false);
   const closeRef = useRef<HTMLButtonElement>(null);
   const detailError = asAppError(query.error);
 
@@ -283,11 +289,12 @@ export function DetailPane({
   }, [onClose]);
 
   useEffect(() => {
-    setTab("content");
+    setTab("actions");
     setDetachTarget(null);
     setDetachPending(false);
     setDetachError(null);
     setDetachNotice(null);
+    setAttachOpen(false);
   }, [skillId]);
 
   const current = detail ?? skill;
@@ -302,6 +309,13 @@ export function DetailPane({
     attachments,
   });
   const unattached = attachments.length === 0 && management !== "unmanaged";
+  const attachableAgents = agents.filter(
+    (agent) =>
+      agent.detected &&
+      !agent.universal &&
+      !agent.shared &&
+      !attachments.some((attachment) => attachment.agentId === agent.id),
+  );
   const localWarning = hasLocalModificationWarning({
     ...skill,
     management,
@@ -313,6 +327,15 @@ export function DetailPane({
   const openDetach = (attachment: AgentAttachment) => {
     setDetachError(null);
     setDetachTarget(attachment);
+  };
+
+  const refreshAfterMutation = () => {
+    // A failed attempt may still have changed the disk; always re-read the
+    // detail and inventory so the UI never shows an assumed state.
+    void queryClient.invalidateQueries({ queryKey: ["skill", skill.name] });
+    void queryClient.invalidateQueries({ queryKey: ["inventory"] });
+    void queryClient.invalidateQueries({ queryKey: ["skill-dir", skill.name] });
+    void queryClient.invalidateQueries({ queryKey: ["skill-file", skill.name] });
   };
 
   const confirmDetach = async () => {
@@ -329,12 +352,7 @@ export function DetailPane({
       );
     } finally {
       setDetachPending(false);
-      // A failed attempt may still have changed the disk; always re-read the
-      // detail and inventory so the UI never shows an assumed state.
-      void queryClient.invalidateQueries({ queryKey: ["skill", skill.name] });
-      void queryClient.invalidateQueries({ queryKey: ["inventory"] });
-      void queryClient.invalidateQueries({ queryKey: ["skill-dir", skill.name] });
-      void queryClient.invalidateQueries({ queryKey: ["skill-file", skill.name] });
+      refreshAfterMutation();
     }
   };
 
@@ -531,19 +549,6 @@ export function DetailPane({
           <button
             type="button"
             role="tab"
-            id="detail-tab-content"
-            aria-controls="detail-panel-content"
-            aria-selected={tab === "content"}
-            tabIndex={tab === "content" ? 0 : -1}
-            className="detail-tab"
-            data-selected={tab === "content" ? "true" : "false"}
-            onClick={() => setTab("content")}
-          >
-            内容
-          </button>
-          <button
-            type="button"
-            role="tab"
             id="detail-tab-actions"
             aria-controls="detail-panel-actions"
             aria-selected={tab === "actions"}
@@ -553,6 +558,19 @@ export function DetailPane({
             onClick={() => setTab("actions")}
           >
             操作
+          </button>
+          <button
+            type="button"
+            role="tab"
+            id="detail-tab-content"
+            aria-controls="detail-panel-content"
+            aria-selected={tab === "content"}
+            tabIndex={tab === "content" ? 0 : -1}
+            className="detail-tab"
+            data-selected={tab === "content" ? "true" : "false"}
+            onClick={() => setTab("content")}
+          >
+            内容
           </button>
         </div>
 
@@ -604,10 +622,30 @@ export function DetailPane({
             ) : null}
 
             <section className="detail-section">
-              <h4 className="detail-section-title">
-                Agent 挂载{" "}
-                <span className="count">{attachments.length} 个</span>
-              </h4>
+              <div className="flex items-center justify-between gap-2">
+                <h4 className="detail-section-title">
+                  Agent 挂载{" "}
+                  <span className="count">{attachments.length} 个</span>
+                </h4>
+                {management === "managed" ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 shrink-0 px-2 text-[12px]"
+                    data-testid="detail-attach"
+                    disabled={attachableAgents.length === 0}
+                    title={
+                      attachableAgents.length === 0
+                        ? "没有可挂载的 agent（需已检测、未挂载且不共享 canonical）"
+                        : "为这个 skill 追加一个 agent 挂载"
+                    }
+                    onClick={() => setAttachOpen(true)}
+                  >
+                    <Link2 aria-hidden="true" />
+                    挂载到…
+                  </Button>
+                ) : null}
+              </div>
               {attachments.length === 0 ? (
                 <p className="notice mt-2.5">
                   未挂载任何 agent。共享副本仍保留，可在安装向导中重新挂载。
@@ -854,6 +892,14 @@ export function DetailPane({
             setDetachError(null);
           }}
           onConfirm={() => void confirmDetach()}
+        />
+        <AttachDialog
+          open={attachOpen}
+          skillName={skill.name}
+          agents={agents}
+          attachments={attachments}
+          onClose={() => setAttachOpen(false)}
+          onChanged={refreshAfterMutation}
         />
       </aside>
     </>

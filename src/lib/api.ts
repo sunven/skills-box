@@ -2,11 +2,15 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   ActiveMutationInfo,
   AppDataKind,
+  AttachResult,
   CancelAck,
   DetachResult,
   EnvReport,
+  ExtraAgent,
+  ExtraAgentInput,
   InstallRequest,
   InventorySnapshot,
+  RemoveExtraAgentResult,
   SkillDetail,
   SkillDirListing,
   SkillFileContent,
@@ -162,6 +166,30 @@ export function detachAgent(
   agentId: string,
 ): Promise<DetachResult> {
   return invoke<DetachResult>("detach_agent", { skillId, agentId });
+}
+
+/**
+ * Attach one more agent to an already-installed managed skill. Rust re-checks
+ * the managed/canonical condition, rejects universal/broken/occupied targets
+ * and creates a symlink into the agent's skills directory. No CLI is spawned.
+ */
+export function attachAgent(
+  skillId: string,
+  agentId: string,
+): Promise<AttachResult> {
+  return invoke<AttachResult>("attach_agent", { skillId, agentId });
+}
+
+/** Persist a user-defined extra agent in the app-data `agents.json`. */
+export function addExtraAgent(agent: ExtraAgentInput): Promise<ExtraAgent> {
+  return invoke<ExtraAgent>("add_extra_agent", { agent });
+}
+
+/** Detach its skills first, then remove one user-defined extra agent. */
+export function removeExtraAgent(
+  agentId: string,
+): Promise<RemoveExtraAgentResult> {
+  return invoke<RemoveExtraAgentResult>("remove_extra_agent", { agentId });
 }
 
 /**

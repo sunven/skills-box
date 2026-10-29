@@ -156,13 +156,23 @@ impl EnvResolver {
         let detection_env = self.base_child_env(None, None);
         let detection =
             DetectionContext::new(self.paths.home(), self.paths.cli_cwd(), detection_env);
-        let agents = detect_agents(&detection);
+        let extra_agents = crate::agents::extras::load(&self.paths);
+        let extra_definitions: Vec<crate::agents::AgentDefinition> = extra_agents
+            .agents
+            .iter()
+            .map(crate::agents::extras::ExtraAgent::definition)
+            .collect();
+        let mut agents = detect_agents(&detection);
+        agents.extend(crate::agents::detect_definitions(
+            &detection,
+            &extra_definitions,
+        ));
         let lock = lock_health::inspect(&self.paths);
 
         let override_mode = self.config.node_override.is_some();
         let static_candidates = self.static_node_candidates();
         let mut node_result = self.search_nodes(static_candidates.clone()).await;
-        let mut warnings = Vec::new();
+        let mut warnings = extra_agents.warnings;
         let mut login_dirs: Vec<PathBuf> = Vec::new();
 
         if !override_mode && node_result.npx.is_none() {

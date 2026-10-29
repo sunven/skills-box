@@ -1,5 +1,6 @@
 import type {
   AgentAttachment,
+  AgentOrigin,
   InventoryAgent,
   InventorySkill,
   UpdateState,
@@ -36,6 +37,8 @@ export interface AgentOption {
   universal: boolean;
   shared: boolean;
   count: number;
+  origin: AgentOrigin;
+  detected: boolean;
 }
 
 export type StatusCounts = Record<StatusFilter, number>;
@@ -248,6 +251,8 @@ export function computeAgentOptions(
     universal: agent.universal,
     shared: agent.shared,
     count: counts.get(agent.id) ?? 0,
+    origin: agent.origin,
+    detected: agent.detected,
   }));
 
   // Be defensive: an attachment whose agent is missing from the snapshot is
@@ -263,6 +268,8 @@ export function computeAgentOptions(
         universal: false,
         shared: false,
         count: counts.get(attachment.agentId) ?? 0,
+        origin: "catalog",
+        detected: true,
       });
     }
   }

@@ -9,6 +9,7 @@ import { FilterSidebar } from "./components/filter-sidebar";
 import { InstallWizard } from "./components/install-wizard";
 import { InterruptedBanner } from "./components/interrupted-banner";
 import { LockErrorScreen } from "./components/lock-error-screen";
+import { ManageAgentsDialog } from "./components/manage-agents-dialog";
 import { SkillListPane } from "./components/skill-list-pane";
 import { UninstallDialog } from "./components/uninstall-dialog";
 import { UpdateDialog } from "./components/update-dialog";
@@ -104,6 +105,7 @@ function App() {
   const [detailOpen, setDetailOpen] = useState(false);
   const [anomaliesOpen, setAnomaliesOpen] = useState(false);
   const [installOpen, setInstallOpen] = useState(false);
+  const [manageAgentsOpen, setManageAgentsOpen] = useState(false);
   const [updateMode, setUpdateMode] = useState<"single" | "all" | null>(null);
   const [updateSkillName, setUpdateSkillName] = useState<string | null>(null);
   // Keep the uninstall target stable across the inventory refresh that follows
@@ -345,6 +347,7 @@ function App() {
                 rechecking={recheck.isPending}
                 onRecheck={handleRecheck}
                 onClose={() => setFiltersOpen(false)}
+                onManageAgents={() => setManageAgentsOpen(true)}
               />
             </div>
             <SkillListPane
@@ -369,6 +372,7 @@ function App() {
               <DetailPane
                 skill={selectedSkill}
                 updateResult={selectedSkill.updateResult}
+                agents={snapshot?.agents ?? []}
                 checkingUpdates={checkUpdates.isPending}
                 onCheckUpdates={handleCheckUpdates}
                 onClose={handleCloseDetail}
@@ -411,6 +415,14 @@ function App() {
         open={uninstallSkill !== null}
         skill={uninstallSkill}
         onClose={() => setUninstallSkill(null)}
+      />
+      <ManageAgentsDialog
+        open={manageAgentsOpen}
+        agents={snapshot?.agents ?? []}
+        skills={skills}
+        warnings={snapshot?.warnings ?? []}
+        onClose={() => setManageAgentsOpen(false)}
+        onChanged={handleRecheck}
       />
       <InstallWizard
         open={installOpen}

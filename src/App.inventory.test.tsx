@@ -146,6 +146,8 @@ describe("inventory list", () => {
       universal: false,
       shared: false,
       globalSkillsDir: `~/.agent-${index}/skills`,
+      origin: "catalog" as const,
+      detected: true,
     }));
     const skill = makeSkill({
       name: "many-mounts",

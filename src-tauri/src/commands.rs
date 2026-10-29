@@ -11,6 +11,8 @@ use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::AppState;
+use crate::agents::extras::{ExtraAgent, RemoveExtraAgentResult, UserExtraAgent};
+use crate::attach::AttachResult;
 use crate::content::{self, SkillDirListing, SkillFileContent};
 use crate::detach::DetachResult;
 use crate::detail::{self, SkillDetail};
@@ -316,6 +318,35 @@ pub async fn detach_agent(
     agent_id: String,
 ) -> Result<DetachResult, AppError> {
     state.tasks.detach_agent(skill_id, agent_id).await
+}
+
+/// Native attach: add one agent attachment to an already-installed managed
+/// skill. Serialized with install/update/uninstall/detach; no CLI is spawned.
+#[tauri::command]
+pub async fn attach_agent(
+    state: State<'_, AppState>,
+    skill_id: String,
+    agent_id: String,
+) -> Result<AttachResult, AppError> {
+    state.tasks.attach_agent(skill_id, agent_id).await
+}
+
+/// Persist a user-defined extra agent in the app-data `agents.json`.
+#[tauri::command]
+pub async fn add_extra_agent(
+    state: State<'_, AppState>,
+    agent: UserExtraAgent,
+) -> Result<ExtraAgent, AppError> {
+    state.tasks.add_extra_agent(agent).await
+}
+
+/// Remove a user-defined extra agent, detaching its skills first.
+#[tauri::command]
+pub async fn remove_extra_agent(
+    state: State<'_, AppState>,
+    agent_id: String,
+) -> Result<RemoveExtraAgentResult, AppError> {
+    state.tasks.remove_extra_agent(agent_id).await
 }
 
 /// Serialized destructive uninstall. Only managed and copy-only skills are

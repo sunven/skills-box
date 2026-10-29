@@ -105,6 +105,7 @@ export type UpdateState =
   | "path_missing";
 export type AttachmentMode = "link" | "copy" | "native" | "broken";
 export type LocalModification = "clean" | "modified" | "unknown";
+export type AgentOrigin = "catalog" | "builtin" | "user";
 
 export type TaskPhase =
   | "preparing"
@@ -240,6 +241,37 @@ export interface InventoryAgent {
   universal: boolean;
   shared: boolean;
   globalSkillsDir: string | null;
+  /** `catalog` agents come from the vendored CLI data; the rest are extras. */
+  origin: AgentOrigin;
+  /** False only for extra agents whose detection path does not exist. */
+  detected: boolean;
+}
+
+/** Result of a native attach to one agent. */
+export interface AttachResult {
+  skillId: string;
+  agentId: string;
+  agentName: string;
+  attachmentPath: string;
+  canonicalPath: string;
+  logPath: string;
+}
+
+export interface ExtraAgentInput {
+  id: string;
+  displayName: string;
+  skillsDir: string;
+}
+
+export interface ExtraAgent extends ExtraAgentInput {
+  builtin: boolean;
+}
+
+export interface RemoveExtraAgentResult {
+  id: string;
+  displayName: string;
+  /** Skill ids detached before the definition was removed. */
+  detached: string[];
 }
 
 export interface AnomalyGroup {

@@ -84,6 +84,11 @@ impl AppPaths {
         self.app_data.join("update-check.json")
     }
 
+    /// User-defined extra agents. Editable by hand; the UI writes the same file.
+    pub fn agents_config_path(&self) -> PathBuf {
+        self.app_data.join("agents.json")
+    }
+
     pub fn baselines_dir(&self) -> PathBuf {
         self.app_data.join("baselines")
     }

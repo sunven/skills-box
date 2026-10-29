@@ -27,6 +27,8 @@ const agents: InventoryAgent[] = [
     universal: false,
     shared: false,
     globalSkillsDir: "~/.claude/skills",
+    origin: "catalog",
+    detected: true,
   },
   {
     id: "codex",
@@ -34,6 +36,8 @@ const agents: InventoryAgent[] = [
     universal: true,
     shared: true,
     globalSkillsDir: "~/.agents/skills",
+    origin: "catalog",
+    detected: true,
   },
   {
     id: "gemini-cli",
@@ -41,6 +45,8 @@ const agents: InventoryAgent[] = [
     universal: true,
     shared: false,
     globalSkillsDir: "~/.gemini/skills",
+    origin: "catalog",
+    detected: true,
   },
   {
     id: "qoder",
@@ -48,6 +54,26 @@ const agents: InventoryAgent[] = [
     universal: false,
     shared: false,
     globalSkillsDir: "~/.qoder/skills",
+    origin: "catalog",
+    detected: true,
+  },
+  {
+    id: "workbuddy",
+    displayName: "WorkBuddy",
+    universal: false,
+    shared: false,
+    globalSkillsDir: "~/.workbuddy/skills",
+    origin: "builtin",
+    detected: true,
+  },
+  {
+    id: "acme",
+    displayName: "Acme Agent",
+    universal: false,
+    shared: false,
+    globalSkillsDir: "~/.acme/skills",
+    origin: "user",
+    detected: false,
   },
 ];
 
@@ -56,6 +82,8 @@ const agentNames: Record<string, string> = {
   codex: "Codex",
   "gemini-cli": "Gemini CLI",
   qoder: "Qoder",
+  workbuddy: "WorkBuddy",
+  acme: "Acme Agent",
 };
 
 function attach(

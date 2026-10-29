@@ -163,7 +163,7 @@ fn validate_agents(
     raw: &[String],
 ) -> Result<(Vec<String>, Vec<InstallTarget>), AppError> {
     let mut seen = HashSet::new();
-    let mut ids = Vec::new();
+    let mut order = Vec::new();
     for value in raw {
         let id = value.trim();
         let invalid = id.is_empty()
@@ -181,22 +181,25 @@ fn validate_agents(
         if id == UNIVERSAL_AGENT_ID {
             continue;
         }
-        let definition = catalog()
+        if let Some(definition) = catalog()
             .agents
             .iter()
             .find(|definition| definition.id == id)
-            .ok_or_else(|| AppError::agent_invalid(format!("未知 agent：{id}")))?;
-        if definition.global_skills_dir.is_none() {
-            return Err(AppError::agent_unsupported_global(&definition.display_name));
+        {
+            if definition.global_skills_dir.is_none() {
+                return Err(AppError::agent_unsupported_global(&definition.display_name));
+            }
+        } else if crate::agents::extras::find(paths, id).is_none() {
+            return Err(AppError::agent_invalid(format!("未知 agent：{id}")));
         }
-        if seen.insert(definition.id.clone()) {
-            ids.push(definition.id.clone());
+        if seen.insert(id.to_string()) {
+            order.push(id.to_string());
         }
     }
 
     let detected = crate::inventory::detected_agent_dirs(paths);
     let mut targets = Vec::new();
-    for id in ids {
+    for id in order {
         let target = detected
             .iter()
             .find(|agent| agent.id == id)
@@ -205,9 +208,12 @@ fn validate_agents(
                     .agents
                     .iter()
                     .find(|definition| definition.id == id)
-                    .map(|definition| definition.display_name.as_str())
-                    .unwrap_or(id.as_str());
-                AppError::agent_not_detected(display_name)
+                    .map(|definition| definition.display_name.clone())
+                    .or_else(|| {
+                        crate::agents::extras::find(paths, &id).map(|extra| extra.display_name)
+                    })
+                    .unwrap_or_else(|| id.clone());
+                AppError::agent_not_detected(&display_name)
             })?;
         targets.push(InstallTarget {
             id: target.id.clone(),
@@ -217,8 +223,11 @@ fn validate_agents(
         });
     }
 
+    // Extra agents are linked natively after the CLI runs, so they never
+    // appear in the CLI argument list.
     let agent_ids = targets
         .iter()
+        .filter(|target| crate::agents::is_catalog_agent(&target.id))
         .map(|target| target.id.clone())
         .chain(std::iter::once(UNIVERSAL_AGENT_ID.to_string()))
         .collect();
@@ -239,11 +248,15 @@ pub fn resolve_agent_dirs(paths: &AppPaths, ids: &[String]) -> Vec<AgentDir> {
     let context = DetectionContext::new(paths.home(), paths.cli_cwd(), env);
     ids.iter()
         .filter_map(|id| {
-            let definition = catalog()
+            let definition = match catalog()
                 .agents
                 .iter()
-                .find(|definition| &definition.id == id)?;
-            let skills_dir = resolve_global_skills_dir(definition, &context)?;
+                .find(|definition| &definition.id == id)
+            {
+                Some(definition) => definition.clone(),
+                None => crate::agents::extras::find(paths, id)?.definition(),
+            };
+            let skills_dir = resolve_global_skills_dir(&definition, &context)?;
             Some(AgentDir {
                 id: definition.id.clone(),
                 display_name: definition.display_name.clone(),
@@ -252,6 +265,105 @@ pub fn resolve_agent_dirs(paths: &AppPaths, ids: &[String]) -> Vec<AgentDir> {
             })
         })
         .collect()
+}
+
+/// Create the symlinks the pinned CLI cannot create. Extra agents are never in
+/// `agent_ids`, so after `skills add` lands the canonical folder skills-box
+/// links them itself. Idempotent: an existing symlink to the canonical folder
+/// is left untouched, and nothing is ever overwritten.
+pub fn ensure_extra_attachments(
+    paths: &AppPaths,
+    plan: &InstallPlan,
+    installed: &[String],
+) -> HashMap<String, AppError> {
+    let canonical_root = paths.canonical_skills_dir();
+    let mut errors = HashMap::new();
+    for name in installed {
+        let canonical = canonical_root.join(name);
+        if !fs::metadata(&canonical)
+            .map(|metadata| metadata.is_dir())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        for target in plan
+            .targets
+            .iter()
+            .filter(|target| !target.universal && !crate::agents::is_catalog_agent(&target.id))
+        {
+            if let Err(error) = ensure_extra_link(&canonical, &target.skills_dir, name) {
+                errors.entry(name.clone()).or_insert(error);
+            }
+        }
+    }
+    errors
+}
+
+fn ensure_extra_link(
+    canonical: &std::path::Path,
+    skills_dir: &std::path::Path,
+    name: &str,
+) -> Result<(), AppError> {
+    match fs::symlink_metadata(skills_dir) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(AppError::agent_attach_failed(format!(
+                "额外 agent 的 skills 目录本身是符号链接：{}",
+                skills_dir.display()
+            )));
+        }
+        Ok(metadata) if !metadata.is_dir() => {
+            return Err(AppError::agent_attach_failed(format!(
+                "额外 agent 的 skills 路径不是目录：{}",
+                skills_dir.display()
+            )));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir_all(skills_dir).map_err(|error| {
+                AppError::agent_attach_failed(format!("无法创建 {}：{error}", skills_dir.display()))
+            })?;
+        }
+        Err(error) => {
+            return Err(AppError::agent_attach_failed(format!(
+                "无法检查 {}：{error}",
+                skills_dir.display()
+            )));
+        }
+    }
+
+    let attachment = skills_dir.join(name);
+    match fs::symlink_metadata(&attachment) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            let expected = fs::canonicalize(canonical).unwrap_or_else(|_| canonical.to_path_buf());
+            match fs::canonicalize(&attachment) {
+                Ok(resolved) if resolved == expected => Ok(()),
+                Ok(resolved) => Err(AppError::agent_attach_failed(format!(
+                    "{} 已存在且指向 {}，已停止（不覆盖现有内容）。",
+                    attachment.display(),
+                    resolved.display()
+                ))),
+                Err(error) => Err(AppError::agent_attach_failed(format!(
+                    "{} 是断链，已停止（不覆盖现有内容）：{error}",
+                    attachment.display()
+                ))),
+            }
+        }
+        Ok(_) => Err(AppError::agent_attach_failed(format!(
+            "{} 已存在且不是符号链接，已停止（不覆盖现有内容）。",
+            attachment.display()
+        ))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound =>
+        {
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(canonical, &attachment).map_err(|error| {
+                AppError::agent_attach_failed(format!("无法创建 {}：{error}", attachment.display()))
+            })
+        }
+        Err(error) => Err(AppError::agent_attach_failed(format!(
+            "无法检查 {}：{error}",
+            attachment.display()
+        ))),
+    }
 }
 
 /// Reject same-name managed/copy-only/unmanaged skills before spawning. The
@@ -1083,6 +1195,96 @@ mod tests {
         assert_eq!(
             result.results[0].error.as_ref().unwrap().code,
             codes::VERIFY_LOCK_MISMATCH
+        );
+    }
+
+    #[test]
+    fn validation_accepts_detected_extra_agents_without_cli_args() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let workbook = home.join(".workbuddy");
+        fs::create_dir_all(workbook.join("skills")).unwrap();
+        let paths = AppPaths::new(&home, tmp.path().join("app-data"));
+
+        let plan =
+            validate_request(&paths, &request("acme/skills", &["alpha"], &["workbuddy"])).unwrap();
+        assert_eq!(plan.agent_ids, vec![UNIVERSAL_AGENT_ID.to_string()]);
+        assert_eq!(plan.targets.len(), 1);
+        assert_eq!(plan.targets[0].id, "workbuddy");
+        assert_eq!(plan.targets[0].skills_dir, workbook.join("skills"));
+
+        let spec = install_command(&runtime(), &plan, Duration::from_secs(900));
+        assert!(
+            !spec.args.iter().any(|arg| arg == "workbuddy"),
+            "extra agents must never reach the CLI"
+        );
+
+        fs::remove_dir_all(home.join(".workbuddy")).unwrap();
+        let error = validate_request(&paths, &request("acme/skills", &["alpha"], &["workbuddy"]))
+            .unwrap_err();
+        assert_eq!(error.code, codes::AGENT_NOT_DETECTED);
+    }
+
+    #[test]
+    fn extra_attachments_are_linked_natively_and_never_overwritten() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let workbook = home.join(".workbuddy/skills");
+        fs::create_dir_all(&workbook).unwrap();
+        let paths = AppPaths::new(&home, tmp.path().join("app-data"));
+        install_state(&paths, "find-skills", None, false);
+
+        let plan = InstallPlan {
+            source: "acme/skills".to_string(),
+            skills: vec!["find-skills".to_string()],
+            agent_ids: vec![UNIVERSAL_AGENT_ID.to_string()],
+            targets: vec![InstallTarget {
+                id: "workbuddy".to_string(),
+                display_name: "WorkBuddy".to_string(),
+                universal: false,
+                skills_dir: workbook.clone(),
+            }],
+            retry: false,
+        };
+
+        let errors = ensure_extra_attachments(&paths, &plan, &["find-skills".to_string()]);
+        assert!(errors.is_empty(), "{errors:?}");
+        let link = workbook.join("find-skills");
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            fs::canonicalize(&link).unwrap(),
+            fs::canonicalize(paths.canonical_skills_dir().join("find-skills")).unwrap()
+        );
+
+        // Idempotent on the second run.
+        assert!(ensure_extra_attachments(&paths, &plan, &["find-skills".to_string()]).is_empty());
+
+        // A foreign directory at the same name is reported, not overwritten.
+        let foreign = paths.canonical_skills_dir().join("other");
+        fs::create_dir_all(&foreign).unwrap();
+        fs::create_dir_all(workbook.join("other")).unwrap();
+        let other_plan = InstallPlan {
+            source: "acme/skills".to_string(),
+            skills: vec!["other".to_string()],
+            agent_ids: vec![UNIVERSAL_AGENT_ID.to_string()],
+            targets: vec![InstallTarget {
+                id: "workbuddy".to_string(),
+                display_name: "WorkBuddy".to_string(),
+                universal: false,
+                skills_dir: workbook.clone(),
+            }],
+            retry: false,
+        };
+        let errors = ensure_extra_attachments(&paths, &other_plan, &["other".to_string()]);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(
+            errors[&"other".to_string()].code,
+            codes::AGENT_ATTACH_FAILED
         );
     }
 

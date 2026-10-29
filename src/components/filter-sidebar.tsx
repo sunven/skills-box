@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { RotateCcw, X } from "lucide-react";
+import { RotateCcw, Settings2, X } from "lucide-react";
 import { Button } from "./ui/button";
 import { AgentLogo } from "./agent-logo";
 import { EnvironmentBadge } from "./environment-badge";
@@ -30,6 +30,7 @@ interface FilterSidebarProps {
   rechecking: boolean;
   onRecheck: () => void;
   onClose?: () => void;
+  onManageAgents?: () => void;
 }
 
 interface FilterRowProps {
@@ -76,8 +77,20 @@ function FilterRow({
   );
 }
 
-function SectionTitle({ children }: { children: ReactNode }) {
-  return <h3 className="filter-label">{children}</h3>;
+function SectionTitle({
+  children,
+  action,
+}: {
+  children: ReactNode;
+  action?: ReactNode;
+}) {
+  if (!action) return <h3 className="filter-label">{children}</h3>;
+  return (
+    <div className="flex items-center justify-between gap-1">
+      <h3 className="filter-label">{children}</h3>
+      {action}
+    </div>
+  );
 }
 
 export function FilterSidebar({
@@ -96,6 +109,7 @@ export function FilterSidebar({
   rechecking,
   onRecheck,
   onClose,
+  onManageAgents,
 }: FilterSidebarProps) {
   return (
     <aside aria-label="筛选" className="rail">
@@ -140,7 +154,24 @@ export function FilterSidebar({
         </section>
 
         <section aria-label="Agents" className="filter-group">
-          <SectionTitle>Agent</SectionTitle>
+          <SectionTitle
+            action={
+              onManageAgents ? (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-6"
+                  aria-label="管理 agent"
+                  title="管理额外 agent"
+                  onClick={onManageAgents}
+                >
+                  <Settings2 className="size-3.5" aria-hidden="true" />
+                </Button>
+              ) : null
+            }
+          >
+            Agent
+          </SectionTitle>
           <FilterRow
             label="全部 Agent"
             count={statusCounts.all}
@@ -169,12 +200,18 @@ export function FilterSidebar({
                     <span className="text-[11.5px] text-muted-foreground">
                       共享
                     </span>
+                  ) : !agent.detected ? (
+                    <span className="text-[11.5px] text-muted-foreground">
+                      未检测
+                    </span>
                   ) : null
                 }
                 title={
                   agent.shared
                     ? `${agent.displayName} · 共享 canonical store`
-                    : agent.displayName
+                    : !agent.detected
+                      ? `${agent.displayName} · 未检测到（目录不存在，不能作为安装目标）`
+                      : agent.displayName
                 }
               />
             ))
