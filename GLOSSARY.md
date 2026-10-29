@@ -132,6 +132,10 @@ _Avoid_: cache, state
 A serialized operation that changes skills or agent attachments.
 _Avoid_: job, command
 
+**Mutation session**:
+One execution of one mutation task, ending in a single outcome. The task is the serialized operation; the session is one run of it.
+_Avoid_: job, runner, transaction
+
 **Anomaly**:
 A state that does not match the canonical model, such as an orphan folder, broken link, or stale lock entry; v1 surfaces it read-only.
 _Avoid_: error, corruption

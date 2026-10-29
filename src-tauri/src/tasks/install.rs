@@ -15,6 +15,7 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use crate::agents::{DetectionContext, catalog, resolve_global_skills_dir};
+use crate::baseline::{BaselineStore, write_warning};
 use crate::cli::CliRuntime;
 use crate::env::capture_process_env;
 use crate::env::child_env::{ChildEnvParams, build_child_env};
@@ -22,11 +23,15 @@ use crate::error::AppError;
 use crate::inventory::{AgentDir, ManagementState};
 use crate::lock::LockFile;
 use crate::paths::AppPaths;
-use crate::process::CommandSpec;
+use crate::process::{CommandSpec, ExecOutput};
 use crate::security;
 
 use super::conflicts::find_conflicts;
-use super::manager::{TaskSkillResult, TaskSkillStatus};
+use super::manager::{TaskAction, TaskPhase, TaskSkillResult, TaskSkillStatus};
+use super::session::{
+    CancellationPolicy, FailureDisposition, MutationAction, Preflight, ProgressMessage, Reporter,
+    SessionProfile, StartOutcome, UnitOutcome,
+};
 use super::source::validate_source;
 
 pub const INSTALL_TIMEOUT: Duration = crate::timeouts::WRITE_TIMEOUT;
@@ -536,6 +541,31 @@ pub fn parse_install_output(raw: &str) -> InstallOutput {
     InstallOutput::Results(results)
 }
 
+pub(crate) fn classify_install_failure(detail: &str, stderr: &str) -> AppError {
+    let combined = if stderr.trim().is_empty() {
+        detail.trim().to_string()
+    } else if detail.trim().is_empty() {
+        stderr.trim().to_string()
+    } else {
+        format!("{}\n{}", detail.trim(), stderr.trim())
+    };
+    let detail = super::parser::truncate_chars(&combined, 16 * 1024);
+    let lower = detail.to_lowercase();
+    if lower.contains("failed to clone")
+        || lower.contains("unable to access")
+        || lower.contains("couldn't connect")
+        || lower.contains("failed to connect")
+        || lower.contains("could not resolve")
+        || lower.contains("network is unreachable")
+    {
+        AppError::network_fetch_failed(detail)
+    } else if detail.is_empty() {
+        AppError::cli_exit_nonzero("skills CLI 以非零退出码结束且未输出详情。")
+    } else {
+        AppError::cli_exit_nonzero(detail)
+    }
+}
+
 /// Copy `~/.agents/.skill-lock.json` into `backups/<ms>-install-<task>/`
 /// before the CLI runs. A missing lock is a normal fresh-machine state and is
 /// recorded as absent.
@@ -723,6 +753,153 @@ fn verify_installed(
         }
     }
     Ok(())
+}
+
+/// Install as one session unit: lock snapshot and conflict re-check in
+/// preflight, one `skills add`, then disk verification, baseline writes and
+/// the lock snapshot as the task backup.
+pub(crate) struct InstallAction {
+    paths: AppPaths,
+    timeout: Duration,
+    task_id: String,
+}
+
+impl InstallAction {
+    pub(crate) fn new(paths: AppPaths, timeout: Duration, task_id: String) -> Self {
+        Self {
+            paths,
+            timeout,
+            task_id,
+        }
+    }
+}
+
+impl MutationAction for InstallAction {
+    type Plan = InstallPlan;
+    type Unit = InstallPlan;
+
+    fn profile(&self, plan: &Self::Plan) -> SessionProfile {
+        SessionProfile {
+            action: TaskAction::Install,
+            initial_message: "正在准备安装…".to_string(),
+            success_status: TaskSkillStatus::Installed,
+            total: plan.total(),
+            cancellation: CancellationPolicy::SealOnly,
+        }
+    }
+
+    fn begin(&self, plan: &Self::Plan) -> Result<StartOutcome<Self::Unit>, AppError> {
+        Ok(StartOutcome {
+            units: vec![plan.clone()],
+            initial_rows: Vec::new(),
+            log_path: None,
+        })
+    }
+
+    fn preflight(&self, plan: &Self::Unit, _reporter: &Reporter) -> Result<Preflight, AppError> {
+        // The app never writes the lock, but a corrupt lock must block the
+        // install before the CLI spawns.
+        LockFile::read(&self.paths.lock_path())?;
+        let retry_source = plan.retry.then_some(plan.source.as_str());
+        if let Some(conflict) = conflicts_for(&self.paths, &plan.skills, retry_source)? {
+            return Err(conflict);
+        }
+        let snapshot = snapshot_lock(&self.paths, &self.task_id)?;
+        Ok(Preflight {
+            snapshot: snapshot.clone(),
+            post_message: Some(ProgressMessage {
+                phase: TaskPhase::Preparing,
+                message: format!("已快照 lock：{}", self.paths.display(&snapshot)),
+                skill: None,
+                completed: 0,
+            }),
+            warnings: Vec::new(),
+        })
+    }
+
+    fn command(&self, plan: &Self::Unit, runtime: &CliRuntime, reporter: &Reporter) -> CommandSpec {
+        reporter.progress(TaskPhase::RunningCli, "正在执行 skills add…", None);
+        install_command(runtime, plan, self.timeout)
+    }
+
+    fn complete(
+        &self,
+        plan: &Self::Unit,
+        output: ExecOutput,
+        preflight: &Preflight,
+        reporter: &Reporter,
+    ) -> Result<UnitOutcome, AppError> {
+        reporter.progress(
+            TaskPhase::Verifying,
+            "正在校验 canonical、agent 挂载与 lock…",
+            None,
+        );
+        let cli_results = match parse_install_output(&output.stdout) {
+            InstallOutput::Results(results) => results,
+            InstallOutput::Fatal(detail) => {
+                return Err(classify_install_failure(&detail, &output.stderr));
+            }
+            InstallOutput::Unrecognized(detail) => {
+                return Err(AppError::cli_invalid_json(format!(
+                    "{detail}\n{}",
+                    output.stderr.trim()
+                )));
+            }
+        };
+
+        let installed_names: Vec<String> = cli_results
+            .iter()
+            .filter(|result| result.status == CliSkillStatus::Installed)
+            .filter_map(|result| result.name.clone())
+            .collect();
+        let link_errors = ensure_extra_attachments(&self.paths, plan, &installed_names);
+        let mut verification = verify_install(&self.paths, plan, &cli_results);
+        for result in &mut verification.results {
+            if let Some(error) = link_errors.get(&result.name) {
+                result.status = TaskSkillStatus::Failed;
+                result.error = Some(error.clone());
+            }
+        }
+        for (index, result) in verification.results.iter().enumerate() {
+            reporter.progress_at(
+                TaskPhase::Verifying,
+                format!("已校验 {}", result.name),
+                index as u32 + 1,
+                Some(result.name.as_str()),
+            );
+        }
+
+        let mut warnings = verification.warnings;
+        let baselines = BaselineStore::new(&self.paths);
+        for result in &verification.results {
+            if result.status != TaskSkillStatus::Installed {
+                continue;
+            }
+            let canonical = self.paths.canonical_skills_dir().join(&result.name);
+            if let Err(error) = baselines.record_from_dir(&result.name, &canonical, true) {
+                warnings.push(write_warning(error));
+            }
+        }
+
+        Ok(UnitOutcome {
+            rows: verification.results,
+            warnings,
+            backup_path: self.paths.display(&preflight.snapshot),
+            final_progress: None,
+        })
+    }
+
+    fn on_infrastructure_failure(
+        &self,
+        _unit: &Self::Unit,
+        error: AppError,
+        _preflight: Option<&Preflight>,
+        _reporter: &Reporter,
+    ) -> FailureDisposition {
+        FailureDisposition::TaskFailed(error)
+    }
+
+    fn on_cancelled(&self, _unit: &Self::Unit, _preflight: &Preflight, _error: Option<AppError>) {}
 }
 
 fn now_ms() -> u64 {

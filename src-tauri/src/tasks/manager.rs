@@ -2,7 +2,7 @@
 //! single-writer mutation permits, and cancellable preview tasks.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -10,24 +10,17 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::Serialize;
 use tokio::sync::{Notify, Semaphore};
 
-use crate::backup::{BackupAction, BackupStore};
-use crate::baseline::{BaselineStore, LocalModification};
 use crate::cli::{CliRuntimeProvider, preview_command};
 use crate::error::{AppError, codes};
 use crate::interrupted::{InterruptedMutation, MarkerStore, MutationKind};
-use crate::lock::LockFile;
-use crate::logs::{OperationEntry, OperationLog};
 use crate::paths::AppPaths;
 use crate::process::{CancelToken, ExecError, ProcessExecutor};
 
 use super::conflicts::{ConflictInfo, ConflictProvider};
-use super::install::{
-    self, INSTALL_TIMEOUT, InstallOutput, InstallPlan, InstallRequest, install_command,
-    parse_install_output, snapshot_lock, validate_request, verify_install,
-};
+use super::install::{self, INSTALL_TIMEOUT, InstallPlan, InstallRequest, validate_request};
 use super::parser::{ParsedSkill, PreviewParseOutcome, parse_preview_output};
+use super::session;
 use super::source::{SourceSpec, validate_source};
-use super::summary;
 use super::uninstall as uninstall_task;
 use super::update as update_task;
 
@@ -157,7 +150,7 @@ pub struct TaskEvent {
 }
 
 impl TaskEvent {
-    fn progress(
+    pub(super) fn progress(
         task_id: &str,
         phase: TaskPhase,
         message: impl Into<String>,
@@ -289,7 +282,7 @@ struct TaskEntry {
 }
 
 #[derive(Debug)]
-enum FinishOutcome {
+pub(super) enum FinishOutcome {
     Completed(TaskResult, String),
     Failed(AppError),
     Cancelled,
@@ -535,6 +528,40 @@ impl TaskManager {
         Ok(task_id)
     }
 
+    /// Register one install/update/uninstall task and write the interruption
+    /// marker. The task entry and its mutation share one clock read.
+    fn register_mutation(
+        &self,
+        action: TaskAction,
+        kind: MutationKind,
+        skills: Vec<String>,
+    ) -> (TaskId, CancelToken) {
+        let task_id = format!("task-{}", self.inner.next_id.fetch_add(1, Ordering::SeqCst));
+        let cancel = CancelToken::new();
+        let started_at_epoch_ms = now_ms();
+        {
+            let mut tasks = self.lock_tasks();
+            tasks.insert(
+                task_id.clone(),
+                TaskEntry {
+                    state: TaskState::Running,
+                    cancel: cancel.clone(),
+                    cancellable: true,
+                    mutation: Some(MutationState {
+                        kind,
+                        skills,
+                        started_at_epoch_ms,
+                        snapshot_paths: Vec::new(),
+                    }),
+                    action,
+                    started_at_epoch_ms,
+                },
+            );
+        }
+        self.begin_marker(&task_id);
+        (task_id, cancel)
+    }
+
     /// Validate a mutation request synchronously, acquire the single-writer
     /// permit, and run the install task. Same-name conflicts are rejected
     /// before a task exists.
@@ -561,35 +588,25 @@ impl TaskManager {
         // The permit is taken after validation so invalid requests do not
         // briefly occupy the write slot, and held for the whole task.
         let permit = self.try_acquire_mutation()?;
-        let task_id = format!("task-{}", self.inner.next_id.fetch_add(1, Ordering::SeqCst));
-        let cancel = CancelToken::new();
-        {
-            let mut tasks = self.lock_tasks();
-            tasks.insert(
-                task_id.clone(),
-                TaskEntry {
-                    state: TaskState::Running,
-                    cancel: cancel.clone(),
-                    cancellable: true,
-                    mutation: Some(MutationState {
-                        kind: MutationKind::Install,
-                        skills: plan.skills.clone(),
-                        started_at_epoch_ms: now_ms(),
-                        snapshot_paths: Vec::new(),
-                    }),
-                    action: TaskAction::Install,
-                    started_at_epoch_ms: now_ms(),
-                },
-            );
-        }
-        self.begin_marker(&task_id);
+        let (task_id, cancel) = self.register_mutation(
+            TaskAction::Install,
+            MutationKind::Install,
+            plan.skills.clone(),
+        );
 
+        let action = install::InstallAction::new(
+            self.inner.paths.clone(),
+            self.inner.config.install_timeout,
+            task_id.clone(),
+        );
+        let finish_sink = on_event.clone();
+        let ctx = self.session_context(&task_id, on_event, cancel);
         let manager = self.clone();
         let spawned_id = task_id.clone();
         tokio::spawn(async move {
-            manager
-                .run_install(spawned_id, plan, permit, cancel, on_event)
-                .await;
+            let _permit = permit;
+            let outcome = session::run(ctx, action, plan).await;
+            manager.finish(&spawned_id, &finish_sink, outcome);
         });
         Ok(task_id)
     }
@@ -740,37 +757,24 @@ impl TaskManager {
             }
         };
 
-        let task_id = format!("task-{}", self.inner.next_id.fetch_add(1, Ordering::SeqCst));
-        let cancel = CancelToken::new();
-        {
-            let mut tasks = self.lock_tasks();
-            tasks.insert(
-                task_id.clone(),
-                TaskEntry {
-                    state: TaskState::Running,
-                    cancel: cancel.clone(),
-                    // Update may be cancelled between skills; the run loop
-                    // disables acceptance while one skill is being written.
-                    cancellable: true,
-                    mutation: Some(MutationState {
-                        kind: MutationKind::Update,
-                        skills: plan.items.iter().map(|item| item.name.clone()).collect(),
-                        started_at_epoch_ms: now_ms(),
-                        snapshot_paths: Vec::new(),
-                    }),
-                    action: TaskAction::Update,
-                    started_at_epoch_ms: now_ms(),
-                },
-            );
-        }
-        self.begin_marker(&task_id);
+        let (task_id, cancel) = self.register_mutation(
+            TaskAction::Update,
+            MutationKind::Update,
+            plan.items.iter().map(|item| item.name.clone()).collect(),
+        );
 
+        let action = update_task::UpdateAction::new(
+            self.inner.paths.clone(),
+            self.inner.config.install_timeout,
+        );
+        let finish_sink = on_event.clone();
+        let ctx = self.session_context(&task_id, on_event, cancel);
         let manager = self.clone();
         let spawned_id = task_id.clone();
         tokio::spawn(async move {
-            manager
-                .run_update(spawned_id, plan, permit, cancel, on_event)
-                .await;
+            let _permit = permit;
+            let outcome = session::run(ctx, action, plan).await;
+            manager.finish(&spawned_id, &finish_sink, outcome);
         });
         Ok(task_id)
     }
@@ -805,51 +809,26 @@ impl TaskManager {
             }
         };
 
-        let task_id = format!("task-{}", self.inner.next_id.fetch_add(1, Ordering::SeqCst));
-        let cancel = CancelToken::new();
-        {
-            let mut tasks = self.lock_tasks();
-            tasks.insert(
-                task_id.clone(),
-                TaskEntry {
-                    state: TaskState::Running,
-                    cancel: cancel.clone(),
-                    // Uninstall may be cancelled until the CLI is spawned.
-                    cancellable: true,
-                    mutation: Some(MutationState {
-                        kind: MutationKind::Uninstall,
-                        skills: vec![plan.name.clone()],
-                        started_at_epoch_ms: now_ms(),
-                        snapshot_paths: Vec::new(),
-                    }),
-                    action: TaskAction::Uninstall,
-                    started_at_epoch_ms: now_ms(),
-                },
-            );
-        }
-        self.begin_marker(&task_id);
+        let (task_id, cancel) = self.register_mutation(
+            TaskAction::Uninstall,
+            MutationKind::Uninstall,
+            vec![plan.name.clone()],
+        );
 
+        let action = uninstall_task::UninstallAction::new(
+            self.inner.paths.clone(),
+            self.inner.config.install_timeout,
+        );
+        let finish_sink = on_event.clone();
+        let ctx = self.session_context(&task_id, on_event, cancel);
         let manager = self.clone();
         let spawned_id = task_id.clone();
         tokio::spawn(async move {
-            manager
-                .run_uninstall(spawned_id, plan, permit, cancel, on_event)
-                .await;
+            let _permit = permit;
+            let outcome = session::run(ctx, action, plan).await;
+            manager.finish(&spawned_id, &finish_sink, outcome);
         });
         Ok(task_id)
-    }
-
-    /// Seal a task against cancellation and report whether cancellation was
-    /// requested before the seal. Used immediately before spawning a mutation.
-    fn seal_task(&self, task_id: &str) -> bool {
-        let mut tasks = self.lock_tasks();
-        match tasks.get_mut(task_id) {
-            Some(entry) => {
-                entry.cancellable = false;
-                entry.cancel.is_cancelled()
-            }
-            None => true,
-        }
     }
 
     /// Toggle cancellation acceptance for update tasks. Updates accept a
@@ -859,6 +838,35 @@ impl TaskManager {
         let mut tasks = self.lock_tasks();
         if let Some(entry) = tasks.get_mut(task_id) {
             entry.cancellable = cancellable;
+        }
+    }
+
+    /// Narrow session handle: the session never touches the task map or the
+    /// marker directly.
+    fn session_context(
+        &self,
+        task_id: &str,
+        sink: EventSink,
+        cancel: CancelToken,
+    ) -> session::SessionContext {
+        let snapshot_manager = self.clone();
+        let snapshot_task = task_id.to_string();
+        let record_snapshot = Arc::new(move |path: &Path| {
+            snapshot_manager.record_snapshot(&snapshot_task, path);
+        });
+        let cancellable_manager = self.clone();
+        let cancellable_task = task_id.to_string();
+        let set_cancellable = Arc::new(move |value: bool| {
+            cancellable_manager.set_task_cancellable(&cancellable_task, value);
+        });
+        session::SessionContext {
+            task_id: task_id.to_string(),
+            sink,
+            cancel,
+            runtime: Arc::clone(&self.inner.runtime),
+            executor: Arc::clone(&self.inner.executor),
+            record_snapshot,
+            set_cancellable,
         }
     }
 
@@ -1078,983 +1086,6 @@ impl TaskManager {
         }
     }
 
-    async fn run_install(
-        &self,
-        task_id: TaskId,
-        plan: InstallPlan,
-        permit: MutationPermit,
-        cancel: CancelToken,
-        sink: EventSink,
-    ) {
-        let _permit = permit;
-        let total = plan.total();
-        emit(
-            &sink,
-            TaskEvent::progress(&task_id, TaskPhase::Preparing, "正在准备安装…", 0, total),
-        );
-        if cancel.is_cancelled() {
-            self.finish(&task_id, &sink, FinishOutcome::Cancelled);
-            return;
-        }
-
-        let runtime = tokio::select! {
-            result = self.inner.runtime.cli_runtime() => match result {
-                Ok(runtime) => runtime,
-                Err(error) => {
-                    self.finish(&task_id, &sink, FinishOutcome::Failed(error));
-                    return;
-                }
-            },
-            _ = cancel.cancelled() => {
-                self.finish(&task_id, &sink, FinishOutcome::Cancelled);
-                return;
-            }
-        };
-        if cancel.is_cancelled() {
-            self.finish(&task_id, &sink, FinishOutcome::Cancelled);
-            return;
-        }
-
-        // Strict lock read, final conflict re-check, then the pre-spawn
-        // snapshot. The lock is never written by the app.
-        let paths = self.inner.paths.clone();
-        let snapshot_plan = plan.clone();
-        let snapshot_task = task_id.clone();
-        let snapshot = tokio::select! {
-            result = tokio::task::spawn_blocking(move || -> Result<PathBuf, AppError> {
-                LockFile::read(&paths.lock_path())?;
-                let retry_source = snapshot_plan.retry.then_some(snapshot_plan.source.as_str());
-                if let Some(conflict) =
-                    install::conflicts_for(&paths, &snapshot_plan.skills, retry_source)?
-                {
-                    return Err(conflict);
-                }
-                snapshot_lock(&paths, &snapshot_task)
-            }) => match result {
-                Ok(Ok(path)) => path,
-                Ok(Err(error)) => {
-                    self.finish(&task_id, &sink, FinishOutcome::Failed(error));
-                    return;
-                }
-                Err(error) => {
-                    self.finish(
-                        &task_id,
-                        &sink,
-                        FinishOutcome::Failed(AppError::backup_failed(error.to_string())),
-                    );
-                    return;
-                }
-            },
-            _ = cancel.cancelled() => {
-                self.finish(&task_id, &sink, FinishOutcome::Cancelled);
-                return;
-            }
-        };
-        if cancel.is_cancelled() {
-            self.finish(&task_id, &sink, FinishOutcome::Cancelled);
-            return;
-        }
-
-        self.record_snapshot(&task_id, &snapshot);
-
-        emit(
-            &sink,
-            TaskEvent::progress(
-                &task_id,
-                TaskPhase::Preparing,
-                format!("已快照 lock：{}", self.inner.paths.display(&snapshot)),
-                0,
-                total,
-            ),
-        );
-
-        // From here on the CLI may write: cancellation is rejected.
-        if self.seal_task(&task_id) {
-            self.finish(&task_id, &sink, FinishOutcome::Cancelled);
-            return;
-        }
-
-        emit(
-            &sink,
-            TaskEvent::progress(
-                &task_id,
-                TaskPhase::RunningCli,
-                "正在执行 skills add…",
-                0,
-                total,
-            ),
-        );
-        let spec = install_command(&runtime, &plan, self.inner.config.install_timeout);
-        let output = match self.inner.executor.run(spec, cancel.clone()).await {
-            Ok(output) => output,
-            Err(ExecError::Cancelled) => {
-                self.finish(&task_id, &sink, FinishOutcome::Cancelled);
-                return;
-            }
-            Err(ExecError::Timeout(timeout)) => {
-                self.finish(
-                    &task_id,
-                    &sink,
-                    FinishOutcome::Failed(AppError::cli_timeout("安装", timeout)),
-                );
-                return;
-            }
-            Err(ExecError::Spawn { program, message }) => {
-                self.finish(
-                    &task_id,
-                    &sink,
-                    FinishOutcome::Failed(AppError::cli_spawn_failed(format!(
-                        "无法启动 {program}: {message}"
-                    ))),
-                );
-                return;
-            }
-            Err(ExecError::Io(message)) => {
-                self.finish(
-                    &task_id,
-                    &sink,
-                    FinishOutcome::Failed(AppError::cli_failed(message)),
-                );
-                return;
-            }
-        };
-
-        emit(
-            &sink,
-            TaskEvent::progress(
-                &task_id,
-                TaskPhase::Verifying,
-                "正在校验 canonical、agent 挂载与 lock…",
-                0,
-                total,
-            ),
-        );
-
-        // The per-skill JSON status is authoritative for failures, but an
-        // installed entry still has to pass the filesystem verification below.
-        let cli_results = match parse_install_output(&output.stdout) {
-            InstallOutput::Results(results) => results,
-            InstallOutput::Fatal(detail) => {
-                let error = classify_install_failure(&detail, &output.stderr);
-                self.finish(&task_id, &sink, FinishOutcome::Failed(error));
-                return;
-            }
-            InstallOutput::Unrecognized(detail) => {
-                self.finish(
-                    &task_id,
-                    &sink,
-                    FinishOutcome::Failed(AppError::cli_invalid_json(format!(
-                        "{detail}\n{}",
-                        output.stderr.trim()
-                    ))),
-                );
-                return;
-            }
-        };
-
-        let verification_paths = self.inner.paths.clone();
-        let verification_plan = plan.clone();
-        let installed_names: Vec<String> = cli_results
-            .iter()
-            .filter(|result| result.status == install::CliSkillStatus::Installed)
-            .filter_map(|result| result.name.clone())
-            .collect();
-        let verification = match tokio::task::spawn_blocking(move || {
-            let link_errors = install::ensure_extra_attachments(
-                &verification_paths,
-                &verification_plan,
-                &installed_names,
-            );
-            let mut verification =
-                verify_install(&verification_paths, &verification_plan, &cli_results);
-            for result in &mut verification.results {
-                if let Some(error) = link_errors.get(&result.name) {
-                    result.status = TaskSkillStatus::Failed;
-                    result.error = Some(error.clone());
-                }
-            }
-            verification
-        })
-        .await
-        {
-            Ok(verification) => verification,
-            Err(error) => {
-                self.finish(
-                    &task_id,
-                    &sink,
-                    FinishOutcome::Failed(AppError::verify_failed(error.to_string())),
-                );
-                return;
-            }
-        };
-
-        for (index, result) in verification.results.iter().enumerate() {
-            let mut event = TaskEvent::progress(
-                &task_id,
-                TaskPhase::Verifying,
-                format!("已校验 {}", result.name),
-                index as u32 + 1,
-                total,
-            );
-            event.skill = Some(result.name.clone());
-            emit(&sink, event);
-        }
-
-        // A verified install is the known-good state for local-modification
-        // detection: record the baseline before reporting success (spec §3.6).
-        let mut warnings = verification.warnings;
-        let baselines = BaselineStore::new(&self.inner.paths);
-        for result in &verification.results {
-            if result.status != TaskSkillStatus::Installed {
-                continue;
-            }
-            let name = result.name.clone();
-            let canonical = self.inner.paths.canonical_skills_dir().join(&name);
-            let baseline_store = baselines.clone();
-            match tokio::task::spawn_blocking(move || {
-                baseline_store.record_from_dir(&name, &canonical, true)
-            })
-            .await
-            {
-                Ok(Ok(_)) => {}
-                Ok(Err(error)) => warnings.push(baseline_write_warning(error)),
-                Err(error) => warnings.push(baseline_write_warning(
-                    AppError::new(codes::BASELINE_WRITE_FAILED, "无法刷新本地基线指纹。")
-                        .detail(error.to_string()),
-                )),
-            }
-        }
-
-        let overall = summary::overall_for(&verification.results, TaskSkillStatus::Installed);
-        let message = summary::message(TaskAction::Install, overall, &verification.results);
-        let result = TaskResult {
-            action: TaskAction::Install,
-            overall,
-            skills: verification.results,
-            warnings,
-            backup_path: Some(self.inner.paths.display(&snapshot)),
-            log_path: None,
-            started_at: 0,
-            finished_at_epoch_ms: now_ms(),
-            preview: None,
-        };
-        self.finish(&task_id, &sink, FinishOutcome::Completed(result, message));
-    }
-
-    async fn run_update(
-        &self,
-        task_id: TaskId,
-        plan: update_task::UpdatePlan,
-        permit: MutationPermit,
-        cancel: CancelToken,
-        sink: EventSink,
-    ) {
-        let _permit = permit;
-        let total = plan.total();
-        emit(
-            &sink,
-            TaskEvent::progress(&task_id, TaskPhase::Preparing, "正在准备更新…", 0, total),
-        );
-        if cancel.is_cancelled() {
-            self.finish(&task_id, &sink, FinishOutcome::Cancelled);
-            return;
-        }
-
-        let runtime = tokio::select! {
-            result = self.inner.runtime.cli_runtime() => match result {
-                Ok(runtime) => runtime,
-                Err(error) => {
-                    self.finish(&task_id, &sink, FinishOutcome::Failed(error));
-                    return;
-                }
-            },
-            _ = cancel.cancelled() => {
-                self.finish(&task_id, &sink, FinishOutcome::Cancelled);
-                return;
-            }
-        };
-        if cancel.is_cancelled() {
-            self.finish(&task_id, &sink, FinishOutcome::Cancelled);
-            return;
-        }
-
-        let paths = self.inner.paths.clone();
-        let backups = BackupStore::new(&paths);
-        let log = OperationLog::new(&paths);
-        let log_path = paths.display(log.path());
-        let baselines = BaselineStore::new(&paths);
-
-        let mut results: Vec<TaskSkillResult> = Vec::new();
-        let mut warnings: Vec<AppError> = Vec::new();
-        let mut backup_paths: Vec<String> = Vec::new();
-
-        // Ineligible selections are reported (and logged) without touching
-        // the disk, so update-all can continue with the remaining items.
-        for skip in &plan.skipped {
-            let _ = log.append(&OperationEntry::new(
-                "update",
-                &skip.name,
-                Vec::new(),
-                "skipped",
-                None,
-                Some(skip.error.clone()),
-            ));
-            results.push(TaskSkillResult {
-                name: skip.name.clone(),
-                status: TaskSkillStatus::Skipped,
-                error: Some(skip.error.clone()),
-                backup_path: None,
-            });
-        }
-
-        let mut cancelled = false;
-        for item in &plan.items {
-            // Cancellation is accepted between skills and while the next
-            // mandatory backup is being written; it is rejected exactly while
-            // the CLI is writing.
-            self.set_task_cancellable(&task_id, true);
-            if cancel.is_cancelled() {
-                cancelled = true;
-                break;
-            }
-
-            if item.local_modification != LocalModification::Clean {
-                let detail = item
-                    .local_modification_detail
-                    .clone()
-                    .unwrap_or_else(|| "无法确认当前文件是否与基线一致。".to_string());
-                warnings.push(AppError::update_local_modified(&item.name, detail));
-            }
-            if !item.copy_agents.is_empty() {
-                warnings.push(AppError::update_copy_to_symlink(
-                    &item.name,
-                    &item.copy_agents.join("、"),
-                ));
-            }
-
-            let mut backup_event = TaskEvent::progress(
-                &task_id,
-                TaskPhase::Backup,
-                format!("正在备份 {}…", item.name),
-                results.len() as u32,
-                total,
-            );
-            backup_event.skill = Some(item.name.clone());
-            emit(&sink, backup_event);
-
-            let backup_attachments = item.attachments.clone();
-            let backup_agents = item.agent_ids.clone();
-            let backup_canonical = item.canonical.clone();
-            let backup_name = item.name.clone();
-            let backup_store = backups.clone();
-            let backup_outcome = tokio::task::spawn_blocking(move || {
-                backup_store.create(
-                    BackupAction::Update,
-                    &backup_name,
-                    Some(&backup_canonical),
-                    &backup_attachments,
-                    &backup_agents,
-                )
-            })
-            .await;
-            let backup = match backup_outcome {
-                Ok(Ok(backup)) => backup,
-                Ok(Err(error)) => {
-                    // A backup failure aborts the operation: no CLI runs.
-                    let error =
-                        log_backup_failure(&log, "update", &item.name, &item.agent_ids, error);
-                    self.finish(&task_id, &sink, FinishOutcome::Failed(error));
-                    return;
-                }
-                Err(error) => {
-                    let error = log_backup_failure(
-                        &log,
-                        "update",
-                        &item.name,
-                        &item.agent_ids,
-                        AppError::backup_failed(error.to_string()),
-                    );
-                    self.finish(&task_id, &sink, FinishOutcome::Failed(error));
-                    return;
-                }
-            };
-            let backup_display = paths.display(&backup.path);
-            backup_paths.push(backup_display.clone());
-            self.record_snapshot(&task_id, &backup.path);
-
-            if cancel.is_cancelled() {
-                let _ = log.append(&OperationEntry::new(
-                    "update",
-                    &item.name,
-                    item.agent_ids.clone(),
-                    "cancelled",
-                    Some(backup_display),
-                    None,
-                ));
-                cancelled = true;
-                break;
-            }
-            // From here until the CLI exits the write window is sealed.
-            self.set_task_cancellable(&task_id, false);
-            if cancel.is_cancelled() {
-                let _ = log.append(&OperationEntry::new(
-                    "update",
-                    &item.name,
-                    item.agent_ids.clone(),
-                    "cancelled",
-                    Some(paths.display(&backup.path)),
-                    None,
-                ));
-                cancelled = true;
-                break;
-            }
-
-            let mut running_event = TaskEvent::progress(
-                &task_id,
-                TaskPhase::RunningCli,
-                format!("正在更新 {}（skills add）…", item.name),
-                results.len() as u32,
-                total,
-            );
-            running_event.skill = Some(item.name.clone());
-            emit(&sink, running_event);
-
-            let spec =
-                update_task::update_command(item, &runtime, self.inner.config.install_timeout);
-            // The write window stays sealed until this skill is backed up,
-            // updated, verified and re-baselined. Cancellation is only
-            // re-enabled at the top of the next iteration (between skills).
-            let exec_result = self.inner.executor.run(spec, cancel.clone()).await;
-            let output = match exec_result {
-                Ok(output) => output,
-                Err(ExecError::Cancelled) => {
-                    let _ = log.append(&OperationEntry::new(
-                        "update",
-                        &item.name,
-                        item.agent_ids.clone(),
-                        "cancelled",
-                        Some(backup_display.clone()),
-                        Some(AppError::cli_cancelled()),
-                    ));
-                    cancelled = true;
-                    break;
-                }
-                Err(ExecError::Timeout(timeout)) => {
-                    let error = AppError::cli_timeout("更新", timeout);
-                    results.push(failed_update_result(
-                        &log,
-                        item,
-                        Some(&backup_display),
-                        error,
-                    ));
-                    emit_update_progress(
-                        &sink,
-                        &task_id,
-                        item,
-                        TaskPhase::Verifying,
-                        results.len() as u32,
-                        total,
-                    );
-                    continue;
-                }
-                Err(ExecError::Spawn { program, message }) => {
-                    let error =
-                        AppError::cli_spawn_failed(format!("无法启动 {program}: {message}"));
-                    results.push(failed_update_result(
-                        &log,
-                        item,
-                        Some(&backup_display),
-                        error,
-                    ));
-                    emit_update_progress(
-                        &sink,
-                        &task_id,
-                        item,
-                        TaskPhase::Verifying,
-                        results.len() as u32,
-                        total,
-                    );
-                    continue;
-                }
-                Err(ExecError::Io(message)) => {
-                    let error = AppError::cli_failed(message);
-                    results.push(failed_update_result(
-                        &log,
-                        item,
-                        Some(&backup_display),
-                        error,
-                    ));
-                    emit_update_progress(
-                        &sink,
-                        &task_id,
-                        item,
-                        TaskPhase::Verifying,
-                        results.len() as u32,
-                        total,
-                    );
-                    continue;
-                }
-            };
-
-            let mut verify_event = TaskEvent::progress(
-                &task_id,
-                TaskPhase::Verifying,
-                format!("正在校验 {} 的 canonical、挂载与 lock…", item.name),
-                results.len() as u32,
-                total,
-            );
-            verify_event.skill = Some(item.name.clone());
-            emit(&sink, verify_event);
-
-            let verify_paths = paths.clone();
-            let verify_item = item.clone();
-            let verification = match tokio::task::spawn_blocking(move || {
-                update_task::verify_update(&verify_paths, &verify_item, &output)
-            })
-            .await
-            {
-                Ok(verification) => verification,
-                Err(error) => {
-                    let error = AppError::verify_failed(error.to_string());
-                    results.push(failed_update_result(
-                        &log,
-                        item,
-                        Some(&backup_display),
-                        error,
-                    ));
-                    emit_update_progress(
-                        &sink,
-                        &task_id,
-                        item,
-                        TaskPhase::Verifying,
-                        results.len() as u32,
-                        total,
-                    );
-                    continue;
-                }
-            };
-
-            warnings.extend(verification.warnings);
-            let (status, error) = match verification.result {
-                Ok(()) => (TaskSkillStatus::Updated, None),
-                Err(error) if error.code == codes::SKILL_NOT_IN_SOURCE => {
-                    (TaskSkillStatus::Skipped, Some(error))
-                }
-                Err(error) => (TaskSkillStatus::Failed, Some(error)),
-            };
-
-            if status == TaskSkillStatus::Updated {
-                let baseline_name = item.name.clone();
-                let baseline_canonical = item.canonical.clone();
-                let baseline_store = baselines.clone();
-                match tokio::task::spawn_blocking(move || {
-                    baseline_store.record_from_dir(&baseline_name, &baseline_canonical, true)
-                })
-                .await
-                {
-                    Ok(Ok(_)) => {}
-                    Ok(Err(error)) => warnings.push(baseline_write_warning(error)),
-                    Err(error) => warnings.push(baseline_write_warning(
-                        AppError::new(
-                            codes::BASELINE_WRITE_FAILED,
-                            "更新成功，但无法刷新本地基线指纹。",
-                        )
-                        .detail(error.to_string()),
-                    )),
-                }
-            }
-
-            // This skill is fully written, verified and re-baselined, so the
-            // next cancellation check is a genuine "between skills" point.
-            self.set_task_cancellable(&task_id, true);
-
-            let result_status = update_task::status_label(status);
-            let _ = log.append(&OperationEntry::new(
-                "update",
-                &item.name,
-                item.agent_ids.clone(),
-                result_status,
-                Some(backup_display.clone()),
-                error.clone(),
-            ));
-            results.push(TaskSkillResult {
-                name: item.name.clone(),
-                status,
-                error,
-                backup_path: Some(backup_display.clone()),
-            });
-            emit_update_progress(
-                &sink,
-                &task_id,
-                item,
-                TaskPhase::Verifying,
-                results.len() as u32,
-                total,
-            );
-            // Give the UI a chance to request a between-skills cancellation.
-            tokio::task::yield_now().await;
-        }
-
-        let overall = if cancelled || cancel.is_cancelled() {
-            TaskOverall::Cancelled
-        } else {
-            summary::overall_for(&results, TaskSkillStatus::Updated)
-        };
-        let message = summary::message(TaskAction::Update, overall, &results);
-        let backup_path = if backup_paths.len() == 1 {
-            backup_paths.first().cloned()
-        } else {
-            None
-        };
-        let result = TaskResult {
-            action: TaskAction::Update,
-            overall,
-            skills: results,
-            warnings,
-            backup_path,
-            log_path: Some(log_path),
-            started_at: 0,
-            finished_at_epoch_ms: now_ms(),
-            preview: None,
-        };
-        self.finish(&task_id, &sink, FinishOutcome::Completed(result, message));
-    }
-
-    async fn run_uninstall(
-        &self,
-        task_id: TaskId,
-        plan: uninstall_task::UninstallPlan,
-        permit: MutationPermit,
-        cancel: CancelToken,
-        sink: EventSink,
-    ) {
-        let _permit = permit;
-        let total = plan.total();
-        emit(
-            &sink,
-            TaskEvent::progress(&task_id, TaskPhase::Preparing, "正在准备卸载…", 0, total),
-        );
-        if cancel.is_cancelled() {
-            self.finish(&task_id, &sink, FinishOutcome::Cancelled);
-            return;
-        }
-
-        let runtime = tokio::select! {
-            result = self.inner.runtime.cli_runtime() => match result {
-                Ok(runtime) => runtime,
-                Err(error) => {
-                    self.finish(&task_id, &sink, FinishOutcome::Failed(error));
-                    return;
-                }
-            },
-            _ = cancel.cancelled() => {
-                self.finish(&task_id, &sink, FinishOutcome::Cancelled);
-                return;
-            }
-        };
-        if cancel.is_cancelled() {
-            self.finish(&task_id, &sink, FinishOutcome::Cancelled);
-            return;
-        }
-
-        let paths = self.inner.paths.clone();
-        let backups = BackupStore::new(&paths);
-        let log = OperationLog::new(&paths);
-        let log_path = paths.display(log.path());
-        let baselines = BaselineStore::new(&paths);
-
-        let mut backup_event = TaskEvent::progress(
-            &task_id,
-            TaskPhase::Backup,
-            format!("正在备份 {}…", plan.name),
-            0,
-            total,
-        );
-        backup_event.skill = Some(plan.name.clone());
-        emit(&sink, backup_event);
-
-        let backup_name = plan.name.clone();
-        let backup_canonical = plan.canonical.clone();
-        let backup_attachments = plan.backup_attachments();
-        let backup_agents = plan.agent_ids.clone();
-        let backup_store = backups.clone();
-        let backup_outcome = tokio::task::spawn_blocking(move || {
-            backup_store.create(
-                BackupAction::Uninstall,
-                &backup_name,
-                backup_canonical.as_deref(),
-                &backup_attachments,
-                &backup_agents,
-            )
-        })
-        .await;
-        let backup = match backup_outcome {
-            Ok(Ok(backup)) => backup,
-            Ok(Err(error)) => {
-                // A backup failure aborts the operation: no CLI runs.
-                let error =
-                    log_backup_failure(&log, "uninstall", &plan.name, &plan.agent_ids, error);
-                self.finish(&task_id, &sink, FinishOutcome::Failed(error));
-                return;
-            }
-            Err(error) => {
-                let error = log_backup_failure(
-                    &log,
-                    "uninstall",
-                    &plan.name,
-                    &plan.agent_ids,
-                    AppError::backup_failed(error.to_string()),
-                );
-                self.finish(&task_id, &sink, FinishOutcome::Failed(error));
-                return;
-            }
-        };
-        let backup_display = paths.display(&backup.path);
-        self.record_snapshot(&task_id, &backup.path);
-
-        if cancel.is_cancelled() {
-            let _ = log.append(&OperationEntry::new(
-                "uninstall",
-                &plan.name,
-                plan.agent_ids.clone(),
-                "cancelled",
-                Some(backup_display),
-                None,
-            ));
-            self.finish(&task_id, &sink, FinishOutcome::Cancelled);
-            return;
-        }
-        // From here on the CLI may write: cancellation is rejected.
-        if self.seal_task(&task_id) {
-            let _ = log.append(&OperationEntry::new(
-                "uninstall",
-                &plan.name,
-                plan.agent_ids.clone(),
-                "cancelled",
-                Some(backup_display),
-                None,
-            ));
-            self.finish(&task_id, &sink, FinishOutcome::Cancelled);
-            return;
-        }
-
-        let mut running_event = TaskEvent::progress(
-            &task_id,
-            TaskPhase::RunningCli,
-            format!("正在执行 skills remove（{}）…", plan.name),
-            0,
-            total,
-        );
-        running_event.skill = Some(plan.name.clone());
-        emit(&sink, running_event);
-
-        let spec = uninstall_task::uninstall_command(
-            &runtime,
-            &plan.name,
-            self.inner.config.install_timeout,
-        );
-        let output = match self.inner.executor.run(spec, cancel.clone()).await {
-            Ok(output) => output,
-            Err(ExecError::Cancelled) => {
-                let _ = log.append(&OperationEntry::new(
-                    "uninstall",
-                    &plan.name,
-                    plan.agent_ids.clone(),
-                    "cancelled",
-                    Some(backup_display.clone()),
-                    Some(AppError::cli_cancelled()),
-                ));
-                self.finish(&task_id, &sink, FinishOutcome::Cancelled);
-                return;
-            }
-            Err(ExecError::Timeout(timeout)) => {
-                self.finish_uninstall_failure(
-                    &task_id,
-                    &sink,
-                    &plan,
-                    &log,
-                    &log_path,
-                    &backup_display,
-                    AppError::cli_timeout("卸载", timeout),
-                );
-                return;
-            }
-            Err(ExecError::Spawn { program, message }) => {
-                self.finish_uninstall_failure(
-                    &task_id,
-                    &sink,
-                    &plan,
-                    &log,
-                    &log_path,
-                    &backup_display,
-                    AppError::cli_spawn_failed(format!("无法启动 {program}: {message}")),
-                );
-                return;
-            }
-            Err(ExecError::Io(message)) => {
-                self.finish_uninstall_failure(
-                    &task_id,
-                    &sink,
-                    &plan,
-                    &log,
-                    &log_path,
-                    &backup_display,
-                    AppError::cli_failed(message),
-                );
-                return;
-            }
-        };
-
-        let mut verify_event = TaskEvent::progress(
-            &task_id,
-            TaskPhase::Verifying,
-            "正在校验 canonical、agent 挂载与 lock…",
-            0,
-            total,
-        );
-        verify_event.skill = Some(plan.name.clone());
-        emit(&sink, verify_event);
-
-        let verify_paths = paths.clone();
-        let verify_plan = plan.clone();
-        let cli_succeeded = output.success();
-        let verification = match tokio::task::spawn_blocking(move || {
-            let mut warnings = Vec::new();
-            if cli_succeeded {
-                uninstall_task::remove_extra_attachments(&verify_plan, &mut warnings);
-            }
-            let mut verification = uninstall_task::verify_uninstall(&verify_paths, &verify_plan);
-            warnings.append(&mut verification.warnings);
-            verification.warnings = warnings;
-            verification
-        })
-        .await
-        {
-            Ok(verification) => verification,
-            Err(error) => {
-                self.finish_uninstall_failure(
-                    &task_id,
-                    &sink,
-                    &plan,
-                    &log,
-                    &log_path,
-                    &backup_display,
-                    AppError::verify_failed(error.to_string()),
-                );
-                return;
-            }
-        };
-
-        let mut warnings = verification.warnings;
-        let outcome = uninstall_task::evaluate_output(&output, verification.result);
-        let status = if outcome.is_ok() {
-            TaskSkillStatus::Removed
-        } else {
-            TaskSkillStatus::Failed
-        };
-        let error = outcome.err();
-        if status == TaskSkillStatus::Removed
-            && let Err(clear_error) = baselines.clear(&plan.name)
-        {
-            warnings.push(
-                AppError::new(
-                    codes::BASELINE_CLEAR_FAILED,
-                    "卸载成功，但无法清除本地基线指纹。",
-                )
-                .detail(clear_error.to_string()),
-            );
-        }
-
-        let log_result = if status == TaskSkillStatus::Removed {
-            "removed"
-        } else {
-            "failed"
-        };
-        let _ = log.append(&OperationEntry::new(
-            "uninstall",
-            &plan.name,
-            plan.agent_ids.clone(),
-            log_result,
-            Some(backup_display.clone()),
-            error.clone(),
-        ));
-        let skill_result = TaskSkillResult {
-            name: plan.name.clone(),
-            status,
-            error,
-            backup_path: Some(backup_display.clone()),
-        };
-        // Same roll-up helper as install/update, even for the single row.
-        let overall = summary::overall_for(
-            std::slice::from_ref(&skill_result),
-            TaskSkillStatus::Removed,
-        );
-        let message = summary::message(
-            TaskAction::Uninstall,
-            overall,
-            std::slice::from_ref(&skill_result),
-        );
-        let result = TaskResult {
-            action: TaskAction::Uninstall,
-            overall,
-            skills: vec![skill_result],
-            warnings,
-            backup_path: Some(backup_display),
-            log_path: Some(log_path),
-            started_at: 0,
-            finished_at_epoch_ms: now_ms(),
-            preview: None,
-        };
-        self.finish(&task_id, &sink, FinishOutcome::Completed(result, message));
-    }
-
-    /// Record and report a single-skill uninstall failure that happened after
-    /// the backup was written (CLI spawn/timeout, verifier crash, ...). The
-    /// backup and log paths stay visible so the user can inspect or restore.
-    #[allow(clippy::too_many_arguments)]
-    fn finish_uninstall_failure(
-        &self,
-        task_id: &str,
-        sink: &EventSink,
-        plan: &uninstall_task::UninstallPlan,
-        log: &OperationLog,
-        log_path: &str,
-        backup_display: &str,
-        error: AppError,
-    ) {
-        let _ = log.append(&OperationEntry::new(
-            "uninstall",
-            &plan.name,
-            plan.agent_ids.clone(),
-            "failed",
-            Some(backup_display.to_string()),
-            Some(error.clone()),
-        ));
-        let skill_result = TaskSkillResult {
-            name: plan.name.clone(),
-            status: TaskSkillStatus::Failed,
-            error: Some(error),
-            backup_path: Some(backup_display.to_string()),
-        };
-        let message = summary::message(
-            TaskAction::Uninstall,
-            TaskOverall::Failed,
-            std::slice::from_ref(&skill_result),
-        );
-        let result = TaskResult {
-            action: TaskAction::Uninstall,
-            overall: TaskOverall::Failed,
-            skills: vec![skill_result],
-            warnings: Vec::new(),
-            backup_path: Some(backup_display.to_string()),
-            log_path: Some(log_path.to_string()),
-            started_at: 0,
-            finished_at_epoch_ms: now_ms(),
-            preview: None,
-        };
-        self.finish(task_id, sink, FinishOutcome::Completed(result, message));
-    }
-
     async fn lookup_conflicts(&self, skills: &[ParsedSkill]) -> HashMap<String, ConflictInfo> {
         let names: Vec<String> = skills.iter().map(|skill| skill.name.clone()).collect();
         if names.is_empty() {
@@ -2171,100 +1202,6 @@ impl TaskManager {
     }
 }
 
-fn failed_update_result(
-    log: &OperationLog,
-    item: &update_task::UpdateItem,
-    backup_path: Option<&str>,
-    error: AppError,
-) -> TaskSkillResult {
-    let _ = log.append(&OperationEntry::new(
-        "update",
-        &item.name,
-        item.agent_ids.clone(),
-        "failed",
-        backup_path.map(str::to_string),
-        Some(error.clone()),
-    ));
-    TaskSkillResult {
-        name: item.name.clone(),
-        status: TaskSkillStatus::Failed,
-        error: Some(error),
-        backup_path: backup_path.map(str::to_string),
-    }
-}
-
-fn emit_update_progress(
-    sink: &EventSink,
-    task_id: &str,
-    item: &update_task::UpdateItem,
-    phase: TaskPhase,
-    completed: u32,
-    total: u32,
-) {
-    let mut event = TaskEvent::progress(
-        task_id,
-        phase,
-        format!("已处理 {}", item.name),
-        completed,
-        total,
-    );
-    event.skill = Some(item.name.clone());
-    emit(sink, event);
-}
-
-/// Log a mandatory-backup failure and return the same error, so both the
-/// update and uninstall paths abort with one identical code path.
-fn log_backup_failure(
-    log: &OperationLog,
-    action: &str,
-    name: &str,
-    agents: &[String],
-    error: AppError,
-) -> AppError {
-    let _ = log.append(&OperationEntry::new(
-        action,
-        name,
-        agents.to_vec(),
-        "failed",
-        None,
-        Some(error.clone()),
-    ));
-    error
-}
-
-fn baseline_write_warning(error: AppError) -> AppError {
-    AppError::new(
-        codes::BASELINE_WRITE_FAILED,
-        "操作成功，但无法刷新本地基线指纹。",
-    )
-    .detail(error.message)
-}
-
-pub(super) fn classify_install_failure(detail: &str, stderr: &str) -> AppError {
-    let combined = if stderr.trim().is_empty() {
-        detail.trim().to_string()
-    } else if detail.trim().is_empty() {
-        stderr.trim().to_string()
-    } else {
-        format!("{}\n{}", detail.trim(), stderr.trim())
-    };
-    let detail = super::parser::truncate_chars(&combined, 16 * 1024);
-    let lower = detail.to_lowercase();
-    if lower.contains("failed to clone")
-        || lower.contains("unable to access")
-        || lower.contains("couldn't connect")
-        || lower.contains("failed to connect")
-        || lower.contains("could not resolve")
-        || lower.contains("network is unreachable")
-    {
-        AppError::network_fetch_failed(detail)
-    } else if detail.is_empty() {
-        AppError::cli_exit_nonzero("skills CLI 以非零退出码结束且未输出详情。")
-    } else {
-        AppError::cli_exit_nonzero(detail)
-    }
-}
-
 fn classify_cli_failure(stdout: &str, stderr: &str) -> AppError {
     let detail = if stderr.trim().is_empty() {
         stdout.trim().to_string()
@@ -2290,7 +1227,7 @@ fn classify_cli_failure(stdout: &str, stderr: &str) -> AppError {
     }
 }
 
-fn now_ms() -> u64 {
+pub(super) fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
@@ -2312,6 +1249,7 @@ impl Clone for TaskManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::baseline::BaselineStore;
     use crate::cli::CliRuntime;
     use crate::error::codes;
     use crate::process::fake::{ScriptedExecutor, ScriptedResponse};

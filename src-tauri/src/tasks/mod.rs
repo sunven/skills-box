@@ -4,6 +4,7 @@ pub mod conflicts;
 pub mod install;
 pub mod manager;
 pub mod parser;
+mod session;
 pub mod source;
 pub mod summary;
 pub mod uninstall;

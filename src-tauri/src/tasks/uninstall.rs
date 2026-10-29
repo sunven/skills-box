@@ -21,16 +21,23 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::backup::BackupAttachment;
+use crate::backup::{BackupAction, BackupAttachment, BackupStore};
+use crate::baseline::BaselineStore;
 use crate::cli::CliRuntime;
 use crate::error::AppError;
 use crate::inventory::{self, AgentDir, AttachmentLocation, AttachmentMode, ManagementState};
 use crate::lock::LockFile;
+use crate::logs::{OperationEntry, OperationLog};
 use crate::paths::AppPaths;
 use crate::process::{CommandSpec, ExecOutput};
 use crate::security;
 
 use super::install::{INSTALL_TIMEOUT, UNIVERSAL_AGENT_ID};
+use super::manager::{TaskAction, TaskPhase, TaskSkillResult, TaskSkillStatus};
+use super::session::{
+    CancellationPolicy, FailureDisposition, MutationAction, Preflight, Reporter, SessionProfile,
+    StartOutcome, UnitOutcome,
+};
 
 pub const UNINSTALL_TIMEOUT: Duration = INSTALL_TIMEOUT;
 
@@ -331,6 +338,203 @@ pub fn evaluate_output(
     match classify_remove_output(output) {
         Some(error) => Err(error),
         None => Ok(()),
+    }
+}
+
+/// Uninstall as one session unit: backup in preflight, one `skills remove`,
+/// then disk verification, baseline clearing and the operation log.
+pub(crate) struct UninstallAction {
+    paths: AppPaths,
+    timeout: Duration,
+}
+
+impl UninstallAction {
+    pub(crate) fn new(paths: AppPaths, timeout: Duration) -> Self {
+        Self { paths, timeout }
+    }
+}
+
+impl MutationAction for UninstallAction {
+    type Plan = UninstallPlan;
+    type Unit = UninstallPlan;
+
+    fn profile(&self, plan: &Self::Plan) -> SessionProfile {
+        SessionProfile {
+            action: TaskAction::Uninstall,
+            initial_message: "正在准备卸载…".to_string(),
+            success_status: TaskSkillStatus::Removed,
+            total: plan.total(),
+            cancellation: CancellationPolicy::SealOnly,
+        }
+    }
+
+    fn begin(&self, plan: &Self::Plan) -> Result<StartOutcome<Self::Unit>, AppError> {
+        let log = OperationLog::new(&self.paths);
+        Ok(StartOutcome {
+            units: vec![plan.clone()],
+            initial_rows: Vec::new(),
+            log_path: Some(self.paths.display(log.path())),
+        })
+    }
+
+    fn preflight(&self, plan: &Self::Unit, reporter: &Reporter) -> Result<Preflight, AppError> {
+        reporter.progress(
+            TaskPhase::Backup,
+            format!("正在备份 {}…", plan.name),
+            Some(plan.name.as_str()),
+        );
+        let backups = BackupStore::new(&self.paths);
+        let backup = backups
+            .create(
+                BackupAction::Uninstall,
+                &plan.name,
+                plan.canonical.as_deref(),
+                &plan.backup_attachments(),
+                &plan.agent_ids,
+            )
+            .inspect_err(|error| {
+                let log = OperationLog::new(&self.paths);
+                let _ = log.append(&OperationEntry::new(
+                    "uninstall",
+                    &plan.name,
+                    plan.agent_ids.clone(),
+                    "failed",
+                    None,
+                    Some(error.clone()),
+                ));
+            })?;
+        Ok(Preflight {
+            snapshot: backup.path,
+            post_message: None,
+            warnings: Vec::new(),
+        })
+    }
+
+    fn command(&self, plan: &Self::Unit, runtime: &CliRuntime, reporter: &Reporter) -> CommandSpec {
+        reporter.progress(
+            TaskPhase::RunningCli,
+            format!("正在执行 skills remove（{}）…", plan.name),
+            Some(plan.name.as_str()),
+        );
+        uninstall_command(runtime, &plan.name, self.timeout)
+    }
+
+    fn complete(
+        &self,
+        plan: &Self::Unit,
+        output: ExecOutput,
+        preflight: &Preflight,
+        reporter: &Reporter,
+    ) -> Result<UnitOutcome, AppError> {
+        reporter.progress(
+            TaskPhase::Verifying,
+            "正在校验 canonical、agent 挂载与 lock…",
+            Some(plan.name.as_str()),
+        );
+        let mut warnings = Vec::new();
+        if output.success() {
+            remove_extra_attachments(plan, &mut warnings);
+        }
+        let mut verification = verify_uninstall(&self.paths, plan);
+        warnings.append(&mut verification.warnings);
+        let outcome = evaluate_output(&output, verification.result);
+        let status = if outcome.is_ok() {
+            TaskSkillStatus::Removed
+        } else {
+            TaskSkillStatus::Failed
+        };
+        let error = outcome.err();
+        if status == TaskSkillStatus::Removed
+            && let Err(clear_error) = BaselineStore::new(&self.paths).clear(&plan.name)
+        {
+            warnings.push(
+                AppError::new(
+                    crate::error::codes::BASELINE_CLEAR_FAILED,
+                    "卸载成功，但无法清除本地基线指纹。",
+                )
+                .detail(clear_error.to_string()),
+            );
+        }
+
+        let backup_display = self.paths.display(&preflight.snapshot);
+        let log = OperationLog::new(&self.paths);
+        let log_result = if status == TaskSkillStatus::Removed {
+            "removed"
+        } else {
+            "failed"
+        };
+        let _ = log.append(&OperationEntry::new(
+            "uninstall",
+            &plan.name,
+            plan.agent_ids.clone(),
+            log_result,
+            Some(backup_display.clone()),
+            error.clone(),
+        ));
+        Ok(UnitOutcome {
+            rows: vec![TaskSkillResult {
+                name: plan.name.clone(),
+                status,
+                error,
+                backup_path: Some(backup_display.clone()),
+            }],
+            warnings,
+            backup_path: backup_display,
+            final_progress: None,
+        })
+    }
+
+    fn on_infrastructure_failure(
+        &self,
+        plan: &Self::Unit,
+        error: AppError,
+        preflight: Option<&Preflight>,
+        _reporter: &Reporter,
+    ) -> FailureDisposition {
+        let log = OperationLog::new(&self.paths);
+        let Some(preflight) = preflight else {
+            let _ = log.append(&OperationEntry::new(
+                "uninstall",
+                &plan.name,
+                plan.agent_ids.clone(),
+                "failed",
+                None,
+                Some(error.clone()),
+            ));
+            return FailureDisposition::TaskFailed(error);
+        };
+        let backup_display = self.paths.display(&preflight.snapshot);
+        let _ = log.append(&OperationEntry::new(
+            "uninstall",
+            &plan.name,
+            plan.agent_ids.clone(),
+            "failed",
+            Some(backup_display.clone()),
+            Some(error.clone()),
+        ));
+        FailureDisposition::UnitFailed(UnitOutcome {
+            rows: vec![TaskSkillResult {
+                name: plan.name.clone(),
+                status: TaskSkillStatus::Failed,
+                error: Some(error),
+                backup_path: Some(backup_display.clone()),
+            }],
+            warnings: Vec::new(),
+            backup_path: backup_display,
+            final_progress: None,
+        })
+    }
+
+    fn on_cancelled(&self, plan: &Self::Unit, preflight: &Preflight, error: Option<AppError>) {
+        let log = OperationLog::new(&self.paths);
+        let _ = log.append(&OperationEntry::new(
+            "uninstall",
+            &plan.name,
+            plan.agent_ids.clone(),
+            "cancelled",
+            Some(self.paths.display(&preflight.snapshot)),
+            error,
+        ));
     }
 }
 

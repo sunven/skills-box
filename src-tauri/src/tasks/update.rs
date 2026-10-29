@@ -16,11 +16,13 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::backup::BackupAttachment;
-use crate::baseline::LocalModification;
-use crate::error::AppError;
+use crate::backup::{BackupAction, BackupAttachment, BackupStore};
+use crate::baseline::{BaselineStore, LocalModification, write_warning};
+use crate::cli::CliRuntime;
+use crate::error::{AppError, codes};
 use crate::inventory::{self, AgentDir, AttachmentLocation, AttachmentMode, ManagementState};
 use crate::lock::{LockEntry, LockFile};
+use crate::logs::{OperationEntry, OperationLog};
 use crate::paths::AppPaths;
 use crate::process::{CommandSpec, ExecOutput};
 
@@ -28,7 +30,11 @@ use super::install::{
     INSTALL_TIMEOUT, InstallOutput, InstallPlan, InstallTarget, UNIVERSAL_AGENT_ID,
     ensure_extra_attachments, install_command, parse_install_output, verify_install,
 };
-use super::manager::{TaskSkillResult, TaskSkillStatus};
+use super::manager::{TaskAction, TaskPhase, TaskSkillResult, TaskSkillStatus};
+use super::session::{
+    CancellationPolicy, FailureDisposition, FinalProgress, MutationAction, Preflight, Reporter,
+    SessionProfile, StartOutcome, UnitOutcome,
+};
 use super::source::validate_source;
 
 #[derive(Debug, Clone)]
@@ -329,7 +335,7 @@ pub fn verify_update(
         InstallOutput::Results(results) => results,
         InstallOutput::Fatal(detail) => {
             return UpdateVerification {
-                result: Err(super::manager::classify_install_failure(
+                result: Err(super::install::classify_install_failure(
                     &detail,
                     &output.stderr,
                 )),
@@ -423,6 +429,231 @@ pub fn status_label(status: TaskSkillStatus) -> &'static str {
 
 /// Names that may be retried: every failed skill, never skipped/ineligible
 /// rows. Used by the frontend result view and kept here for contract clarity.
+/// Update as a multi-unit session: one unit per update candidate. The action
+/// owns backup, command, verification, baseline, the operation log and the
+/// per-item progress event; the session owns the between-unit cancellation
+/// window and the result envelope.
+pub(crate) struct UpdateAction {
+    paths: AppPaths,
+    timeout: Duration,
+}
+
+impl UpdateAction {
+    pub(crate) fn new(paths: AppPaths, timeout: Duration) -> Self {
+        Self { paths, timeout }
+    }
+}
+
+impl MutationAction for UpdateAction {
+    type Plan = UpdatePlan;
+    type Unit = UpdateItem;
+
+    fn profile(&self, plan: &Self::Plan) -> SessionProfile {
+        SessionProfile {
+            action: TaskAction::Update,
+            initial_message: "正在准备更新…".to_string(),
+            success_status: TaskSkillStatus::Updated,
+            total: plan.total(),
+            cancellation: CancellationPolicy::BetweenUnits,
+        }
+    }
+
+    fn begin(&self, plan: &Self::Plan) -> Result<StartOutcome<Self::Unit>, AppError> {
+        let log = OperationLog::new(&self.paths);
+        let mut initial_rows = Vec::new();
+        for skip in &plan.skipped {
+            let _ = log.append(&OperationEntry::new(
+                "update",
+                &skip.name,
+                Vec::new(),
+                "skipped",
+                None,
+                Some(skip.error.clone()),
+            ));
+            initial_rows.push(TaskSkillResult {
+                name: skip.name.clone(),
+                status: TaskSkillStatus::Skipped,
+                error: Some(skip.error.clone()),
+                backup_path: None,
+            });
+        }
+        Ok(StartOutcome {
+            units: plan.items.clone(),
+            initial_rows,
+            log_path: Some(self.paths.display(log.path())),
+        })
+    }
+
+    fn preflight(&self, item: &Self::Unit, reporter: &Reporter) -> Result<Preflight, AppError> {
+        reporter.progress(
+            TaskPhase::Backup,
+            format!("正在备份 {}…", item.name),
+            Some(item.name.as_str()),
+        );
+        let mut warnings = Vec::new();
+        if item.local_modification != LocalModification::Clean {
+            let detail = item
+                .local_modification_detail
+                .clone()
+                .unwrap_or_else(|| "无法确认当前文件是否与基线一致。".to_string());
+            warnings.push(AppError::update_local_modified(&item.name, detail));
+        }
+        if !item.copy_agents.is_empty() {
+            warnings.push(AppError::update_copy_to_symlink(
+                &item.name,
+                &item.copy_agents.join("、"),
+            ));
+        }
+
+        let backups = BackupStore::new(&self.paths);
+        let backup = backups
+            .create(
+                BackupAction::Update,
+                &item.name,
+                Some(&item.canonical),
+                &item.attachments,
+                &item.agent_ids,
+            )
+            .inspect_err(|error| {
+                let log = OperationLog::new(&self.paths);
+                let _ = log.append(&OperationEntry::new(
+                    "update",
+                    &item.name,
+                    item.agent_ids.clone(),
+                    "failed",
+                    None,
+                    Some(error.clone()),
+                ));
+            })?;
+        Ok(Preflight {
+            snapshot: backup.path,
+            post_message: None,
+            warnings,
+        })
+    }
+
+    fn command(&self, item: &Self::Unit, runtime: &CliRuntime, reporter: &Reporter) -> CommandSpec {
+        reporter.progress(
+            TaskPhase::RunningCli,
+            format!("正在更新 {}（skills add）…", item.name),
+            Some(item.name.as_str()),
+        );
+        update_command(item, runtime, self.timeout)
+    }
+
+    fn complete(
+        &self,
+        item: &Self::Unit,
+        output: ExecOutput,
+        preflight: &Preflight,
+        reporter: &Reporter,
+    ) -> Result<UnitOutcome, AppError> {
+        reporter.progress(
+            TaskPhase::Verifying,
+            format!("正在校验 {} 的 canonical、挂载与 lock…", item.name),
+            Some(item.name.as_str()),
+        );
+        let verification = verify_update(&self.paths, item, &output);
+        let mut warnings = verification.warnings;
+        let (status, error) = match verification.result {
+            Ok(()) => (TaskSkillStatus::Updated, None),
+            Err(error) if error.code == codes::SKILL_NOT_IN_SOURCE => {
+                (TaskSkillStatus::Skipped, Some(error))
+            }
+            Err(error) => (TaskSkillStatus::Failed, Some(error)),
+        };
+        if status == TaskSkillStatus::Updated
+            && let Err(error) =
+                BaselineStore::new(&self.paths).record_from_dir(&item.name, &item.canonical, true)
+        {
+            warnings.push(write_warning(error));
+        }
+
+        let backup_display = self.paths.display(&preflight.snapshot);
+        let log = OperationLog::new(&self.paths);
+        let _ = log.append(&OperationEntry::new(
+            "update",
+            &item.name,
+            item.agent_ids.clone(),
+            status_label(status),
+            Some(backup_display.clone()),
+            error.clone(),
+        ));
+        Ok(UnitOutcome {
+            rows: vec![TaskSkillResult {
+                name: item.name.clone(),
+                status,
+                error,
+                backup_path: Some(backup_display.clone()),
+            }],
+            warnings,
+            backup_path: backup_display,
+            final_progress: Some(FinalProgress {
+                phase: TaskPhase::Verifying,
+                message: format!("已处理 {}", item.name),
+                skill: Some(item.name.clone()),
+            }),
+        })
+    }
+
+    fn on_infrastructure_failure(
+        &self,
+        item: &Self::Unit,
+        error: AppError,
+        preflight: Option<&Preflight>,
+        _reporter: &Reporter,
+    ) -> FailureDisposition {
+        let log = OperationLog::new(&self.paths);
+        let Some(preflight) = preflight else {
+            let _ = log.append(&OperationEntry::new(
+                "update",
+                &item.name,
+                item.agent_ids.clone(),
+                "failed",
+                None,
+                Some(error.clone()),
+            ));
+            return FailureDisposition::TaskFailed(error);
+        };
+        let backup_display = self.paths.display(&preflight.snapshot);
+        let _ = log.append(&OperationEntry::new(
+            "update",
+            &item.name,
+            item.agent_ids.clone(),
+            "failed",
+            Some(backup_display.clone()),
+            Some(error.clone()),
+        ));
+        FailureDisposition::UnitFailed(UnitOutcome {
+            rows: vec![TaskSkillResult {
+                name: item.name.clone(),
+                status: TaskSkillStatus::Failed,
+                error: Some(error),
+                backup_path: Some(backup_display.clone()),
+            }],
+            warnings: Vec::new(),
+            backup_path: backup_display,
+            final_progress: Some(FinalProgress {
+                phase: TaskPhase::Verifying,
+                message: format!("已处理 {}", item.name),
+                skill: Some(item.name.clone()),
+            }),
+        })
+    }
+
+    fn on_cancelled(&self, item: &Self::Unit, preflight: &Preflight, error: Option<AppError>) {
+        let log = OperationLog::new(&self.paths);
+        let _ = log.append(&OperationEntry::new(
+            "update",
+            &item.name,
+            item.agent_ids.clone(),
+            "cancelled",
+            Some(self.paths.display(&preflight.snapshot)),
+            error,
+        ));
+    }
+}
+
 pub fn retryable_names(results: &[TaskSkillResult]) -> Vec<String> {
     results
         .iter()

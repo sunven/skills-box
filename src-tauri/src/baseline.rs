@@ -454,6 +454,16 @@ pub fn is_git_tree_hash(hash: &str) -> bool {
     hash.len() == 40 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+/// Warning appended when an operation succeeded but its baseline could not be
+/// refreshed.
+pub(crate) fn write_warning(error: AppError) -> AppError {
+    AppError::new(
+        codes::BASELINE_WRITE_FAILED,
+        "操作成功，但无法刷新本地基线指纹。",
+    )
+    .detail(error.message)
+}
+
 fn read_sorted(dir: &Path) -> io::Result<Vec<fs::DirEntry>> {
     let mut entries = fs::read_dir(dir)?.collect::<Result<Vec<_>, io::Error>>()?;
     entries.sort_by_key(|entry| entry.file_name());
