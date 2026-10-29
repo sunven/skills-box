@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isHttpsUrl, stripFrontmatter } from "./markdown";
+import { isHttpsUrl, safeMarkdownUrl, stripFrontmatter } from "./markdown";
 
 describe("stripFrontmatter", () => {
   it("removes a leading frontmatter block but keeps the body", () => {
@@ -38,5 +38,35 @@ describe("isHttpsUrl", () => {
     expect(isHttpsUrl("/relative/path")).toBe(false);
     expect(isHttpsUrl(" https://example.com")).toBe(false);
     expect(isHttpsUrl(undefined)).toBe(false);
+  });
+});
+
+describe("safeMarkdownUrl", () => {
+  it("allows https, fragments, and relative skill paths", () => {
+    expect(safeMarkdownUrl("https://example.com/docs")).toBe(
+      "https://example.com/docs",
+    );
+    expect(safeMarkdownUrl("#section")).toBe("#section");
+    expect(safeMarkdownUrl("references/api.md")).toBe(
+      "references/api.md",
+    );
+    expect(safeMarkdownUrl("../assets/logo.png")).toBe(
+      "../assets/logo.png",
+    );
+    expect(safeMarkdownUrl("a%20b.md")).toBe("a%20b.md");
+  });
+
+  it("rejects schemes, absolute paths, protocol-relative URLs, and backslashes", () => {
+    expect(safeMarkdownUrl("http://example.com")).toBe("");
+    expect(safeMarkdownUrl("javascript:alert(1)")).toBe("");
+    expect(safeMarkdownUrl("data:text/html,x")).toBe("");
+    expect(safeMarkdownUrl("mailto:a@example.com")).toBe("");
+    expect(safeMarkdownUrl("file:///etc/passwd")).toBe("");
+    expect(safeMarkdownUrl("/etc/passwd")).toBe("");
+    expect(safeMarkdownUrl("//evil.test/x")).toBe("");
+    expect(safeMarkdownUrl("a\\b")).toBe("");
+    expect(safeMarkdownUrl(" https://example.com")).toBe("");
+    expect(safeMarkdownUrl("")).toBe("");
+    expect(safeMarkdownUrl(undefined)).toBe("");
   });
 });

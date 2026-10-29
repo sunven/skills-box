@@ -1,16 +1,29 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { createQueryClient } from "./lib/query-client";
 import type {
   AgentAttachment,
   InventorySnapshot,
   SkillDetail,
+  SkillDirListing,
+  SkillFileContent,
 } from "./lib/types";
 import { healthyReport } from "./test/fixtures";
-import { makeDetail } from "./test/detail-fixtures";
+import {
+  IMAGE_DATA_URL,
+  makeDetail,
+  makeDirListing,
+  makeFileContent,
+} from "./test/detail-fixtures";
 import {
   attachment,
   group,
@@ -76,17 +89,21 @@ function baseDetail(overrides: Partial<SkillDetail> = {}): SkillDetail {
     directoryMtimeEpochMs: 1793163988000,
     hash: "0123456789abcdef0123456789abcdef01234567",
     attachments,
-    warnings: ["断链：Gemini CLI"],
     ...overrides,
   });
 }
 
-function mockCommands(options: {
-  snapshot?: InventorySnapshot | (() => InventorySnapshot);
-  detail?: SkillDetail | ((skillId: string) => SkillDetail);
-  detailError?: { code: string; message: string; hint?: string };
-  openError?: { code: string; message: string };
-}): Call[] {
+function mockCommands(
+  options: {
+    snapshot?: InventorySnapshot | (() => InventorySnapshot);
+    detail?: SkillDetail | ((skillId: string) => SkillDetail);
+    detailError?: { code: string; message: string; hint?: string };
+    listing?: (skillId: string, path: string) => SkillDirListing;
+    file?: (skillId: string, path: string) => SkillFileContent;
+    fileError?: { code: string; message: string; hint?: string };
+    openError?: { code: string; message: string };
+  } = {},
+): Call[] {
   const calls: Call[] = [];
   const snapshot = options.snapshot ?? baseSnapshot();
   mockIPC((command, payload) => {
@@ -102,8 +119,21 @@ function mockCommands(options: {
         const detail = options.detail ?? baseDetail();
         return typeof detail === "function" ? detail(skillId) : detail;
       }
+      case "list_skill_dir": {
+        const args = payload as { skillId: string; path?: string };
+        return options.listing
+          ? options.listing(args.skillId, args.path ?? "")
+          : makeDirListing(args.skillId, args.path ?? "");
+      }
+      case "read_skill_file": {
+        if (options.fileError) throw options.fileError;
+        const args = payload as { skillId: string; path: string };
+        return options.file
+          ? options.file(args.skillId, args.path)
+          : makeFileContent(args.skillId, args.path);
+      }
       case "open_skill_folder":
-      case "open_skill_md":
+      case "open_skill_file":
         if (options.openError) throw options.openError;
         return null;
       case "open_external_url":
@@ -137,30 +167,60 @@ function selectAlphaSync() {
 async function selectAlpha() {
   await screen.findByText("alpha");
   const target = selectAlphaSync();
-  await screen.findByText("概览");
+  await detailPane().findByTestId("skill-markdown-rendered");
   return target;
 }
+
+function treeRow(path: string): HTMLElement {
+  const found = detailPane()
+    .getAllByTestId("tree-row")
+    .find((candidate) => candidate.getAttribute("data-path") === path);
+  if (!found) throw new Error(`missing tree row ${path}`);
+  return found;
+}
+
+async function waitForTreeRow(path: string) {
+  await waitFor(() => {
+    const found = detailPane()
+      .getAllByTestId("tree-row")
+      .some((candidate) => candidate.getAttribute("data-path") === path);
+    expect(found).toBe(true);
+  });
+}
+
+function tab(name: "内容" | "操作"): HTMLElement {
+  return detailPane().getByRole("tab", { name });
+}
+
+function toolbar() {
+  return within(detailPane().getByTestId("content-toolbar"));
+}
+
+beforeEach(() => {
+  Element.prototype.scrollIntoView = vi.fn();
+});
 
 afterEach(() => {
   clearMocks();
 });
 
-describe("skill detail panel", () => {
-  it("renders overview metadata, orthogonal badges, attachments and rendered SKILL.md", async () => {
+describe("skill detail drawer", () => {
+  it("renders identity, pinned alerts, the content tab, and the actions tab composition", async () => {
+    const content =
+      "---\nname: alpha\ndescription: Alpha\n---\n\n# Alpha 标题\n\n正文第一段。\n\n- 条目一\n- 条目二\n";
     mockCommands({
       detail: baseDetail({
         localModification: "modified",
         localModificationDetail: "当前文件与基线指纹不一致。",
-        skillMd: {
-          status: "ok",
-          path: "~/.agents/skills/alpha/SKILL.md",
-          content:
-            "---\nname: alpha\ndescription: Alpha\n---\n\n# Alpha 标题\n\n正文第一段。\n\n- 条目一\n- 条目二\n",
-          sizeBytes: 120,
-          limitBytes: 1024 * 1024,
-          error: null,
-        },
+        warnings: ["断链：Gemini CLI"],
       }),
+      file: (skillId, path) =>
+        path === "SKILL.md"
+          ? makeFileContent(skillId, path, {
+              content,
+              sizeBytes: content.length,
+            })
+          : makeFileContent(skillId, path),
     });
     renderApp();
     await selectAlpha();
@@ -169,45 +229,52 @@ describe("skill detail panel", () => {
     expect(
       pane.getByRole("heading", { name: "alpha" }),
     ).toBeInTheDocument();
-    // Update, management and warning badges stay orthogonal.
-    expect(pane.getAllByText("未知").length).toBeGreaterThan(0);
+    expect(pane.getByTestId("detail-update-badge")).toHaveTextContent("未知");
     expect(pane.getAllByText("本地改动").length).toBeGreaterThan(0);
     expect(pane.getAllByText("断链").length).toBeGreaterThan(0);
     expect(pane.getAllByText("警告").length).toBeGreaterThan(0);
-    expect(
-      pane.getByText(
-        "检测到本地改动：共享副本与基线记录不一致。更新会覆盖修改，请先备份。",
-        { exact: false },
-      ),
-    ).toBeInTheDocument();
 
-    expect(pane.getByText("acme/skills")).toBeInTheDocument();
-    expect(pane.getByText("· 公开 GitHub")).toBeInTheDocument();
-    expect(pane.getByText("main")).toBeInTheDocument();
-    expect(pane.getByText("skills/alpha/SKILL.md")).toBeInTheDocument();
-    expect(pane.getByText("canonical 路径")).toBeInTheDocument();
-    expect(pane.getByText("2026-01-01")).toBeInTheDocument();
-    expect(pane.getByText("2026-02-03")).toBeInTheDocument();
-    expect(pane.getAllByText("~/.agents/skills/alpha").length).toBeGreaterThan(
-      0,
+    // State notices sit above the tabs and are visible in both panels.
+    const alerts = pane.getByTestId("detail-alerts");
+    expect(alerts).toHaveTextContent(
+      "检测到本地改动：共享副本与基线记录不一致。更新会覆盖修改，请先备份。",
     );
-    expect(pane.getByText("2026-10-28")).toBeInTheDocument();
-    expect(pane.getByText("0123456789ab…")).toBeInTheDocument();
-    expect(pane.queryByText("未检测到改动")).not.toBeInTheDocument();
-    expect(pane.getByText("受管")).toBeInTheDocument();
+    expect(pane.getByTestId("detail-warnings")).toHaveTextContent(
+      "断链：Gemini CLI",
+    );
 
-    // Hash can be expanded to the full value.
-    fireEvent.click(pane.getByRole("button", { name: "查看完整 hash" }));
+    expect(tab("内容")).toHaveAttribute("aria-selected", "true");
+    expect(tab("操作")).toHaveAttribute("aria-selected", "false");
+
+    // Arrow keys move between the tabs and take focus with them.
+    fireEvent.keyDown(tab("内容"), { key: "ArrowRight" });
+    expect(tab("操作")).toHaveAttribute("aria-selected", "true");
+    expect(document.activeElement).toBe(tab("操作"));
+    fireEvent.keyDown(tab("操作"), { key: "ArrowLeft" });
+    expect(tab("内容")).toHaveAttribute("aria-selected", "true");
+    expect(document.activeElement).toBe(tab("内容"));
+
+    // Root tree lists directories first and auto-selects SKILL.md.
+    const rootRows = pane
+      .getAllByTestId("tree-row")
+      .map((element) => element.getAttribute("data-path"));
+    expect(rootRows).toEqual(["assets", "references", "scripts", "SKILL.md"]);
+    expect(treeRow("SKILL.md")).toHaveAttribute("data-selected", "true");
+
+    const rendered = pane.getByTestId("skill-markdown-rendered");
     expect(
-      pane.getByText("0123456789abcdef0123456789abcdef01234567"),
+      within(rendered).getByRole("heading", { name: "Alpha 标题" }),
     ).toBeInTheDocument();
+    expect(within(rendered).getByText("正文第一段。")).toBeInTheDocument();
+    expect(within(rendered).getByText("条目一")).toBeInTheDocument();
+    expect(rendered).not.toHaveTextContent("name: alpha");
 
-    // Attachment rows expose detach only for detachable link/copy mounts;
-    // native/broken rows stay read-only.
+    fireEvent.click(tab("操作"));
+    expect(tab("操作")).toHaveAttribute("aria-selected", "true");
+    expect(await pane.findByText("概览")).toBeInTheDocument();
+    expect(pane.getByText("Agent 挂载")).toBeInTheDocument();
+    expect(pane.getByText("3 个")).toBeInTheDocument();
     expect(pane.getAllByTestId("detail-agent-row")).toHaveLength(3);
-    expect(pane.getByText("链接")).toBeInTheDocument();
-    expect(pane.getByText("共享")).toBeInTheDocument();
-    expect(pane.getByText("链接目标缺失；只读提示，不自动修复。")).toBeInTheDocument();
     expect(
       pane.getByRole("button", { name: "断开 Claude Code" }),
     ).toBeInTheDocument();
@@ -217,109 +284,147 @@ describe("skill detail panel", () => {
     expect(
       pane.getByRole("button", { name: "检查更新" }),
     ).toBeInTheDocument();
-    // Managed rows expose the destructive uninstall action from ticket 09.
     expect(
       pane.getByRole("button", { name: "彻底卸载" }),
     ).toBeInTheDocument();
-
-    // Rendered SKILL.md hides frontmatter and renders Markdown.
-    const rendered = pane.getByTestId("skill-md-rendered");
-    expect(within(rendered).getByRole("heading", { name: "Alpha 标题" })).toBeInTheDocument();
-    expect(within(rendered).getByText("正文第一段。")).toBeInTheDocument();
-    expect(within(rendered).getByText("条目一")).toBeInTheDocument();
-    expect(rendered).not.toHaveTextContent("name: alpha");
+    expect(pane.getByText("acme/skills")).toBeInTheDocument();
+    expect(pane.getByText("main")).toBeInTheDocument();
+    expect(pane.getByText("canonical 路径")).toBeInTheDocument();
+    expect(pane.getByText("上次检查")).toBeInTheDocument();
+    expect(pane.getByText("远端 tree SHA")).toBeInTheDocument();
+    expect(pane.getByTestId("detail-last-update-check")).toHaveTextContent(
+      "尚未检查",
+    );
+    // The local-modification notice is still pinned above the tabs.
+    expect(pane.getByTestId("detail-alerts")).toHaveTextContent(
+      /检测到本地改动/,
+    );
   });
 
-  it("toggles between rendered and complete raw SKILL.md without losing focus", async () => {
-    const content =
-      "---\nname: alpha\ndescription: Alpha\n---\n\n# Alpha 标题\n\n正文。\n";
-    mockCommands({
-      detail: baseDetail({
-        skillMd: {
-          status: "ok",
-          path: "~/.agents/skills/alpha/SKILL.md",
-          content,
-          sizeBytes: content.length,
-          limitBytes: 1024 * 1024,
-          error: null,
-        },
-      }),
-    });
+  it("browses directories and previews markdown, text, and images", async () => {
+    mockCommands({});
     renderApp();
     await selectAlpha();
-
     const pane = detailPane();
-    expect(pane.getByTestId("skill-md-rendered")).toBeInTheDocument();
-    const rawButton = pane.getByRole("button", { name: "原文" });
-    rawButton.focus();
-    fireEvent.click(rawButton);
 
-    const raw = pane.getByTestId("skill-md-raw");
-    expect(raw).toHaveTextContent("---");
-    expect(raw).toHaveTextContent("name: alpha");
-    expect(raw.textContent).toBe(content);
-    expect(rawButton).toHaveAttribute("aria-pressed", "true");
-    expect(document.activeElement).toBe(rawButton);
+    fireEvent.click(treeRow("references"));
+    await waitForTreeRow("references/api.md");
+    expect(treeRow("references")).toHaveAttribute("aria-expanded", "true");
 
-    const renderedButton = pane.getByRole("button", { name: "渲染" });
-    fireEvent.click(renderedButton);
-    expect(pane.getByTestId("skill-md-rendered")).toBeInTheDocument();
-    expect(pane.queryByTestId("skill-md-raw")).toBeNull();
-    expect(renderedButton).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(treeRow("references/api.md"));
+    await waitFor(() =>
+      expect(pane.getByTestId("content-preview-path")).toHaveTextContent(
+        "references/api.md",
+      ),
+    );
+    await waitFor(() =>
+      expect(pane.getByTestId("skill-markdown-rendered")).toHaveTextContent(
+        "参考文档。",
+      ),
+    );
+    expect(treeRow("references/api.md")).toHaveAttribute(
+      "data-selected",
+      "true",
+    );
+
+    fireEvent.click(treeRow("scripts"));
+    await waitForTreeRow("scripts/run.sh");
+    fireEvent.click(treeRow("scripts/run.sh"));
+    await waitFor(() =>
+      expect(pane.getByTestId("content-preview-path")).toHaveTextContent(
+        "scripts/run.sh",
+      ),
+    );
+    await waitFor(() =>
+      expect(pane.getByTestId("skill-file-text")).toHaveTextContent(
+        "#!/bin/sh",
+      ),
+    );
+    expect(pane.queryByRole("button", { name: "原文" })).toBeNull();
+
+    fireEvent.click(treeRow("assets"));
+    await waitForTreeRow("assets/logo.png");
+    fireEvent.click(treeRow("assets/logo.png"));
+    await waitFor(() =>
+      expect(pane.getByTestId("skill-file-image")).toBeInTheDocument(),
+    );
+    const image = pane.getByTestId("skill-file-image") as HTMLImageElement;
+    expect(image.src).toBe(IMAGE_DATA_URL);
   });
 
-  it("does not execute raw HTML, load remote images, or open non-https links", async () => {
+  it("renders markdown safely and navigates internal links, images, and fragments", async () => {
     const content = [
-      "# Alpha",
+      "---",
+      "name: alpha",
+      "description: Alpha",
+      "---",
+      "",
+      "# Alpha 标题",
+      "",
+      "## Sec",
       "",
       "<script>window.__skills_box_xss = true</script>",
       '<img src="https://evil.test/raw.png" onerror="window.__skills_box_xss = true" />',
       "",
+      "[API 文档](references/api.md)",
+      "[跳转](#sec)",
       "[HTTPS 文档](https://example.com/docs)",
       "[HTTP 链接](http://example.com/insecure)",
       "[JS 链接](javascript:alert(1))",
       "",
       "![架构图](https://example.com/diagram.png)",
-      "![不安全图](http://example.com/bad.png)",
+      "![本地图](assets/logo.png)",
     ].join("\n");
     const calls = mockCommands({
-      detail: baseDetail({
-        skillMd: {
-          status: "ok",
-          path: "~/.agents/skills/alpha/SKILL.md",
-          content,
-          sizeBytes: content.length,
-          limitBytes: 1024 * 1024,
-          error: null,
-        },
-      }),
+      file: (skillId, path) =>
+        path === "SKILL.md"
+          ? makeFileContent(skillId, path, {
+              content,
+              sizeBytes: content.length,
+            })
+          : makeFileContent(skillId, path),
     });
     renderApp();
     await selectAlpha();
 
     const pane = detailPane();
-    const rendered = pane.getByTestId("skill-md-rendered");
+    const rendered = pane.getByTestId("skill-markdown-rendered");
     expect(rendered.querySelector("script")).toBeNull();
-    expect(rendered.querySelector("img")).toBeNull();
     expect(
       (window as unknown as { __skills_box_xss?: boolean }).__skills_box_xss,
     ).toBeUndefined();
     expect(rendered).not.toHaveTextContent("window.__skills_box_xss");
+    expect(
+      rendered.querySelector('img[src="https://evil.test/raw.png"]'),
+    ).toBeNull();
 
-    const httpsLink = within(rendered).getByRole("link", { name: "HTTPS 文档" });
-    expect(httpsLink).toHaveAttribute("href", "https://example.com/docs");
-    fireEvent.click(httpsLink);
+    const localImage = await within(rendered).findByTestId(
+      "skill-markdown-image",
+    );
+    expect(localImage).toHaveAttribute("src", IMAGE_DATA_URL);
+    expect(localImage).toHaveAttribute("alt", "本地图");
+    expect(within(rendered).getByText(/架构图/)).toBeInTheDocument();
+
+    // Fragment links scroll the current document.
+    const heading = within(rendered).getByRole("heading", { name: "Sec" });
+    expect(heading).toHaveAttribute("id", "sec");
+    fireEvent.click(within(rendered).getByRole("link", { name: "跳转" }));
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+
+    // External https still goes through the opener.
+    fireEvent.click(
+      within(rendered).getByRole("link", { name: "HTTPS 文档" }),
+    );
     await waitFor(() =>
       expect(
         calls.some(
           (call) =>
             call.command === "open_external_url" &&
-            (call.payload as { url?: string }).url === "https://example.com/docs",
+            (call.payload as { url?: string }).url ===
+              "https://example.com/docs",
         ),
       ).toBe(true),
     );
-
-    // Non-https links render as plain text, never as openable links.
     expect(
       within(rendered).queryByRole("link", { name: "HTTP 链接" }),
     ).toBeNull();
@@ -327,322 +432,227 @@ describe("skill detail panel", () => {
       within(rendered).queryByRole("link", { name: "JS 链接" }),
     ).toBeNull();
 
-    // Remote images become links/placeholders; nothing loads them.
-    expect(within(rendered).getByText(/架构图/)).toBeInTheDocument();
-    expect(within(rendered).getByText(/不安全图/)).toBeInTheDocument();
-    const imageLink = within(rendered).getByRole("link", { name: "打开图片" });
-    expect(imageLink).toHaveAttribute("href", "https://example.com/diagram.png");
-    fireEvent.click(imageLink);
+    // Internal relative links select the target file and reveal it in the tree.
+    fireEvent.click(within(rendered).getByRole("link", { name: "API 文档" }));
     await waitFor(() =>
-      expect(
-        calls.filter(
-          (call) =>
-            call.command === "open_external_url" &&
-            (call.payload as { url?: string }).url ===
-              "https://example.com/diagram.png",
-        ),
-      ).toHaveLength(1),
+      expect(pane.getByTestId("content-preview-path")).toHaveTextContent(
+        "references/api.md",
+      ),
     );
-    expect(rendered.querySelector("img")).toBeNull();
+    await waitForTreeRow("references/api.md");
+    expect(treeRow("references/api.md")).toHaveAttribute(
+      "data-selected",
+      "true",
+    );
   });
 
-  it("shows a clear warning when SKILL.md is missing", async () => {
+  it("shows an empty selection when SKILL.md is missing", async () => {
+    const listing = (skillId: string, path: string) =>
+      path === ""
+        ? makeDirListing(skillId, "", {
+            entries: [
+              {
+                name: "notes.txt",
+                path: "notes.txt",
+                kind: "file",
+                symlink: false,
+                sizeBytes: 10,
+                markdown: false,
+                expandable: false,
+              },
+            ],
+          })
+        : makeDirListing(skillId, path);
     mockCommands({
-      detail: baseDetail({
-        skillMd: {
-          status: "missing",
-          path: "~/.agents/skills/alpha/SKILL.md",
-          content: null,
-          sizeBytes: null,
-          limitBytes: 1024 * 1024,
-          error: null,
-        },
-        warnings: ["未找到 SKILL.md"],
-      }),
+      listing,
+      detail: baseDetail({ warnings: ["未找到 SKILL.md"] }),
     });
     renderApp();
-    await selectAlpha();
+    await screen.findByText("alpha");
+    selectAlphaSync();
+
     const pane = detailPane();
     expect(
-      pane.getByText(
-        "未找到 SKILL.md。该 skill 目录可能不完整；不会渲染内容。",
-      ),
+      await pane.findByText("从左侧选择文件查看内容"),
     ).toBeInTheDocument();
-    expect(pane.getByTestId("detail-warnings")).toHaveTextContent(
-      "未找到 SKILL.md",
+    await waitFor(() =>
+      expect(pane.getByTestId("detail-warnings")).toHaveTextContent(
+        "未找到 SKILL.md",
+      ),
     );
-    expect(pane.queryByRole("button", { name: "原文" })).toBeNull();
+    expect(treeRow("notes.txt")).toHaveAttribute("data-selected", "false");
+
+    fireEvent.click(treeRow("notes.txt"));
+    await waitFor(() =>
+      expect(pane.getByTestId("content-preview-path")).toHaveTextContent(
+        "notes.txt",
+      ),
+    );
+    await waitFor(() =>
+      expect(pane.getByTestId("skill-file-text")).toBeInTheDocument(),
+    );
   });
 
-  it("refuses to load SKILL.md over 1 MiB and shows unreadable errors", async () => {
+  it("reports oversized, binary, and unreadable files", async () => {
     mockCommands({
-      detail: baseDetail({
-        skillMd: {
-          status: "too_large",
-          path: "~/.agents/skills/alpha/SKILL.md",
-          content: null,
-          sizeBytes: 1024 * 1024 + 1,
-          limitBytes: 1024 * 1024,
-          error: null,
-        },
-        warnings: ["SKILL.md 超过 1 MiB，未加载内容。"],
-      }),
+      file: (skillId, path) => {
+        if (path === "SKILL.md") {
+          return makeFileContent(skillId, path, {
+            status: "too_large",
+            content: null,
+            sizeBytes: 1024 * 1024 + 1,
+          });
+        }
+        if (path === "references/notes.txt") {
+          return makeFileContent(skillId, path, {
+            status: "binary",
+            kind: "text",
+            content: null,
+            sizeBytes: 16,
+          });
+        }
+        if (path === "scripts/run.sh") {
+          return makeFileContent(skillId, path, {
+            status: "unreadable",
+            kind: "text",
+            content: null,
+            error: "权限不足",
+          });
+        }
+        return makeFileContent(skillId, path);
+      },
     });
     renderApp();
-    await selectAlpha();
-    expect(
-      detailPane().getAllByText(/SKILL.md 超过 1 MiB/).length,
-    ).toBeGreaterThan(0);
-    expect(
-      detailPane().queryByRole("button", { name: "原文" }),
-    ).toBeNull();
-  });
-
-  it("shows an unreadable SKILL.md error", async () => {
-    mockCommands({
-      detail: baseDetail({
-        skillMd: {
-          status: "unreadable",
-          path: "~/.agents/skills/alpha/SKILL.md",
-          content: null,
-          sizeBytes: 3,
-          limitBytes: 1024 * 1024,
-          error: "SKILL.md 不是有效的 UTF-8",
-        },
-        warnings: ["无法读取 SKILL.md：SKILL.md 不是有效的 UTF-8"],
-      }),
-    });
-    renderApp();
-    await selectAlpha();
-    expect(
-      detailPane().getAllByText(
-        /无法读取 SKILL.md：SKILL.md 不是有效的 UTF-8/,
-      ).length,
-    ).toBeGreaterThan(0);
-    expect(detailPane().queryByTestId("skill-md-rendered")).toBeNull();
-  });
-
-  it("warns about malformed frontmatter but still hides the block in the rendered view", async () => {
-    const content = "---\ndescription: \"unterminated\n---\n# Alpha\n";
-    mockCommands({
-      detail: baseDetail({
-        skillMd: {
-          status: "ok",
-          path: "~/.agents/skills/alpha/SKILL.md",
-          content,
-          sizeBytes: content.length,
-          limitBytes: 1024 * 1024,
-          error: null,
-        },
-        warnings: ['SKILL.md frontmatter 解析失败：description 的引号未闭合'],
-      }),
-    });
-    renderApp();
-    await selectAlpha();
-
+    await screen.findByText("alpha");
+    selectAlphaSync();
     const pane = detailPane();
-    expect(pane.getByTestId("detail-warnings")).toHaveTextContent("frontmatter");
-    expect(
-      pane.getByText(
-        "渲染视图可能无法完整隐藏 frontmatter：解析失败，原文可查看完整内容。",
-      ),
-    ).toBeInTheDocument();
-    expect(pane.getByTestId("skill-md-rendered")).not.toHaveTextContent(
-      "description:",
-    );
-    expect(pane.getByTestId("skill-md-rendered")).toHaveTextContent("Alpha");
 
-    fireEvent.click(pane.getByRole("button", { name: "原文" }));
-    expect(pane.getByTestId("skill-md-raw").textContent).toBe(content);
+    expect(await pane.findByText(/文件超过 1 MiB 上限/)).toBeInTheDocument();
+    expect(pane.getByText(/当前大小 1 MiB/)).toBeInTheDocument();
+
+    fireEvent.click(treeRow("references"));
+    await waitForTreeRow("references/notes.txt");
+    fireEvent.click(treeRow("references/notes.txt"));
+    expect(
+      await pane.findByText("该文件不是 UTF-8 文本"),
+    ).toBeInTheDocument();
+
+    fireEvent.click(treeRow("scripts"));
+    await waitForTreeRow("scripts/run.sh");
+    fireEvent.click(treeRow("scripts/run.sh"));
+    expect(await pane.findByText("无法读取该文件")).toBeInTheDocument();
+    expect(pane.getByText("权限不足")).toBeInTheDocument();
   });
 
-  it("shows local-modification badges and banners, and keeps unmanaged read-only", async () => {
-    const modified = makeSkill({
-      name: "alpha",
-      localModification: "modified",
-      attachments: [attachment("claude-code")],
-    });
-    const unknown = makeSkill({
+  it("preserves content state across tabs and resets it when the skill changes", async () => {
+    const beta = makeSkill({
       name: "beta",
-      localModification: "unknown",
+      description: "Beta",
       attachments: [attachment("claude-code")],
-    });
-    const unmanaged = makeSkill({
-      name: "gamma",
-      management: "unmanaged",
-      source: null,
-      localModification: "unknown",
-      attachments: [attachment("claude-code", "copy")],
-      canonicalPath: null,
-    });
-    const copyOnly = makeSkill({
-      name: "delta",
-      management: "copy_only",
-      localModification: "clean",
-      canonicalPath: null,
-      attachments: [attachment("claude-code", "copy")],
     });
     mockCommands({
       snapshot: makeSnapshot({
-        skills: [modified, unknown, unmanaged, copyOnly],
-        anomalies: makeAnomalies({
-          total: 4,
-          unmanaged: group(1, ["gamma"]),
-          modified: group(2, ["alpha · 本地改动", "beta · 本地改动?"]),
-        }),
+        skills: [baseSnapshot().skills[0]!, beta],
       }),
-      detail: (skillId) =>
-        makeDetail({
-          name: skillId,
-          management:
-            skillId === "gamma"
-              ? "unmanaged"
-              : skillId === "delta"
-                ? "copy_only"
-                : "managed",
-          canonicalPath:
-            skillId === "gamma" || skillId === "delta"
-              ? null
-              : `~/.agents/skills/${skillId}`,
-          directoryPath:
-            skillId === "gamma" || skillId === "delta"
-              ? `~/.claude/skills/${skillId}`
-              : `~/.agents/skills/${skillId}`,
-          localModification:
-            skillId === "alpha"
-              ? "modified"
-              : skillId === "beta" || skillId === "gamma"
-                ? "unknown"
-                : "clean",
-          localModificationDetail:
-            skillId === "alpha"
-              ? "当前文件与基线指纹不一致。"
-              : skillId === "beta"
-                ? "lock hash 与当前目录不一致；首次扫描已记录基线但尚未校验。"
-                : null,
-          attachments: [attachment("claude-code", "copy", undefined, false)],
-          warnings: [],
-        }),
+      detail: (skillId) => baseDetail({ name: skillId }),
     });
     renderApp();
-    await screen.findByText("alpha");
+    await selectAlpha();
+    const pane = detailPane();
 
-    expect(within(row("alpha")).getByTestId("local-modification-badge")).toHaveTextContent("本地改动");
-    expect(within(row("beta")).getByTestId("local-modification-badge")).toHaveTextContent("本地改动?");
-    expect(within(row("gamma")).queryByTestId("local-modification-badge")).toBeNull();
-    expect(within(row("delta")).queryByTestId("local-modification-badge")).toBeNull();
+    fireEvent.click(treeRow("references"));
+    await waitForTreeRow("references/api.md");
+    fireEvent.click(treeRow("references/api.md"));
+    await waitFor(() =>
+      expect(pane.getByTestId("content-preview-path")).toHaveTextContent(
+        "references/api.md",
+      ),
+    );
 
-    row("alpha").focus();
-    fireEvent.click(row("alpha"));
-    expect(
-      await detailPane().findByText(/检测到本地改动：共享副本与基线记录不一致/),
-    ).toBeInTheDocument();
+    fireEvent.click(tab("操作"));
+    fireEvent.click(tab("内容"));
+    expect(pane.getByTestId("content-preview-path")).toHaveTextContent(
+      "references/api.md",
+    );
 
     fireEvent.click(row("beta"));
+    await waitFor(() =>
+      expect(pane.getByTestId("content-preview-path")).toHaveTextContent(
+        "SKILL.md",
+      ),
+    );
+    expect(tab("内容")).toHaveAttribute("aria-selected", "true");
     expect(
-      await detailPane().findByText(/无法确认本地改动/),
-    ).toBeInTheDocument();
-    expect(detailPane().getAllByText("本地改动?").length).toBeGreaterThan(0);
-
-    fireEvent.click(row("gamma"));
-    await waitFor(() => {
-      expect(
-        detailPane().getByText("未受管：该目录没有 lock 条目，v1 只读展示，不提供更新或卸载。"),
-      ).toBeInTheDocument();
-    });
-    expect(detailPane().getByRole("button", { name: "在 Finder 中查看" })).toBeInTheDocument();
-    expect(detailPane().queryByRole("button", { name: "默认编辑器打开" })).toBeNull();
-    expect(detailPane().queryByText("本地改动?")).toBeNull();
-    expect(detailPane().getByText("~/.claude/skills/gamma")).toBeInTheDocument();
-    expect(detailPane().getByText("canonical 路径")).toBeInTheDocument();
-    // Unmanaged rows stay read-only: no uninstall action.
-    expect(detailPane().queryByRole("button", { name: "彻底卸载" })).toBeNull();
-
-    fireEvent.click(row("delta"));
-    await waitFor(() => {
-      expect(detailPane().getByText(/仅副本：没有 canonical 目录/)).toBeInTheDocument();
-    });
-    expect(detailPane().getByRole("button", { name: "在 Finder 中查看" })).toBeInTheDocument();
-    // Copy-only exposes Finder and uninstall, but no editor/update/detach.
-    expect(detailPane().queryByRole("button", { name: "默认编辑器打开" })).toBeNull();
-    expect(detailPane().getByText("agent 路径")).toBeInTheDocument();
-    expect(
-      detailPane().queryByRole("button", { name: /检查更新|^更新$|断开/ }),
-    ).toBeNull();
-    // Copy-only rows can be uninstalled even though they cannot update/detach.
-    expect(
-      detailPane().getByRole("button", { name: "彻底卸载" }),
-    ).toBeInTheDocument();
-
-    // The anomaly filter includes copy-only rows plus modified and unknown
-    // local changes.
-    fireEvent.click(screen.getByRole("button", { name: /^异常/ }));
-    await waitFor(() => {
-      expect(
-        screen
-          .queryAllByTestId("skill-row")
-          .map((element) => element.getAttribute("data-skill-name")),
-      ).toEqual(["alpha", "beta", "delta", "gamma"]);
-    });
+      pane
+        .getAllByTestId("tree-row")
+        .some(
+          (element) =>
+            element.getAttribute("data-path") === "references/api.md",
+        ),
+    ).toBe(false);
   });
 
-  it("extends the anomaly dialog with the modified category", async () => {
-    mockCommands({
-      snapshot: baseSnapshot({
-        anomalies: makeAnomalies({
-          total: 4,
-          stale: group(1, ["ghost"]),
-          unmanaged: group(1, ["gamma"]),
-          broken: group(1, ["alpha · Gemini CLI"]),
-          modified: group(1, ["alpha · 本地改动"]),
-        }),
-      }),
-    });
-    renderApp();
-    await screen.findByText("alpha");
-
-    const banner = screen.getByRole("button", { name: /异常 4/ });
-    expect(banner).toHaveTextContent("1 个本地改动");
-    fireEvent.click(banner);
-
-    const dialog = screen.getByRole("dialog", { name: "异常与只读提示" });
-    expect(within(dialog).getByText("本地改动")).toBeInTheDocument();
-    expect(within(dialog).getByText("alpha · 本地改动")).toBeInTheDocument();
-    expect(within(dialog).getByText(/本地改动\?/)).toBeInTheDocument();
-  });
-
-  it("opens Finder and the editor through skillId-only commands and keeps focus", async () => {
+  it("opens Finder and the selected file with skillId and relative path only", async () => {
     const calls = mockCommands({});
     renderApp();
     await selectAlpha();
-    expect(document.activeElement).toBe(
-      screen.getByRole("button", { name: "关闭详情" }),
-    );
-
     const pane = detailPane();
-    const finder = pane.getByRole("button", { name: "在 Finder 中查看" });
-    finder.focus();
-    fireEvent.click(finder);
-    await waitFor(() => {
-      expect(calls.some((call) => call.command === "open_skill_folder")).toBe(true);
-    });
-    const folderCall = calls.find((call) => call.command === "open_skill_folder")!;
-    expect(folderCall.payload).toEqual({ skillId: "alpha" });
-    expect(Object.keys(folderCall.payload as object)).toEqual(["skillId"]);
-    expect(document.activeElement).toBe(finder);
 
-    const editor = pane.getByRole("button", { name: "默认编辑器打开" });
-    editor.focus();
-    fireEvent.click(editor);
-    await waitFor(() => {
-      expect(calls.some((call) => call.command === "open_skill_md")).toBe(true);
+    const finder = toolbar().getByRole("button", {
+      name: "在 Finder 中查看",
     });
-    const mdCall = calls.find((call) => call.command === "open_skill_md")!;
-    expect(mdCall.payload).toEqual({ skillId: "alpha" });
-    expect(document.activeElement).toBe(editor);
+    fireEvent.click(finder);
+    await waitFor(() =>
+      expect(calls.some((call) => call.command === "open_skill_folder")).toBe(
+        true,
+      ),
+    );
+    const folderCall = calls.find(
+      (call) => call.command === "open_skill_folder",
+    )!;
+    expect(folderCall.payload).toEqual({ skillId: "alpha" });
+
+    const opener = toolbar().getByRole("button", {
+      name: "用默认应用打开",
+    });
+    fireEvent.click(opener);
+    await waitFor(() =>
+      expect(calls.some((call) => call.command === "open_skill_file")).toBe(
+        true,
+      ),
+    );
+    const fileCall = calls.find(
+      (call) => call.command === "open_skill_file",
+    )!;
+    expect(fileCall.payload).toEqual({
+      skillId: "alpha",
+      path: "SKILL.md",
+    });
+
+    fireEvent.click(treeRow("references"));
+    await waitForTreeRow("references/api.md");
+    fireEvent.click(treeRow("references/api.md"));
+    await waitFor(() =>
+      expect(pane.getByTestId("content-preview-path")).toHaveTextContent(
+        "references/api.md",
+      ),
+    );
+    fireEvent.click(opener);
+    await waitFor(() =>
+      expect(
+        calls.filter((call) => call.command === "open_skill_file"),
+      ).toHaveLength(2),
+    );
+    const secondCall = calls.filter(
+      (call) => call.command === "open_skill_file",
+    )[1]!;
+    expect(secondCall.payload).toEqual({
+      skillId: "alpha",
+      path: "references/api.md",
+    });
   });
 
-  it("surfaces opener failures in a focused alert and clears them when selection changes", async () => {
+  it("surfaces content-open failures and clears them when the skill changes", async () => {
     const alpha = baseSnapshot().skills[0]!;
     const beta = makeSkill({
       name: "beta",
@@ -659,26 +669,80 @@ describe("skill detail panel", () => {
     });
     renderApp();
     await selectAlpha();
+    const pane = detailPane();
 
     fireEvent.click(
-      detailPane().getByRole("button", { name: "在 Finder 中查看" }),
+      toolbar().getByRole("button", { name: "在 Finder 中查看" }),
     );
-    const alert = await detailPane().findByRole("alert");
+    const alert = await pane.findByRole("alert");
     expect(alert).toHaveTextContent("无法打开文件或目录。");
     await waitFor(() => expect(alert).toHaveFocus());
 
     fireEvent.click(row("beta"));
     await waitFor(() => {
-      expect(detailPane().queryByRole("alert")).toBeNull();
+      expect(pane.queryByRole("alert")).toBeNull();
       expect(
-        detailPane().getByRole("heading", { name: "beta" }),
+        pane.getByRole("heading", { name: "beta" }),
       ).toBeInTheDocument();
     });
   });
 
-  it("keeps the summary usable when detail loading fails and offers a retry", async () => {
+  it("refreshes the directory, the selected file, and the detail", async () => {
+    const calls = mockCommands({});
+    renderApp();
+    await selectAlpha();
+    const count = (command: string) =>
+      calls.filter((call) => call.command === command).length;
+    const initialList = count("list_skill_dir");
+    const initialRead = count("read_skill_file");
+    const initialDetail = count("get_skill_detail");
+
+    fireEvent.click(toolbar().getByRole("button", { name: "刷新" }));
+    await waitFor(() => {
+      expect(count("list_skill_dir")).toBeGreaterThan(initialList);
+      expect(count("read_skill_file")).toBeGreaterThan(initialRead);
+      expect(count("get_skill_detail")).toBeGreaterThan(initialDetail);
+    });
+  });
+
+  it("toggles rendered and complete raw markdown without losing focus", async () => {
+    const content =
+      "---\nname: alpha\ndescription: Alpha\n---\n\n# Alpha 标题\n\n正文。\n";
+    mockCommands({
+      file: (skillId, path) =>
+        path === "SKILL.md"
+          ? makeFileContent(skillId, path, {
+              content,
+              sizeBytes: content.length,
+            })
+          : makeFileContent(skillId, path),
+    });
+    renderApp();
+    await selectAlpha();
+    const pane = detailPane();
+
+    expect(pane.getByTestId("skill-markdown-rendered")).toBeInTheDocument();
+    const rawButton = pane.getByRole("button", { name: "原文" });
+    rawButton.focus();
+    fireEvent.click(rawButton);
+
+    const raw = pane.getByTestId("skill-file-raw");
+    expect(raw).toHaveTextContent("---");
+    expect(raw).toHaveTextContent("name: alpha");
+    expect(raw.textContent).toBe(content);
+    expect(rawButton).toHaveAttribute("aria-pressed", "true");
+    expect(document.activeElement).toBe(rawButton);
+
+    const renderedButton = pane.getByRole("button", { name: "渲染" });
+    fireEvent.click(renderedButton);
+    expect(pane.getByTestId("skill-markdown-rendered")).toBeInTheDocument();
+    expect(pane.queryByTestId("skill-file-raw")).toBeNull();
+    expect(renderedButton).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("keeps the drawer usable when detail loading fails and offers a retry", async () => {
     let attempts = 0;
-    mockIPC((command) => {
+    mockIPC((command, payload) => {
       if (command === "get_environment") return healthyReport();
       if (command === "get_inventory") return baseSnapshot();
       if (command === "get_skill_detail") {
@@ -692,8 +756,13 @@ describe("skill detail panel", () => {
         }
         return baseDetail();
       }
-      if (command === "open_skill_folder" || command === "open_skill_md") {
-        return null;
+      if (command === "list_skill_dir") {
+        const args = payload as { skillId: string; path?: string };
+        return makeDirListing(args.skillId, args.path ?? "");
+      }
+      if (command === "read_skill_file") {
+        const args = payload as { skillId: string; path: string };
+        return makeFileContent(args.skillId, args.path);
       }
       throw new Error(`unexpected command: ${command}`);
     });
@@ -705,15 +774,18 @@ describe("skill detail panel", () => {
     );
 
     const pane = detailPane();
-    expect(pane.getByRole("heading", { name: "alpha" })).toBeInTheDocument();
+    expect(
+      pane.getByRole("heading", { name: "alpha" }),
+    ).toBeInTheDocument();
     const alert = await pane.findByRole("alert");
     expect(alert).toHaveTextContent("读取 skill 详情失败。");
     expect(alert).toHaveTextContent("请检查该 skill 目录的权限后重试。");
     fireEvent.click(within(alert).getByRole("button", { name: "重试读取" }));
     await waitFor(() => {
       expect(pane.queryByRole("alert")).toBeNull();
-      expect(pane.getByText("概览")).toBeInTheDocument();
     });
+    fireEvent.click(tab("操作"));
+    expect(await pane.findByText("概览")).toBeInTheDocument();
     expect(attempts).toBe(2);
   });
 

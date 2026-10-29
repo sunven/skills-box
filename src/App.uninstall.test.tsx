@@ -21,7 +21,11 @@ import type {
   TaskSkillStatus,
 } from "./lib/types";
 import { healthyReport } from "./test/fixtures";
-import { detailForSkill } from "./test/detail-fixtures";
+import {
+  detailForSkill,
+  makeDirListing,
+  makeFileContent,
+} from "./test/detail-fixtures";
 import {
   attachment,
   group,
@@ -120,6 +124,17 @@ function setup(startError?: AppError): UninstallState {
         (entry) => entry.name === skillId,
       );
       return skill ? detailForSkill(skill) : null;
+    }
+    if (command === "list_skill_dir") {
+      const args = payload as { skillId: string; path?: string };
+      return makeDirListing(args.skillId, args.path ?? "");
+    }
+    if (command === "read_skill_file") {
+      const args = payload as { skillId: string; path: string };
+      return makeFileContent(args.skillId, args.path);
+    }
+    if (command === "open_skill_folder" || command === "open_skill_file") {
+      return null;
     }
     if (command === "start_uninstall") {
       const args = payload as {
@@ -232,6 +247,7 @@ async function openUninstall(name: string) {
     ).toBe(true);
   });
   fireEvent.click(row(name));
+  fireEvent.click(await screen.findByRole("tab", { name: "操作" }));
   await waitFor(() => {
     expect(
       detail().getByRole("button", { name: "彻底卸载" }),
@@ -272,11 +288,16 @@ describe("uninstall", () => {
     await waitFor(() => {
       expect(detail().getByText(/未受管：该目录没有 lock 条目/)).toBeInTheDocument();
     });
+    fireEvent.click(await screen.findByRole("tab", { name: "操作" }));
     expect(
       detail().queryByRole("button", { name: "彻底卸载" }),
     ).toBeNull();
 
     fireEvent.click(row("copy-only"));
+    await waitFor(() => {
+      expect(detail().getByText(/仅副本：没有 canonical 目录/)).toBeInTheDocument();
+    });
+    fireEvent.click(await screen.findByRole("tab", { name: "操作" }));
     await waitFor(() => {
       expect(
         detail().getByRole("button", { name: "彻底卸载" }),

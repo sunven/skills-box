@@ -8,6 +8,8 @@ import type {
   InstallRequest,
   InventorySnapshot,
   SkillDetail,
+  SkillDirListing,
+  SkillFileContent,
   TaskEvent,
   UpdateCheckReport,
 } from "./types";
@@ -34,9 +36,28 @@ export function openSkillFolder(skillId: string): Promise<void> {
   return invoke<void>("open_skill_folder", { skillId });
 }
 
-/** Rust resolves and guards SKILL.md; opens with the default editor. */
-export function openSkillMd(skillId: string): Promise<void> {
-  return invoke<void>("open_skill_md", { skillId });
+/** Lazy directory listing; `path` is relative to the server-resolved skill root. */
+export function listSkillDir(
+  skillId: string,
+  path = "",
+): Promise<SkillDirListing> {
+  return invoke<SkillDirListing>("list_skill_dir", { skillId, path });
+}
+
+/** Read one skill file; oversized and binary files are values, not errors. */
+export function readSkillFile(
+  skillId: string,
+  path: string,
+): Promise<SkillFileContent> {
+  return invoke<SkillFileContent>("read_skill_file", { skillId, path });
+}
+
+/** Open one file inside the skill with the system default application. */
+export function openSkillFile(
+  skillId: string,
+  path: string,
+): Promise<void> {
+  return invoke<void>("open_skill_file", { skillId, path });
 }
 
 /**

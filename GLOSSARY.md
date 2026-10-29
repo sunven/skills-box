@@ -16,6 +16,18 @@ _Avoid_: cache, source directory
 A folder identified by its `SKILL.md` and name, containing reusable instructions for coding agents.
 _Avoid_: package, plugin
 
+**Skill content**:
+The files and directories inside a skill folder other than its `SKILL.md` entry point, such as references, scripts, and assets.
+_Avoid_: resources, bundled files
+
+**Content browser**:
+The read-only tree-and-preview view of one skill's content.
+_Avoid_: file explorer, file manager
+
+**File preview**:
+The read-only rendering of one skill content file: rendered Markdown, raw text, an image, or metadata only.
+_Avoid_: viewer, editor
+
 **Managed skill**:
 A skill with a lock entry, whether its files live in the canonical store or only in agent copies.
 _Avoid_: installed skill, tracked skill
@@ -53,7 +65,7 @@ A coding agent with its own global skills directory, such as Claude Code or Code
 _Avoid_: client, target
 
 **Agent attachment**:
-The representation of a global skill inside an agent's skills directory, either a symbolic link or a copy.
+The representation of a global skill inside an agent's skills directory, either a symbolic link or a copy. The Chinese UI labels it 「挂载」.
 _Avoid_: installation, mount
 
 **Detach**:

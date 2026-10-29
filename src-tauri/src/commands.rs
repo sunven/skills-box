@@ -11,8 +11,9 @@ use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::AppState;
+use crate::content::{self, SkillDirListing, SkillFileContent};
 use crate::detach::DetachResult;
-use crate::detail::{self, OpenTarget, SkillDetail};
+use crate::detail::{self, SkillDetail};
 use crate::env::EnvReport;
 use crate::error::{AppError, codes};
 use crate::inventory::InventorySnapshot;
@@ -81,22 +82,71 @@ pub async fn get_skill_detail(
     .await
 }
 
+/// Lazy directory listing for the content tab. The frontend sends a skill id
+/// and a relative path only; the skill root is resolved on the server.
+#[tauri::command]
+pub async fn list_skill_dir(
+    state: State<'_, AppState>,
+    skill_id: String,
+    path: String,
+) -> Result<SkillDirListing, AppError> {
+    let paths = state.paths.clone();
+    blocking_read("skill 内容目录", move || {
+        let agents = crate::inventory::detected_agent_dirs(&paths);
+        content::list(&paths, &agents, &skill_id, &path)
+    })
+    .await
+}
+
+/// Read-only file preview. Oversized, binary and unreadable files are values,
+/// not errors, so the preview can explain the state.
+#[tauri::command]
+pub async fn read_skill_file(
+    state: State<'_, AppState>,
+    skill_id: String,
+    path: String,
+) -> Result<SkillFileContent, AppError> {
+    let paths = state.paths.clone();
+    blocking_read("skill 文件", move || {
+        let agents = crate::inventory::detected_agent_dirs(&paths);
+        content::read_file(&paths, &agents, &skill_id, &path)
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn open_skill_folder(
     app: AppHandle,
     state: State<'_, AppState>,
     skill_id: String,
 ) -> Result<(), AppError> {
-    open_target(app, state, &skill_id, OpenTarget::Folder).await
+    let paths = state.paths.clone();
+    let resolved = blocking_read("skill 路径", move || {
+        let agents = crate::inventory::detected_agent_dirs(&paths);
+        detail::resolve_skill_root(&paths, &agents, &skill_id)
+    })
+    .await?;
+    app.opener()
+        .open_path(resolved.to_string_lossy().to_string(), None::<&str>)
+        .map_err(|error| AppError::open_failed(error.to_string()))
 }
 
 #[tauri::command]
-pub async fn open_skill_md(
+pub async fn open_skill_file(
     app: AppHandle,
     state: State<'_, AppState>,
     skill_id: String,
+    path: String,
 ) -> Result<(), AppError> {
-    open_target(app, state, &skill_id, OpenTarget::SkillMd).await
+    let paths = state.paths.clone();
+    let resolved = blocking_read("skill 文件路径", move || {
+        let agents = crate::inventory::detected_agent_dirs(&paths);
+        content::resolve_open_path(&paths, &agents, &skill_id, &path)
+    })
+    .await?;
+    app.opener()
+        .open_path(resolved.to_string_lossy().to_string(), None::<&str>)
+        .map_err(|error| AppError::open_failed(error.to_string()))
 }
 
 /// External links are the only URL surface. The frontend never gets the
@@ -135,31 +185,22 @@ pub fn open_external_url(app: AppHandle, url: String) -> Result<(), AppError> {
         .map_err(|error| AppError::open_failed(error.to_string()))
 }
 
-async fn open_target(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    skill_id: &str,
-    target: OpenTarget,
-) -> Result<(), AppError> {
-    let paths = state.paths.clone();
-    let skill_id = skill_id.to_string();
-    let resolved = read_with_timeout("skill 路径", READ_TIMEOUT, async move {
-        tauri::async_runtime::spawn_blocking(move || {
-            let agents = crate::inventory::detected_agent_dirs(&paths);
-            detail::resolve_open_target(&paths, &agents, &skill_id, target)
-        })
-        .await
-        .map_err(|error| {
-            AppError::new(codes::SKILL_READ_FAILED, "解析 skill 路径失败。")
-                .detail(error.to_string())
-                .retryable(true)
-        })?
+/// Run one blocking read on the blocking pool under the spec's 30-second cap.
+async fn blocking_read<T, F>(what: &str, work: F) -> Result<T, AppError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, AppError> + Send + 'static,
+{
+    read_with_timeout(what, READ_TIMEOUT, async move {
+        tauri::async_runtime::spawn_blocking(work)
+            .await
+            .map_err(|error| {
+                AppError::new(codes::SKILL_READ_FAILED, "读取 skill 内容失败。")
+                    .detail(error.to_string())
+                    .retryable(true)
+            })?
     })
-    .await?;
-
-    app.opener()
-        .open_path(resolved.to_string_lossy().to_string(), None::<&str>)
-        .map_err(|error| AppError::open_failed(error.to_string()))
+    .await
 }
 
 /// Start a read-only install preview. Invalid sources are rejected before a

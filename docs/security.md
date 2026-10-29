@@ -9,11 +9,22 @@ reference for release review and for ticket 11 (acceptance).
   (`src-tauri/capabilities/default.json`). There is no `shell`, `fs`, `dialog`
   or `opener` permission in the frontend.
 - The opener is used only from Rust commands: `open_skill_folder`,
-  `open_skill_md`, `reveal_app_data` (server-resolved paths guarded by
-  `path::ensure_allowed`) and `open_external_url` (absolute `https://` with a
-  host, re-validated in Rust). The frontend never receives a path or argv.
+  `open_skill_file`, `reveal_app_data` (server-resolved paths guarded by
+  `security::ensure_allowed`) and `open_external_url` (absolute `https://` with
+  a host, re-validated in Rust). The frontend never receives a path or argv.
 - `opener:default` was removed from the capability because it also allows
   `mailto:`, `tel:` and `http:` URLs. The plugin stays registered for Rust use.
+
+## Skill content reads
+
+`list_skill_dir` and `read_skill_file` accept only a skill id and a relative
+path. Rust resolves the skill root from the inventory, rejects absolute paths,
+`.`/`..`, empty segments, backslashes, NUL, and the hidden `.git`,
+`node_modules` and `.DS_Store` components, canonicalizes the target, and
+rejects anything that resolves outside the skill root. Listings cap at 500
+entries (2,000 scanned) and depth 12; text previews cap at 1 MiB and images at
+5 MiB. Image previews travel as base64 data URLs; remote URLs are never
+fetched.
 
 ## CSP
 

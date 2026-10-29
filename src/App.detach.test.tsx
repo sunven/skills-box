@@ -11,7 +11,11 @@ import type {
   SkillDetail,
 } from "./lib/types";
 import { healthyReport } from "./test/fixtures";
-import { makeDetail } from "./test/detail-fixtures";
+import {
+  makeDetail,
+  makeDirListing,
+  makeFileContent,
+} from "./test/detail-fixtures";
 import {
   attachment,
   makeAnomalies,
@@ -102,6 +106,17 @@ function mockCommands(options: {
         return snapshotWith(current);
       case "get_skill_detail":
         return detailWith(current);
+      case "list_skill_dir": {
+        const args = payload as { skillId: string; path?: string };
+        return makeDirListing(args.skillId, args.path ?? "");
+      }
+      case "read_skill_file": {
+        const args = payload as { skillId: string; path: string };
+        return makeFileContent(args.skillId, args.path);
+      }
+      case "open_skill_folder":
+      case "open_skill_file":
+        return null;
       case "detach_agent": {
         if (options.detachError) throw options.detachError;
         const request = payload as { skillId: string; agentId: string };
@@ -130,6 +145,7 @@ async function selectAlpha() {
     .find((candidate) => candidate.getAttribute("data-skill-name") === "alpha");
   if (!row) throw new Error("missing alpha row");
   fireEvent.click(row);
+  fireEvent.click(await screen.findByRole("tab", { name: "操作" }));
   await screen.findByText("概览");
 }
 
@@ -320,6 +336,14 @@ describe("detach from one agent", () => {
           attachments: [copyAttachment],
         });
       }
+      if (command === "list_skill_dir") {
+        const args = payload as { skillId: string; path?: string };
+        return makeDirListing(args.skillId, args.path ?? "");
+      }
+      if (command === "read_skill_file") {
+        const args = payload as { skillId: string; path: string };
+        return makeFileContent(args.skillId, args.path);
+      }
       throw new Error(`unexpected command: ${command}`);
     });
     renderApp();
@@ -330,6 +354,7 @@ describe("detach from one agent", () => {
           .queryAllByTestId("skill-row")
           .find((row) => row.getAttribute("data-skill-name") === name)!,
       );
+      fireEvent.click(await screen.findByRole("tab", { name: "操作" }));
       await waitFor(() => {
         expect(detailPane().getAllByTestId("detail-agent-row")).toHaveLength(1);
       });

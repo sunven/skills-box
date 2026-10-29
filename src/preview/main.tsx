@@ -7,7 +7,9 @@ import { createQueryClient } from "../lib/query-client";
 import type { TaskEvent, TaskResult } from "../lib/types";
 import {
   environment,
+  listSkillDir,
   previewSummary,
+  readSkillFile,
   skillDetail,
   snapshot,
   updateReport,
@@ -98,6 +100,17 @@ mockIPC(
         const args = payload as { skillId?: string };
         return skillDetail(args.skillId ?? "agent-browser");
       }
+      case "list_skill_dir": {
+        const args = payload as { skillId?: string; path?: string };
+        return listSkillDir(
+          args.skillId ?? "agent-browser",
+          args.path ?? "",
+        );
+      }
+      case "read_skill_file": {
+        const args = payload as { skillId?: string; path: string };
+        return readSkillFile(args.skillId ?? "agent-browser", args.path);
+      }
       case "check_updates":
         return updateReport;
       case "start_preview": {
@@ -122,7 +135,7 @@ mockIPC(
         return null;
       case "reveal_app_data":
       case "open_skill_folder":
-      case "open_skill_md":
+      case "open_skill_file":
       case "open_external_url":
       case "dismiss_interrupted_mutation":
       case "quit_app":
@@ -189,50 +202,79 @@ async function driveUpdate() {
   clickButton("开始更新");
 }
 
-window.setTimeout(() => {
-  if (params.has("check")) clickButton("检查更新");
-  window.setTimeout(() => {
-    const rows = document.querySelectorAll<HTMLElement>(
-      '[data-testid="skill-row"]',
+async function selectDetailTab(label: "内容" | "操作") {
+  const tab = [
+    ...document.querySelectorAll<HTMLButtonElement>('[role="tab"]'),
+  ].find((candidate) => candidate.textContent?.trim() === label);
+  tab?.click();
+  await pause(120);
+}
+
+async function driveContent() {
+  const file = params.get("file");
+  if (!file) return;
+  const parts = file.split("/").filter(Boolean);
+  for (const part of parts.slice(0, -1)) {
+    const dir = [...document.querySelectorAll<HTMLElement>(".tree-row")].find(
+      (candidate) => candidate.textContent?.includes(part),
     );
-    if (rows.length > 0 && (window.innerWidth > 860 || params.has("selectMobile"))) {
-      if (params.has("select") || params.has("selectMobile")) rows[0]!.click();
-    }
-    if (params.has("scroll")) {
-      window.setTimeout(() => {
-        const pane = document.querySelector<HTMLElement>(
-          '[data-testid="detail-content"]',
+    dir?.click();
+    await pause(180);
+  }
+  const last = parts[parts.length - 1] ?? "";
+  const target = [...document.querySelectorAll<HTMLElement>(".tree-row")].find(
+    (candidate) => candidate.textContent?.includes(last),
+  );
+  target?.click();
+  await pause(180);
+}
+
+window.setTimeout(async () => {
+  if (params.has("check")) clickButton("检查更新");
+  await pause(400);
+  const rows = document.querySelectorAll<HTMLElement>(
+    '[data-testid="skill-row"]',
+  );
+  if (rows.length > 0 && (window.innerWidth > 860 || params.has("selectMobile"))) {
+    if (params.has("select") || params.has("selectMobile")) rows[0]!.click();
+  }
+  await pause(300);
+  if (params.has("file")) await driveContent();
+  if (params.get("tab") === "actions") await selectDetailTab("操作");
+  if (params.has("scroll")) {
+    const pane =
+      params.get("tab") === "actions"
+        ? document.querySelector<HTMLElement>(
+            '[data-testid="detail-actions-panel"]',
+          )
+        : document.querySelector<HTMLElement>(".content-preview-body");
+    pane?.scrollTo(0, pane.scrollHeight);
+  }
+  if (params.has("install")) {
+    if (params.has("wizardStep")) void driveWizard();
+    else clickButton("安装 skill");
+  }
+  if (params.has("update")) {
+    void driveUpdate();
+  }
+  if (params.has("filters")) {
+    document
+      .querySelector<HTMLButtonElement>('button[aria-label="打开筛选"]')
+      ?.click();
+  }
+  if (params.has("anomalies")) {
+    document
+      .querySelector<HTMLButtonElement>('button[aria-label^="只读提示"]')
+      ?.click();
+  }
+  if (params.has("uninstall") || params.has("detach")) {
+    await pause(350);
+    await selectDetailTab("操作");
+    const target = params.has("uninstall")
+      ? buttonByText("彻底卸载")
+      : document.querySelector<HTMLButtonElement>(
+          'button[aria-label^="断开 "]',
         );
-        pane?.scrollTo(0, pane.scrollHeight);
-      }, 500);
-    }
-    if (params.has("install")) {
-      if (params.has("wizardStep")) void driveWizard();
-      else clickButton("安装 skill");
-    }
-    if (params.has("update")) {
-      void driveUpdate();
-    }
-    if (params.has("filters")) {
-      document
-        .querySelector<HTMLButtonElement>('button[aria-label="打开筛选"]')
-        ?.click();
-    }
-    if (params.has("anomalies")) {
-      document
-        .querySelector<HTMLButtonElement>('button[aria-label^="只读提示"]')
-        ?.click();
-    }
-    if (params.has("uninstall") || params.has("detach")) {
-      window.setTimeout(() => {
-        const target =
-          params.has("uninstall")
-            ? buttonByText("彻底卸载")
-            : document.querySelector<HTMLButtonElement>(
-                'button[aria-label^="断开 "]',
-              );
-        target?.click();
-      }, 350);
-    }
-  }, 400);
+    target?.click();
+  }
 }, 400);

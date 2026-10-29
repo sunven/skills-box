@@ -7,6 +7,9 @@ import type {
   InventorySnapshot,
   PreviewSummary,
   SkillDetail,
+  SkillDirEntry,
+  SkillDirListing,
+  SkillFileContent,
   UpdateCheckReport,
   UpdateSkillResult,
   UpdateState,
@@ -624,6 +627,9 @@ agent-browser screenshot out.png
 
 The snapshot command returns the accessibility tree, which is usually a better
 input for a model than raw HTML. Prefer role-based selectors over CSS paths.
+
+See [the API reference](references/api.md) for the full command surface, or
+![the diagram](assets/logo.png).
 `;
 
 export function skillDetail(name: string): SkillDetail {
@@ -654,13 +660,135 @@ export function skillDetail(name: string): SkillDetail {
         : null,
     attachments: skill.attachments,
     warnings: skill.warnings,
-    skillMd: {
-      status: "ok",
-      path: `/Users/sunven/.agents/skills/${skill.name}/SKILL.md`,
-      content: skillMd,
-      sizeBytes: 1842,
-      limitBytes: 1048576,
-      error: null,
-    },
+  };
+}
+
+const PNG_DATA_URL =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
+function contentEntry(
+  name: string,
+  kind: SkillDirEntry["kind"],
+  base: string,
+  overrides: Partial<SkillDirEntry> = {},
+): SkillDirEntry {
+  const path = base ? `${base}/${name}` : name;
+  const directory = kind === "dir";
+  return {
+    name,
+    path,
+    kind,
+    symlink: false,
+    sizeBytes: directory ? null : 1842,
+    markdown: !directory && name.toLowerCase().endsWith(".md"),
+    expandable: directory,
+    ...overrides,
+  };
+}
+
+export function listSkillDir(name: string, path = ""): SkillDirListing {
+  const entries =
+    path === ""
+      ? [
+          contentEntry("references", "dir", ""),
+          contentEntry("scripts", "dir", ""),
+          contentEntry("assets", "dir", ""),
+          contentEntry("SKILL.md", "file", ""),
+          contentEntry(".gitignore", "file", ""),
+        ]
+      : path === "references"
+        ? [
+            contentEntry("api.md", "file", "references"),
+            contentEntry("notes.txt", "file", "references", {
+              sizeBytes: 248,
+            }),
+          ]
+        : path === "scripts"
+          ? [contentEntry("run.sh", "file", "scripts", { sizeBytes: 312 })]
+          : path === "assets"
+            ? [
+                contentEntry("logo.png", "file", "assets", {
+                  sizeBytes: 1024,
+                }),
+              ]
+            : [];
+  return {
+    path,
+    displayPath: `/Users/sunven/.agents/skills/${name}${path ? `/${path}` : ""}`,
+    entries,
+    truncated: false,
+    maxEntries: 500,
+    maxDepth: 12,
+  };
+}
+
+const apiMarkdown = `# API reference
+
+The CLI exposes a small command surface.
+
+- \`open\` — navigate to a URL
+- \`snapshot\` — read the accessibility tree
+- \`screenshot\` — save a PNG
+
+[Back to SKILL.md](../SKILL.md)
+`;
+
+export function readSkillFile(name: string, path: string): SkillFileContent {
+  const base = {
+    path,
+    displayPath: `/Users/sunven/.agents/skills/${name}/${path}`,
+    status: "ok" as const,
+    sizeBytes: 1842,
+    limitBytes: 1024 * 1024,
+    content: null,
+    dataUrl: null,
+    error: null,
+  };
+  if (path === "SKILL.md") {
+    return {
+      ...base,
+      kind: "markdown",
+      content: skillMd.split("agent-browser").join(name),
+    };
+  }
+  if (path === "references/api.md") {
+    return { ...base, kind: "markdown", content: apiMarkdown };
+  }
+  if (path === "references/notes.txt") {
+    return {
+      ...base,
+      path,
+      displayPath: base.displayPath,
+      kind: "text",
+      content: "Notes\n\n- keep selectors role-based\n- prefer snapshot over HTML\n",
+      sizeBytes: 62,
+    };
+  }
+  if (path === "scripts/run.sh") {
+    return {
+      ...base,
+      kind: "text",
+      content: "#!/bin/sh\nset -euo pipefail\nagent-browser snapshot --interactive\n",
+      sizeBytes: 64,
+    };
+  }
+  if (path === "assets/logo.png") {
+    return {
+      ...base,
+      kind: "image",
+      dataUrl: PNG_DATA_URL,
+      sizeBytes: 1024,
+      limitBytes: 5 * 1024 * 1024,
+    };
+  }
+  if (path === ".gitignore") {
+    return { ...base, kind: "text", content: "dist/\nnode_modules/\n" };
+  }
+  return {
+    ...base,
+    status: "unreadable",
+    kind: "text",
+    error: "文件不存在或不可读取。",
+    sizeBytes: null,
   };
 }

@@ -10,7 +10,11 @@ import type {
   InventorySnapshot,
 } from "./lib/types";
 import { healthyReport, cliMissingReport } from "./test/fixtures";
-import { detailForSkill } from "./test/detail-fixtures";
+import {
+  detailForSkill,
+  makeDirListing,
+  makeFileContent,
+} from "./test/detail-fixtures";
 import {
   attachment,
   codexAgent,
@@ -54,7 +58,18 @@ function mockCommands(
       const skill = snapshot.skills.find((entry) => entry.name === skillId);
       return skill ? detailForSkill(skill) : null;
     }
-    if (command === "open_skill_folder" || command === "open_skill_md") {
+    if (command === "list_skill_dir") {
+      const args = payload as { skillId: string; path?: string };
+      return makeDirListing(args.skillId, args.path ?? "");
+    }
+    if (command === "read_skill_file") {
+      const args = payload as { skillId: string; path: string };
+      return makeFileContent(args.skillId, args.path);
+    }
+    if (
+      command === "open_skill_folder" ||
+      command === "open_skill_file"
+    ) {
       return null;
     }
     throw new Error(`unexpected command: ${command}`);
@@ -315,6 +330,7 @@ describe("inventory list", () => {
     await screen.findByText("beta");
 
     fireEvent.click(row("alpha"));
+    fireEvent.click(await screen.findByRole("tab", { name: "操作" }));
     fireEvent.click(
       await detail().findByRole("button", { name: "彻底卸载" }),
     );

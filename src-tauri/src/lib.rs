@@ -3,6 +3,7 @@ pub mod backup;
 pub mod baseline;
 pub mod cli;
 pub mod commands;
+pub mod content;
 pub mod detach;
 pub mod detail;
 pub mod env;
@@ -101,8 +102,10 @@ pub fn run() {
             commands::get_environment,
             commands::get_inventory,
             commands::get_skill_detail,
+            commands::list_skill_dir,
+            commands::read_skill_file,
             commands::open_skill_folder,
-            commands::open_skill_md,
+            commands::open_skill_file,
             commands::open_external_url,
             commands::start_preview,
             commands::start_install,

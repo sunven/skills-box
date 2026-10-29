@@ -24,7 +24,11 @@ import type {
   UpdateState,
 } from "./lib/types";
 import { healthyReport } from "./test/fixtures";
-import { detailForSkill } from "./test/detail-fixtures";
+import {
+  detailForSkill,
+  makeDirListing,
+  makeFileContent,
+} from "./test/detail-fixtures";
 import {
   attachment,
   makeAnomalies,
@@ -201,6 +205,17 @@ function setup(): ExecState {
       const skill = snapshot.skills.find((entry) => entry.name === skillId);
       return skill ? detailForSkill(skill) : null;
     }
+    if (command === "list_skill_dir") {
+      const args = payload as { skillId: string; path?: string };
+      return makeDirListing(args.skillId, args.path ?? "");
+    }
+    if (command === "read_skill_file") {
+      const args = payload as { skillId: string; path: string };
+      return makeFileContent(args.skillId, args.path);
+    }
+    if (command === "open_skill_folder" || command === "open_skill_file") {
+      return null;
+    }
     if (command === "check_updates") {
       state.checkCalls += 1;
       return report;
@@ -321,6 +336,7 @@ function detail() {
 
 async function openSingleUpdate(name: string) {
   fireEvent.click(row(name));
+  fireEvent.click(await screen.findByRole("tab", { name: "操作" }));
   await waitFor(() => {
     expect(
       detail().getByRole("button", { name: "更新" }),

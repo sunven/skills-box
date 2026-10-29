@@ -18,7 +18,7 @@ export function stripFrontmatter(raw: string): string {
 }
 
 /** Links and images may only leave the app over https, via the opener. */
-export function isHttpsUrl(value: unknown): value is string {
+export function isHttpsUrl(value: unknown): boolean {
   if (typeof value !== "string" || value.trim() !== value) return false;
   try {
     const url = new URL(value);
@@ -26,4 +26,19 @@ export function isHttpsUrl(value: unknown): value is string {
   } catch {
     return false;
   }
+}
+
+/**
+ * URLs allowed inside a skill markdown preview: absolute https, a same-document
+ * fragment, or a relative path. Relative paths are resolved against the current
+ * file and can only select files inside the server-guarded skill folder.
+ */
+export function safeMarkdownUrl(value: unknown): string {
+  if (typeof value !== "string") return "";
+  if (isHttpsUrl(value)) return value;
+  if (value.trim() !== value || value === "") return "";
+  if (value.startsWith("#")) return value;
+  if (value.startsWith("/") || value.includes("\\")) return "";
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value)) return "";
+  return value;
 }

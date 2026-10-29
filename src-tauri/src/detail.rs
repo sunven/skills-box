@@ -1,8 +1,9 @@
-//! Read-only skill detail assembly and server-resolved open targets.
+//! Read-only skill detail assembly and server-resolved skill roots.
 //!
 //! Detail combines the inventory scan with lock metadata and a capped read of
-//! `SKILL.md` (1 MiB). The frontend never supplies a path: open commands resolve
-//! the skill folder on the server and pass it through path guards.
+//! `SKILL.md` (1 MiB) for the description and warnings. Content browsing lives
+//! in `content` and reads every file, including SKILL.md, through one path.
+//! The frontend never supplies an absolute path.
 
 use serde::Serialize;
 use std::fs::{self, File};
@@ -21,56 +22,41 @@ use crate::security::{self, AllowedRoot};
 
 pub const SKILL_MD_LIMIT_BYTES: u64 = 1024 * 1024;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SkillMdStatus {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SkillMdStatus {
     Ok,
     Missing,
     TooLarge,
     Unreadable,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SkillMd {
-    pub status: SkillMdStatus,
-    pub path: Option<String>,
-    pub content: Option<String>,
-    pub size_bytes: Option<u64>,
-    pub limit_bytes: u64,
-    pub error: Option<String>,
+struct SkillMdRead {
+    status: SkillMdStatus,
+    content: Option<String>,
+    error: Option<String>,
 }
 
-impl SkillMd {
-    fn missing(path: Option<String>) -> Self {
+impl SkillMdRead {
+    fn missing() -> Self {
         Self {
             status: SkillMdStatus::Missing,
-            path,
             content: None,
-            size_bytes: None,
-            limit_bytes: SKILL_MD_LIMIT_BYTES,
             error: None,
         }
     }
 
-    fn unreadable(path: Option<String>, error: impl Into<String>, size_bytes: Option<u64>) -> Self {
+    fn unreadable(error: impl Into<String>) -> Self {
         Self {
             status: SkillMdStatus::Unreadable,
-            path,
             content: None,
-            size_bytes,
-            limit_bytes: SKILL_MD_LIMIT_BYTES,
             error: Some(error.into()),
         }
     }
 
-    fn too_large(path: Option<String>, size_bytes: u64) -> Self {
+    fn too_large() -> Self {
         Self {
             status: SkillMdStatus::TooLarge,
-            path,
             content: None,
-            size_bytes: Some(size_bytes),
-            limit_bytes: SKILL_MD_LIMIT_BYTES,
             error: None,
         }
     }
@@ -100,7 +86,6 @@ pub struct SkillDetail {
     pub local_modification_detail: Option<String>,
     pub attachments: Vec<AgentAttachment>,
     pub warnings: Vec<String>,
-    pub skill_md: SkillMd,
 }
 
 pub fn read(paths: &AppPaths, skill_id: &str) -> Result<SkillDetail, AppError> {
@@ -121,7 +106,7 @@ pub fn read_with_agents(
         .clone()
         .ok_or_else(|| AppError::skill_not_found(skill_id))?;
     let display_directory = Some(paths.display(&primary));
-    let skill_md = read_skill_md(&primary, display_directory.clone());
+    let skill_md = read_skill_md(&primary);
 
     let lock_entry = located.lock_entry.as_ref();
     let mut warnings = Vec::new();
@@ -224,21 +209,19 @@ pub fn read_with_agents(
         local_modification_detail,
         attachments,
         warnings,
-        skill_md,
     })
 }
 
-fn read_skill_md(directory: &Path, display_directory: Option<String>) -> SkillMd {
+fn read_skill_md(directory: &Path) -> SkillMdRead {
     let path = directory.join("SKILL.md");
-    let display_path = display_directory.map(|directory| format!("{directory}/SKILL.md"));
 
     let link_metadata = match fs::symlink_metadata(&path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return SkillMd::missing(display_path);
+            return SkillMdRead::missing();
         }
         Err(error) => {
-            return SkillMd::unreadable(display_path, error.to_string(), None);
+            return SkillMdRead::unreadable(error.to_string());
         }
     };
 
@@ -246,86 +229,61 @@ fn read_skill_md(directory: &Path, display_directory: Option<String>) -> SkillMd
         let resolved = match fs::canonicalize(&path) {
             Ok(resolved) => resolved,
             Err(error) => {
-                return SkillMd::unreadable(
-                    display_path,
-                    format!("SKILL.md 符号链接不可解析：{error}"),
-                    None,
-                );
+                return SkillMdRead::unreadable(format!("SKILL.md 符号链接不可解析：{error}"));
             }
         };
         let directory_resolved =
             fs::canonicalize(directory).unwrap_or_else(|_| directory.to_path_buf());
         if !resolved.starts_with(&directory_resolved) {
-            return SkillMd::unreadable(
-                display_path,
-                "SKILL.md 符号链接指向 skill 目录之外，已拒绝读取。",
-                None,
-            );
+            return SkillMdRead::unreadable("SKILL.md 符号链接指向 skill 目录之外，已拒绝读取。");
         }
     }
 
     let metadata = match fs::metadata(&path) {
         Ok(metadata) => metadata,
         Err(error) => {
-            return SkillMd::unreadable(display_path, error.to_string(), None);
+            return SkillMdRead::unreadable(error.to_string());
         }
     };
     if !metadata.is_file() {
-        return SkillMd::unreadable(
-            display_path,
-            "SKILL.md 不是普通文件。",
-            Some(metadata.len()),
-        );
+        return SkillMdRead::unreadable("SKILL.md 不是普通文件。");
     }
     if metadata.len() > SKILL_MD_LIMIT_BYTES {
-        return SkillMd::too_large(display_path, metadata.len());
+        return SkillMdRead::too_large();
     }
 
     let file = match File::open(&path) {
         Ok(file) => file,
         Err(error) => {
-            return SkillMd::unreadable(display_path, error.to_string(), Some(metadata.len()));
+            return SkillMdRead::unreadable(error.to_string());
         }
     };
     let mut bytes = Vec::new();
     if let Err(error) = file.take(SKILL_MD_LIMIT_BYTES + 1).read_to_end(&mut bytes) {
-        return SkillMd::unreadable(display_path, error.to_string(), Some(metadata.len()));
+        return SkillMdRead::unreadable(error.to_string());
     }
     if bytes.len() as u64 > SKILL_MD_LIMIT_BYTES {
-        return SkillMd::too_large(display_path, bytes.len() as u64);
+        return SkillMdRead::too_large();
     }
     let content = match String::from_utf8(bytes) {
         Ok(content) => content,
         Err(error) => {
-            return SkillMd::unreadable(
-                display_path,
-                format!("SKILL.md 不是有效的 UTF-8：{error}"),
-                Some(metadata.len()),
-            );
+            return SkillMdRead::unreadable(format!("SKILL.md 不是有效的 UTF-8：{error}"));
         }
     };
-    SkillMd {
+    SkillMdRead {
         status: SkillMdStatus::Ok,
-        path: display_path,
         content: Some(content),
-        size_bytes: Some(metadata.len()),
-        limit_bytes: SKILL_MD_LIMIT_BYTES,
         error: None,
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OpenTarget {
-    Folder,
-    SkillMd,
-}
-
-/// Resolve and guard a path for `open_skill_folder` / `open_skill_md`.
-pub fn resolve_open_target(
+/// Resolve and guard the physical skill folder used by content browsing and
+/// `open_skill_folder`.
+pub fn resolve_skill_root(
     paths: &AppPaths,
     agents: &[AgentDir],
     skill_id: &str,
-    target: OpenTarget,
 ) -> Result<PathBuf, AppError> {
     security::validate_skill_id(skill_id)?;
     let located = inventory::locate_with_agents(paths, agents, skill_id)?
@@ -356,30 +314,20 @@ pub fn resolve_open_target(
     let roots = allowed_roots(paths, agents);
     security::ensure_allowed(&folder, &roots)?;
 
-    let resolved = match target {
-        OpenTarget::Folder => folder,
-        OpenTarget::SkillMd => folder.join("SKILL.md"),
-    };
-    security::ensure_allowed(&resolved, &roots)?;
-
-    let metadata = fs::metadata(&resolved).map_err(|error| {
+    let metadata = fs::metadata(&folder).map_err(|error| {
         AppError::new(
             crate::error::codes::SKILL_NOT_FOUND,
-            "要打开的文件或目录不存在。",
+            "skill 目录不存在。",
         )
-        .detail(format!("{}（{error}）", resolved.display()))
+        .detail(format!("{}（{error}）", folder.display()))
     })?;
-    let ok = match target {
-        OpenTarget::Folder => metadata.is_dir(),
-        OpenTarget::SkillMd => metadata.is_file(),
-    };
-    if !ok {
+    if !metadata.is_dir() {
         return Err(AppError::path_invalid(format!(
-            "目标类型不匹配：{}",
-            resolved.display()
+            "目标不是目录：{}",
+            folder.display()
         )));
     }
-    Ok(resolved)
+    Ok(folder)
 }
 
 fn allowed_roots(paths: &AppPaths, agents: &[AgentDir]) -> Vec<AllowedRoot> {
@@ -546,20 +494,9 @@ mod tests {
             detail.attachments[0].detachable,
             "managed canonical + non-universal link is detachable"
         );
-        assert_eq!(detail.skill_md.status, SkillMdStatus::Ok);
-        assert_eq!(
-            detail.skill_md.path.as_deref(),
-            Some("~/.agents/skills/alpha/SKILL.md")
-        );
-        assert!(
-            detail
-                .skill_md
-                .content
-                .as_deref()
-                .unwrap()
-                .contains("---\nname: alpha")
-        );
-        assert_eq!(detail.skill_md.limit_bytes, 1024 * 1024);
+        let skill_md = read_skill_md(&dir);
+        assert_eq!(skill_md.status, SkillMdStatus::Ok);
+        assert!(skill_md.content.unwrap().contains("---\nname: alpha"));
         assert!(detail.warnings.is_empty(), "{:?}", detail.warnings);
 
         let json = serde_json::to_value(&detail).unwrap();
@@ -567,7 +504,7 @@ mod tests {
         assert_eq!(json["management"], "managed");
         assert_eq!(json["update"], "unknown");
         assert_eq!(json["ref"], "main");
-        assert_eq!(json["skillMd"]["status"], "ok");
+        assert!(json.get("skillMd").is_none());
         assert_eq!(json["attachments"][0]["agentId"], "claude-code");
         assert_eq!(json["attachments"][0]["detachable"], true);
         assert!(json["directoryMtimeEpochMs"].as_u64().unwrap() > 0);
@@ -627,8 +564,9 @@ mod tests {
         fixture.write_lock(&[("zeta", "0".repeat(40))]);
 
         let detail = fixture.detail("zeta");
-        assert_eq!(detail.skill_md.status, SkillMdStatus::Missing);
-        assert!(detail.skill_md.content.is_none());
+        let skill_md = read_skill_md(&dir);
+        assert_eq!(skill_md.status, SkillMdStatus::Missing);
+        assert!(skill_md.content.is_none());
         assert!(detail.description.is_none());
         assert!(
             detail
@@ -650,9 +588,9 @@ mod tests {
         fixture.write_lock(&[("huge", "0".repeat(40))]);
 
         let detail = fixture.detail("huge");
-        assert_eq!(detail.skill_md.status, SkillMdStatus::TooLarge);
-        assert!(detail.skill_md.content.is_none());
-        assert_eq!(detail.skill_md.limit_bytes, SKILL_MD_LIMIT_BYTES);
+        let skill_md = read_skill_md(&dir);
+        assert_eq!(skill_md.status, SkillMdStatus::TooLarge);
+        assert!(skill_md.content.is_none());
         assert!(
             detail
                 .warnings
@@ -672,10 +610,10 @@ mod tests {
         file.set_len(SKILL_MD_LIMIT_BYTES).unwrap();
         fixture.write_lock(&[("boundary", "0".repeat(40))]);
 
-        let detail = fixture.detail("boundary");
-        assert_eq!(detail.skill_md.status, SkillMdStatus::Ok);
+        let skill_md = read_skill_md(&dir);
+        assert_eq!(skill_md.status, SkillMdStatus::Ok);
         assert_eq!(
-            detail.skill_md.content.as_ref().unwrap().len() as u64,
+            skill_md.content.as_ref().unwrap().len() as u64,
             SKILL_MD_LIMIT_BYTES
         );
     }
@@ -688,7 +626,7 @@ mod tests {
         fs::write(invalid.join("SKILL.md"), [0xff, 0xfe, 0xfd]).unwrap();
         fixture.write_lock(&[("invalid", "0".repeat(40))]);
         let detail = fixture.detail("invalid");
-        assert_eq!(detail.skill_md.status, SkillMdStatus::Unreadable);
+        assert_eq!(read_skill_md(&invalid).status, SkillMdStatus::Unreadable);
         assert!(
             detail
                 .warnings
@@ -705,7 +643,7 @@ mod tests {
         .unwrap();
         fixture.write_lock(&[("malformed", "0".repeat(40))]);
         let detail = fixture.detail("malformed");
-        assert_eq!(detail.skill_md.status, SkillMdStatus::Ok);
+        assert_eq!(read_skill_md(&malformed).status, SkillMdStatus::Ok);
         assert!(
             detail
                 .warnings
@@ -725,7 +663,7 @@ mod tests {
         fixture.write_lock(&[("sneaky", "0".repeat(40))]);
 
         let detail = fixture.detail("sneaky");
-        assert_eq!(detail.skill_md.status, SkillMdStatus::Unreadable);
+        assert_eq!(read_skill_md(&dir).status, SkillMdStatus::Unreadable);
         assert!(
             detail
                 .warnings
@@ -735,60 +673,36 @@ mod tests {
     }
 
     #[test]
-    fn open_target_resolution_uses_server_paths_and_rejects_traversal() {
+    fn skill_root_resolution_uses_server_paths_and_rejects_traversal() {
         let fixture = Fixture::new();
         let dir = fixture.canonical_skill("alpha", "# Alpha\n");
         fixture.write_lock(&[("alpha", git_tree_hash(&dir).unwrap())]);
         fixture.link(&fixture.claude, "alpha", &dir);
 
-        let folder =
-            resolve_open_target(&fixture.paths, &fixture.agents, "alpha", OpenTarget::Folder)
-                .unwrap();
+        let folder = resolve_skill_root(&fixture.paths, &fixture.agents, "alpha").unwrap();
         assert_eq!(folder, dir);
-        let md = resolve_open_target(
-            &fixture.paths,
-            &fixture.agents,
-            "alpha",
-            OpenTarget::SkillMd,
-        )
-        .unwrap();
-        assert_eq!(md, dir.join("SKILL.md"));
 
-        let traversal = resolve_open_target(
-            &fixture.paths,
-            &fixture.agents,
-            "../alpha",
-            OpenTarget::Folder,
-        )
-        .unwrap_err();
+        let traversal = resolve_skill_root(&fixture.paths, &fixture.agents, "../alpha").unwrap_err();
         assert_eq!(traversal.code, codes::PATH_INVALID);
 
-        let unknown = resolve_open_target(
-            &fixture.paths,
-            &fixture.agents,
-            "missing",
-            OpenTarget::Folder,
-        )
-        .unwrap_err();
+        let unknown = resolve_skill_root(&fixture.paths, &fixture.agents, "missing").unwrap_err();
         assert_eq!(unknown.code, codes::SKILL_NOT_FOUND);
     }
 
     #[test]
-    fn open_target_for_copy_only_uses_the_agent_copy() {
+    fn skill_root_for_copy_only_uses_the_agent_copy() {
         let fixture = Fixture::new();
         let copy = fixture.claude.join("beta");
         fs::create_dir_all(&copy).unwrap();
         fs::write(copy.join("SKILL.md"), "---\nname: beta\n---\n").unwrap();
         fixture.write_lock(&[("beta", String::new())]);
 
-        let folder =
-            resolve_open_target(&fixture.paths, &fixture.agents, "beta", OpenTarget::Folder)
-                .unwrap();
+        let folder = resolve_skill_root(&fixture.paths, &fixture.agents, "beta").unwrap();
         assert_eq!(folder, copy);
     }
 
     #[test]
-    fn open_target_rejects_ambiguous_copy_only_skills() {
+    fn skill_root_rejects_ambiguous_copy_only_skills() {
         let fixture = Fixture::new();
         let claude_copy = fixture.claude.join("beta");
         fs::create_dir_all(&claude_copy).unwrap();
@@ -806,14 +720,13 @@ mod tests {
             skills_dir: gemini_root,
         });
 
-        let error =
-            resolve_open_target(&fixture.paths, &agents, "beta", OpenTarget::Folder).unwrap_err();
+        let error = resolve_skill_root(&fixture.paths, &agents, "beta").unwrap_err();
         assert_eq!(error.code, codes::SKILL_AMBIGUOUS);
         assert!(error.detail.unwrap().contains("Gemini CLI"));
     }
 
     #[test]
-    fn open_target_rejects_an_agent_root_that_is_a_symlink() {
+    fn skill_root_rejects_an_agent_root_that_is_a_symlink() {
         let fixture = Fixture::new();
         let real = fixture._tmp.path().join("real-claude");
         fs::create_dir_all(real.join("beta")).unwrap();
@@ -822,9 +735,7 @@ mod tests {
         symlink(&real, &fixture.claude).unwrap();
         fixture.write_lock(&[("beta", String::new())]);
 
-        let error =
-            resolve_open_target(&fixture.paths, &fixture.agents, "beta", OpenTarget::Folder)
-                .unwrap_err();
+        let error = resolve_skill_root(&fixture.paths, &fixture.agents, "beta").unwrap_err();
         assert_eq!(error.code, codes::PATH_INVALID);
     }
 
@@ -844,8 +755,8 @@ mod tests {
         let md = dir.join("SKILL.md");
         fs::set_permissions(&md, fs::Permissions::from_mode(0o644)).unwrap();
         fixture.write_lock(&[("alpha", "0".repeat(40))]);
-        let detail = fixture.detail("alpha");
-        assert_eq!(detail.skill_md.status, SkillMdStatus::Ok);
+        let _ = fixture.detail("alpha");
+        assert_eq!(read_skill_md(&dir).status, SkillMdStatus::Ok);
     }
 
     #[test]
@@ -859,10 +770,9 @@ mod tests {
         fs::set_permissions(&alpha_md, fs::Permissions::from_mode(0o000)).unwrap();
 
         let detail = fixture.detail("alpha");
+        assert_eq!(read_skill_md(&alpha).status, SkillMdStatus::Unreadable);
         fs::set_permissions(&alpha_md, fs::Permissions::from_mode(0o644)).unwrap();
 
-        assert_eq!(detail.skill_md.status, SkillMdStatus::Unreadable);
-        assert!(detail.skill_md.content.is_none());
         assert!(
             detail
                 .warnings
@@ -872,8 +782,9 @@ mod tests {
             detail.warnings
         );
 
+        let beta_dir = fixture.canonical.join("beta");
         let beta = fixture.detail("beta");
-        assert_eq!(beta.skill_md.status, SkillMdStatus::Ok);
+        assert_eq!(read_skill_md(&beta_dir).status, SkillMdStatus::Ok);
         assert!(beta.warnings.is_empty());
     }
 }

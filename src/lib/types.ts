@@ -307,12 +307,38 @@ export interface AnomalyView extends AnomalySummary {
   checkFailed: AnomalyGroup;
 }
 
-export type SkillMdStatus = "ok" | "missing" | "too_large" | "unreadable";
+export type SkillEntryKind = "file" | "dir" | "broken" | "outside";
 
-export interface SkillMd {
-  status: SkillMdStatus;
-  path: string | null;
+export interface SkillDirEntry {
+  name: string;
+  /** Relative to the skill root, using `/` separators. */
+  path: string;
+  kind: SkillEntryKind;
+  symlink: boolean;
+  sizeBytes: number | null;
+  markdown: boolean;
+  expandable: boolean;
+}
+
+export interface SkillDirListing {
+  path: string;
+  displayPath: string;
+  entries: SkillDirEntry[];
+  truncated: boolean;
+  maxEntries: number;
+  maxDepth: number;
+}
+
+export type SkillFileStatus = "ok" | "too_large" | "binary" | "unreadable";
+export type SkillFileKind = "markdown" | "text" | "image";
+
+export interface SkillFileContent {
+  path: string;
+  displayPath: string;
+  status: SkillFileStatus;
+  kind: SkillFileKind;
   content: string | null;
+  dataUrl: string | null;
   sizeBytes: number | null;
   limitBytes: number;
   error: string | null;
@@ -338,5 +364,4 @@ export interface SkillDetail {
   localModificationDetail: string | null;
   attachments: AgentAttachment[];
   warnings: string[];
-  skillMd: SkillMd;
 }

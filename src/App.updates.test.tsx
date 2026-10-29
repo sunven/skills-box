@@ -13,7 +13,11 @@ import type {
   UpdateState,
 } from "./lib/types";
 import { healthyReport } from "./test/fixtures";
-import { detailForSkill } from "./test/detail-fixtures";
+import {
+  detailForSkill,
+  makeDirListing,
+  makeFileContent,
+} from "./test/detail-fixtures";
 import {
   attachment,
   makeAnomalies,
@@ -150,8 +154,16 @@ function mockCommands(options: {
         if (!entry) throw new Error("no scripted update report");
         return typeof entry === "function" ? entry() : entry;
       }
+      case "list_skill_dir": {
+        const args = payload as { skillId: string; path?: string };
+        return makeDirListing(args.skillId, args.path ?? "");
+      }
+      case "read_skill_file": {
+        const args = payload as { skillId: string; path: string };
+        return makeFileContent(args.skillId, args.path);
+      }
       case "open_skill_folder":
-      case "open_skill_md":
+      case "open_skill_file":
         return null;
       default:
         throw new Error(`unexpected command: ${command}`);
@@ -424,6 +436,7 @@ describe("manual update checking", () => {
     });
 
     fireEvent.click(row("alpha"));
+    fireEvent.click(await screen.findByRole("tab", { name: "操作" }));
     await waitFor(() => {
       expect(
         detail().getByTestId("detail-update-badge"),
