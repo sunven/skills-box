@@ -4,7 +4,12 @@ import { AlertTriangle, CheckCircle2, Trash2, X } from "lucide-react";
 import { Button } from "./ui/button";
 import { TaskProgress } from "./install-wizard";
 import { useModalFocus } from "../hooks/use-modal-focus";
-import { asAppError, revealAppData, startUninstall } from "../lib/api";
+import {
+  asAppError,
+  fallbackError,
+  revealAppData,
+  startUninstall,
+} from "../lib/api";
 import type { TaskEvent, UpdateViewSkill } from "../lib/types";
 import { ATTACHMENT_LABELS } from "../lib/inventory-view";
 import {
@@ -109,7 +114,7 @@ export function UninstallDialog({
       await revealAppData(kind);
     } catch (error) {
       setRevealError(
-        (asAppError(error) ?? { message: "无法打开目录。" }).message,
+        (asAppError(error) ?? fallbackError("无法打开目录。")).message,
       );
     }
   };
@@ -382,7 +387,7 @@ export function UninstallDialog({
               {result.warnings.length > 0 ? (
                 <ul className="notice mt-2 list-disc pl-8" data-tone="warning">
                   {result.warnings.map((warning) => (
-                    <li key={`${warning.code}-${warning.message}`}>
+                    <li key={warning.code ?? warning.message}>
                       {warning.message}
                       {warning.detail ? ` · ${warning.detail}` : ""}
                     </li>

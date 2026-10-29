@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use crate::cli::{CliRuntime, CliRuntimeProvider};
 use crate::error::AppError;
+use crate::error::cli::{self, CliAction};
 use crate::process::{CancelToken, CommandSpec, ExecError, ExecOutput, ProcessExecutor};
 
 use super::manager::{
@@ -289,7 +290,7 @@ pub async fn run<A: MutationAction>(
                 );
             }
             Err(error) => {
-                let error = map_exec_error(profile.action, error);
+                let error = cli::classify_exec_error(cli_action(profile.action), error);
                 match action.on_infrastructure_failure(unit, error, Some(&preflight), &reporter) {
                     FailureDisposition::TaskFailed(error) => return FinishOutcome::Failed(error),
                     FailureDisposition::UnitFailed(outcome) => {
@@ -429,23 +430,12 @@ fn emit_final_progress(
     emit(&ctx.sink, event);
 }
 
-fn map_exec_error(action: TaskAction, error: ExecError) -> AppError {
-    match error {
-        ExecError::Cancelled => AppError::cli_cancelled(),
-        ExecError::Timeout(timeout) => AppError::cli_timeout(action_label(action), timeout),
-        ExecError::Spawn { program, message } => {
-            AppError::cli_spawn_failed(format!("无法启动 {program}: {message}"))
-        }
-        ExecError::Io(message) => AppError::cli_failed(message),
-    }
-}
-
-fn action_label(action: TaskAction) -> &'static str {
+fn cli_action(action: TaskAction) -> CliAction {
     match action {
-        TaskAction::Preview => "预览",
-        TaskAction::Install => "安装",
-        TaskAction::Update => "更新",
-        TaskAction::Uninstall => "卸载",
+        TaskAction::Preview => CliAction::Preview,
+        TaskAction::Install => CliAction::Install,
+        TaskAction::Update => CliAction::Update,
+        TaskAction::Uninstall => CliAction::Uninstall,
     }
 }
 
@@ -457,7 +447,7 @@ fn emit(sink: &EventSink, event: TaskEvent) {
 mod tests {
     use super::*;
     use crate::cli::CliRuntime;
-    use crate::error::codes;
+    use crate::error::ErrorCode;
     use crate::process::fake::{ScriptedExecutor, ScriptedResponse};
     use std::collections::BTreeMap;
     use std::sync::Mutex;
@@ -838,7 +828,7 @@ mod tests {
         let FinishOutcome::Failed(error) = outcome else {
             panic!("expected failed");
         };
-        assert_eq!(error.code, codes::CLI_TIMEOUT);
+        assert_eq!(error.code, ErrorCode::CliTimeout);
         assert!(!calls(&harness).iter().any(|call| call == "complete:alpha"));
     }
 

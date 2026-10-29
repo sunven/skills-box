@@ -6,6 +6,7 @@ import { Input } from "./ui/input";
 import { useModalFocus } from "../hooks/use-modal-focus";
 import {
   cancelTask,
+  fallbackError,
   startInstall,
   startPreview,
 } from "../lib/api";
@@ -372,9 +373,9 @@ export function InstallWizard({
     if (previewRunning || installRunning) return;
     const source = sourceInput.trim();
     if (!source) {
-      previewRunner.setStartError({
-        message: "请输入公开 GitHub 仓库，例如 owner/repo。",
-      });
+      previewRunner.setStartError(
+        fallbackError("请输入公开 GitHub 仓库，例如 owner/repo。"),
+      );
       return;
     }
     installRunner.reset();
@@ -1020,7 +1021,7 @@ export function InstallWizard({
                       className="notice mt-2 list-disc pl-8" data-tone="warning"
                     >
                       {installResult.warnings.map((warning) => (
-                        <li key={`${warning.code}-${warning.message}`}>
+                        <li key={warning.code ?? warning.message}>
                           {warning.message}
                           {warning.detail ? ` · ${warning.detail}` : ""}
                         </li>

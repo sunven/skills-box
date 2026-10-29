@@ -11,7 +11,12 @@ import {
 import { Button } from "./ui/button";
 import { TaskProgress } from "./install-wizard";
 import { useModalFocus } from "../hooks/use-modal-focus";
-import { asAppError, revealAppData, startUpdate } from "../lib/api";
+import {
+  asAppError,
+  fallbackError,
+  revealAppData,
+  startUpdate,
+} from "../lib/api";
 import type {
   InventoryAgent,
   TaskEvent,
@@ -254,7 +259,7 @@ export function UpdateDialog({
       await revealAppData(kind);
     } catch (error) {
       setRevealError(
-        (asAppError(error) ?? { message: "无法打开目录。" }).message,
+        (asAppError(error) ?? fallbackError("无法打开目录。")).message,
       );
     }
   };
@@ -679,7 +684,7 @@ export function UpdateDialog({
                   className="notice mt-2 list-disc pl-8" data-tone="warning"
                 >
                   {result.warnings.map((warning) => (
-                    <li key={`${warning.code}-${warning.message}`}>
+                    <li key={warning.code ?? warning.message}>
                       {warning.message}
                       {warning.detail ? ` · ${warning.detail}` : ""}
                     </li>

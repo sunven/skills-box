@@ -4,8 +4,13 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { AgentLogo } from "./agent-logo";
 import { useModalFocus } from "../hooks/use-modal-focus";
-import { addExtraAgent, asAppError, removeExtraAgent } from "../lib/api";
-import type { InventoryAgent, InventorySkill } from "../lib/types";
+import {
+  addExtraAgent,
+  asAppError,
+  fallbackError,
+  removeExtraAgent,
+} from "../lib/api";
+import type { AppError, InventoryAgent, InventorySkill } from "../lib/types";
 
 interface ManageAgentsDialogProps {
   open: boolean;
@@ -16,15 +21,8 @@ interface ManageAgentsDialogProps {
   onChanged: () => void;
 }
 
-interface DialogError {
-  code?: string;
-  message: string;
-  detail?: string;
-  hint?: string;
-}
-
-function toError(error: unknown, fallback: string): DialogError {
-  return asAppError(error) ?? { message: fallback };
+function toError(error: unknown, fallback: string): AppError {
+  return asAppError(error) ?? fallbackError(fallback);
 }
 
 /**
@@ -46,11 +44,11 @@ export function ManageAgentsDialog({
   const [displayName, setDisplayName] = useState("");
   const [skillsDir, setSkillsDir] = useState("");
   const [adding, setAdding] = useState(false);
-  const [addError, setAddError] = useState<DialogError | null>(null);
+  const [addError, setAddError] = useState<AppError | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
-  const [deleteError, setDeleteError] = useState<DialogError | null>(null);
+  const [deleteError, setDeleteError] = useState<AppError | null>(null);
 
   const extras = useMemo(
     () => agents.filter((agent) => agent.origin !== "catalog"),
@@ -97,17 +95,19 @@ export function ManageAgentsDialog({
       setAddError({
         message: "id 不合法。",
         hint: "只能包含字母、数字、`-`、`_`、`.`，且不能以 `-` 开头。",
+        retryable: false,
       });
       return;
     }
     if (!trimmedName) {
-      setAddError({ message: "请填写显示名。" });
+      setAddError(fallbackError("请填写显示名。"));
       return;
     }
     if (!trimmedDir.startsWith("~/") && !trimmedDir.startsWith("/")) {
       setAddError({
         message: "skills 目录不合法。",
         hint: "必须以 `~/` 开头或是绝对路径，例如 ~/.workbuddy/skills。",
+        retryable: false,
       });
       return;
     }

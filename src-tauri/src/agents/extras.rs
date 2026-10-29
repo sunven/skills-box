@@ -434,19 +434,19 @@ mod tests {
     fn duplicate_and_builtin_ids_are_rejected_on_add() {
         let (_tmp, paths) = paths();
         let error = add_user_agent(&paths, &entry("workbuddy", "~/.wb/skills")).unwrap_err();
-        assert_eq!(error.code, crate::error::codes::EXTRA_AGENT_DUPLICATE);
+        assert_eq!(error.code, crate::error::ErrorCode::ExtraDuplicate);
         let error = add_user_agent(&paths, &entry("qoder", "~/.q/skills")).unwrap_err();
-        assert_eq!(error.code, crate::error::codes::EXTRA_AGENT_DUPLICATE);
+        assert_eq!(error.code, crate::error::ErrorCode::ExtraDuplicate);
         add_user_agent(&paths, &entry("acme", "~/.acme/skills")).unwrap();
         let error = add_user_agent(&paths, &entry("acme", "~/.acme2/skills")).unwrap_err();
-        assert_eq!(error.code, crate::error::codes::EXTRA_AGENT_DUPLICATE);
+        assert_eq!(error.code, crate::error::ErrorCode::ExtraDuplicate);
     }
 
     #[test]
     fn builtin_extras_cannot_be_removed() {
         let (_tmp, paths) = paths();
         let error = remove_user_agent(&paths, "workbuddy").unwrap_err();
-        assert_eq!(error.code, crate::error::codes::EXTRA_AGENT_BUILTIN);
+        assert_eq!(error.code, crate::error::ErrorCode::ExtraBuiltin);
     }
 
     #[test]

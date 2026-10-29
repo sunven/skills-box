@@ -564,10 +564,8 @@ fn resolve_root_in_catalog(
     let roots = allowed_roots(paths, agents);
     security::ensure_allowed(&folder, &roots)?;
 
-    let metadata = fs::metadata(&folder).map_err(|error| {
-        AppError::new(crate::error::codes::SKILL_NOT_FOUND, "skill 目录不存在。")
-            .detail(format!("{}（{error}）", folder.display()))
-    })?;
+    let metadata =
+        fs::metadata(&folder).map_err(|error| AppError::skill_dir_not_found(&folder, error))?;
     if !metadata.is_dir() {
         return Err(AppError::path_invalid(format!(
             "目标不是目录：{}",

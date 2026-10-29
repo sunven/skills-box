@@ -3,7 +3,7 @@ import { Button } from "./ui/button";
 import type { AppError } from "../lib/types";
 
 interface LockErrorScreenProps {
-  error: Partial<AppError> & { message: string };
+  error: AppError;
   onRetry: () => void;
   retrying: boolean;
 }

@@ -77,7 +77,10 @@ describe("shared task runner", () => {
       fallbackFailure: "更新失败，请重试。",
     });
     expect(state.running).toBe(false);
-    expect(state.taskError).toEqual({ message: "更新失败，请重试。" });
+    expect(state.taskError).toEqual({
+      message: "更新失败，请重试。",
+      retryable: false,
+    });
 
     state = taskRunReducer(state, {
       type: "event",
@@ -123,16 +126,17 @@ describe("shared task runner", () => {
     expect(state.cancelling).toBe(true);
     expect(state.taskError).toEqual({
       message: "当前 skill 正在写入，无法取消。",
+      retryable: false,
     });
 
     state = taskRunReducer(state, {
       type: "startFailed",
-      error: { message: "无法开始更新。" },
+      error: { message: "无法开始更新。", retryable: false },
     });
     expect(state).toMatchObject({
       running: false,
       phase: null,
-      startError: { message: "无法开始更新。" },
+      startError: { message: "无法开始更新。", retryable: false },
     });
   });
 

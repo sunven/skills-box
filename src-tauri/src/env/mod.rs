@@ -159,7 +159,7 @@ impl EnvironmentService {
             .report
             .issues
             .iter()
-            .find(|issue| issue.code.starts_with("env."))
+            .find(|issue| issue.code.is_env())
         {
             return Err(issue.clone());
         }

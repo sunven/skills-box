@@ -754,7 +754,7 @@ fn parent_path(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::codes;
+    use crate::error::ErrorCode;
     use crate::process::fake::ScriptedExecutor;
     use crate::update::github::GitHubFetchError;
     use crate::update::state::{UPDATE_CHECK_STATE_VERSION, UpdateCheckOutcome};
@@ -1148,7 +1148,7 @@ mod tests {
                 .contains("找不到")
         );
         let offline = result_of(&report, "eta").error.as_ref().unwrap();
-        assert_eq!(offline.code, codes::NETWORK_OFFLINE);
+        assert_eq!(offline.code, ErrorCode::NetworkOffline);
         assert_eq!(result_of(&report, "eta").previous_state, None);
         assert_eq!(result_of(&report, "eta").last_success_at_epoch_ms, None);
 
@@ -1167,7 +1167,7 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .code,
-            codes::NETWORK_OFFLINE
+            ErrorCode::NetworkOffline
         );
 
         // One request per (source, ref), not per skill.
@@ -1335,7 +1335,7 @@ mod tests {
         );
         assert_eq!(
             result_of(&failed, "alpha").error.as_ref().unwrap().code,
-            codes::NETWORK_RATE_LIMITED
+            ErrorCode::NetworkRateLimited
         );
         assert_eq!(failed.sources[0].status, UpdateSourceStatus::Error);
         // A failed check must never surface as up to date.
@@ -1404,15 +1404,15 @@ mod tests {
         assert_eq!(state_of(&report, "gamma"), UpdateState::Error);
         assert_eq!(
             result_of(&report, "alpha").error.as_ref().unwrap().code,
-            codes::NETWORK_RATE_LIMITED
+            ErrorCode::NetworkRateLimited
         );
         assert_eq!(
             result_of(&report, "beta").error.as_ref().unwrap().code,
-            codes::NETWORK_ERROR
+            ErrorCode::NetworkError
         );
         assert_eq!(
             result_of(&report, "gamma").error.as_ref().unwrap().code,
-            codes::NETWORK_ERROR
+            ErrorCode::NetworkError
         );
         assert_eq!(report.last_success_at_epoch_ms, None);
     }
@@ -1634,7 +1634,7 @@ mod tests {
         assert_eq!(state_of(&report, "alpha"), UpdateState::Error);
         assert_eq!(
             result_of(&report, "alpha").error.as_ref().unwrap().code,
-            codes::NETWORK_ERROR
+            ErrorCode::NetworkError
         );
         assert_eq!(report.sources[0].status, UpdateSourceStatus::Error);
     }

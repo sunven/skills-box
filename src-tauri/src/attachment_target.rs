@@ -376,7 +376,7 @@ fn install_target_state(target: &Path, canonical: &Path) -> Result<TargetState, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::codes;
+    use crate::error::ErrorCode;
     use std::os::unix::fs::symlink;
 
     struct Fixture {
@@ -485,7 +485,7 @@ mod tests {
             &fixture.agent.id,
         )
         .unwrap_err();
-        assert_eq!(error.code, codes::SKILL_COPY_ONLY);
+        assert_eq!(error.code, ErrorCode::SkillCopyOnly);
         let error = resolve_attach(
             &fixture.paths,
             &fixture.located(ManagementState::Unmanaged, Vec::new()),
@@ -493,7 +493,7 @@ mod tests {
             &fixture.agent.id,
         )
         .unwrap_err();
-        assert_eq!(error.code, codes::SKILL_UNMANAGED);
+        assert_eq!(error.code, ErrorCode::SkillUnmanaged);
 
         let universal = AgentDir {
             universal: true,
@@ -506,7 +506,7 @@ mod tests {
             &universal.id,
         )
         .unwrap_err();
-        assert_eq!(error.code, codes::AGENT_NATIVE);
+        assert_eq!(error.code, ErrorCode::AgentNative);
 
         let shared = AgentDir {
             skills_dir: fixture.paths.canonical_skills_dir(),
@@ -519,13 +519,13 @@ mod tests {
             &shared.id,
         )
         .unwrap_err();
-        assert_eq!(error.code, codes::AGENT_NATIVE);
+        assert_eq!(error.code, ErrorCode::AgentNative);
 
         for (mode, expected) in [
-            (AttachmentMode::Native, codes::AGENT_NATIVE),
-            (AttachmentMode::Broken, codes::AGENT_BROKEN),
-            (AttachmentMode::Link, codes::AGENT_ALREADY_ATTACHED),
-            (AttachmentMode::Copy, codes::AGENT_ALREADY_ATTACHED),
+            (AttachmentMode::Native, ErrorCode::AgentNative),
+            (AttachmentMode::Broken, ErrorCode::AgentBroken),
+            (AttachmentMode::Link, ErrorCode::AgentAlreadyAttached),
+            (AttachmentMode::Copy, ErrorCode::AgentAlreadyAttached),
         ] {
             let located = fixture.located(ManagementState::Managed, vec![fixture.attachment(mode)]);
             let error = resolve_attach(
@@ -546,7 +546,7 @@ mod tests {
             &fixture.agent.id,
         )
         .unwrap_err();
-        assert_eq!(error.code, codes::AGENT_ATTACH_FAILED);
+        assert_eq!(error.code, ErrorCode::AgentAttachFailed);
 
         let mut escaped = fixture.located(ManagementState::Managed, Vec::new());
         escaped.name = "../alpha".to_string();
@@ -557,7 +557,7 @@ mod tests {
             &fixture.agent.id,
         )
         .unwrap_err();
-        assert_eq!(error.code, codes::PATH_OUTSIDE_ALLOWED_ROOT);
+        assert_eq!(error.code, ErrorCode::PathOutsideAllowedRoot);
 
         let agent_link = fixture.paths.home().join(".linked-skills");
         symlink(&fixture.agent_dir, &agent_link).unwrap();
@@ -572,7 +572,7 @@ mod tests {
             &linked.id,
         )
         .unwrap_err();
-        assert_eq!(error.code, codes::PATH_INVALID);
+        assert_eq!(error.code, ErrorCode::PathInvalid);
     }
 
     #[test]
@@ -612,29 +612,29 @@ mod tests {
         for (located, expected) in [
             (
                 fixture.located(ManagementState::CopyOnly, Vec::new()),
-                codes::SKILL_COPY_ONLY,
+                ErrorCode::SkillCopyOnly,
             ),
             (
                 fixture.located(ManagementState::Unmanaged, Vec::new()),
-                codes::SKILL_UNMANAGED,
+                ErrorCode::SkillUnmanaged,
             ),
             (
                 fixture.located(ManagementState::Managed, Vec::new()),
-                codes::AGENT_NOT_ATTACHED,
+                ErrorCode::AgentNotAttached,
             ),
             (
                 fixture.located(
                     ManagementState::Managed,
                     vec![fixture.attachment(AttachmentMode::Native)],
                 ),
-                codes::AGENT_NATIVE,
+                ErrorCode::AgentNative,
             ),
             (
                 fixture.located(
                     ManagementState::Managed,
                     vec![fixture.attachment(AttachmentMode::Broken)],
                 ),
-                codes::AGENT_BROKEN,
+                ErrorCode::AgentBroken,
             ),
         ] {
             let error = resolve_detach(
@@ -658,7 +658,7 @@ mod tests {
             &universal.id,
         )
         .unwrap_err();
-        assert_eq!(error.code, codes::AGENT_NATIVE);
+        assert_eq!(error.code, ErrorCode::AgentNative);
 
         let missing = AgentDir {
             skills_dir: fixture.paths.home().join(".missing/skills"),
@@ -671,7 +671,7 @@ mod tests {
             &missing.id,
         )
         .unwrap_err();
-        assert_eq!(error.code, codes::PATH_INVALID);
+        assert_eq!(error.code, ErrorCode::PathInvalid);
     }
 
     #[test]
@@ -700,19 +700,19 @@ mod tests {
 
         fs::write(&link, "occupied").unwrap();
         let error = resolve_install_link(&fixture.canonical, &fixture.agent, "alpha").unwrap_err();
-        assert_eq!(error.code, codes::AGENT_ATTACH_FAILED);
+        assert_eq!(error.code, ErrorCode::AgentAttachFailed);
 
         fs::remove_file(&link).unwrap();
         let other = fixture.paths.home().join("other");
         fs::create_dir_all(&other).unwrap();
         symlink(&other, &link).unwrap();
         let error = resolve_install_link(&fixture.canonical, &fixture.agent, "alpha").unwrap_err();
-        assert_eq!(error.code, codes::AGENT_ATTACH_FAILED);
+        assert_eq!(error.code, ErrorCode::AgentAttachFailed);
 
         fs::remove_file(&link).unwrap();
         symlink(fixture.paths.home().join("missing"), &link).unwrap();
         let error = resolve_install_link(&fixture.canonical, &fixture.agent, "alpha").unwrap_err();
-        assert_eq!(error.code, codes::AGENT_ATTACH_FAILED);
+        assert_eq!(error.code, ErrorCode::AgentAttachFailed);
 
         let agent_link = fixture.paths.home().join(".linked-skills");
         symlink(&fixture.agent_dir, &agent_link).unwrap();
@@ -721,7 +721,7 @@ mod tests {
             ..fixture.agent.clone()
         };
         let error = resolve_install_link(&fixture.canonical, &linked, "alpha").unwrap_err();
-        assert_eq!(error.code, codes::AGENT_ATTACH_FAILED);
+        assert_eq!(error.code, ErrorCode::AgentAttachFailed);
     }
 
     #[test]
@@ -794,7 +794,7 @@ mod tests {
 #[cfg(test)]
 mod canonical_target_tests {
     use super::*;
-    use crate::error::codes;
+    use crate::error::ErrorCode;
 
     #[test]
     fn detach_rejects_a_canonical_target_path() {
@@ -827,7 +827,7 @@ mod canonical_target_tests {
         };
         let error =
             resolve_detach(&paths, &located, std::slice::from_ref(&agent), &agent.id).unwrap_err();
-        assert_eq!(error.code, codes::PATH_INVALID);
+        assert_eq!(error.code, ErrorCode::PathInvalid);
         assert!(error.detail.as_deref().unwrap().contains("canonical"));
     }
 }

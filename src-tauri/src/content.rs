@@ -506,7 +506,7 @@ fn file_value(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::codes;
+    use crate::error::ErrorCode;
     use std::os::unix::fs::{PermissionsExt, symlink};
 
     struct Fixture {
@@ -698,14 +698,14 @@ mod tests {
             " spaced",
         ] {
             let error = fixture.list("alpha", relative).unwrap_err();
-            assert_eq!(error.code, codes::PATH_INVALID, "{relative:?}");
+            assert_eq!(error.code, ErrorCode::PathInvalid, "{relative:?}");
         }
         let too_deep = (0..=CONTENT_MAX_DEPTH)
             .map(|index| format!("d{index}"))
             .collect::<Vec<_>>()
             .join("/");
         let error = fixture.list("alpha", &too_deep).unwrap_err();
-        assert_eq!(error.code, codes::PATH_INVALID);
+        assert_eq!(error.code, ErrorCode::PathInvalid);
         assert!(error.detail.as_deref().unwrap_or("").contains("目录层级"));
     }
 
@@ -773,11 +773,11 @@ mod tests {
         );
         assert_eq!(
             fixture.read("alpha", "outside.txt").unwrap_err().code,
-            codes::PATH_OUTSIDE_ALLOWED_ROOT
+            ErrorCode::PathOutsideAllowedRoot
         );
         assert_eq!(
             fixture.read("alpha", "broken.txt").unwrap_err().code,
-            codes::PATH_INVALID
+            ErrorCode::PathInvalid
         );
     }
 
@@ -861,11 +861,11 @@ mod tests {
 
         assert_eq!(
             fixture.read("alpha", "").unwrap_err().code,
-            codes::PATH_INVALID
+            ErrorCode::PathInvalid
         );
         assert_eq!(
             fixture.read("alpha", "references").unwrap_err().code,
-            codes::PATH_INVALID
+            ErrorCode::PathInvalid
         );
     }
 
@@ -897,7 +897,7 @@ mod tests {
 
         for relative in ["", "references", "../alpha", ".git/config"] {
             let error = resolve_open_path(&fixture.root("alpha"), relative).unwrap_err();
-            assert_eq!(error.code, codes::PATH_INVALID, "{relative:?}");
+            assert_eq!(error.code, ErrorCode::PathInvalid, "{relative:?}");
         }
     }
 

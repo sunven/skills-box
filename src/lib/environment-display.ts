@@ -1,3 +1,4 @@
+import { isLockError } from "./api";
 import type { EnvReport, LockHealth, PathSource, ToolState, ToolStatus } from "./types";
 
 export const pathSourceLabels: Record<PathSource, string> = {
@@ -132,7 +133,7 @@ export function environmentSummary(report: EnvReport | undefined): {
   if (!report) return { label: "环境异常", tone: "destructive" };
   if (report.mutationsEnabled) return { label: "环境正常", tone: "success" };
   const onlyLockIssues =
-    report.issues.length > 0 && report.issues.every((issue) => issue.code.startsWith("lock."));
+    report.issues.length > 0 && report.issues.every((issue) => isLockError(issue));
   return onlyLockIssues
     ? { label: "环境受限", tone: "warning" }
     : { label: "环境异常", tone: "destructive" };

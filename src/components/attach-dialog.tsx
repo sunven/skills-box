@@ -3,8 +3,8 @@ import { Link2, X } from "lucide-react";
 import { Button } from "./ui/button";
 import { AgentLogo } from "./agent-logo";
 import { useModalFocus } from "../hooks/use-modal-focus";
-import { asAppError, attachAgent } from "../lib/api";
-import type { AgentAttachment, InventoryAgent } from "../lib/types";
+import { asAppError, attachAgent, fallbackError } from "../lib/api";
+import type { AgentAttachment, AppError, InventoryAgent } from "../lib/types";
 
 interface AttachDialogProps {
   open: boolean;
@@ -13,13 +13,6 @@ interface AttachDialogProps {
   attachments: AgentAttachment[];
   onClose: () => void;
   onChanged: () => void;
-}
-
-interface DialogError {
-  code?: string;
-  message: string;
-  detail?: string;
-  hint?: string;
 }
 
 /**
@@ -39,7 +32,7 @@ export function AttachDialog({
   const closeRef = useRef<HTMLButtonElement>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [pending, setPending] = useState(false);
-  const [error, setError] = useState<DialogError | null>(null);
+  const [error, setError] = useState<AppError | null>(null);
 
   const attachedIds = useMemo(
     () => new Set(attachments.map((attachment) => attachment.agentId)),
@@ -86,7 +79,7 @@ export function AttachDialog({
   const confirm = async () => {
     const targets = eligible.filter((agent) => selected.has(agent.id));
     if (targets.length === 0) {
-      setError({ message: "请选择至少一个 agent。" });
+      setError(fallbackError("请选择至少一个 agent。"));
       return;
     }
     setPending(true);
@@ -116,6 +109,7 @@ export function AttachDialog({
           ? "挂载失败。"
           : "部分 agent 挂载失败。",
       detail: failures.join("\n"),
+      retryable: false,
     });
     setSelected(new Set());
   };

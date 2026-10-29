@@ -516,7 +516,7 @@ fn expand_tilde(raw: &str, home: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::codes;
+    use crate::error::ErrorCode;
     use std::os::unix::fs::symlink;
 
     struct Fixture {
@@ -1034,11 +1034,11 @@ mod tests {
         fs::create_dir_all(fixture.paths.agents_root()).unwrap();
         fs::write(fixture.paths.lock_path(), "{not json").unwrap();
         let error = read_with_agents(&fixture.paths, &fixture.agents).unwrap_err();
-        assert_eq!(error.code, codes::LOCK_CORRUPT);
+        assert_eq!(error.code, ErrorCode::LockCorrupt);
 
         fs::write(fixture.paths.lock_path(), r#"{"version":2,"skills":{}}"#).unwrap();
         let error = read_with_agents(&fixture.paths, &fixture.agents).unwrap_err();
-        assert_eq!(error.code, codes::LOCK_UNSUPPORTED_VERSION);
+        assert_eq!(error.code, ErrorCode::LockUnsupportedVersion);
     }
 
     #[test]

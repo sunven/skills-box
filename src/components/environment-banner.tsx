@@ -1,5 +1,6 @@
 import { AlertTriangle, Loader2, RotateCcw } from "lucide-react";
 import { Button } from "./ui/button";
+import { isLockError } from "../lib/api";
 import type { AppError, EnvReport } from "../lib/types";
 
 interface EnvironmentBannerProps {
@@ -91,7 +92,7 @@ export function EnvironmentBanner({
   const issues: AppError[] = report?.issues ?? [];
   if (issues.length === 0) return null;
 
-  const onlyLockIssues = issues.every((issue) => issue.code.startsWith("lock."));
+  const onlyLockIssues = issues.every((issue) => isLockError(issue));
   return (
     <div
       role="alert"
@@ -111,7 +112,7 @@ export function EnvironmentBanner({
           <ul className="mt-1 space-y-1">
             {issues.map((issue, index) => (
               <li
-                key={`${issue.code}-${index}`}
+                key={`${issue.code ?? issue.message}-${index}`}
                 className="text-[12.5px] text-destructive/90"
               >
                 <span className="font-medium">{issue.message}</span>

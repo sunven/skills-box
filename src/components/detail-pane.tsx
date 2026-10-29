@@ -22,12 +22,13 @@ import {
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { AttachDialog } from "./attach-dialog";
-import { DetachDialog, type DetachDialogError } from "./detach-dialog";
-import { asAppError, detachAgent } from "../lib/api";
+import { DetachDialog } from "./detach-dialog";
+import { asAppError, detachAgent, fallbackError } from "../lib/api";
 import { agentInitials } from "../lib/agent-style";
 import { agentLogoUrl } from "../lib/agent-logos";
 import type {
   AgentAttachment,
+  AppError,
   DetachResult,
   InventoryAgent,
   SkillDetail,
@@ -271,7 +272,7 @@ export const DetailPane = memo(function DetailPane({
   const [tab, setTab] = useState<DetailTab>("actions");
   const [detachTarget, setDetachTarget] = useState<AgentAttachment | null>(null);
   const [detachPending, setDetachPending] = useState(false);
-  const [detachError, setDetachError] = useState<DetachDialogError | null>(null);
+  const [detachError, setDetachError] = useState<AppError | null>(null);
   const [detachNotice, setDetachNotice] = useState<DetachResult | null>(null);
   const [attachOpen, setAttachOpen] = useState(false);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -364,7 +365,7 @@ export const DetailPane = memo(function DetailPane({
       setDetachTarget(null);
     } catch (error) {
       setDetachError(
-        asAppError(error) ?? { message: "断开失败，请刷新后重试。" },
+        asAppError(error) ?? fallbackError("断开失败，请刷新后重试。"),
       );
     } finally {
       setDetachPending(false);

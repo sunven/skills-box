@@ -185,7 +185,7 @@ pub(crate) fn directory_mtime_epoch_ms(path: &Path) -> Option<u64> {
 mod tests {
     use super::*;
     use crate::baseline::git_tree_hash;
-    use crate::error::codes;
+    use crate::error::ErrorCode;
     use std::os::unix::fs::{PermissionsExt, symlink};
 
     struct Fixture {
@@ -500,10 +500,10 @@ mod tests {
 
         let traversal =
             resolve_skill_root(&fixture.paths, &fixture.agents, "../alpha").unwrap_err();
-        assert_eq!(traversal.code, codes::PATH_INVALID);
+        assert_eq!(traversal.code, ErrorCode::PathInvalid);
 
         let unknown = resolve_skill_root(&fixture.paths, &fixture.agents, "missing").unwrap_err();
-        assert_eq!(unknown.code, codes::SKILL_NOT_FOUND);
+        assert_eq!(unknown.code, ErrorCode::SkillNotFound);
     }
 
     #[test]
@@ -538,7 +538,7 @@ mod tests {
         });
 
         let error = resolve_skill_root(&fixture.paths, &agents, "beta").unwrap_err();
-        assert_eq!(error.code, codes::SKILL_AMBIGUOUS);
+        assert_eq!(error.code, ErrorCode::SkillAmbiguous);
         assert!(error.detail.unwrap().contains("Gemini CLI"));
     }
 
@@ -553,7 +553,7 @@ mod tests {
         fixture.write_lock(&[("beta", String::new())]);
 
         let error = resolve_skill_root(&fixture.paths, &fixture.agents, "beta").unwrap_err();
-        assert_eq!(error.code, codes::PATH_INVALID);
+        assert_eq!(error.code, ErrorCode::PathInvalid);
     }
 
     #[test]
@@ -561,7 +561,7 @@ mod tests {
         let fixture = Fixture::new();
         for id in ["", "..", "a/b", "a\\b", ".hidden"] {
             let error = read_with_agents(&fixture.paths, &fixture.agents, id).unwrap_err();
-            assert_eq!(error.code, codes::PATH_INVALID, "{id:?}");
+            assert_eq!(error.code, ErrorCode::PathInvalid, "{id:?}");
         }
     }
 

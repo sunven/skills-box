@@ -108,7 +108,7 @@ pub fn attach_agent(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::codes;
+    use crate::error::ErrorCode;
     use std::path::PathBuf;
 
     struct Fixture {
@@ -186,7 +186,7 @@ mod tests {
 
         let error =
             attach_agent(&fixture.paths, &fixture.agents, "alpha", "claude-code").unwrap_err();
-        assert_eq!(error.code, codes::AGENT_ALREADY_ATTACHED);
+        assert_eq!(error.code, ErrorCode::AgentAlreadyAttached);
     }
 
     #[test]
@@ -195,11 +195,11 @@ mod tests {
         fs::remove_file(fixture.paths.lock_path()).unwrap();
         let error =
             attach_agent(&fixture.paths, &fixture.agents, "alpha", "claude-code").unwrap_err();
-        assert_eq!(error.code, codes::SKILL_UNMANAGED);
+        assert_eq!(error.code, ErrorCode::SkillUnmanaged);
 
         let fixture = Fixture::new();
         let error = attach_agent(&fixture.paths, &fixture.agents, "alpha", "nope").unwrap_err();
-        assert_eq!(error.code, codes::AGENT_NOT_DETECTED);
+        assert_eq!(error.code, ErrorCode::AgentNotDetected);
 
         let fixture = Fixture::new();
         // A plain file in the agent directory is invisible to the inventory
@@ -207,7 +207,7 @@ mod tests {
         fs::write(fixture.claude.join("alpha"), "noise").unwrap();
         let error =
             attach_agent(&fixture.paths, &fixture.agents, "alpha", "claude-code").unwrap_err();
-        assert_eq!(error.code, codes::AGENT_ATTACH_FAILED);
+        assert_eq!(error.code, ErrorCode::AgentAttachFailed);
     }
 
     #[test]
@@ -221,7 +221,7 @@ mod tests {
             skills_dir: canonical.clone(),
         }];
         let error = attach_agent(&fixture.paths, &agents, "alpha", "codex").unwrap_err();
-        assert_eq!(error.code, codes::AGENT_NATIVE);
+        assert_eq!(error.code, ErrorCode::AgentNative);
 
         // Copy-only beta: a lock entry and an agent copy, no canonical folder.
         let copy = fixture.claude.join("beta");
@@ -235,6 +235,6 @@ mod tests {
 
         let error =
             attach_agent(&fixture.paths, &fixture.agents, "beta", "claude-code").unwrap_err();
-        assert_eq!(error.code, codes::SKILL_COPY_ONLY);
+        assert_eq!(error.code, ErrorCode::SkillCopyOnly);
     }
 }

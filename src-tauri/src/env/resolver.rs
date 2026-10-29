@@ -1139,7 +1139,7 @@ fn epoch_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::codes;
+    use crate::error::ErrorCode;
     use crate::process::fake::{ScriptedExecutor, ScriptedResponse};
     use std::collections::BTreeMap;
     use std::fs;
@@ -1272,12 +1272,8 @@ mod tests {
         )
     }
 
-    fn issue_codes(report: &EnvReport) -> Vec<&str> {
-        report
-            .issues
-            .iter()
-            .map(|issue| issue.code.as_str())
-            .collect()
+    fn issue_codes(report: &EnvReport) -> Vec<ErrorCode> {
+        report.issues.iter().map(|issue| issue.code).collect()
     }
 
     #[tokio::test]
@@ -1473,7 +1469,7 @@ mod tests {
         assert_eq!(report.node.status, ToolState::TooOld);
         assert_eq!(report.node.version.as_deref(), Some("v20.11.0"));
         assert!(!report.mutations_enabled);
-        assert!(issue_codes(&report).contains(&codes::ENV_NODE_TOO_OLD));
+        assert!(issue_codes(&report).contains(&ErrorCode::EnvNodeTooOld));
         assert!(report.issues[0].message.contains("22.20"));
     }
 
@@ -1490,7 +1486,7 @@ mod tests {
 
         assert_eq!(report.node.status, ToolState::Missing);
         assert_eq!(report.path_source, PathSource::Unresolved);
-        assert!(issue_codes(&report).contains(&codes::ENV_NODE_MISSING));
+        assert!(issue_codes(&report).contains(&ErrorCode::EnvNodeMissing));
         assert!(!report.mutations_enabled);
     }
 
@@ -1515,7 +1511,7 @@ mod tests {
         assert_eq!(report.node.status, ToolState::Ok);
         assert_eq!(report.npx.status, ToolState::Missing);
         assert_eq!(report.cli.status, ToolState::NotChecked);
-        assert!(issue_codes(&report).contains(&codes::ENV_NPX_MISSING));
+        assert!(issue_codes(&report).contains(&ErrorCode::EnvNpxMissing));
         assert!(!report.mutations_enabled);
     }
 
@@ -1536,7 +1532,7 @@ mod tests {
 
         assert_eq!(report.node.status, ToolState::Ok);
         assert_eq!(report.git.status, ToolState::Missing);
-        assert!(issue_codes(&report).contains(&codes::ENV_GIT_MISSING));
+        assert!(issue_codes(&report).contains(&ErrorCode::EnvGitMissing));
         assert!(!report.mutations_enabled);
     }
 
@@ -1571,11 +1567,11 @@ mod tests {
 
         assert_eq!(report.cli.status, ToolState::Error);
         assert!(!report.cli.available);
-        assert!(issue_codes(&report).contains(&codes::ENV_CLI_MISSING));
+        assert!(issue_codes(&report).contains(&ErrorCode::EnvCliMissing));
         let issue = report
             .issues
             .iter()
-            .find(|issue| issue.code == codes::ENV_CLI_MISSING)
+            .find(|issue| issue.code == ErrorCode::EnvCliMissing)
             .unwrap();
         assert!(issue.detail.as_deref().unwrap().contains("network down"));
     }
@@ -1607,11 +1603,11 @@ mod tests {
 
         assert_eq!(report.cli.status, ToolState::Error);
         assert!(!report.cli.available);
-        assert!(issue_codes(&report).contains(&codes::ENV_VERSION_UNSUPPORTED));
+        assert!(issue_codes(&report).contains(&ErrorCode::EnvVersionUnsupported));
         let issue = report
             .issues
             .iter()
-            .find(|issue| issue.code == codes::ENV_VERSION_UNSUPPORTED)
+            .find(|issue| issue.code == ErrorCode::EnvVersionUnsupported)
             .unwrap();
         assert!(issue.detail.as_deref().unwrap().contains("1.8.0"));
     }
@@ -1665,7 +1661,7 @@ mod tests {
 
         assert_eq!(report.path_source, PathSource::Override);
         assert_eq!(report.node.status, ToolState::Error);
-        assert!(issue_codes(&report).contains(&codes::ENV_OVERRIDE_INVALID));
+        assert!(issue_codes(&report).contains(&ErrorCode::EnvOverrideInvalid));
         assert_eq!(executor.call_count(), 0, "no fallback probes for override");
     }
 
@@ -1721,7 +1717,7 @@ mod tests {
         let report = fixture.resolver(executor).resolve().await.unwrap();
 
         assert_eq!(report.node.status, ToolState::Error);
-        assert!(issue_codes(&report).contains(&codes::ENV_NODE_PROBE_TIMEOUT));
+        assert!(issue_codes(&report).contains(&ErrorCode::EnvNodeProbeTimeout));
     }
 
     #[tokio::test]
@@ -1864,7 +1860,7 @@ mod tests {
         ));
         let service = super::super::EnvironmentService::new(fixture.resolver(executor));
         let error = service.cli_runtime().await.unwrap_err();
-        assert_eq!(error.code, codes::ENV_NODE_MISSING);
+        assert_eq!(error.code, ErrorCode::EnvNodeMissing);
     }
 
     #[test]

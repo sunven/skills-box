@@ -17,7 +17,7 @@ use crate::content::{self, SkillDirListing, SkillFileContent};
 use crate::detach::DetachResult;
 use crate::detail::SkillDetail;
 use crate::env::EnvReport;
-use crate::error::{AppError, codes};
+use crate::error::AppError;
 use crate::inventory::InventorySnapshot;
 use crate::paths::AppPaths;
 use crate::tasks::{ActiveMutationInfo, CancelAck, EventSink, InstallRequest, TaskEvent, TaskId};
@@ -62,11 +62,7 @@ pub async fn get_inventory(state: State<'_, AppState>) -> Result<InventorySnapsh
     read_with_timeout("库存", READ_TIMEOUT, async move {
         tauri::async_runtime::spawn_blocking(move || read_model.snapshot())
             .await
-            .map_err(|error| {
-                AppError::new(codes::SKILL_READ_FAILED, "读取库存失败。")
-                    .detail(error.to_string())
-                    .retryable(true)
-            })?
+            .map_err(|error| AppError::skill_read_failed_context("库存", error))?
     })
     .await
 }
@@ -80,11 +76,7 @@ pub async fn get_skill_detail(
     read_with_timeout("skill 详情", READ_TIMEOUT, async move {
         tauri::async_runtime::spawn_blocking(move || read_model.detail(&skill_id))
             .await
-            .map_err(|error| {
-                AppError::new(codes::SKILL_READ_FAILED, "读取 skill 详情失败。")
-                    .detail(error.to_string())
-                    .retryable(true)
-            })?
+            .map_err(|error| AppError::skill_read_failed_context("skill 详情", error))?
     })
     .await
 }
@@ -199,11 +191,7 @@ where
     read_with_timeout(what, READ_TIMEOUT, async move {
         tauri::async_runtime::spawn_blocking(work)
             .await
-            .map_err(|error| {
-                AppError::new(codes::SKILL_READ_FAILED, "读取 skill 内容失败。")
-                    .detail(error.to_string())
-                    .retryable(true)
-            })?
+            .map_err(|error| AppError::skill_read_failed_context("skill 内容", error))?
     })
     .await
 }
@@ -408,7 +396,7 @@ pub fn app_data_dir(paths: &AppPaths, kind: &str) -> Result<PathBuf, AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::codes;
+    use crate::error::ErrorCode;
 
     #[test]
     fn app_data_kinds_map_to_their_directories() {
@@ -430,7 +418,7 @@ mod tests {
         let paths = AppPaths::new("/Users/tester", "/tmp/skills-box-app-data");
         for kind in ["", "../backups", "/tmp", "BACKUPS", "*"] {
             let error = app_data_dir(&paths, kind).unwrap_err();
-            assert_eq!(error.code, codes::PATH_INVALID, "{kind:?}");
+            assert_eq!(error.code, ErrorCode::PathInvalid, "{kind:?}");
         }
     }
 
@@ -440,7 +428,7 @@ mod tests {
         let error = read_with_timeout("库存", Duration::from_millis(20), pending)
             .await
             .unwrap_err();
-        assert_eq!(error.code, codes::SKILL_READ_TIMEOUT);
+        assert_eq!(error.code, ErrorCode::SkillReadTimeout);
         assert!(error.retryable);
         assert!(error.message.contains("库存"));
     }
@@ -457,7 +445,7 @@ mod tests {
         })
         .await
         .unwrap_err();
-        assert_eq!(error.code, codes::LOCK_CORRUPT);
+        assert_eq!(error.code, ErrorCode::LockCorrupt);
     }
 
     #[test]
@@ -488,7 +476,7 @@ mod tests {
             "\nhttps://example.com",
         ] {
             let error = validate_external_url(url).unwrap_err();
-            assert_eq!(error.code, codes::OPEN_FAILED, "{url:?}");
+            assert_eq!(error.code, ErrorCode::OpenFailed, "{url:?}");
             assert!(!error.retryable);
         }
     }

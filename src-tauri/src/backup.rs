@@ -326,7 +326,7 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::codes;
+    use crate::error::ErrorCode;
     use std::os::unix::fs::symlink;
 
     struct Fixture {
@@ -523,7 +523,7 @@ mod tests {
                 &["universal".to_string()],
             )
             .unwrap_err();
-        assert_eq!(error.code, codes::BACKUP_FAILED);
+        assert_eq!(error.code, ErrorCode::BackupFailed);
         assert!(error.message.contains("备份"));
 
         // A missing canonical source is also fatal.
@@ -532,7 +532,7 @@ mod tests {
         let error = BackupStore::new(&fixture.paths)
             .create(BackupAction::Update, "alpha", Some(&missing), &[], &[])
             .unwrap_err();
-        assert_eq!(error.code, codes::BACKUP_FAILED);
+        assert_eq!(error.code, ErrorCode::BackupFailed);
         let remaining: Vec<_> = fs::read_dir(fixture.paths.backups_dir()).unwrap().collect();
         assert!(
             remaining.is_empty(),

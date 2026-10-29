@@ -27,7 +27,12 @@ import {
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { SkillMarkdown } from "./skill-markdown";
-import { asAppError, openSkillFile, openSkillFolder } from "../lib/api";
+import {
+  asAppError,
+  fallbackError,
+  openSkillFile,
+  openSkillFolder,
+} from "../lib/api";
 import {
   fileName,
   formatBytes,
@@ -39,6 +44,7 @@ import {
   useSkillFileQuery,
 } from "../hooks/use-skill-content";
 import type {
+  AppError,
   SkillDirEntry,
   SkillDirListing,
   SkillFileContent,
@@ -63,7 +69,7 @@ export const SkillContentTab = memo(function SkillContentTab({
   const [view, setView] = useState<DetailView>("rendered");
   const [pendingAction, setPendingAction] = useState<ContentAction | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [actionError, setActionError] = useState<ReturnType<typeof asAppError>>(
+  const [actionError, setActionError] = useState<AppError | null>(
     null,
   );
   const actionErrorRef = useRef<HTMLDivElement>(null);
@@ -126,7 +132,7 @@ export const SkillContentTab = memo(function SkillContentTab({
       if (kind === "folder") await openSkillFolder(skillId);
       else await openSkillFile(skillId, selectedPath as string);
     } catch (error) {
-      setActionError(asAppError(error) ?? { message: "未知错误" });
+      setActionError(asAppError(error) ?? fallbackError("未知错误"));
     } finally {
       setPendingAction(null);
     }
@@ -251,7 +257,7 @@ function SkillTree({
   if (rootQuery.error) {
     return (
       <TreeState
-        error={asAppError(rootQuery.error) ?? { message: "无法读取目录。" }}
+        error={asAppError(rootQuery.error) ?? fallbackError("无法读取目录。")}
         onRetry={() => void rootQuery.refetch()}
       />
     );
@@ -426,7 +432,7 @@ function SkillTreeDir({
           <TreeState
             indent={depth + 1}
             error={
-              asAppError(listing.error) ?? { message: "无法读取该目录。" }
+              asAppError(listing.error) ?? fallbackError("无法读取该目录。")
             }
             onRetry={() => void listing.refetch()}
           />
@@ -479,7 +485,7 @@ function TreeState({
 }: {
   loading?: boolean;
   text?: string;
-  error?: { message: string; hint?: string };
+  error?: AppError | null;
   onRetry?: () => void;
   indent?: number;
 }) {

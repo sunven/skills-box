@@ -21,6 +21,7 @@ use crate::cli::CliRuntime;
 use crate::env::capture_process_env;
 use crate::env::child_env::{ChildEnvParams, build_child_env};
 use crate::error::AppError;
+use crate::error::cli::{self, CliAction};
 use crate::inventory::{AgentDir, ManagementState};
 use crate::lock::LockFile;
 use crate::paths::AppPaths;
@@ -514,31 +515,6 @@ pub fn parse_install_output(raw: &str) -> InstallOutput {
     InstallOutput::Results(results)
 }
 
-pub(crate) fn classify_install_failure(detail: &str, stderr: &str) -> AppError {
-    let combined = if stderr.trim().is_empty() {
-        detail.trim().to_string()
-    } else if detail.trim().is_empty() {
-        stderr.trim().to_string()
-    } else {
-        format!("{}\n{}", detail.trim(), stderr.trim())
-    };
-    let detail = super::parser::truncate_chars(&combined, 16 * 1024);
-    let lower = detail.to_lowercase();
-    if lower.contains("failed to clone")
-        || lower.contains("unable to access")
-        || lower.contains("couldn't connect")
-        || lower.contains("failed to connect")
-        || lower.contains("could not resolve")
-        || lower.contains("network is unreachable")
-    {
-        AppError::network_fetch_failed(detail)
-    } else if detail.is_empty() {
-        AppError::cli_exit_nonzero("skills CLI 以非零退出码结束且未输出详情。")
-    } else {
-        AppError::cli_exit_nonzero(detail)
-    }
-}
-
 /// Copy `~/.agents/.skill-lock.json` into `backups/<ms>-install-<task>/`
 /// before the CLI runs. A missing lock is a normal fresh-machine state and is
 /// recorded as absent.
@@ -623,7 +599,7 @@ pub fn verify_install(
 
         let (status, error) = match outcome {
             Ok(()) => (TaskSkillStatus::Installed, None),
-            Err(error) if error.code == crate::error::codes::SKILL_NOT_IN_SOURCE => {
+            Err(error) if error.code == crate::error::ErrorCode::SkillNotInSource => {
                 (TaskSkillStatus::Skipped, Some(error))
             }
             Err(error) => (TaskSkillStatus::Failed, Some(error)),
@@ -810,7 +786,8 @@ impl MutationAction for InstallAction {
         let cli_results = match parse_install_output(&output.stdout) {
             InstallOutput::Results(results) => results,
             InstallOutput::Fatal(detail) => {
-                return Err(classify_install_failure(&detail, &output.stderr));
+                return Err(cli::classify_add_failure(&detail, &output.stderr)
+                    .to_app_error(CliAction::Install));
             }
             InstallOutput::Unrecognized(detail) => {
                 return Err(AppError::cli_invalid_json(format!(
@@ -885,7 +862,7 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::codes;
+    use crate::error::ErrorCode;
     use std::collections::BTreeMap;
     use std::path::Path;
 
@@ -1086,10 +1063,10 @@ mod tests {
         ] {
             let error = validate_request(&paths, &request("acme/skills", &[forbidden], &["qoder"]))
                 .unwrap_err();
-            assert_eq!(error.code, codes::SKILL_INVALID_NAME, "{forbidden:?}");
+            assert_eq!(error.code, ErrorCode::SkillInvalidName, "{forbidden:?}");
         }
         let error = validate_request(&paths, &request("acme/skills", &[], &["qoder"])).unwrap_err();
-        assert_eq!(error.code, codes::SKILL_INVALID_NAME);
+        assert_eq!(error.code, ErrorCode::SkillInvalidName);
     }
 
     #[test]
@@ -1107,17 +1084,17 @@ mod tests {
         ] {
             let error = validate_request(&paths, &request("acme/skills", &["alpha"], &[unknown]))
                 .unwrap_err();
-            assert_eq!(error.code, codes::AGENT_INVALID, "{unknown}");
+            assert_eq!(error.code, ErrorCode::AgentInvalid, "{unknown}");
         }
         let error = validate_request(
             &paths,
             &request("acme/skills", &["alpha"], &["promptscript"]),
         )
         .unwrap_err();
-        assert_eq!(error.code, codes::AGENT_UNSUPPORTED_GLOBAL);
+        assert_eq!(error.code, ErrorCode::AgentUnsupportedGlobal);
         let error =
             validate_request(&paths, &request("acme/skills", &["alpha"], &["eve"])).unwrap_err();
-        assert_eq!(error.code, codes::AGENT_UNSUPPORTED_GLOBAL);
+        assert_eq!(error.code, ErrorCode::AgentUnsupportedGlobal);
     }
 
     #[test]
@@ -1128,7 +1105,7 @@ mod tests {
         let paths = AppPaths::new(&home, tmp.path().join("app-data"));
         let error =
             validate_request(&paths, &request("acme/skills", &["alpha"], &["qoder"])).unwrap_err();
-        assert_eq!(error.code, codes::AGENT_NOT_DETECTED);
+        assert_eq!(error.code, ErrorCode::AgentNotDetected);
     }
 
     #[test]
@@ -1220,7 +1197,7 @@ mod tests {
         assert_eq!(result.results[0].status, TaskSkillStatus::Failed);
         assert_eq!(
             result.results[0].error.as_ref().unwrap().code,
-            codes::VERIFY_CANONICAL_MISSING
+            ErrorCode::VerifyCanonicalMissing
         );
 
         let agent_dir = tmp.path().join("home/.qoder/skills");
@@ -1229,7 +1206,7 @@ mod tests {
         let result = verify_install(&paths, &plan, &cli);
         assert_eq!(
             result.results[0].error.as_ref().unwrap().code,
-            codes::VERIFY_ATTACHMENT_MISSING
+            ErrorCode::VerifyAttachmentMissing
         );
 
         let _ = fs::remove_dir_all(&agent_dir);
@@ -1240,7 +1217,7 @@ mod tests {
         let result = verify_install(&paths, &plan, &cli);
         assert_eq!(
             result.results[0].error.as_ref().unwrap().code,
-            codes::VERIFY_ATTACHMENT_MODE
+            ErrorCode::VerifyAttachmentMode
         );
         #[cfg(unix)]
         fs::remove_file(agent_dir.join("find-skills")).unwrap();
@@ -1248,7 +1225,7 @@ mod tests {
         let result = verify_install(&paths, &plan, &cli);
         assert_eq!(
             result.results[0].error.as_ref().unwrap().code,
-            codes::VERIFY_ATTACHMENT_MISSING
+            ErrorCode::VerifyAttachmentMissing
         );
 
         install_state(&paths, "find-skills", Some(&agent_dir), false);
@@ -1256,7 +1233,7 @@ mod tests {
         let result = verify_install(&paths, &plan, &cli);
         assert_eq!(
             result.results[0].error.as_ref().unwrap().code,
-            codes::VERIFY_LOCK_MISSING
+            ErrorCode::VerifyLockMissing
         );
     }
 
@@ -1271,7 +1248,7 @@ mod tests {
         let result = verify_install(&paths, &plan, &parse_results(SUCCESS));
         assert_eq!(result.results[0].status, TaskSkillStatus::Installed);
         assert_eq!(result.warnings.len(), 1);
-        assert_eq!(result.warnings[0].code, codes::VERIFY_COPY_FALLBACK);
+        assert_eq!(result.warnings[0].code, ErrorCode::VerifyCopyFallback);
     }
 
     #[test]
@@ -1283,12 +1260,12 @@ mod tests {
         assert_eq!(result.results[0].status, TaskSkillStatus::Skipped);
         assert_eq!(
             result.results[0].error.as_ref().unwrap().code,
-            codes::SKILL_NOT_IN_SOURCE
+            ErrorCode::SkillNotInSource
         );
         assert_eq!(result.results[1].status, TaskSkillStatus::Failed);
         assert_eq!(
             result.results[1].error.as_ref().unwrap().code,
-            codes::VERIFY_CANONICAL_MISSING
+            ErrorCode::VerifyCanonicalMissing
         );
     }
 
@@ -1301,7 +1278,7 @@ mod tests {
         let error = conflicts_for(&paths, &["alpha".to_string()], None)
             .unwrap()
             .expect("plain duplicate must conflict");
-        assert_eq!(error.code, codes::SKILL_CONFLICT);
+        assert_eq!(error.code, ErrorCode::SkillConflict);
         // A retry from the same source may overwrite the managed entry.
         assert!(
             conflicts_for(&paths, &["alpha".to_string()], Some("acme/skills"))
@@ -1312,7 +1289,7 @@ mod tests {
         let error = conflicts_for(&paths, &["alpha".to_string()], Some("other/repo"))
             .unwrap()
             .expect("different source must conflict");
-        assert_eq!(error.code, codes::SKILL_CONFLICT);
+        assert_eq!(error.code, ErrorCode::SkillConflict);
 
         // Stale lock entries reserve the name too, but a same-source retry is
         // the partial-install case this flag exists for.
@@ -1320,7 +1297,7 @@ mod tests {
         let error = conflicts_for(&paths, &["alpha".to_string()], None)
             .unwrap()
             .expect("stale lock must conflict");
-        assert_eq!(error.code, codes::SKILL_CONFLICT);
+        assert_eq!(error.code, ErrorCode::SkillConflict);
         assert!(
             conflicts_for(&paths, &["alpha".to_string()], Some("acme/skills"))
                 .unwrap()
@@ -1344,7 +1321,7 @@ mod tests {
         assert_eq!(result.results[0].status, TaskSkillStatus::Failed);
         assert_eq!(
             result.results[0].error.as_ref().unwrap().code,
-            codes::VERIFY_LOCK_MISMATCH
+            ErrorCode::VerifyLockMismatch
         );
     }
 
@@ -1372,7 +1349,7 @@ mod tests {
         fs::remove_dir_all(home.join(".workbuddy")).unwrap();
         let error = validate_request(&paths, &request("acme/skills", &["alpha"], &["workbuddy"]))
             .unwrap_err();
-        assert_eq!(error.code, codes::AGENT_NOT_DETECTED);
+        assert_eq!(error.code, ErrorCode::AgentNotDetected);
     }
 
     #[test]
@@ -1434,7 +1411,7 @@ mod tests {
         assert_eq!(errors.len(), 1);
         assert_eq!(
             errors[&"other".to_string()].code,
-            codes::AGENT_ATTACH_FAILED
+            ErrorCode::AgentAttachFailed
         );
     }
 

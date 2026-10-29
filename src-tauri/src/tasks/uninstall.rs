@@ -25,6 +25,7 @@ use crate::backup::{BackupAction, BackupAttachment, BackupStore};
 use crate::baseline::BaselineStore;
 use crate::cli::CliRuntime;
 use crate::error::AppError;
+use crate::error::cli::{self, CliAction};
 use crate::inventory::{self, AgentDir, AttachmentLocation, AttachmentMode, ManagementState};
 use crate::lock::LockFile;
 use crate::logs::{OperationEntry, OperationLog};
@@ -293,34 +294,7 @@ pub fn verify_uninstall(paths: &AppPaths, plan: &UninstallPlan) -> UninstallVeri
 /// failures. `remove` writes human text only and sets exit 0 even when it
 /// removed nothing, so this complements — never replaces — disk verification.
 pub fn classify_remove_output(output: &ExecOutput) -> Option<AppError> {
-    let combined = if output.stderr_trimmed().is_empty() {
-        output.stdout_trimmed().to_string()
-    } else if output.stdout_trimmed().is_empty() {
-        output.stderr_trimmed().to_string()
-    } else {
-        format!("{}\n{}", output.stdout_trimmed(), output.stderr_trimmed())
-    };
-    let lower = combined.to_lowercase();
-    let failed = !output.success()
-        || lower.contains("failed to remove")
-        || lower.contains("could not remove");
-    if !failed {
-        return None;
-    }
-    let detail = super::parser::truncate_chars(&combined, 16 * 1024);
-    if !output.success() {
-        if detail.is_empty() {
-            Some(AppError::cli_exit_nonzero(
-                "skills remove 以非零退出码结束且未输出详情。",
-            ))
-        } else {
-            Some(AppError::cli_exit_nonzero(detail))
-        }
-    } else if detail.is_empty() {
-        Some(AppError::cli_invalid_json("skills remove 未返回任何输出。"))
-    } else {
-        Some(AppError::cli_partial_failure(detail))
-    }
+    cli::classify_remove_failure(output).map(|failure| failure.to_app_error(CliAction::Uninstall))
 }
 
 /// Combine the CLI result with disk verification. Exit code 0 is never enough:
@@ -447,13 +421,7 @@ impl MutationAction for UninstallAction {
         if status == TaskSkillStatus::Removed
             && let Err(clear_error) = BaselineStore::new(&self.paths).clear(&plan.name)
         {
-            warnings.push(
-                AppError::new(
-                    crate::error::codes::BASELINE_CLEAR_FAILED,
-                    "卸载成功，但无法清除本地基线指纹。",
-                )
-                .detail(clear_error.to_string()),
-            );
+            warnings.push(AppError::baseline_clear_failed(clear_error));
         }
 
         let backup_display = self.paths.display(&preflight.snapshot);
@@ -545,7 +513,7 @@ fn lexists(path: &std::path::Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::codes;
+    use crate::error::ErrorCode;
     use std::os::unix::fs::symlink;
     use std::path::Path;
 
@@ -783,7 +751,7 @@ mod tests {
     fn unmanaged_skills_are_rejected() {
         let fixture = Fixture::new();
         let error = fixture.plan("unmanaged").unwrap_err();
-        assert_eq!(error.code, codes::SKILL_UNMANAGED);
+        assert_eq!(error.code, ErrorCode::SkillUnmanaged);
         assert!(error.message.contains("不可更新或卸载"), "{error}");
     }
 
@@ -792,14 +760,14 @@ mod tests {
         let fixture = Fixture::new();
         for id in ["", "..", "alpha/beta", ".hidden"] {
             let error = fixture.plan(id).unwrap_err();
-            assert_eq!(error.code, codes::PATH_INVALID, "{id:?}");
+            assert_eq!(error.code, ErrorCode::PathInvalid, "{id:?}");
         }
         for id in ["alpha;rm", "$(id)", "`id`", "a|b", "a&b", "a>b", "a*b"] {
             let error = fixture.plan(id).unwrap_err();
-            assert_eq!(error.code, codes::SKILL_INVALID_NAME, "{id:?}");
+            assert_eq!(error.code, ErrorCode::SkillInvalidName, "{id:?}");
         }
         let error = fixture.plan("ghost").unwrap_err();
-        assert_eq!(error.code, codes::SKILL_NOT_FOUND);
+        assert_eq!(error.code, ErrorCode::SkillNotFound);
     }
 
     #[test]
@@ -810,7 +778,7 @@ mod tests {
         symlink(fixture.claude.join("alpha"), fixture.gemini.join("alpha")).unwrap();
 
         let error = fixture.plan("alpha").unwrap_err();
-        assert_eq!(error.code, codes::AGENT_DEPENDENCY_CONFLICT);
+        assert_eq!(error.code, ErrorCode::AgentDependencyConflict);
         assert!(error.message.contains("Claude Code"), "{error:?}");
         let detail = error.detail.expect("dependency detail");
         assert!(detail.contains("Gemini CLI"), "{detail}");
@@ -827,7 +795,7 @@ mod tests {
         .unwrap();
 
         let error = fixture.plan("copy-only").unwrap_err();
-        assert_eq!(error.code, codes::AGENT_DEPENDENCY_CONFLICT);
+        assert_eq!(error.code, ErrorCode::AgentDependencyConflict);
         assert!(error.message.contains("Claude Code"), "{error:?}");
         assert!(error.detail.unwrap().contains("Qoder"));
     }
@@ -882,7 +850,7 @@ mod tests {
         remove_lock_key(&fixture.paths, "alpha");
 
         let error = verify_uninstall(&fixture.paths, &plan).result.unwrap_err();
-        assert_eq!(error.code, codes::VERIFY_CANONICAL_PRESENT);
+        assert_eq!(error.code, ErrorCode::VerifyCanonicalPresent);
         assert!(error.message.contains("canonical"));
         assert!(error.detail.unwrap().contains("alpha"));
     }
@@ -899,7 +867,7 @@ mod tests {
         assert!(fixture.claude.join("alpha").is_dir());
 
         let error = verify_uninstall(&fixture.paths, &plan).result.unwrap_err();
-        assert_eq!(error.code, codes::VERIFY_ATTACHMENT_PRESENT);
+        assert_eq!(error.code, ErrorCode::VerifyAttachmentPresent);
         assert!(error.message.contains("Claude Code"));
         assert!(error.detail.unwrap().contains(".claude/skills/alpha"));
     }
@@ -916,7 +884,7 @@ mod tests {
         assert!(fs::symlink_metadata(fixture.qoder.join("alpha")).is_ok());
 
         let error = verify_uninstall(&fixture.paths, &plan).result.unwrap_err();
-        assert_eq!(error.code, codes::VERIFY_ATTACHMENT_PRESENT);
+        assert_eq!(error.code, ErrorCode::VerifyAttachmentPresent);
         assert!(error.message.contains("Qoder"));
     }
 
@@ -930,7 +898,7 @@ mod tests {
         remove_path(&fixture.gemini.join("alpha"));
 
         let error = verify_uninstall(&fixture.paths, &plan).result.unwrap_err();
-        assert_eq!(error.code, codes::VERIFY_LOCK_PRESENT);
+        assert_eq!(error.code, ErrorCode::VerifyLockPresent);
         assert!(error.message.contains("lock"));
     }
 
@@ -951,7 +919,7 @@ mod tests {
 
         fs::write(fixture.paths.lock_path(), "{not json").unwrap();
         let error = verify_uninstall(&fixture.paths, &plan).result.unwrap_err();
-        assert_eq!(error.code, codes::VERIFY_FAILED);
+        assert_eq!(error.code, ErrorCode::VerifyFailed);
     }
 
     #[test]
@@ -962,7 +930,7 @@ mod tests {
         let verification = verify_uninstall(&fixture.paths, &plan);
         assert_eq!(
             verification.result.unwrap_err().code,
-            codes::VERIFY_CANONICAL_PRESENT
+            ErrorCode::VerifyCanonicalPresent
         );
     }
 
@@ -983,11 +951,11 @@ mod tests {
         assert!(classify_remove_output(&output(0, MISSING, "")).is_none());
 
         let failure = classify_remove_output(&output(0, PARTIAL, "")).expect("partial failure");
-        assert_eq!(failure.code, codes::CLI_PARTIAL_FAILURE);
+        assert_eq!(failure.code, ErrorCode::CliPartialFailure);
         assert!(failure.detail.unwrap().contains("Failed to remove"));
 
         let nonzero = classify_remove_output(&output(1, "", "boom")).expect("nonzero");
-        assert_eq!(nonzero.code, codes::CLI_EXIT_NONZERO);
+        assert_eq!(nonzero.code, ErrorCode::CliExitNonzero);
         assert_eq!(nonzero.detail.as_deref(), Some("boom"));
     }
 }
@@ -999,7 +967,7 @@ mod execution_tests {
     use crate::backup::BACKUP_MANIFEST_FILE;
     use crate::baseline::BaselineStore;
     use crate::cli::CliRuntimeProvider;
-    use crate::error::codes;
+    use crate::error::ErrorCode;
     use crate::process::{CancelToken, ExecError, ProcessExecutor};
     use crate::tasks::conflicts::{ConflictInfo, ConflictProvider};
     use crate::tasks::manager::{
@@ -1450,7 +1418,7 @@ mod execution_tests {
         assert_eq!(result.overall, TaskOverall::Failed);
         assert_eq!(result.skills[0].status, TaskSkillStatus::Failed);
         let error = result.skills[0].error.clone().expect("verify error");
-        assert_eq!(error.code, codes::VERIFY_ATTACHMENT_PRESENT);
+        assert_eq!(error.code, ErrorCode::VerifyAttachmentPresent);
         assert!(error.message.contains("Claude Code"));
         assert!(result.backup_path.is_some());
         assert!(result.log_path.is_some());
@@ -1460,7 +1428,10 @@ mod execution_tests {
         );
         let lines = fixture.log_lines();
         assert_eq!(lines[0]["result"], "failed");
-        assert_eq!(lines[0]["error"]["code"], codes::VERIFY_ATTACHMENT_PRESENT);
+        assert_eq!(
+            lines[0]["error"]["code"],
+            ErrorCode::VerifyAttachmentPresent.as_str()
+        );
     }
 
     #[tokio::test]
@@ -1475,13 +1446,16 @@ mod execution_tests {
         assert_eq!(result.overall, TaskOverall::Failed);
         assert_eq!(
             result.skills[0].error.as_ref().unwrap().code,
-            codes::VERIFY_CANONICAL_PRESENT
+            ErrorCode::VerifyCanonicalPresent
         );
         assert!(fixture.canonical.exists());
         assert_eq!(fixture.executor.calls().len(), 1);
         let lines = fixture.log_lines();
         assert_eq!(lines[0]["result"], "failed");
-        assert_eq!(lines[0]["error"]["code"], codes::VERIFY_CANONICAL_PRESENT);
+        assert_eq!(
+            lines[0]["error"]["code"],
+            ErrorCode::VerifyCanonicalPresent.as_str()
+        );
     }
 
     #[tokio::test]
@@ -1495,7 +1469,7 @@ mod execution_tests {
         let result = final_event.result.unwrap();
         assert_eq!(result.overall, TaskOverall::Failed);
         let error = result.skills[0].error.as_ref().unwrap();
-        assert_eq!(error.code, codes::CLI_EXIT_NONZERO);
+        assert_eq!(error.code, ErrorCode::CliExitNonzero);
         assert!(
             error
                 .detail
@@ -1524,10 +1498,13 @@ mod execution_tests {
         assert_eq!(result.overall, TaskOverall::Failed);
         assert_eq!(
             result.skills[0].error.as_ref().unwrap().code,
-            codes::VERIFY_LOCK_PRESENT
+            ErrorCode::VerifyLockPresent
         );
         let lines = fixture.log_lines();
-        assert_eq!(lines[0]["error"]["code"], codes::VERIFY_LOCK_PRESENT);
+        assert_eq!(
+            lines[0]["error"]["code"],
+            ErrorCode::VerifyLockPresent.as_str()
+        );
     }
 
     #[tokio::test]
@@ -1542,13 +1519,13 @@ mod execution_tests {
         let (_phases, final_event) = run_task(&fixture.manager, "alpha").await;
         assert_eq!(final_event.phase, TaskPhase::Failed);
         let error = final_event.error.expect("backup error");
-        assert_eq!(error.code, codes::BACKUP_FAILED);
+        assert_eq!(error.code, ErrorCode::BackupFailed);
         assert_eq!(fixture.executor.calls().len(), 0);
         assert!(fixture.canonical.is_dir());
         let lines = fixture.log_lines();
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0]["result"], "failed");
-        assert_eq!(lines[0]["error"]["code"], codes::BACKUP_FAILED);
+        assert_eq!(lines[0]["error"]["code"], ErrorCode::BackupFailed.as_str());
         assert!(lines[0].get("backupPath").is_none());
     }
 
@@ -1561,7 +1538,7 @@ mod execution_tests {
             .start_uninstall("unmanaged".to_string(), sink)
             .await
             .unwrap_err();
-        assert_eq!(error.code, codes::SKILL_UNMANAGED);
+        assert_eq!(error.code, ErrorCode::SkillUnmanaged);
         assert_eq!(fixture.executor.calls().len(), 0);
         assert!(fixture.backups().is_empty());
         assert!(receiver.try_recv().is_err(), "no task should be created");
@@ -1579,7 +1556,7 @@ mod execution_tests {
             .start_uninstall("alpha".to_string(), sink)
             .await
             .unwrap_err();
-        assert_eq!(error.code, codes::AGENT_DEPENDENCY_CONFLICT);
+        assert_eq!(error.code, ErrorCode::AgentDependencyConflict);
         assert_eq!(fixture.executor.calls().len(), 0);
         assert!(fixture.backups().is_empty());
         assert!(fixture.canonical.is_dir());
@@ -1653,7 +1630,7 @@ mod execution_tests {
             }
         }
         let error = fixture.manager.cancel_task(&task_id).unwrap_err();
-        assert_eq!(error.code, codes::TASK_CANNOT_CANCEL);
+        assert_eq!(error.code, ErrorCode::TaskCannotCancel);
 
         let final_event = tokio::time::timeout(Duration::from_secs(2), async {
             loop {

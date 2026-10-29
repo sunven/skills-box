@@ -17,6 +17,7 @@ import type {
   TaskEvent,
   UpdateCheckReport,
   UpdateCheckState,
+  AppError,
 } from "./types";
 
 /**
@@ -212,19 +213,14 @@ export function revealAppData(kind: AppDataKind): Promise<void> {
   return invoke<void>("reveal_app_data", { kind });
 }
 
-/** Normalize a rejected Tauri command into an `AppError`-shaped object. */
-export function asAppError(error: unknown): {
-  code?: string;
-  message: string;
-  detail?: string;
-  hint?: string;
-} | null {
+/** Normalize a rejected Tauri command into the shared `AppError` shape. */
+export function asAppError(error: unknown): AppError | null {
   if (!error) return null;
   if (error instanceof Error) {
-    return { message: error.message };
+    return { message: error.message, retryable: false };
   }
   if (typeof error === "string") {
-    return { message: error };
+    return { message: error, retryable: false };
   }
   if (typeof error === "object") {
     const candidate = error as {
@@ -232,6 +228,7 @@ export function asAppError(error: unknown): {
       message?: unknown;
       detail?: unknown;
       hint?: unknown;
+      retryable?: unknown;
     };
     if (typeof candidate.message === "string") {
       return {
@@ -240,8 +237,22 @@ export function asAppError(error: unknown): {
         detail:
           typeof candidate.detail === "string" ? candidate.detail : undefined,
         hint: typeof candidate.hint === "string" ? candidate.hint : undefined,
+        retryable:
+          typeof candidate.retryable === "boolean"
+            ? candidate.retryable
+            : false,
       };
     }
   }
-  return { message: "未知错误" };
+  return { message: "未知错误", retryable: false };
+}
+
+/** A client-side fallback with no invented backend code. */
+export function fallbackError(message: string): AppError {
+  return { message, retryable: false };
+}
+
+/** The lock-family errors drive the full-screen lock recovery path. */
+export function isLockError(error: AppError | null | undefined): boolean {
+  return error?.code?.startsWith("lock.") ?? false;
 }

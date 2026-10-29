@@ -1,6 +1,6 @@
 import { useCallback, useReducer, useRef } from "react";
 import type { MutableRefObject } from "react";
-import { asAppError, cancelTask } from "./api";
+import { asAppError, cancelTask, fallbackError } from "./api";
 import type {
   AppError,
   TaskAction,
@@ -16,13 +16,6 @@ import type {
  * the same progress/cancel/result transitions, so they live here instead of
  * being copied three times.
  */
-export interface TaskRunnerError {
-  code?: string;
-  message: string;
-  detail?: string;
-  hint?: string;
-}
-
 export interface TaskRunState {
   taskId: string | null;
   running: boolean;
@@ -32,8 +25,8 @@ export interface TaskRunState {
   message: string;
   cancelling: boolean;
   result: TaskResult | null;
-  taskError: TaskRunnerError | null;
-  startError: TaskRunnerError | null;
+  taskError: AppError | null;
+  startError: AppError | null;
   revealError: string | null;
 }
 
@@ -59,10 +52,10 @@ export type TaskRunAction =
   | { type: "event"; event: TaskEvent; fallbackFailure: string }
   | { type: "cancelling"; value: boolean }
   | { type: "cancelRejected"; message: string }
-  | { type: "cancelFailed"; error: TaskRunnerError }
-  | { type: "startFailed"; error: TaskRunnerError }
-  | { type: "startError"; error: TaskRunnerError | null }
-  | { type: "taskError"; error: TaskRunnerError | null }
+  | { type: "cancelFailed"; error: AppError }
+  | { type: "startFailed"; error: AppError }
+  | { type: "startError"; error: AppError | null }
+  | { type: "taskError"; error: AppError | null }
   | { type: "revealError"; message: string | null }
   | { type: "reset" };
 
@@ -110,7 +103,7 @@ export function taskRunReducer(
           ...next,
           running: false,
           cancelling: false,
-          taskError: event.error ?? { message: action.fallbackFailure },
+          taskError: event.error ?? fallbackError(action.fallbackFailure),
         };
       }
       return next;
@@ -118,7 +111,7 @@ export function taskRunReducer(
     case "cancelling":
       return { ...state, cancelling: action.value };
     case "cancelRejected":
-      return { ...state, taskError: { message: action.message } };
+      return { ...state, taskError: fallbackError(action.message) };
     case "cancelFailed":
       return { ...state, taskError: action.error };
     case "startFailed":
@@ -140,8 +133,8 @@ export function taskRunReducer(
 }
 
 /** The backend is the only source of error codes; no client-invented codes. */
-export function eventError(event: TaskEvent, fallbackMessage: string): TaskRunnerError {
-  return event.error ?? { message: fallbackMessage };
+export function eventError(event: TaskEvent, fallbackMessage: string): AppError {
+  return event.error ?? fallbackError(fallbackMessage);
 }
 
 /**
@@ -154,7 +147,7 @@ export async function launchTask(options: {
   launch: (onEvent: (event: TaskEvent) => void) => Promise<string>;
   onEvent: (event: TaskEvent) => void;
   onTaskId: (taskId: string) => void;
-  onStartError: (error: TaskRunnerError) => void;
+  onStartError: (error: AppError) => void;
   fallbackMessage: string;
 }): Promise<void> {
   const seq = ++options.runSeq.current;
@@ -172,7 +165,7 @@ export async function launchTask(options: {
   } catch (error) {
     if (options.runSeq.current !== seq) return;
     options.onStartError(
-      asAppError(error) ?? { message: options.fallbackMessage },
+      asAppError(error) ?? fallbackError(options.fallbackMessage),
     );
   }
 }
@@ -200,8 +193,8 @@ export interface TaskRunner {
   cancel: (fallbackMessage?: string) => Promise<void>;
   reset: () => void;
   setRevealError: (message: string | null) => void;
-  setTaskError: (error: TaskRunnerError | null) => void;
-  setStartError: (error: TaskRunnerError | null) => void;
+  setTaskError: (error: AppError | null) => void;
+  setStartError: (error: AppError | null) => void;
 }
 
 /**
@@ -262,7 +255,7 @@ export function useTaskRunner(options: TaskRunnerOptions): TaskRunner {
       } catch (error) {
         dispatch({
           type: "cancelFailed",
-          error: asAppError(error) ?? { message: fallbackMessage },
+          error: asAppError(error) ?? fallbackError(fallbackMessage),
         });
       } finally {
         dispatch({ type: "cancelling", value: false });
@@ -281,11 +274,11 @@ export function useTaskRunner(options: TaskRunnerOptions): TaskRunner {
     dispatch({ type: "revealError", message });
   }, []);
 
-  const setTaskError = useCallback((error: TaskRunnerError | null) => {
+  const setTaskError = useCallback((error: AppError | null) => {
     dispatch({ type: "taskError", error });
   }, []);
 
-  const setStartError = useCallback((error: TaskRunnerError | null) => {
+  const setStartError = useCallback((error: AppError | null) => {
     dispatch({ type: "startError", error });
   }, []);
 

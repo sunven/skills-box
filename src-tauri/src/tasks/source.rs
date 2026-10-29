@@ -161,13 +161,13 @@ fn is_valid_component(component: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::codes;
+    use crate::error::ErrorCode;
 
     fn normalized(input: &str) -> String {
         validate_source(input).unwrap().normalized
     }
 
-    fn code(input: &str) -> String {
+    fn code(input: &str) -> ErrorCode {
         validate_source(input).unwrap_err().code
     }
 
@@ -197,52 +197,55 @@ mod tests {
 
     #[test]
     fn rejects_empty_and_whitespace_only_sources() {
-        assert_eq!(code(""), codes::SOURCE_MISSING);
-        assert_eq!(code("   "), codes::SOURCE_MISSING);
+        assert_eq!(code(""), ErrorCode::SourceMissing);
+        assert_eq!(code("   "), ErrorCode::SourceMissing);
     }
 
     #[test]
     fn rejects_subdirectories() {
-        assert_eq!(code("owner/repo/sub"), codes::SOURCE_UNSUPPORTED_SUBDIR);
+        assert_eq!(code("owner/repo/sub"), ErrorCode::SourceUnsupportedSubdir);
         assert_eq!(
             code("https://github.com/owner/repo/tree/main/sub"),
-            codes::SOURCE_UNSUPPORTED_SUBDIR
+            ErrorCode::SourceUnsupportedSubdir
         );
     }
 
     #[test]
     fn rejects_refs_and_skill_filters() {
-        assert_eq!(code("owner/repo#main"), codes::SOURCE_UNSUPPORTED_REF);
+        assert_eq!(code("owner/repo#main"), ErrorCode::SourceUnsupportedRef);
         assert_eq!(
             code("https://github.com/owner/repo#v1"),
-            codes::SOURCE_UNSUPPORTED_REF
+            ErrorCode::SourceUnsupportedRef
         );
-        assert_eq!(code("owner/repo@skill"), codes::SOURCE_INVALID);
+        assert_eq!(code("owner/repo@skill"), ErrorCode::SourceInvalid);
     }
 
     #[test]
     fn rejects_non_github_providers_with_explicit_errors() {
         assert_eq!(
             code("https://gitlab.com/group/repo"),
-            codes::SOURCE_UNSUPPORTED_PROVIDER
+            ErrorCode::SourceUnsupportedProvider
         );
         assert_eq!(
             code("gitlab.com/group/repo"),
-            codes::SOURCE_UNSUPPORTED_PROVIDER
+            ErrorCode::SourceUnsupportedProvider
         );
         assert_eq!(
             code("git@github.com:owner/repo.git"),
-            codes::SOURCE_UNSUPPORTED_PROVIDER
+            ErrorCode::SourceUnsupportedProvider
         );
         assert_eq!(
             code("ssh://git@github.com/owner/repo.git"),
-            codes::SOURCE_UNSUPPORTED_PROVIDER
+            ErrorCode::SourceUnsupportedProvider
         );
         assert_eq!(
             code("https://www.notion.so/page"),
-            codes::SOURCE_UNSUPPORTED_PROVIDER
+            ErrorCode::SourceUnsupportedProvider
         );
-        assert_eq!(code("notion.site/page"), codes::SOURCE_UNSUPPORTED_PROVIDER);
+        assert_eq!(
+            code("notion.site/page"),
+            ErrorCode::SourceUnsupportedProvider
+        );
     }
 
     #[test]
@@ -257,7 +260,7 @@ mod tests {
         ] {
             assert_eq!(
                 code(input),
-                codes::SOURCE_UNSUPPORTED_PROVIDER,
+                ErrorCode::SourceUnsupportedProvider,
                 "{input} should be rejected"
             );
         }
@@ -265,21 +268,21 @@ mod tests {
 
     #[test]
     fn rejects_malformed_github_inputs() {
-        assert_eq!(code("https://github.com/owner"), codes::SOURCE_INVALID);
+        assert_eq!(code("https://github.com/owner"), ErrorCode::SourceInvalid);
         assert_eq!(
             code("https://github.com/owner/repo?tab=readme"),
-            codes::SOURCE_INVALID
+            ErrorCode::SourceInvalid
         );
         assert_eq!(
             code("http://github.com/owner/repo"),
-            codes::SOURCE_UNSUPPORTED_PROVIDER
+            ErrorCode::SourceUnsupportedProvider
         );
-        assert_eq!(code("github.com/owner/repo"), codes::SOURCE_INVALID);
-        assert_eq!(code("owner"), codes::SOURCE_INVALID);
-        assert_eq!(code("owner//repo"), codes::SOURCE_INVALID);
-        assert_eq!(code("-owner/repo"), codes::SOURCE_INVALID);
-        assert_eq!(code("owner/-repo"), codes::SOURCE_INVALID);
-        assert_eq!(code("owner/re po"), codes::SOURCE_INVALID);
+        assert_eq!(code("github.com/owner/repo"), ErrorCode::SourceInvalid);
+        assert_eq!(code("owner"), ErrorCode::SourceInvalid);
+        assert_eq!(code("owner//repo"), ErrorCode::SourceInvalid);
+        assert_eq!(code("-owner/repo"), ErrorCode::SourceInvalid);
+        assert_eq!(code("owner/-repo"), ErrorCode::SourceInvalid);
+        assert_eq!(code("owner/re po"), ErrorCode::SourceInvalid);
     }
 
     #[test]
@@ -297,7 +300,7 @@ mod tests {
             "https://github.com/owner/repo`id`",
         ] {
             let error = validate_source(input).unwrap_err();
-            assert_eq!(error.code, codes::SOURCE_INVALID, "{input:?}");
+            assert_eq!(error.code, ErrorCode::SourceInvalid, "{input:?}");
         }
     }
 }

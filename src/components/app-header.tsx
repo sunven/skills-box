@@ -1,7 +1,7 @@
 import { ArrowUpCircle, Download, RefreshCw, SlidersHorizontal } from "lucide-react";
 import { Button } from "./ui/button";
 import { environmentSummary } from "../lib/environment-display";
-import type { EnvReport, UpdateCheckReport } from "../lib/types";
+import type { AppError, EnvReport, UpdateCheckReport } from "../lib/types";
 import { formatEpochDateTime, type LastCheckSummary } from "../lib/update-view";
 
 interface AppHeaderProps {
@@ -12,7 +12,7 @@ interface AppHeaderProps {
   onInstall: () => void;
   updateReport?: UpdateCheckReport | null;
   lastCheck?: LastCheckSummary | null;
-  updateError?: { message: string; detail?: string } | null;
+  updateError?: AppError | null;
   checkingUpdates: boolean;
   updatesEnabled: boolean;
   onCheckUpdates: () => void;

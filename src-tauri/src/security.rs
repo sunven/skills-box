@@ -202,7 +202,7 @@ mod tests {
             "alpha\0beta",
         ] {
             let error = validate_skill_id(id).unwrap_err();
-            assert_eq!(error.code, crate::error::codes::PATH_INVALID, "{id:?}");
+            assert_eq!(error.code, crate::error::ErrorCode::PathInvalid, "{id:?}");
         }
         for id in ["alpha", "ce-review", "skill_1.2"] {
             validate_skill_id(id).unwrap();
@@ -230,11 +230,11 @@ mod tests {
     fn rejects_paths_outside_allowed_roots() {
         let (tmp, canonical, _agent, roots) = setup();
         let error = ensure_allowed(&tmp.path().join("elsewhere/alpha"), &roots).unwrap_err();
-        assert_eq!(error.code, crate::error::codes::PATH_OUTSIDE_ALLOWED_ROOT);
+        assert_eq!(error.code, crate::error::ErrorCode::PathOutsideAllowedRoot);
 
         let traversal = canonical.join("../evil");
         let error = ensure_allowed(&traversal, &roots).unwrap_err();
-        assert_eq!(error.code, crate::error::codes::PATH_OUTSIDE_ALLOWED_ROOT);
+        assert_eq!(error.code, crate::error::ErrorCode::PathOutsideAllowedRoot);
     }
 
     #[test]
@@ -247,7 +247,7 @@ mod tests {
         roots[1] = AllowedRoot::agent(agent.clone());
 
         let error = ensure_allowed(&agent.join("alpha"), &roots).unwrap_err();
-        assert_eq!(error.code, crate::error::codes::PATH_INVALID);
+        assert_eq!(error.code, crate::error::ErrorCode::PathInvalid);
         assert!(error.detail.as_deref().unwrap().contains("符号链接"));
 
         // Canonical children remain usable.
@@ -262,7 +262,7 @@ mod tests {
         symlink(&outside, agent.join("escaped")).unwrap();
 
         let error = ensure_allowed(&agent.join("escaped"), &roots).unwrap_err();
-        assert_eq!(error.code, crate::error::codes::PATH_OUTSIDE_ALLOWED_ROOT);
+        assert_eq!(error.code, crate::error::ErrorCode::PathOutsideAllowedRoot);
     }
 
     #[test]

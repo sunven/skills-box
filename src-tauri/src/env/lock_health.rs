@@ -130,7 +130,7 @@ pub fn inspect_path(path: &Path, display: &str) -> LockHealth {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::codes;
+    use crate::error::ErrorCode;
 
     fn temp_paths() -> (tempfile::TempDir, AppPaths) {
         let tmp = tempfile::tempdir().unwrap();
@@ -175,7 +175,7 @@ mod tests {
         assert_eq!(health.status, LockStatus::Corrupt);
         assert!(health.exists);
         assert!(!health.healthy());
-        assert_eq!(health.error.as_ref().unwrap().code, codes::LOCK_CORRUPT);
+        assert_eq!(health.error.as_ref().unwrap().code, ErrorCode::LockCorrupt);
     }
 
     #[test]
@@ -188,7 +188,7 @@ mod tests {
         assert_eq!(health.version, Some(2));
         assert_eq!(
             health.error.as_ref().unwrap().code,
-            codes::LOCK_UNSUPPORTED_VERSION
+            ErrorCode::LockUnsupportedVersion
         );
         assert!(!health.healthy());
     }
@@ -200,6 +200,6 @@ mod tests {
         std::fs::write(paths.lock_path(), r#"{"version":3}"#).unwrap();
         let health = inspect(&paths);
         assert_eq!(health.status, LockStatus::Corrupt);
-        assert_eq!(health.error.as_ref().unwrap().code, codes::LOCK_CORRUPT);
+        assert_eq!(health.error.as_ref().unwrap().code, ErrorCode::LockCorrupt);
     }
 }

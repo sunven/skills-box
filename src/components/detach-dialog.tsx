@@ -3,14 +3,7 @@ import { HardDrive, ShieldAlert, Unlink, X } from "lucide-react";
 import { Button } from "./ui/button";
 import { useModalFocus } from "../hooks/use-modal-focus";
 import { ATTACHMENT_LABELS } from "../lib/inventory-view";
-import type { AgentAttachment } from "../lib/types";
-
-export interface DetachDialogError {
-  code?: string;
-  message: string;
-  detail?: string;
-  hint?: string;
-}
+import type { AgentAttachment, AppError } from "../lib/types";
 
 interface DetachDialogProps {
   open: boolean;
@@ -19,7 +12,7 @@ interface DetachDialogProps {
   target: AgentAttachment | null;
   otherAttachments: AgentAttachment[];
   pending: boolean;
-  error: DetachDialogError | null;
+  error: AppError | null;
   onClose: () => void;
   onConfirm: () => void;
 }

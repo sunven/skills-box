@@ -115,8 +115,7 @@ impl OperationLog {
 }
 
 fn log_write_failed(path: &Path, error: std::io::Error) -> AppError {
-    AppError::new(crate::error::codes::LOG_WRITE_FAILED, "无法写入操作日志。")
-        .detail(format!("{}：{error}", path.display()))
+    AppError::log_write_failed(path, error)
 }
 
 #[derive(Debug, Serialize)]
@@ -176,7 +175,7 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::codes;
+    use crate::error::ErrorCode;
 
     fn entry(result: &str, error: Option<AppError>) -> OperationEntry {
         OperationEntry::new(
@@ -219,7 +218,7 @@ mod tests {
 
         let second: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
         assert_eq!(second["result"], "failed");
-        assert_eq!(second["error"]["code"], codes::CLI_FAILED);
+        assert_eq!(second["error"]["code"], ErrorCode::CliFailed.as_str());
         assert_eq!(second["error"]["message"], "skills CLI 执行失败。");
         assert_eq!(second["error"]["retryable"], true);
     }
@@ -231,7 +230,7 @@ mod tests {
         fs::create_dir_all(&path).unwrap();
         let log = OperationLog::from_path(path);
         let error = log.append(&entry("updated", None)).unwrap_err();
-        assert_eq!(error.code, crate::error::codes::LOG_WRITE_FAILED);
+        assert_eq!(error.code, crate::error::ErrorCode::LogWriteFailed);
     }
 
     #[test]

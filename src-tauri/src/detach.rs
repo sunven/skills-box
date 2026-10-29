@@ -625,7 +625,7 @@ mod tests {
 
         let error = fixture.detach("alpha", "claude-code").unwrap_err();
 
-        assert_eq!(error.code, crate::error::codes::AGENT_DEPENDENCY_CONFLICT);
+        assert_eq!(error.code, crate::error::ErrorCode::AgentDependencyConflict);
         let detail = error.detail.as_deref().unwrap_or_default();
         assert!(detail.contains("Gemini CLI"), "{detail}");
         assert!(detail.contains("~/.gemini/skills/alpha"), "{detail}");
@@ -642,7 +642,7 @@ mod tests {
         assert_eq!(lines[0]["result"], "failed");
         assert_eq!(
             lines[0]["error"]["code"],
-            crate::error::codes::AGENT_DEPENDENCY_CONFLICT
+            crate::error::ErrorCode::AgentDependencyConflict.as_str()
         );
         assert!(lines[0].get("backupPath").is_none());
     }
@@ -682,15 +682,15 @@ mod tests {
         .unwrap();
 
         let universal = fixture.detach("alpha", "gemini-cli").unwrap_err();
-        assert_eq!(universal.code, crate::error::codes::AGENT_NATIVE);
+        assert_eq!(universal.code, crate::error::ErrorCode::AgentNative);
         let shared = fixture.detach("alpha", "codex").unwrap_err();
-        assert_eq!(shared.code, crate::error::codes::AGENT_NATIVE);
+        assert_eq!(shared.code, crate::error::ErrorCode::AgentNative);
         let broken = fixture.detach("beta", "qoder").unwrap_err();
-        assert_eq!(broken.code, crate::error::codes::AGENT_BROKEN);
+        assert_eq!(broken.code, crate::error::ErrorCode::AgentBroken);
         let not_attached = fixture.detach("alpha", "qoder").unwrap_err();
-        assert_eq!(not_attached.code, crate::error::codes::AGENT_NOT_ATTACHED);
+        assert_eq!(not_attached.code, crate::error::ErrorCode::AgentNotAttached);
         let unknown = fixture.detach("alpha", "not-an-agent").unwrap_err();
-        assert_eq!(unknown.code, crate::error::codes::AGENT_NOT_DETECTED);
+        assert_eq!(unknown.code, crate::error::ErrorCode::AgentNotDetected);
 
         // Nothing was removed or backed up.
         assert!(fixture.claude.join("alpha").is_symlink());
@@ -709,11 +709,11 @@ mod tests {
         fs::write(gamma.join("SKILL.md"), "# gamma\n").unwrap();
 
         let copy_only = fixture.detach("beta", "claude-code").unwrap_err();
-        assert_eq!(copy_only.code, crate::error::codes::SKILL_COPY_ONLY);
+        assert_eq!(copy_only.code, crate::error::ErrorCode::SkillCopyOnly);
         assert!(copy.join("SKILL.md").is_file());
 
         let unmanaged = fixture.detach("gamma", "claude-code").unwrap_err();
-        assert_eq!(unmanaged.code, crate::error::codes::SKILL_UNMANAGED);
+        assert_eq!(unmanaged.code, crate::error::ErrorCode::SkillUnmanaged);
         assert!(gamma.join("SKILL.md").is_file());
 
         assert!(fixture.backup_dirs().is_empty());
@@ -729,7 +729,7 @@ mod tests {
             let error = fixture.detach(skill, "claude-code").unwrap_err();
             assert_eq!(
                 error.code,
-                crate::error::codes::PATH_INVALID,
+                crate::error::ErrorCode::PathInvalid,
                 "skill id {skill:?}"
             );
         }
@@ -737,7 +737,7 @@ mod tests {
             let error = fixture.detach(skill, "claude-code").unwrap_err();
             assert_eq!(
                 error.code,
-                crate::error::codes::SKILL_INVALID_NAME,
+                crate::error::ErrorCode::SkillInvalidName,
                 "skill id {skill:?}"
             );
         }
@@ -748,7 +748,7 @@ mod tests {
         fs::remove_dir_all(&fixture.claude).unwrap();
         symlink(&real, &fixture.claude).unwrap();
         let error = fixture.detach("alpha", "claude-code").unwrap_err();
-        assert_eq!(error.code, crate::error::codes::PATH_INVALID);
+        assert_eq!(error.code, crate::error::ErrorCode::PathInvalid);
         assert!(error.detail.as_deref().unwrap().contains("符号链接"));
         assert!(real.join("alpha/SKILL.md").is_file());
     }
@@ -782,7 +782,7 @@ mod tests {
 
         let error = fixture.detach("alpha", "claude-code").unwrap_err();
 
-        assert_eq!(error.code, crate::error::codes::LOCK_CORRUPT);
+        assert_eq!(error.code, crate::error::ErrorCode::LockCorrupt);
         assert!(fixture.claude.join("alpha").is_symlink());
         assert!(fixture.backup_dirs().is_empty());
         assert!(fixture.log_lines().is_empty());
@@ -799,7 +799,7 @@ mod tests {
 
         let error = fixture.detach("alpha", "claude-code").unwrap_err();
 
-        assert_eq!(error.code, crate::error::codes::BACKUP_FAILED);
+        assert_eq!(error.code, crate::error::ErrorCode::BackupFailed);
         assert!(copy.join("SKILL.md").is_file(), "copy must survive");
         assert!(canonical.join("SKILL.md").is_file());
         assert_eq!(fs::read(fixture.paths.lock_path()).unwrap(), lock_before);
@@ -808,7 +808,7 @@ mod tests {
         assert_eq!(lines[0]["result"], "failed");
         assert_eq!(
             lines[0]["error"]["code"],
-            crate::error::codes::BACKUP_FAILED
+            crate::error::ErrorCode::BackupFailed.as_str()
         );
         assert!(lines[0].get("backupPath").is_none());
     }

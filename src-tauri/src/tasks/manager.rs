@@ -11,7 +11,8 @@ use serde::Serialize;
 use tokio::sync::{Notify, Semaphore};
 
 use crate::cli::{CliRuntimeProvider, preview_command};
-use crate::error::{AppError, codes};
+use crate::error::AppError;
+use crate::error::cli::{self, CliAction};
 use crate::interrupted::{InterruptedMutation, MarkerStore, MutationKind};
 use crate::paths::AppPaths;
 use crate::process::{CancelToken, ExecError, ProcessExecutor};
@@ -581,9 +582,7 @@ impl TaskManager {
             Ok::<InstallPlan, AppError>(plan)
         })
         .await
-        .map_err(|error| {
-            AppError::new(codes::TASK_INTERNAL, format!("校验安装请求失败：{error}"))
-        })??;
+        .map_err(|error| AppError::task_internal("安装", error))??;
 
         // The permit is taken after validation so invalid requests do not
         // briefly occupy the write slot, and held for the whole task.
@@ -750,10 +749,7 @@ impl TaskManager {
             Ok(Ok(plan)) => plan,
             Ok(Err(error)) => return Err(error),
             Err(error) => {
-                return Err(AppError::new(
-                    codes::TASK_INTERNAL,
-                    format!("校验更新请求失败：{error}"),
-                ));
+                return Err(AppError::task_internal("更新", error));
             }
         };
 
@@ -802,10 +798,7 @@ impl TaskManager {
             Ok(Ok(plan)) => plan,
             Ok(Err(error)) => return Err(error),
             Err(error) => {
-                return Err(AppError::new(
-                    codes::TASK_INTERNAL,
-                    format!("校验卸载请求失败：{error}"),
-                ));
+                return Err(AppError::task_internal("卸载", error));
             }
         };
 
@@ -925,29 +918,11 @@ impl TaskManager {
                 self.finish(&task_id, &sink, FinishOutcome::Cancelled);
                 return;
             }
-            Err(ExecError::Timeout(timeout)) => {
+            Err(error) => {
                 self.finish(
                     &task_id,
                     &sink,
-                    FinishOutcome::Failed(AppError::cli_timeout("预览", timeout)),
-                );
-                return;
-            }
-            Err(ExecError::Spawn { program, message }) => {
-                self.finish(
-                    &task_id,
-                    &sink,
-                    FinishOutcome::Failed(AppError::cli_spawn_failed(format!(
-                        "无法启动 {program}: {message}"
-                    ))),
-                );
-                return;
-            }
-            Err(ExecError::Io(message)) => {
-                self.finish(
-                    &task_id,
-                    &sink,
-                    FinishOutcome::Failed(AppError::cli_failed(message)),
+                    FinishOutcome::Failed(cli::classify_exec_error(CliAction::Preview, error)),
                 );
                 return;
             }
@@ -1079,7 +1054,10 @@ impl TaskManager {
                     self.finish(
                         &task_id,
                         &sink,
-                        FinishOutcome::Failed(classify_cli_failure(&output.stdout, &output.stderr)),
+                        FinishOutcome::Failed(
+                            cli::classify_add_failure(&output.stdout, &output.stderr)
+                                .to_app_error(CliAction::Preview),
+                        ),
                     );
                 }
             }
@@ -1202,31 +1180,6 @@ impl TaskManager {
     }
 }
 
-fn classify_cli_failure(stdout: &str, stderr: &str) -> AppError {
-    let detail = if stderr.trim().is_empty() {
-        stdout.trim().to_string()
-    } else if stdout.trim().is_empty() {
-        stderr.trim().to_string()
-    } else {
-        format!("{}\n{}", stdout.trim(), stderr.trim())
-    };
-    let detail = super::parser::truncate_chars(&detail, 16 * 1024);
-    let lower = detail.to_lowercase();
-    if lower.contains("failed to clone")
-        || lower.contains("unable to access")
-        || lower.contains("couldn't connect")
-        || lower.contains("failed to connect")
-        || lower.contains("could not resolve")
-        || lower.contains("network is unreachable")
-    {
-        AppError::network_fetch_failed(detail)
-    } else if lower.contains("authentication failed") {
-        AppError::source_preview_failed(format!("仓库不存在或无法公开访问：{detail}"))
-    } else {
-        AppError::cli_exit_nonzero(detail)
-    }
-}
-
 pub(super) fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1251,7 +1204,7 @@ mod tests {
     use super::*;
     use crate::baseline::BaselineStore;
     use crate::cli::CliRuntime;
-    use crate::error::codes;
+    use crate::error::ErrorCode;
     use crate::process::fake::{ScriptedExecutor, ScriptedResponse};
     use crate::process::{CommandSpec, ExecOutput};
     use crate::tasks::conflicts::ConflictProvider;
@@ -1464,7 +1417,7 @@ mod tests {
         assert_eq!(event.phase, TaskPhase::Completed);
         let result = event.result.unwrap();
         assert_eq!(result.overall, TaskOverall::Success);
-        assert_eq!(result.warnings[0].code, codes::SOURCE_PREVIEW_FAILED);
+        assert_eq!(result.warnings[0].code, ErrorCode::SourcePreviewFailed);
         let preview = result.preview.unwrap();
         assert!(preview.parse_failed);
         assert!(preview.raw_output.unwrap().contains("garbage output"));
@@ -1508,7 +1461,7 @@ mod tests {
 
         assert_eq!(event.phase, TaskPhase::Failed);
         let error = event.error.unwrap();
-        assert_eq!(error.code, codes::NETWORK_FETCH_FAILED);
+        assert_eq!(error.code, ErrorCode::NetworkFetchFailed);
         assert!(error.retryable);
         assert!(error.message.contains("网络"));
     }
@@ -1527,7 +1480,7 @@ mod tests {
             .expect("timeout should finish the task");
 
         assert_eq!(event.phase, TaskPhase::Failed);
-        assert_eq!(event.error.unwrap().code, codes::CLI_TIMEOUT);
+        assert_eq!(event.error.unwrap().code, ErrorCode::CliTimeout);
     }
 
     #[tokio::test]
@@ -1544,7 +1497,7 @@ mod tests {
             .expect("spawn failure should finish the task");
 
         assert_eq!(event.phase, TaskPhase::Failed);
-        assert_eq!(event.error.unwrap().code, codes::CLI_SPAWN_FAILED);
+        assert_eq!(event.error.unwrap().code, ErrorCode::CliSpawnFailed);
     }
 
     #[tokio::test]
@@ -1612,9 +1565,9 @@ mod tests {
         assert_eq!(event.phase, TaskPhase::Completed);
 
         let error = manager.cancel_task(&task_id).unwrap_err();
-        assert_eq!(error.code, codes::TASK_CANNOT_CANCEL);
+        assert_eq!(error.code, ErrorCode::TaskCannotCancel);
         let missing = manager.cancel_task("task-does-not-exist").unwrap_err();
-        assert_eq!(missing.code, codes::TASK_NOT_FOUND);
+        assert_eq!(missing.code, ErrorCode::TaskNotFound);
     }
 
     #[tokio::test]
@@ -1626,7 +1579,7 @@ mod tests {
         );
         let permit = manager.try_acquire_mutation().unwrap();
         let busy = manager.try_acquire_mutation().unwrap_err();
-        assert_eq!(busy.code, codes::TASK_BUSY);
+        assert_eq!(busy.code, ErrorCode::TaskBusy);
 
         let (sink, mut receiver) = sink();
         manager.start_preview("owner/repo", sink).await.unwrap();
@@ -1651,7 +1604,7 @@ mod tests {
             .start_preview("owner/repo/sub", sink)
             .await
             .unwrap_err();
-        assert_eq!(error.code, codes::SOURCE_UNSUPPORTED_SUBDIR);
+        assert_eq!(error.code, ErrorCode::SourceUnsupportedSubdir);
         assert_eq!(executor.call_count(), 0);
         assert!(receiver.try_recv().is_err(), "no task should be created");
     }
@@ -1669,7 +1622,7 @@ mod tests {
         let event = final_event(&mut receiver).await;
 
         assert_eq!(event.phase, TaskPhase::Failed);
-        assert_eq!(event.error.unwrap().code, codes::ENV_NODE_MISSING);
+        assert_eq!(event.error.unwrap().code, ErrorCode::EnvNodeMissing);
         assert_eq!(executor.call_count(), 0);
     }
 
@@ -2053,7 +2006,7 @@ mod tests {
         assert_eq!(result.skills[1].status, TaskSkillStatus::Skipped);
         assert_eq!(
             result.skills[1].error.as_ref().unwrap().code,
-            codes::SKILL_NOT_IN_SOURCE
+            ErrorCode::SkillNotInSource
         );
     }
 
@@ -2089,7 +2042,7 @@ mod tests {
         assert_eq!(result.overall, TaskOverall::Success);
         assert_eq!(result.skills[0].status, TaskSkillStatus::Installed);
         assert_eq!(result.warnings.len(), 1);
-        assert_eq!(result.warnings[0].code, codes::VERIFY_COPY_FALLBACK);
+        assert_eq!(result.warnings[0].code, ErrorCode::VerifyCopyFallback);
     }
 
     #[tokio::test]
@@ -2123,7 +2076,7 @@ mod tests {
         assert_eq!(result.skills[0].status, TaskSkillStatus::Failed);
         assert_eq!(
             result.skills[0].error.as_ref().unwrap().code,
-            codes::VERIFY_CANONICAL_MISSING
+            ErrorCode::VerifyCanonicalMissing
         );
     }
 
@@ -2136,7 +2089,7 @@ mod tests {
         )
         .await;
         assert_eq!(final_event.phase, TaskPhase::Failed);
-        assert_eq!(final_event.error.unwrap().code, codes::CLI_INVALID_JSON);
+        assert_eq!(final_event.error.unwrap().code, ErrorCode::CliInvalidJson);
         assert_eq!(fixture.executor.call_count(), 1);
     }
 
@@ -2149,7 +2102,10 @@ mod tests {
         )
         .await;
         assert_eq!(final_event.phase, TaskPhase::Failed);
-        assert_eq!(final_event.error.unwrap().code, codes::NETWORK_FETCH_FAILED);
+        assert_eq!(
+            final_event.error.unwrap().code,
+            ErrorCode::NetworkFetchFailed
+        );
     }
 
     #[tokio::test]
@@ -2165,7 +2121,7 @@ mod tests {
             .start_install(install_request(&["find-skills"], &["qoder"]), sink)
             .await
             .unwrap_err();
-        assert_eq!(error.code, codes::SKILL_CONFLICT);
+        assert_eq!(error.code, ErrorCode::SkillConflict);
         assert_eq!(fixture.executor.call_count(), 0);
         assert!(receiver.try_recv().is_err());
         assert!(taken.join("SKILL.md").is_file(), "no overwrite");
@@ -2210,7 +2166,7 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             error.code,
-            codes::SKILL_CONFLICT,
+            ErrorCode::SkillConflict,
             "plain duplicate rejected"
         );
         assert_eq!(executor.call_count(), 0);
@@ -2237,7 +2193,7 @@ mod tests {
             .start_install(install_request(&["find-skills"], &["qoder"]), sink)
             .await
             .unwrap_err();
-        assert_eq!(error.code, codes::LOCK_CORRUPT);
+        assert_eq!(error.code, ErrorCode::LockCorrupt);
         assert_eq!(fixture.executor.call_count(), 0);
     }
 
@@ -2335,7 +2291,7 @@ mod tests {
             }
         }
         let error = manager.cancel_task(&task_id).unwrap_err();
-        assert_eq!(error.code, codes::TASK_CANNOT_CANCEL);
+        assert_eq!(error.code, ErrorCode::TaskCannotCancel);
 
         let final_event = tokio::time::timeout(Duration::from_secs(2), final_event(&mut receiver))
             .await
@@ -2382,7 +2338,7 @@ mod tests {
             .start_install(install_request(&["other-skill"], &["qoder"]), second_sink)
             .await
             .unwrap_err();
-        assert_eq!(error.code, codes::TASK_BUSY);
+        assert_eq!(error.code, ErrorCode::TaskBusy);
 
         let final_event = tokio::time::timeout(Duration::from_secs(2), final_event(&mut receiver))
             .await
@@ -2421,7 +2377,7 @@ mod tests {
             .detach_agent("alpha".to_string(), "qoder".to_string())
             .await
             .unwrap_err();
-        assert_eq!(error.code, codes::TASK_BUSY);
+        assert_eq!(error.code, ErrorCode::TaskBusy);
         assert!(skills_dir.join("alpha").is_symlink());
         drop(permit);
 
@@ -2456,7 +2412,7 @@ mod tests {
             .detach_agent("alpha".to_string(), "qoder".to_string())
             .await
             .unwrap_err();
-        assert_eq!(error.code, codes::TASK_SHUTTING_DOWN);
+        assert_eq!(error.code, ErrorCode::TaskShuttingDown);
     }
 
     // ------------------------------------------------------------------
@@ -2568,7 +2524,7 @@ mod tests {
         // The task is sealed: a user-facing cancel is rejected, but shutdown
         // must still cancel it.
         let error = manager.cancel_task("task-1").unwrap_err();
-        assert_eq!(error.code, codes::TASK_CANNOT_CANCEL);
+        assert_eq!(error.code, ErrorCode::TaskCannotCancel);
 
         let report = manager.shutdown_mutations().await;
         assert_eq!(report.cancelled_tasks, 1);
@@ -2595,7 +2551,7 @@ mod tests {
             .start_install(install_request(&["other"], &["qoder"]), again_sink)
             .await
             .unwrap_err();
-        assert_eq!(error.code, codes::TASK_SHUTTING_DOWN);
+        assert_eq!(error.code, ErrorCode::TaskShuttingDown);
 
         // Dismissing the warning removes the marker but keeps the snapshot.
         manager.dismiss_interrupted_marker();

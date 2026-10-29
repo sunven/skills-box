@@ -150,7 +150,7 @@ fn entry_error(name: &str, detail: impl AsRef<str>) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::codes;
+    use crate::error::ErrorCode;
 
     fn full_entry() -> serde_json::Value {
         serde_json::json!({
@@ -211,7 +211,7 @@ mod tests {
     #[test]
     fn corrupt_json_maps_to_lock_corrupt() {
         let error = LockFile::parse("{not json").unwrap_err();
-        assert_eq!(error.code, codes::LOCK_CORRUPT);
+        assert_eq!(error.code, ErrorCode::LockCorrupt);
         assert!(error.detail.is_some());
     }
 
@@ -220,7 +220,7 @@ mod tests {
         for version in [2, 4] {
             let raw = format!(r#"{{"version":{version},"skills":{{}}}}"#);
             let error = LockFile::parse(&raw).unwrap_err();
-            assert_eq!(error.code, codes::LOCK_UNSUPPORTED_VERSION);
+            assert_eq!(error.code, ErrorCode::LockUnsupportedVersion);
             assert!(error.message.contains(&format!("v{version}")));
         }
     }
@@ -229,7 +229,7 @@ mod tests {
     fn missing_or_non_numeric_version_is_corrupt() {
         for raw in [r#"{"skills":{}}"#, r#"{"version":"3","skills":{}}"#] {
             let error = LockFile::parse(raw).unwrap_err();
-            assert_eq!(error.code, codes::LOCK_CORRUPT);
+            assert_eq!(error.code, ErrorCode::LockCorrupt);
         }
     }
 
@@ -237,7 +237,7 @@ mod tests {
     fn missing_skills_or_non_object_skills_is_corrupt() {
         for raw in [r#"{"version":3}"#, r#"{"version":3,"skills":[]}"#] {
             let error = LockFile::parse(raw).unwrap_err();
-            assert_eq!(error.code, codes::LOCK_CORRUPT);
+            assert_eq!(error.code, ErrorCode::LockCorrupt);
         }
     }
 
@@ -247,7 +247,7 @@ mod tests {
         entry.as_object_mut().unwrap().remove("sourceUrl");
         let raw = serde_json::json!({ "version": 3, "skills": { "alpha": entry } }).to_string();
         let error = LockFile::parse(&raw).unwrap_err();
-        assert_eq!(error.code, codes::LOCK_CORRUPT);
+        assert_eq!(error.code, ErrorCode::LockCorrupt);
         assert!(error.detail.as_deref().unwrap().contains("alpha"));
         assert!(error.detail.as_deref().unwrap().contains("sourceUrl"));
     }

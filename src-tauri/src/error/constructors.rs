@@ -1,138 +1,12 @@
-//! Structured application error returned across the Tauri IPC boundary.
-//!
-//! The frontend only ever displays the normalized `message`; `detail` carries
-//! diagnostic output (for example CLI stderr) and `hint` carries an actionable
-//! next step for the user.
+//! Semantic error constructors: the taxonomy owns code, copy, hint and
+//! retryability; call sites only provide contextual detail.
 
-use serde::Serialize;
-
-/// Error code constants grouped by domain. Keep the string values stable —
-/// the frontend and tests may branch on them.
-pub mod codes {
-    pub const ENV_NODE_MISSING: &str = "env.node_missing";
-    pub const ENV_NODE_TOO_OLD: &str = "env.node_too_old";
-    pub const ENV_NODE_PROBE_FAILED: &str = "env.node_probe_failed";
-    pub const ENV_NODE_PROBE_TIMEOUT: &str = "env.node_probe_timeout";
-    pub const ENV_OVERRIDE_INVALID: &str = "env.override_invalid";
-    pub const ENV_NPX_MISSING: &str = "env.npx_missing";
-    pub const ENV_GIT_MISSING: &str = "env.git_missing";
-    pub const ENV_CLI_MISSING: &str = "env.cli_missing";
-    pub const ENV_VERSION_UNSUPPORTED: &str = "env.version_unsupported";
-    pub const LOCK_CORRUPT: &str = "lock.corrupt";
-    pub const LOCK_UNSUPPORTED_VERSION: &str = "lock.unsupported_version";
-    pub const LOCK_READ_FAILED: &str = "lock.read_failed";
-    pub const SKILL_NOT_FOUND: &str = "skill.not_found";
-    pub const SKILL_AMBIGUOUS: &str = "skill.ambiguous";
-    pub const SKILL_NOT_IN_SOURCE: &str = "skill.not_in_source";
-    pub const SKILL_INVALID_NAME: &str = "skill.invalid_name";
-    pub const SKILL_INSTALL_FAILED: &str = "skill.install_failed";
-    pub const SKILL_READ_FAILED: &str = "skill.read_failed";
-    pub const SKILL_READ_TIMEOUT: &str = "skill.read_timeout";
-    pub const SKILL_UNMANAGED: &str = "skill.unmanaged";
-    pub const SKILL_COPY_ONLY: &str = "skill.copy_only";
-    pub const SKILL_SOURCE_UNRESOLVABLE: &str = "skill.source_unresolvable";
-    pub const AGENT_INVALID: &str = "agent.invalid";
-    pub const AGENT_NOT_DETECTED: &str = "agent.not_detected";
-    pub const AGENT_NOT_ATTACHED: &str = "agent.not_attached";
-    pub const AGENT_NATIVE: &str = "agent.native";
-    pub const AGENT_BROKEN: &str = "agent.broken";
-    pub const AGENT_DEPENDENCY_CONFLICT: &str = "agent.dependency_conflict";
-    pub const AGENT_DETACH_FAILED: &str = "agent.detach_failed";
-    pub const AGENT_ALREADY_ATTACHED: &str = "agent.already_attached";
-    pub const AGENT_ATTACH_FAILED: &str = "agent.attach_failed";
-    pub const AGENT_UNSUPPORTED_GLOBAL: &str = "agent.unsupported_global";
-    pub const EXTRA_AGENT_INVALID: &str = "extra.invalid";
-    pub const EXTRA_AGENT_DUPLICATE: &str = "extra.duplicate";
-    pub const EXTRA_AGENT_BUILTIN: &str = "extra.builtin";
-    pub const EXTRA_AGENT_NOT_FOUND: &str = "extra.not_found";
-    pub const EXTRA_AGENT_CONFIG: &str = "extra.config";
-    pub const PATH_APP_DATA: &str = "path.app_data";
-    pub const PATH_INVALID: &str = "path.invalid";
-    pub const PATH_OUTSIDE_ALLOWED_ROOT: &str = "path.outside_allowed_root";
-    pub const OPEN_FAILED: &str = "open.failed";
-    pub const SOURCE_MISSING: &str = "source.missing";
-    pub const SOURCE_INVALID: &str = "source.invalid";
-    pub const SOURCE_UNSUPPORTED_SUBDIR: &str = "source.unsupported_subdir";
-    pub const SOURCE_UNSUPPORTED_REF: &str = "source.unsupported_ref";
-    pub const SOURCE_UNSUPPORTED_PROVIDER: &str = "source.unsupported_provider";
-    pub const SOURCE_PREVIEW_FAILED: &str = "source.preview_failed";
-    pub const NETWORK_FETCH_FAILED: &str = "network.fetch_failed";
-    pub const NETWORK_OFFLINE: &str = "network.offline";
-    pub const NETWORK_RATE_LIMITED: &str = "network.rate_limited";
-    pub const NETWORK_ERROR: &str = "network.error";
-    pub const CLI_FAILED: &str = "cli.failed";
-    pub const CLI_SPAWN_FAILED: &str = "cli.spawn_failed";
-    pub const CLI_TIMEOUT: &str = "cli.timeout";
-    pub const CLI_EXIT_NONZERO: &str = "cli.exit_nonzero";
-    pub const CLI_INVALID_JSON: &str = "cli.invalid_json";
-    pub const CLI_PARTIAL_FAILURE: &str = "cli.partial_failure";
-    pub const CLI_CANCELLED: &str = "cli.cancelled";
-    pub const TASK_BUSY: &str = "task.busy";
-    pub const TASK_NOT_FOUND: &str = "task.not_found";
-    pub const TASK_CANNOT_CANCEL: &str = "task.cannot_cancel";
-    pub const TASK_CANCELLED: &str = "task.cancelled";
-    pub const TASK_SHUTTING_DOWN: &str = "task.shutting_down";
-    pub const TASK_INTERNAL: &str = "task.internal";
-    pub const SKILL_CONFLICT: &str = "skill.conflict";
-    pub const BACKUP_FAILED: &str = "backup.failed";
-    pub const BASELINE_WRITE_FAILED: &str = "baseline.write_failed";
-    pub const BASELINE_CLEAR_FAILED: &str = "baseline.clear_failed";
-    pub const LOG_WRITE_FAILED: &str = "log.write_failed";
-    pub const VERIFY_FAILED: &str = "verify.failed";
-    pub const VERIFY_CANONICAL_MISSING: &str = "verify.canonical_missing";
-    pub const VERIFY_LOCK_MISSING: &str = "verify.lock_missing";
-    pub const VERIFY_LOCK_MISMATCH: &str = "verify.lock_mismatch";
-    pub const VERIFY_ATTACHMENT_MISSING: &str = "verify.attachment_missing";
-    pub const VERIFY_ATTACHMENT_MODE: &str = "verify.attachment_mode";
-    pub const VERIFY_COPY_FALLBACK: &str = "verify.copy_fallback";
-    pub const VERIFY_CANONICAL_PRESENT: &str = "verify.canonical_present";
-    pub const VERIFY_ATTACHMENT_PRESENT: &str = "verify.attachment_present";
-    pub const VERIFY_LOCK_PRESENT: &str = "verify.lock_present";
-    pub const UPDATE_LOCAL_MODIFIED: &str = "update.local_modified";
-    pub const UPDATE_COPY_TO_SYMLINK: &str = "update.copy_to_symlink";
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AppError {
-    pub code: String,
-    pub message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub detail: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hint: Option<String>,
-    pub retryable: bool,
-}
+use super::{AppError, ErrorCode};
 
 impl AppError {
-    pub fn new(code: &str, message: impl Into<String>) -> Self {
-        Self {
-            code: code.to_string(),
-            message: message.into(),
-            detail: None,
-            hint: None,
-            retryable: false,
-        }
-    }
-
-    pub fn detail(mut self, detail: impl Into<String>) -> Self {
-        self.detail = Some(detail.into());
-        self
-    }
-
-    pub fn hint(mut self, hint: impl Into<String>) -> Self {
-        self.hint = Some(hint.into());
-        self
-    }
-
-    pub fn retryable(mut self, retryable: bool) -> Self {
-        self.retryable = retryable;
-        self
-    }
-
     pub fn env_node_missing(detail: impl Into<String>) -> Self {
         Self::new(
-            codes::ENV_NODE_MISSING,
+            ErrorCode::EnvNodeMissing,
             "未找到 Node.js。Skills Box 需要 Node 22.20 或更高版本。",
         )
         .detail(detail)
@@ -142,7 +16,7 @@ impl AppError {
 
     pub fn env_node_too_old(version: &str, path: &str) -> Self {
         Self::new(
-            codes::ENV_NODE_TOO_OLD,
+            ErrorCode::EnvNodeTooOld,
             format!("Node 版本过低（当前 {version}），需要 22.20 或更高版本。"),
         )
         .detail(format!("{path}（{version}）"))
@@ -152,7 +26,7 @@ impl AppError {
 
     pub fn env_node_probe_failed(detail: impl Into<String>) -> Self {
         Self::new(
-            codes::ENV_NODE_PROBE_FAILED,
+            ErrorCode::EnvNodeProbeFailed,
             "Node 版本探测失败，无法确认运行环境。",
         )
         .detail(detail)
@@ -161,7 +35,7 @@ impl AppError {
     }
 
     pub fn env_node_probe_timeout(detail: impl Into<String>) -> Self {
-        Self::new(codes::ENV_NODE_PROBE_TIMEOUT, "Node 版本探测超时。")
+        Self::new(ErrorCode::EnvNodeProbeTimeout, "Node 版本探测超时。")
             .detail(detail)
             .hint("请检查 Node 安装是否卡住，然后重新检测。")
             .retryable(true)
@@ -169,7 +43,7 @@ impl AppError {
 
     pub fn env_override_invalid(detail: impl Into<String>) -> Self {
         Self::new(
-            codes::ENV_OVERRIDE_INVALID,
+            ErrorCode::EnvOverrideInvalid,
             "指定的 Node 路径不可用，已停止回退探测。",
         )
         .detail(detail)
@@ -177,20 +51,20 @@ impl AppError {
     }
 
     pub fn env_npx_missing(detail: impl Into<String>) -> Self {
-        Self::new(codes::ENV_NPX_MISSING, "未找到 npx。")
+        Self::new(ErrorCode::EnvNpxMissing, "未找到 npx。")
             .detail(detail)
             .hint("npx 随 Node.js 一起提供，请检查 Node.js 安装是否完整。")
     }
 
     pub fn env_git_missing(detail: impl Into<String>) -> Self {
-        Self::new(codes::ENV_GIT_MISSING, "未找到 git。")
+        Self::new(ErrorCode::EnvGitMissing, "未找到 git。")
             .detail(detail)
             .hint("请安装 Xcode Command Line Tools（xcode-select --install）或 git。")
     }
 
     pub fn env_cli_missing(detail: impl Into<String>) -> Self {
         Self::new(
-            codes::ENV_CLI_MISSING,
+            ErrorCode::EnvCliMissing,
             "skills CLI 不可用（npx skills@1.7.4）。",
         )
         .detail(detail)
@@ -202,7 +76,7 @@ impl AppError {
     /// This is an environment incompatibility, not a transient network error.
     pub fn env_version_unsupported(expected: &str, actual: &str) -> Self {
         Self::new(
-            codes::ENV_VERSION_UNSUPPORTED,
+            ErrorCode::EnvVersionUnsupported,
             format!("skills CLI 版本不受支持（期望 {expected}，实际 {actual}）。"),
         )
         .detail(format!("expected = {expected}, actual = {actual}"))
@@ -211,14 +85,14 @@ impl AppError {
     }
 
     pub fn lock_corrupt(detail: impl Into<String>) -> Self {
-        Self::new(codes::LOCK_CORRUPT, "Skill lock 文件损坏，无法解析。")
+        Self::new(ErrorCode::LockCorrupt, "Skill lock 文件损坏，无法解析。")
             .detail(detail)
             .hint("请检查 ~/.agents/.skill-lock.json，或从备份恢复后再试。")
     }
 
     pub fn lock_unsupported_version(version: u64) -> Self {
         Self::new(
-            codes::LOCK_UNSUPPORTED_VERSION,
+            ErrorCode::LockUnsupportedVersion,
             format!("Skill lock 版本不受支持（v{version}），需要 v3。"),
         )
         .detail(format!("version = {version}"))
@@ -226,20 +100,20 @@ impl AppError {
     }
 
     pub fn lock_read_failed(detail: impl Into<String>) -> Self {
-        Self::new(codes::LOCK_READ_FAILED, "无法读取 Skill lock 文件。")
+        Self::new(ErrorCode::LockReadFailed, "无法读取 Skill lock 文件。")
             .detail(detail)
             .hint("请检查 ~/.agents/.skill-lock.json 的权限。")
     }
 
     pub fn path_app_data(detail: impl Into<String>) -> Self {
-        Self::new(codes::PATH_APP_DATA, "无法创建应用数据目录。")
+        Self::new(ErrorCode::PathAppData, "无法创建应用数据目录。")
             .detail(detail)
             .hint("请检查磁盘空间与目录权限，然后重新检测。")
     }
 
     pub fn skill_not_found(name: &str) -> Self {
         Self::new(
-            codes::SKILL_NOT_FOUND,
+            ErrorCode::SkillNotFound,
             format!("找不到 skill「{name}」的目录。"),
         )
         .hint("请刷新库存后重试；如果目录已被外部删除，列表会自动更新。")
@@ -249,7 +123,7 @@ impl AppError {
     /// conflicting content, so no single folder can be chosen safely.
     pub fn skill_ambiguous(name: &str, detail: impl Into<String>) -> Self {
         Self::new(
-            codes::SKILL_AMBIGUOUS,
+            ErrorCode::SkillAmbiguous,
             format!("skill「{name}」对应多个位置，无法安全判断操作目标。"),
         )
         .detail(detail)
@@ -257,7 +131,7 @@ impl AppError {
     }
 
     pub fn skill_read_failed(detail: impl Into<String>) -> Self {
-        Self::new(codes::SKILL_READ_FAILED, "读取 skill 详情失败。")
+        Self::new(ErrorCode::SkillReadFailed, "读取 skill 详情失败。")
             .detail(detail)
             .hint("请检查该 skill 目录的权限后重试。")
             .retryable(true)
@@ -265,7 +139,7 @@ impl AppError {
 
     pub fn skill_read_timeout(what: &str, timeout: std::time::Duration) -> Self {
         Self::new(
-            codes::SKILL_READ_TIMEOUT,
+            ErrorCode::SkillReadTimeout,
             format!("读取{what}超时（{} 秒）。", timeout.as_secs()),
         )
         .hint("请检查磁盘或网络状态，然后重新加载。")
@@ -274,7 +148,7 @@ impl AppError {
 
     pub fn skill_unmanaged(name: &str) -> Self {
         Self::new(
-            codes::SKILL_UNMANAGED,
+            ErrorCode::SkillUnmanaged,
             format!("skill「{name}」没有 lock 条目，不可更新或卸载（断开亦不可用）。"),
         )
         .hint("未受管 skill 只能只读展示或手动处理，请刷新库存确认状态。")
@@ -282,7 +156,7 @@ impl AppError {
 
     pub fn skill_copy_only(name: &str) -> Self {
         Self::new(
-            codes::SKILL_COPY_ONLY,
+            ErrorCode::SkillCopyOnly,
             format!("skill「{name}」只有 agent 副本，没有共享目录，无法更新或断开。"),
         )
         .hint("v1 不支持 copy-only 更新或断开；请先卸载，再重新安装。")
@@ -290,7 +164,7 @@ impl AppError {
 
     pub fn skill_source_unresolvable(name: &str, detail: impl Into<String>) -> Self {
         Self::new(
-            codes::SKILL_SOURCE_UNRESOLVABLE,
+            ErrorCode::SkillSourceUnresolvable,
             format!("无法从 lock 解析 skill「{name}」的来源，已跳过更新。"),
         )
         .detail(detail)
@@ -299,7 +173,7 @@ impl AppError {
 
     pub fn update_local_modified(name: &str, detail: impl Into<String>) -> Self {
         Self::new(
-            codes::UPDATE_LOCAL_MODIFIED,
+            ErrorCode::UpdateLocalModified,
             format!("skill「{name}」存在本地改动，更新前需要确认。"),
         )
         .detail(detail)
@@ -308,19 +182,19 @@ impl AppError {
 
     pub fn update_copy_to_symlink(name: &str, agents: &str) -> Self {
         Self::new(
-            codes::UPDATE_COPY_TO_SYMLINK,
+            ErrorCode::UpdateCopyToSymlink,
             format!("skill「{name}」在 {agents} 上是副本，更新后将转为符号链接。"),
         )
         .detail(format!("更新前已备份这些副本目录：{agents}；可自行恢复。"))
     }
 
     pub fn path_invalid(detail: impl Into<String>) -> Self {
-        Self::new(codes::PATH_INVALID, "无效的 skill 标识或路径。").detail(detail)
+        Self::new(ErrorCode::PathInvalid, "无效的 skill 标识或路径。").detail(detail)
     }
 
     pub fn path_outside_allowed_root(detail: impl Into<String>) -> Self {
         Self::new(
-            codes::PATH_OUTSIDE_ALLOWED_ROOT,
+            ErrorCode::PathOutsideAllowedRoot,
             "路径不在允许的 skill 目录内，已拒绝打开。",
         )
         .detail(detail)
@@ -328,7 +202,7 @@ impl AppError {
     }
 
     pub fn open_failed(detail: impl Into<String>) -> Self {
-        Self::new(codes::OPEN_FAILED, "无法打开文件或目录。")
+        Self::new(ErrorCode::OpenFailed, "无法打开文件或目录。")
             .detail(detail)
             .hint("请检查系统默认应用与文件权限。")
             .retryable(true)
@@ -337,7 +211,7 @@ impl AppError {
     /// External links are restricted to absolute https URLs. Retrying the same
     /// input cannot succeed, so this is not retryable.
     pub fn open_url_rejected(detail: impl Into<String>) -> Self {
-        Self::new(codes::OPEN_FAILED, "仅允许通过 opener 打开 https 链接。")
+        Self::new(ErrorCode::OpenFailed, "仅允许通过 opener 打开 https 链接。")
             .detail(detail)
             .hint("http、file、javascript、data、ssh、mailto 与相对路径都会被拒绝。")
             .retryable(false)
@@ -345,7 +219,7 @@ impl AppError {
 
     pub fn source_missing() -> Self {
         Self::new(
-            codes::SOURCE_MISSING,
+            ErrorCode::SourceMissing,
             "请输入公开 GitHub 仓库，例如 owner/repo。",
         )
         .hint("示例：vercel-labs/skills 或 https://github.com/vercel-labs/skills")
@@ -353,7 +227,7 @@ impl AppError {
 
     pub fn source_invalid(detail: impl Into<String>) -> Self {
         Self::new(
-            codes::SOURCE_INVALID,
+            ErrorCode::SourceInvalid,
             "来源格式无效。仅支持 owner/repo 或 https://github.com/owner/repo。",
         )
         .detail(detail)
@@ -362,7 +236,7 @@ impl AppError {
 
     pub fn source_unsupported_subdir() -> Self {
         Self::new(
-            codes::SOURCE_UNSUPPORTED_SUBDIR,
+            ErrorCode::SourceUnsupportedSubdir,
             "仅支持公开 GitHub 根仓库，不支持子目录。",
         )
         .hint("请去掉仓库后面的子目录，例如 owner/repo。")
@@ -370,7 +244,7 @@ impl AppError {
 
     pub fn source_unsupported_ref() -> Self {
         Self::new(
-            codes::SOURCE_UNSUPPORTED_REF,
+            ErrorCode::SourceUnsupportedRef,
             "仅安装默认分支，不支持 #ref（分支、标签或提交）。",
         )
         .hint("请去掉 #ref 后再预览。")
@@ -378,14 +252,14 @@ impl AppError {
 
     pub fn source_unsupported_provider(provider: &str) -> Self {
         Self::new(
-            codes::SOURCE_UNSUPPORTED_PROVIDER,
+            ErrorCode::SourceUnsupportedProvider,
             format!("不支持该来源（{provider}），仅支持公开 GitHub 仓库。"),
         )
         .hint("请使用 owner/repo 或 https://github.com/owner/repo。")
     }
 
     pub fn source_preview_failed(detail: impl Into<String>) -> Self {
-        Self::new(codes::SOURCE_PREVIEW_FAILED, "无法解析仓库预览。")
+        Self::new(ErrorCode::SourcePreviewFailed, "无法解析仓库预览。")
             .detail(detail)
             .hint("可手动输入 skill 名，或重试预览。")
             .retryable(true)
@@ -393,7 +267,7 @@ impl AppError {
 
     pub fn network_fetch_failed(detail: impl Into<String>) -> Self {
         Self::new(
-            codes::NETWORK_FETCH_FAILED,
+            ErrorCode::NetworkFetchFailed,
             "无法访问仓库，请检查网络后重试。",
         )
         .detail(detail)
@@ -405,7 +279,7 @@ impl AppError {
     /// previous result and surfaces this error instead.
     pub fn network_offline(detail: impl Into<String>) -> Self {
         Self::new(
-            codes::NETWORK_OFFLINE,
+            ErrorCode::NetworkOffline,
             "无法连接 GitHub，已保留上次检查结果。",
         )
         .detail(detail)
@@ -415,7 +289,7 @@ impl AppError {
 
     pub fn network_rate_limited(detail: impl Into<String>) -> Self {
         Self::new(
-            codes::NETWORK_RATE_LIMITED,
+            ErrorCode::NetworkRateLimited,
             "GitHub 检查额度已用尽，已保留上次检查结果。",
         )
         .detail(detail)
@@ -424,21 +298,24 @@ impl AppError {
     }
 
     pub fn network_error(detail: impl Into<String>) -> Self {
-        Self::new(codes::NETWORK_ERROR, "检查更新失败，已保留上次检查结果。")
-            .detail(detail)
-            .hint("请确认仓库仍公开可访问，然后再次手动检查更新。")
-            .retryable(true)
+        Self::new(
+            ErrorCode::NetworkError,
+            "检查更新失败，已保留上次检查结果。",
+        )
+        .detail(detail)
+        .hint("请确认仓库仍公开可访问，然后再次手动检查更新。")
+        .retryable(true)
     }
 
     pub fn cli_failed(detail: impl Into<String>) -> Self {
-        Self::new(codes::CLI_FAILED, "skills CLI 执行失败。")
+        Self::new(ErrorCode::CliFailed, "skills CLI 执行失败。")
             .detail(detail)
             .hint("请检查 Node、npx 与 git 环境，然后重试。")
             .retryable(true)
     }
 
     pub fn cli_spawn_failed(detail: impl Into<String>) -> Self {
-        Self::new(codes::CLI_SPAWN_FAILED, "无法启动 skills CLI 进程。")
+        Self::new(ErrorCode::CliSpawnFailed, "无法启动 skills CLI 进程。")
             .detail(detail)
             .hint("请检查 Node、npx 与 git 环境，然后重新检测。")
             .retryable(true)
@@ -446,7 +323,7 @@ impl AppError {
 
     pub fn cli_timeout(what: &str, timeout: std::time::Duration) -> Self {
         Self::new(
-            codes::CLI_TIMEOUT,
+            ErrorCode::CliTimeout,
             format!("{what}超时（{} 秒）。", timeout.as_secs()),
         )
         .hint("请检查网络或磁盘状态，然后重试。")
@@ -454,7 +331,7 @@ impl AppError {
     }
 
     pub fn cli_exit_nonzero(detail: impl Into<String>) -> Self {
-        Self::new(codes::CLI_EXIT_NONZERO, "skills CLI 以非零退出码结束。")
+        Self::new(ErrorCode::CliExitNonzero, "skills CLI 以非零退出码结束。")
             .detail(detail)
             .hint("请查看详细信息中的 CLI 输出，处理后重试。")
             .retryable(true)
@@ -462,7 +339,7 @@ impl AppError {
 
     pub fn cli_invalid_json(detail: impl Into<String>) -> Self {
         Self::new(
-            codes::CLI_INVALID_JSON,
+            ErrorCode::CliInvalidJson,
             "skills CLI 返回了无法解析的 JSON。",
         )
         .detail(detail)
@@ -471,10 +348,13 @@ impl AppError {
     }
 
     pub fn cli_partial_failure(detail: impl Into<String>) -> Self {
-        Self::new(codes::CLI_PARTIAL_FAILURE, "skills CLI 报告部分操作失败。")
-            .detail(detail)
-            .hint("请查看详细信息中的剩余文件或条目标识，处理后重试。")
-            .retryable(true)
+        Self::new(
+            ErrorCode::CliPartialFailure,
+            "skills CLI 报告部分操作失败。",
+        )
+        .detail(detail)
+        .hint("请查看详细信息中的剩余文件或条目标识，处理后重试。")
+        .retryable(true)
     }
 
     /// The CLI process group was terminated because the task was cancelled or
@@ -482,20 +362,24 @@ impl AppError {
     /// `task.cancelled`; this code is what the operation log records for the
     /// interrupted CLI row.
     pub fn cli_cancelled() -> Self {
-        Self::new(codes::CLI_CANCELLED, "skills CLI 进程已取消。").retryable(true)
+        Self::new(ErrorCode::CliCancelled, "skills CLI 进程已取消。").retryable(true)
     }
 
     pub fn task_busy() -> Self {
-        Self::new(codes::TASK_BUSY, "已有变更任务正在执行，请等待完成后再试。").retryable(true)
+        Self::new(
+            ErrorCode::TaskBusy,
+            "已有变更任务正在执行，请等待完成后再试。",
+        )
+        .retryable(true)
     }
 
     pub fn task_not_found() -> Self {
-        Self::new(codes::TASK_NOT_FOUND, "任务不存在或已结束。").retryable(false)
+        Self::new(ErrorCode::TaskNotFound, "任务不存在或已结束。").retryable(false)
     }
 
     pub fn task_cannot_cancel() -> Self {
         Self::new(
-            codes::TASK_CANNOT_CANCEL,
+            ErrorCode::TaskCannotCancel,
             "任务已结束或已进入不可取消阶段。",
         )
         .retryable(false)
@@ -503,12 +387,12 @@ impl AppError {
 
     /// Terminal marker for a task the user cancelled.
     pub fn task_cancelled() -> Self {
-        Self::new(codes::TASK_CANCELLED, "任务已取消。").retryable(true)
+        Self::new(ErrorCode::TaskCancelled, "任务已取消。").retryable(true)
     }
 
     pub fn task_shutting_down() -> Self {
         Self::new(
-            codes::TASK_SHUTTING_DOWN,
+            ErrorCode::TaskShuttingDown,
             "应用正在退出，无法开始新的任务。",
         )
         .retryable(false)
@@ -516,7 +400,7 @@ impl AppError {
 
     pub fn skill_conflict(name: &str, detail: impl Into<String>) -> Self {
         Self::new(
-            codes::SKILL_CONFLICT,
+            ErrorCode::SkillConflict,
             format!("同名 skill「{name}」已存在，无法安装。"),
         )
         .detail(detail)
@@ -525,7 +409,7 @@ impl AppError {
 
     pub fn skill_invalid_name(detail: impl Into<String>) -> Self {
         Self::new(
-            codes::SKILL_INVALID_NAME,
+            ErrorCode::SkillInvalidName,
             "skill 名无效，请使用单个名称（不能以 - 或 * 开头）。",
         )
         .detail(detail)
@@ -534,7 +418,7 @@ impl AppError {
 
     pub fn skill_not_in_source(name: &str, detail: impl Into<String>) -> Self {
         Self::new(
-            codes::SKILL_NOT_IN_SOURCE,
+            ErrorCode::SkillNotInSource,
             format!("来源中未找到 skill「{name}」。"),
         )
         .detail(detail)
@@ -544,7 +428,7 @@ impl AppError {
 
     pub fn skill_install_failed(name: &str, detail: impl Into<String>) -> Self {
         Self::new(
-            codes::SKILL_INSTALL_FAILED,
+            ErrorCode::SkillInstallFailed,
             format!("skill「{name}」安装失败。"),
         )
         .detail(detail)
@@ -553,12 +437,12 @@ impl AppError {
     }
 
     pub fn agent_invalid(detail: impl Into<String>) -> Self {
-        Self::new(codes::AGENT_INVALID, "agent 标识无效。").detail(detail)
+        Self::new(ErrorCode::AgentInvalid, "agent 标识无效。").detail(detail)
     }
 
     pub fn agent_unsupported_global(name: &str) -> Self {
         Self::new(
-            codes::AGENT_UNSUPPORTED_GLOBAL,
+            ErrorCode::AgentUnsupportedGlobal,
             format!("agent「{name}」不支持全局安装。"),
         )
         .hint("请取消选择该 agent，或使用其项目级安装方式。")
@@ -566,7 +450,7 @@ impl AppError {
 
     pub fn agent_not_detected(name: &str) -> Self {
         Self::new(
-            codes::AGENT_NOT_DETECTED,
+            ErrorCode::AgentNotDetected,
             format!("未检测到 agent「{name}」，无法安装。"),
         )
         .hint("请刷新环境检测后重新选择 agent。")
@@ -575,7 +459,7 @@ impl AppError {
 
     pub fn agent_not_attached(name: &str) -> Self {
         Self::new(
-            codes::AGENT_NOT_ATTACHED,
+            ErrorCode::AgentNotAttached,
             format!("agent「{name}」没有挂载这个 skill，无法断开。"),
         )
         .hint("请刷新库存后重试。")
@@ -585,7 +469,7 @@ impl AppError {
     /// per-agent attachment to remove.
     pub fn agent_native(name: &str) -> Self {
         Self::new(
-            codes::AGENT_NATIVE,
+            ErrorCode::AgentNative,
             format!("agent「{name}」共享 canonical store，不提供断开。"),
         )
         .detail("universal / native 挂载没有独立目录，移除它不会改变该 agent 可见的 skill。")
@@ -594,7 +478,7 @@ impl AppError {
 
     pub fn agent_broken(name: &str, path: &std::path::Path) -> Self {
         Self::new(
-            codes::AGENT_BROKEN,
+            ErrorCode::AgentBroken,
             format!("agent「{name}」的挂载是断链，只读提示，不提供断开。"),
         )
         .detail(path.display().to_string())
@@ -606,7 +490,7 @@ impl AppError {
     /// block instead of rewriting other agents' attachments.
     pub fn agent_dependency_conflict(agent: &str, dependents: &[String]) -> Self {
         Self::new(
-            codes::AGENT_DEPENDENCY_CONFLICT,
+            ErrorCode::AgentDependencyConflict,
             format!("agent「{agent}」上的 copy 副本仍被其他 agent 的符号链接引用，已阻止操作。"),
         )
         .detail(format!("引用该副本的挂载：{}", dependents.join("；")))
@@ -614,7 +498,7 @@ impl AppError {
     }
 
     pub fn agent_detach_failed(detail: impl Into<String>) -> Self {
-        Self::new(codes::AGENT_DETACH_FAILED, "断开 agent 挂载失败。")
+        Self::new(ErrorCode::AgentDetachFailed, "断开 agent 挂载失败。")
             .detail(detail)
             .hint("请检查该 agent 目录的权限后重试；canonical 与 lock 未被修改。")
             .retryable(true)
@@ -622,28 +506,28 @@ impl AppError {
 
     pub fn agent_already_attached(name: &str) -> Self {
         Self::new(
-            codes::AGENT_ALREADY_ATTACHED,
+            ErrorCode::AgentAlreadyAttached,
             format!("agent「{name}」已经挂载了这个 skill。"),
         )
         .hint("请刷新库存后重试。")
     }
 
     pub fn agent_attach_failed(detail: impl Into<String>) -> Self {
-        Self::new(codes::AGENT_ATTACH_FAILED, "创建 agent 挂载失败。")
+        Self::new(ErrorCode::AgentAttachFailed, "创建 agent 挂载失败。")
             .detail(detail)
             .hint("请检查该 agent 目录的权限后重试；canonical 与 lock 未被修改。")
             .retryable(true)
     }
 
     pub fn extra_agent_invalid(detail: impl Into<String>) -> Self {
-        Self::new(codes::EXTRA_AGENT_INVALID, "额外 agent 定义无效。")
+        Self::new(ErrorCode::ExtraInvalid, "额外 agent 定义无效。")
             .detail(detail)
             .hint("id 只能包含字母、数字、`-`、`_`、`.`，skills 目录必须是 `~/` 开头或绝对路径。")
     }
 
     pub fn extra_agent_duplicate(id: &str) -> Self {
         Self::new(
-            codes::EXTRA_AGENT_DUPLICATE,
+            ErrorCode::ExtraDuplicate,
             format!("agent 标识「{id}」已被占用。"),
         )
         .hint("请换一个 id；内置 catalog 与已有额外 agent 的 id 不可复用。")
@@ -651,7 +535,7 @@ impl AppError {
 
     pub fn extra_agent_builtin(name: &str) -> Self {
         Self::new(
-            codes::EXTRA_AGENT_BUILTIN,
+            ErrorCode::ExtraBuiltin,
             format!("内置额外 agent「{name}」不可删除。"),
         )
         .hint("如果该产品未安装，它会自动标记为「未检测到」并从安装目标中隐藏。")
@@ -659,28 +543,28 @@ impl AppError {
 
     pub fn extra_agent_not_found(id: &str) -> Self {
         Self::new(
-            codes::EXTRA_AGENT_NOT_FOUND,
+            ErrorCode::ExtraNotFound,
             format!("未找到额外 agent「{id}」。"),
         )
         .hint("请刷新后重试。")
     }
 
     pub fn extra_agent_config(detail: impl Into<String>) -> Self {
-        Self::new(codes::EXTRA_AGENT_CONFIG, "保存额外 agent 配置失败。")
+        Self::new(ErrorCode::ExtraConfig, "保存额外 agent 配置失败。")
             .detail(detail)
             .hint("请检查应用数据目录的权限后重试。")
             .retryable(true)
     }
 
     pub fn backup_failed(detail: impl Into<String>) -> Self {
-        Self::new(codes::BACKUP_FAILED, "无法创建操作前的备份快照。")
+        Self::new(ErrorCode::BackupFailed, "无法创建操作前的备份快照。")
             .detail(detail)
             .hint("请检查应用数据目录与磁盘空间后重试。")
             .retryable(true)
     }
 
     pub fn verify_failed(detail: impl Into<String>) -> Self {
-        Self::new(codes::VERIFY_FAILED, "安装后校验失败。")
+        Self::new(ErrorCode::VerifyFailed, "安装后校验失败。")
             .detail(detail)
             .hint("可以单独重试该 skill。")
             .retryable(true)
@@ -688,7 +572,7 @@ impl AppError {
 
     pub fn verify_canonical_missing(name: &str, path: &std::path::Path) -> Self {
         Self::new(
-            codes::VERIFY_CANONICAL_MISSING,
+            ErrorCode::VerifyCanonicalMissing,
             format!("共享目录中缺少 skill「{name}」。"),
         )
         .detail(path.display().to_string())
@@ -698,7 +582,7 @@ impl AppError {
 
     pub fn verify_lock_missing(name: &str) -> Self {
         Self::new(
-            codes::VERIFY_LOCK_MISSING,
+            ErrorCode::VerifyLockMissing,
             format!("lock 中缺少 skill「{name}」。"),
         )
         .hint("CLI 可能未能写入 lock；请重试安装。")
@@ -708,7 +592,7 @@ impl AppError {
     /// The CLI wrote a lock entry whose source differs from the requested one.
     pub fn verify_lock_mismatch(name: &str, expected: &str, actual: &str) -> Self {
         Self::new(
-            codes::VERIFY_LOCK_MISMATCH,
+            ErrorCode::VerifyLockMismatch,
             format!("skill「{name}」的 lock 来源与本次操作不一致。"),
         )
         .detail(format!("期望 {expected}，实际 {actual}"))
@@ -718,7 +602,7 @@ impl AppError {
 
     pub fn verify_attachment_missing(name: &str, agent: &str, path: &std::path::Path) -> Self {
         Self::new(
-            codes::VERIFY_ATTACHMENT_MISSING,
+            ErrorCode::VerifyAttachmentMissing,
             format!("agent「{agent}」缺少 skill「{name}」的挂载。"),
         )
         .detail(path.display().to_string())
@@ -733,7 +617,7 @@ impl AppError {
         detail: impl Into<String>,
     ) -> Self {
         Self::new(
-            codes::VERIFY_ATTACHMENT_MODE,
+            ErrorCode::VerifyAttachmentMode,
             format!("agent「{agent}」的挂载模式异常（{name}）。"),
         )
         .detail(format!("{}：{}", path.display(), detail.into()))
@@ -743,7 +627,7 @@ impl AppError {
 
     pub fn verify_copy_fallback(name: &str, agent: &str, path: &std::path::Path) -> Self {
         Self::new(
-            codes::VERIFY_COPY_FALLBACK,
+            ErrorCode::VerifyCopyFallback,
             format!("「{name}」在 agent「{agent}」上是副本而非符号链接。"),
         )
         .detail(path.display().to_string())
@@ -754,7 +638,7 @@ impl AppError {
     /// still on disk. Never reported as success.
     pub fn verify_canonical_present(name: &str, path: &std::path::Path) -> Self {
         Self::new(
-            codes::VERIFY_CANONICAL_PRESENT,
+            ErrorCode::VerifyCanonicalPresent,
             format!("卸载后 canonical 目录仍然存在（{name}）。"),
         )
         .detail(path.display().to_string())
@@ -764,7 +648,7 @@ impl AppError {
     /// Post-uninstall verification: an agent attachment still exists.
     pub fn verify_attachment_present(name: &str, agent: &str, path: &std::path::Path) -> Self {
         Self::new(
-            codes::VERIFY_ATTACHMENT_PRESENT,
+            ErrorCode::VerifyAttachmentPresent,
             format!("卸载后 agent「{agent}」的挂载仍然存在（{name}）。"),
         )
         .detail(path.display().to_string())
@@ -774,163 +658,73 @@ impl AppError {
     /// Post-uninstall verification: the lock key survived the removal.
     pub fn verify_lock_present(name: &str) -> Self {
         Self::new(
-            codes::VERIFY_LOCK_PRESENT,
+            ErrorCode::VerifyLockPresent,
             format!("卸载后 lock 中仍保留 skill「{name}」。"),
         )
         .hint("CLI 可能未清理 lock 条目；请检查后再重试。")
     }
-}
-
-impl std::fmt::Display for AppError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.message)
-    }
-}
-
-impl std::error::Error for AppError {}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn node_missing_maps_to_env_domain_and_is_retryable() {
-        let err = AppError::env_node_missing("tried: override, volta, fnm, nvm");
-        assert_eq!(err.code, codes::ENV_NODE_MISSING);
-        assert!(err.retryable);
-        assert!(err.message.contains("未找到 Node.js"));
-        assert_eq!(
-            err.detail.as_deref(),
-            Some("tried: override, volta, fnm, nvm")
-        );
-        assert!(err.hint.is_some());
+    pub fn task_internal(context: &str, error: impl std::fmt::Display) -> Self {
+        Self::new(
+            ErrorCode::TaskInternal,
+            format!("校验{context}请求失败：{error}"),
+        )
     }
 
-    #[test]
-    fn node_too_old_reports_current_version_and_requirement() {
-        let err = AppError::env_node_too_old("v20.11.0", "/opt/node/bin/node");
-        assert_eq!(err.code, codes::ENV_NODE_TOO_OLD);
-        assert!(err.message.contains("v20.11.0"));
-        assert!(err.message.contains("22.20"));
-        assert_eq!(
-            err.detail.as_deref(),
-            Some("/opt/node/bin/node（v20.11.0）")
-        );
+    pub fn skill_read_failed_context(context: &str, error: impl std::fmt::Display) -> Self {
+        Self::new(ErrorCode::SkillReadFailed, format!("读取{context}失败。"))
+            .detail(error.to_string())
+            .retryable(true)
     }
 
-    #[test]
-    fn tool_errors_use_expected_codes() {
-        assert_eq!(AppError::env_npx_missing("x").code, codes::ENV_NPX_MISSING);
-        assert_eq!(AppError::env_git_missing("x").code, codes::ENV_GIT_MISSING);
-        assert_eq!(AppError::env_cli_missing("x").code, codes::ENV_CLI_MISSING);
-        assert_eq!(
-            AppError::env_version_unsupported("1.7.4", "1.8.0").code,
-            codes::ENV_VERSION_UNSUPPORTED
-        );
-        assert_eq!(AppError::cli_failed("x").code, codes::CLI_FAILED);
-        assert_eq!(
-            AppError::cli_spawn_failed("x").code,
-            codes::CLI_SPAWN_FAILED
-        );
-        assert_eq!(
-            AppError::cli_timeout("安装", std::time::Duration::from_secs(9)).code,
-            codes::CLI_TIMEOUT
-        );
-        assert_eq!(
-            AppError::cli_exit_nonzero("x").code,
-            codes::CLI_EXIT_NONZERO
-        );
-        assert_eq!(
-            AppError::cli_invalid_json("x").code,
-            codes::CLI_INVALID_JSON
-        );
-        assert_eq!(
-            AppError::cli_partial_failure("x").code,
-            codes::CLI_PARTIAL_FAILURE
-        );
-        assert_eq!(AppError::task_cancelled().code, codes::TASK_CANCELLED);
-        assert_eq!(AppError::cli_cancelled().code, codes::CLI_CANCELLED);
-        assert_eq!(
-            AppError::skill_ambiguous("alpha", "x").code,
-            codes::SKILL_AMBIGUOUS
-        );
-        assert_eq!(
-            AppError::verify_lock_mismatch("alpha", "acme/skills", "other/repo").code,
-            codes::VERIFY_LOCK_MISMATCH
-        );
-        assert_eq!(AppError::lock_corrupt("bad json").code, codes::LOCK_CORRUPT);
-        assert_eq!(
-            AppError::lock_unsupported_version(2).code,
-            codes::LOCK_UNSUPPORTED_VERSION
-        );
-        assert_eq!(
-            AppError::lock_read_failed("denied").code,
-            codes::LOCK_READ_FAILED
-        );
-        assert_eq!(AppError::path_app_data("denied").code, codes::PATH_APP_DATA);
-        assert_eq!(
-            AppError::skill_not_found("alpha").code,
-            codes::SKILL_NOT_FOUND
-        );
-        assert_eq!(
-            AppError::skill_read_failed("denied").code,
-            codes::SKILL_READ_FAILED
-        );
-        assert_eq!(AppError::path_invalid("x").code, codes::PATH_INVALID);
-        assert_eq!(
-            AppError::path_outside_allowed_root("x").code,
-            codes::PATH_OUTSIDE_ALLOWED_ROOT
-        );
-        assert_eq!(AppError::open_failed("x").code, codes::OPEN_FAILED);
-        assert_eq!(
-            AppError::agent_not_attached("Claude Code").code,
-            codes::AGENT_NOT_ATTACHED
-        );
-        assert_eq!(AppError::agent_native("Codex").code, codes::AGENT_NATIVE);
-        assert_eq!(
-            AppError::agent_broken("Gemini CLI", std::path::Path::new("/x")).code,
-            codes::AGENT_BROKEN
-        );
-        assert_eq!(
-            AppError::agent_dependency_conflict("Claude Code", &["Gemini CLI".to_string()]).code,
-            codes::AGENT_DEPENDENCY_CONFLICT
-        );
-        assert_eq!(
-            AppError::agent_detach_failed("denied").code,
-            codes::AGENT_DETACH_FAILED
-        );
-        assert_eq!(AppError::network_offline("x").code, codes::NETWORK_OFFLINE);
-        assert_eq!(
-            AppError::network_rate_limited("x").code,
-            codes::NETWORK_RATE_LIMITED
-        );
-        assert_eq!(AppError::network_error("x").code, codes::NETWORK_ERROR);
-        assert_eq!(
-            AppError::agent_dependency_conflict("Claude Code", &["Qoder".to_string()]).code,
-            codes::AGENT_DEPENDENCY_CONFLICT
-        );
-        assert_eq!(
-            AppError::verify_canonical_present("alpha", std::path::Path::new("/a")).code,
-            codes::VERIFY_CANONICAL_PRESENT
-        );
-        assert_eq!(
-            AppError::verify_attachment_present("alpha", "Qoder", std::path::Path::new("/a")).code,
-            codes::VERIFY_ATTACHMENT_PRESENT
-        );
-        assert_eq!(
-            AppError::verify_lock_present("alpha").code,
-            codes::VERIFY_LOCK_PRESENT
-        );
+    pub fn skill_dir_not_found(path: &std::path::Path, error: impl std::fmt::Display) -> Self {
+        Self::new(ErrorCode::SkillNotFound, "skill 目录不存在。")
+            .detail(format!("{}（{error}）", path.display()))
     }
 
-    #[test]
-    fn serializes_camel_case_and_omits_absent_optional_fields() {
-        let err = AppError::new(codes::ENV_NODE_MISSING, "未找到 Node.js");
-        let json = serde_json::to_value(&err).unwrap();
-        assert_eq!(json["code"], codes::ENV_NODE_MISSING);
-        assert_eq!(json["message"], "未找到 Node.js");
-        assert_eq!(json["retryable"], false);
-        assert!(json.get("detail").is_none());
-        assert!(json.get("hint").is_none());
+    pub fn skill_fingerprint_failed(error: impl std::fmt::Display) -> Self {
+        Self::new(ErrorCode::SkillReadFailed, "无法计算 skill 目录指纹。").detail(error.to_string())
+    }
+
+    pub fn baseline_dir_failed(error: impl std::fmt::Display) -> Self {
+        Self::new(ErrorCode::BaselineWriteFailed, "无法创建基线指纹目录。")
+            .detail(error.to_string())
+            .hint("请检查应用数据目录的权限。")
+    }
+
+    pub fn baseline_serialize_failed(error: impl std::fmt::Display) -> Self {
+        Self::new(ErrorCode::BaselineWriteFailed, "无法序列化基线指纹。").detail(error.to_string())
+    }
+
+    pub fn baseline_write_failed(error: impl std::fmt::Display) -> Self {
+        Self::new(ErrorCode::BaselineWriteFailed, "无法写入基线指纹。")
+            .detail(error.to_string())
+            .hint("请检查应用数据目录的权限与磁盘空间。")
+    }
+
+    pub fn baseline_save_failed(error: impl std::fmt::Display) -> Self {
+        Self::new(ErrorCode::BaselineWriteFailed, "无法保存基线指纹。")
+            .detail(error.to_string())
+            .hint("请检查应用数据目录的权限与磁盘空间。")
+    }
+
+    pub fn baseline_warning(error: AppError) -> Self {
+        Self::new(
+            ErrorCode::BaselineWriteFailed,
+            "操作成功，但无法刷新本地基线指纹。",
+        )
+        .detail(error.message)
+    }
+
+    pub fn baseline_clear_failed(error: impl std::fmt::Display) -> Self {
+        Self::new(
+            ErrorCode::BaselineClearFailed,
+            "卸载成功，但无法清除本地基线指纹。",
+        )
+        .detail(error.to_string())
+    }
+
+    pub fn log_write_failed(path: &std::path::Path, error: impl std::fmt::Display) -> Self {
+        Self::new(ErrorCode::LogWriteFailed, "无法写入操作日志。")
+            .detail(format!("{}：{error}", path.display()))
     }
 }

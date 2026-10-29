@@ -13,7 +13,8 @@ export type ToolState = "ok" | "missing" | "too_old" | "error" | "not_checked";
 export type LockStatus = "ok" | "missing" | "corrupt" | "unsupported" | "unreadable";
 
 export interface AppError {
-  code: string;
+  /** Omitted only for client-side fallbacks; backend errors always carry one. */
+  code?: string;
   message: string;
   detail?: string;
   hint?: string;

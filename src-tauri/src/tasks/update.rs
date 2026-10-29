@@ -19,7 +19,8 @@ use std::time::Duration;
 use crate::backup::{BackupAction, BackupAttachment, BackupStore};
 use crate::baseline::{BaselineStore, LocalModification, write_warning};
 use crate::cli::CliRuntime;
-use crate::error::{AppError, codes};
+use crate::error::cli::{self, CliAction};
+use crate::error::{AppError, ErrorCode};
 use crate::inventory::{self, AgentDir, AttachmentLocation, AttachmentMode, ManagementState};
 use crate::lock::{LockEntry, LockFile};
 use crate::logs::{OperationEntry, OperationLog};
@@ -335,10 +336,8 @@ pub fn verify_update(
         InstallOutput::Results(results) => results,
         InstallOutput::Fatal(detail) => {
             return UpdateVerification {
-                result: Err(super::install::classify_install_failure(
-                    &detail,
-                    &output.stderr,
-                )),
+                result: Err(cli::classify_add_failure(&detail, &output.stderr)
+                    .to_app_error(CliAction::Update)),
                 warnings: Vec::new(),
             };
         }
@@ -557,7 +556,7 @@ impl MutationAction for UpdateAction {
         let mut warnings = verification.warnings;
         let (status, error) = match verification.result {
             Ok(()) => (TaskSkillStatus::Updated, None),
-            Err(error) if error.code == codes::SKILL_NOT_IN_SOURCE => {
+            Err(error) if error.code == ErrorCode::SkillNotInSource => {
                 (TaskSkillStatus::Skipped, Some(error))
             }
             Err(error) => (TaskSkillStatus::Failed, Some(error)),
@@ -667,7 +666,7 @@ pub const UPDATE_TIMEOUT: Duration = INSTALL_TIMEOUT;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::codes;
+    use crate::error::ErrorCode;
     use crate::inventory::AgentDir;
     use std::os::unix::fs::symlink;
 
@@ -941,7 +940,10 @@ mod tests {
         let fixture = Fixture::new(&[("alpha", "acme/skills", Some("--all"))]);
         let plan = plan(&fixture, &["alpha"]);
         assert!(plan.items.is_empty());
-        assert_eq!(plan.skipped[0].error.code, codes::SKILL_SOURCE_UNRESOLVABLE);
+        assert_eq!(
+            plan.skipped[0].error.code,
+            ErrorCode::SkillSourceUnresolvable
+        );
     }
 
     #[test]
@@ -986,12 +988,12 @@ mod tests {
         let skipped: std::collections::HashMap<_, _> = plan
             .skipped
             .iter()
-            .map(|skip| (skip.name.as_str(), skip.error.code.as_str()))
+            .map(|skip| (skip.name.as_str(), skip.error.code))
             .collect();
-        assert_eq!(skipped["copy-only"], codes::SKILL_COPY_ONLY);
-        assert_eq!(skipped["non-github"], codes::SKILL_SOURCE_UNRESOLVABLE);
-        assert_eq!(skipped["unmanaged"], codes::SKILL_UNMANAGED);
-        assert_eq!(skipped["ghost"], codes::SKILL_NOT_FOUND);
+        assert_eq!(skipped["copy-only"], ErrorCode::SkillCopyOnly);
+        assert_eq!(skipped["non-github"], ErrorCode::SkillSourceUnresolvable);
+        assert_eq!(skipped["unmanaged"], ErrorCode::SkillUnmanaged);
+        assert_eq!(skipped["ghost"], ErrorCode::SkillNotFound);
     }
 
     #[test]
@@ -1000,7 +1002,7 @@ mod tests {
         fs::write(fixture.paths.lock_path(), "{not json").unwrap();
         let error =
             plan_updates(&fixture.paths, &fixture.agents, &["alpha".to_string()]).unwrap_err();
-        assert_eq!(error.code, codes::LOCK_CORRUPT);
+        assert_eq!(error.code, ErrorCode::LockCorrupt);
     }
 
     #[test]
@@ -1338,7 +1340,7 @@ mod tests {
             result
                 .warnings
                 .iter()
-                .filter(|warning| warning.code == "update.copy_to_symlink")
+                .filter(|warning| warning.code == ErrorCode::UpdateCopyToSymlink)
                 .count(),
             1
         );
@@ -1346,7 +1348,7 @@ mod tests {
             result
                 .warnings
                 .iter()
-                .any(|warning| warning.code == "update.local_modified"),
+                .any(|warning| warning.code == ErrorCode::UpdateLocalModified),
             "{:?}",
             result.warnings
         );
@@ -1462,7 +1464,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             copy_only.error.as_ref().unwrap().code,
-            crate::error::codes::SKILL_COPY_ONLY
+            crate::error::ErrorCode::SkillCopyOnly
         );
         assert!(copy_only.backup_path.is_none());
         assert_eq!(backup_dirs(&fixture).len(), 2, "alpha and beta only");
@@ -1483,7 +1485,7 @@ mod tests {
         assert_eq!(line_for("beta")["result"], "failed");
         assert_eq!(
             line_for("beta")["error"]["code"],
-            crate::error::codes::SKILL_INSTALL_FAILED
+            crate::error::ErrorCode::SkillInstallFailed.as_str()
         );
         assert_eq!(line_for("copy-only")["result"], "skipped");
         assert!(line_for("copy-only").get("backupPath").is_none());
@@ -1502,7 +1504,7 @@ mod tests {
             .start_update(vec!["alpha".to_string()], sink)
             .await
             .unwrap_err();
-        assert_eq!(error.code, crate::error::codes::LOCK_CORRUPT);
+        assert_eq!(error.code, crate::error::ErrorCode::LockCorrupt);
         assert_eq!(executor.calls().len(), 0);
     }
 
@@ -1519,14 +1521,14 @@ mod tests {
 
         assert_eq!(final_event.phase, TaskPhase::Failed);
         let error = final_event.error.expect("backup error");
-        assert_eq!(error.code, crate::error::codes::BACKUP_FAILED);
+        assert_eq!(error.code, crate::error::ErrorCode::BackupFailed);
         assert_eq!(executor.calls().len(), 0);
         let lines = log_lines(&fixture);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0]["result"], "failed");
         assert_eq!(
             lines[0]["error"]["code"],
-            crate::error::codes::BACKUP_FAILED
+            crate::error::ErrorCode::BackupFailed.as_str()
         );
     }
 
@@ -1574,7 +1576,7 @@ mod tests {
             }
         }
         let error = manager.cancel_task(&task_id).unwrap_err();
-        assert_eq!(error.code, codes::TASK_CANNOT_CANCEL);
+        assert_eq!(error.code, ErrorCode::TaskCannotCancel);
 
         let final_event = tokio::time::timeout(Duration::from_secs(2), async {
             loop {
@@ -1616,7 +1618,7 @@ mod tests {
             let event = receiver.recv().await.unwrap();
             if event.phase == TaskPhase::Verifying && event.completed == Some(0) {
                 let error = manager.cancel_task(&task_id).unwrap_err();
-                assert_eq!(error.code, codes::TASK_CANNOT_CANCEL);
+                assert_eq!(error.code, ErrorCode::TaskCannotCancel);
                 break;
             }
         }

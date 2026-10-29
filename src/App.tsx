@@ -32,6 +32,8 @@ import {
 import {
   asAppError,
   dismissInterruptedMutation,
+  fallbackError,
+  isLockError,
   getActiveMutation,
   quitApp,
   revealAppData,
@@ -204,7 +206,7 @@ function App() {
     } catch (error) {
       setQuitting(false);
       setExitError(
-        (asAppError(error) ?? { message: "无法退出应用。" }).message,
+        (asAppError(error) ?? fallbackError("无法退出应用。")).message,
       );
     }
   };
@@ -229,7 +231,7 @@ function App() {
   const inventoryError = asAppError(inventoryQuery.error);
   const updateError = asAppError(checkUpdates.error);
   const lockError =
-    inventoryError && inventoryError.code?.startsWith("lock.")
+    isLockError(inventoryError)
       ? inventoryError
       : null;
   const mutationsEnabled = (report?.mutationsEnabled ?? false) && !lockError;
