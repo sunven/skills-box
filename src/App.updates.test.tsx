@@ -1,8 +1,7 @@
 import { StrictMode } from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import App from "./App";
 import { createQueryClient } from "./lib/query-client";
 import type {
@@ -15,13 +14,13 @@ import type {
   UpdateSourceResult,
   UpdateState,
 } from "./lib/types";
-import { healthyReport } from "./test/fixtures";
 import { formatEpochDateTime } from "./lib/update-view";
 import {
-  detailForSkill,
-  makeDirListing,
-  makeFileContent,
-} from "./test/detail-fixtures";
+  createFakeBackend,
+  type FakeBackendData,
+  type FakeCall,
+  type FakeHandlers,
+} from "./test/fake-backend";
 import {
   attachment,
   makeAnomalies,
@@ -36,11 +35,6 @@ const RUN_AT_LABEL = formatEpochDateTime(RUN_AT);
 const SCOPED_CHECKED_AT = RUN_AT + 60_000;
 const PERSISTED_SUCCESS = LAST_SUCCESS - 60_000;
 const PERSISTED_SUCCESS_LABEL = "2026-10-28 13:05";
-
-interface Call {
-  command: string;
-  payload: unknown;
-}
 
 function updateResult(
   name: string,
@@ -165,57 +159,35 @@ function mockCommands(options: {
   checkError?: Partial<AppError> & { message: string };
   initialState?: UpdateCheckState | null;
   activeMutation?: ActiveMutationInfo | null;
-}): Call[] {
-  const calls: Call[] = [];
-  const snapshot = options.snapshot ?? baseSnapshot();
+}): readonly FakeCall[] {
   const autoReport =
     options.autoReport === undefined ? emptyReport() : options.autoReport;
   let autoPending = autoReport !== null;
   let reportIndex = 0;
-  mockIPC((command, payload) => {
-    calls.push({ command, payload });
-    switch (command) {
-      case "get_environment":
-        return healthyReport();
-      case "get_inventory":
-        return snapshot;
-      case "get_update_check_state":
-        return options.initialState ?? null;
-      case "get_active_mutation":
-        return options.activeMutation ?? null;
-      case "get_skill_detail": {
-        const skillId = (payload as { skillId: string }).skillId;
-        const skill = snapshot.skills.find((entry) => entry.name === skillId);
-        return skill ? detailForSkill(skill) : null;
+  const data: Partial<FakeBackendData> = {
+    snapshot: options.snapshot ?? baseSnapshot(),
+    updateCheckState: options.initialState ?? null,
+    activeMutation: options.activeMutation ?? null,
+    updateReport: () => {
+      if (autoPending && autoReport !== null) {
+        autoPending = false;
+        return typeof autoReport === "function" ? autoReport() : autoReport;
       }
-      case "check_updates": {
-        if (options.checkError) throw options.checkError;
-        if (autoPending && autoReport !== null) {
-          autoPending = false;
-          return typeof autoReport === "function" ? autoReport() : autoReport;
-        }
-        const reports = options.reports ?? [];
-        const entry = reports[Math.min(reportIndex, reports.length - 1)];
-        reportIndex += 1;
-        if (!entry) throw new Error("no scripted update report");
-        return typeof entry === "function" ? entry() : entry;
+      const reports = options.reports ?? [];
+      const entry = reports[Math.min(reportIndex, reports.length - 1)];
+      reportIndex += 1;
+      if (!entry) throw new Error("no scripted update report");
+      return typeof entry === "function" ? entry() : entry;
+    },
+  };
+  const commands: Partial<FakeHandlers> = options.checkError
+    ? {
+        check_updates: () => {
+          throw options.checkError!;
+        },
       }
-      case "list_skill_dir": {
-        const args = payload as { skillId: string; path?: string };
-        return makeDirListing(args.skillId, args.path ?? "");
-      }
-      case "read_skill_file": {
-        const args = payload as { skillId: string; path: string };
-        return makeFileContent(args.skillId, args.path);
-      }
-      case "open_skill_folder":
-      case "open_skill_file":
-        return null;
-      default:
-        throw new Error(`unexpected command: ${command}`);
-    }
-  });
-  return calls;
+    : {};
+  return createFakeBackend({ data, commands }).install().calls;
 }
 
 function renderApp({ strict = false }: { strict?: boolean } = {}) {
@@ -260,13 +232,9 @@ function detail() {
   return within(screen.getByRole("complementary", { name: "详情" }));
 }
 
-function checkCalls(calls: Call[]): Call[] {
+function checkCalls(calls: readonly FakeCall[]): readonly FakeCall[] {
   return calls.filter((call) => call.command === "check_updates");
 }
-
-afterEach(() => {
-  clearMocks();
-});
 
 describe("manual update checking", () => {
   it("auto-checks once on mount and overlays live badges, counts and last-check time", async () => {

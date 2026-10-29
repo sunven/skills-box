@@ -7,14 +7,12 @@ import {
   within,
 } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import type { Channel } from "@tauri-apps/api/core";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import App from "./App";
+import { API_COMMANDS, type ApiCommand } from "./lib/api";
 import { createQueryClient } from "./lib/query-client";
 import type {
   DetectedAgent,
-  InstallRequest,
   InventorySnapshot,
   PreviewSummary,
   TaskEvent,
@@ -23,6 +21,11 @@ import type {
   TaskResult,
   TaskSkillResult,
 } from "./lib/types";
+import {
+  createFakeBackend,
+  type FakeBackend,
+  type FakeTask,
+} from "./test/fake-backend";
 import { healthyReport } from "./test/fixtures";
 import {
   attachment,
@@ -31,13 +34,7 @@ import {
 } from "./test/inventory-fixtures";
 
 interface ExecState {
-  previewChannel: Channel<TaskEvent> | null;
-  installChannel: Channel<TaskEvent> | null;
-  indexes: Map<number, number>;
-  previewCalls: Array<{ source: string }>;
-  installCalls: Array<{ request: InstallRequest }>;
-  cancelCalls: Array<{ taskId: string }>;
-  inventoryCalls: number;
+  backend: FakeBackend;
 }
 
 const detectedAgents: DetectedAgent[] = [
@@ -62,53 +59,18 @@ const detectedAgents: DetectedAgent[] = [
 ];
 
 function setup(snapshot: InventorySnapshot): ExecState {
-  const state: ExecState = {
-    previewChannel: null,
-    installChannel: null,
-    indexes: new Map(),
-    previewCalls: [],
-    installCalls: [],
-    cancelCalls: [],
-    inventoryCalls: 0,
-  };
-  mockIPC((command, payload) => {
-    if (command === "get_environment") {
-      return healthyReport({ agents: detectedAgents });
-    }
-    if (command === "get_inventory") {
-      state.inventoryCalls += 1;
-      return snapshot;
-    }
-    if (command === "start_preview") {
-      const args = payload as {
-        source: string;
-        onEvent: Channel<TaskEvent>;
-      };
-      state.previewCalls.push({ source: args.source });
-      state.previewChannel = args.onEvent;
-      return "task-1";
-    }
-    if (command === "start_install") {
-      const args = payload as {
-        request: InstallRequest;
-        onEvent: Channel<TaskEvent>;
-      };
-      state.installCalls.push({ request: args.request });
-      state.installChannel = args.onEvent;
-      return "task-2";
-    }
-    if (command === "cancel_task") {
-      state.cancelCalls.push(payload as { taskId: string });
-      return { taskId: "task-2", accepted: true, message: "已请求取消" };
-    }
-    throw new Error(`unexpected command: ${command}`);
-  });
+  const backend = createFakeBackend({
+    data: {
+      environment: healthyReport({ agents: detectedAgents }),
+      snapshot,
+    },
+  }).install();
   render(
     <QueryClientProvider client={createQueryClient()}>
       <App />
     </QueryClientProvider>,
   );
-  return state;
+  return { backend };
 }
 
 async function openWizard(): Promise<HTMLElement> {
@@ -117,32 +79,21 @@ async function openWizard(): Promise<HTMLElement> {
   return screen.findByTestId("install-wizard");
 }
 
-function emitOn(
-  state: ExecState,
-  channel: Channel<TaskEvent> | null,
-  event: TaskEvent,
-) {
-  if (!channel) throw new Error("channel is not available");
-  const internals = (
-    window as unknown as {
-      __TAURI_INTERNALS__: {
-        runCallback: (id: number, data: unknown) => void;
-      };
-    }
-  ).__TAURI_INTERNALS__;
-  const index = state.indexes.get(channel.id) ?? 0;
-  state.indexes.set(channel.id, index + 1);
-  act(() => {
-    internals.runCallback(channel.id, { index, message: event });
-  });
+function lastTask(state: ExecState, command: ApiCommand): FakeTask {
+  const matching = state.backend.tasks.filter(
+    (task) => task.command === command,
+  );
+  const task = matching[matching.length - 1];
+  if (!task) throw new Error(`task ${command} is not available`);
+  return task;
 }
 
 function emitPreview(state: ExecState, event: TaskEvent) {
-  emitOn(state, state.previewChannel, event);
+  act(() => lastTask(state, API_COMMANDS.startPreview).emit(event));
 }
 
 function emitInstall(state: ExecState, event: TaskEvent) {
-  emitOn(state, state.installChannel, event);
+  act(() => lastTask(state, API_COMMANDS.startInstall).emit(event));
 }
 
 function taskEvent(
@@ -249,13 +200,15 @@ async function startPreviewAndReachSkills(
     target: { value: "https://github.com/acme/skills" },
   });
   fireEvent.click(within(dialog).getByRole("button", { name: "预览仓库" }));
-  await waitFor(() => expect(state.previewChannel).not.toBeNull());
+  await waitFor(() =>
+    expect(
+      state.backend.tasks.some(
+        (task) => task.command === API_COMMANDS.startPreview,
+      ),
+    ).toBe(true),
+  );
   emitPreview(state, previewCompleted(preview(skills)));
 }
-
-afterEach(() => {
-  clearMocks();
-});
 
 describe("install wizard steps 3-5", () => {
   it("defaults agents by managed skills, labels universal and writes canonical", async () => {
@@ -303,8 +256,12 @@ describe("install wizard steps 3-5", () => {
     );
 
     fireEvent.click(within(dialog).getByRole("button", { name: "开始安装" }));
-    await waitFor(() => expect(state.installCalls).toHaveLength(1));
-    expect(state.installCalls[0]!.request).toEqual({
+    await waitFor(() =>
+      expect(state.backend.count(API_COMMANDS.startInstall)).toBe(1),
+    );
+    expect(
+      state.backend.callsOf(API_COMMANDS.startInstall)[0]!.payload.request,
+    ).toEqual({
       source: "acme/skills",
       skills: ["alpha"],
       agents: ["claude-code"],
@@ -375,7 +332,11 @@ describe("install wizard steps 3-5", () => {
       within(dialog).getByTestId("install-skill-result"),
     ).toHaveAttribute("data-skill-status", "installed");
 
-    await waitFor(() => expect(state.inventoryCalls).toBeGreaterThanOrEqual(2));
+    await waitFor(() =>
+      expect(
+        state.backend.count(API_COMMANDS.getInventory),
+      ).toBeGreaterThanOrEqual(2),
+    );
     expect(
       within(dialog).getByRole("button", { name: "关闭安装向导" }),
     ).toBeEnabled();
@@ -396,8 +357,13 @@ describe("install wizard steps 3-5", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "下一步" }));
     fireEvent.click(within(dialog).getByRole("button", { name: "下一步" }));
     fireEvent.click(within(dialog).getByRole("button", { name: "开始安装" }));
-    await waitFor(() => expect(state.installCalls).toHaveLength(1));
-    expect(state.installCalls[0]!.request.skills).toEqual(["alpha", "beta"]);
+    await waitFor(() =>
+      expect(state.backend.count(API_COMMANDS.startInstall)).toBe(1),
+    );
+    expect(
+      state.backend.callsOf(API_COMMANDS.startInstall)[0]!.payload.request
+        .skills,
+    ).toEqual(["alpha", "beta"]);
 
     emitInstall(
       state,
@@ -426,10 +392,14 @@ describe("install wizard steps 3-5", () => {
     ).toBeInTheDocument();
 
     fireEvent.click(within(rows[1]!).getByRole("button", { name: "重试" }));
-    await waitFor(() => expect(state.installCalls).toHaveLength(2));
+    await waitFor(() =>
+      expect(state.backend.count(API_COMMANDS.startInstall)).toBe(2),
+    );
     // Only the explicit retry button may ask Rust to overwrite a same-source
     // managed/stale entry left by the failed attempt.
-    expect(state.installCalls[1]!.request).toEqual({
+    expect(
+      state.backend.callsOf(API_COMMANDS.startInstall)[1]!.payload.request,
+    ).toEqual({
       source: "acme/skills",
       skills: ["beta"],
       agents: ["claude-code"],
@@ -464,7 +434,9 @@ describe("install wizard steps 3-5", () => {
 
     fireEvent.click(within(dialog).getByRole("button", { name: "下一步" }));
     fireEvent.click(within(dialog).getByRole("button", { name: "开始安装" }));
-    await waitFor(() => expect(state.installCalls).toHaveLength(1));
+    await waitFor(() =>
+      expect(state.backend.count(API_COMMANDS.startInstall)).toBe(1),
+    );
 
     emitInstall(
       state,
@@ -472,7 +444,11 @@ describe("install wizard steps 3-5", () => {
     );
     fireEvent.click(within(dialog).getByRole("button", { name: "取消安装" }));
     await waitFor(() =>
-      expect(state.cancelCalls).toEqual([{ taskId: "task-2" }]),
+      expect(
+        state.backend
+          .callsOf(API_COMMANDS.cancelTask)
+          .map((call) => call.payload),
+      ).toEqual([{ taskId: "task-2" }]),
     );
 
     emitInstall(state, taskEvent("cancelled", { message: "安装已取消。" }));
@@ -495,7 +471,9 @@ describe("install wizard steps 3-5", () => {
 
     fireEvent.click(within(dialog).getByRole("button", { name: "下一步" }));
     fireEvent.click(within(dialog).getByRole("button", { name: "开始安装" }));
-    await waitFor(() => expect(state.installCalls).toHaveLength(1));
+    await waitFor(() =>
+      expect(state.backend.count(API_COMMANDS.startInstall)).toBe(1),
+    );
 
     emitInstall(
       state,
@@ -515,9 +493,12 @@ describe("install wizard steps 3-5", () => {
       within(dialog).queryByRole("button", { name: "关闭" }),
     ).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("button", { name: "重试" }));
-    await waitFor(() => expect(state.installCalls).toHaveLength(2));
-    expect(state.installCalls[1]!.request).toEqual({
-      ...state.installCalls[0]!.request,
+    await waitFor(() =>
+      expect(state.backend.count(API_COMMANDS.startInstall)).toBe(2),
+    );
+    const installCalls = state.backend.callsOf(API_COMMANDS.startInstall);
+    expect(installCalls[1]!.payload.request).toEqual({
+      ...installCalls[0]!.payload.request,
       retry: true,
     });
   });

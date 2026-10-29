@@ -7,10 +7,9 @@ import {
   within,
 } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import type { Channel } from "@tauri-apps/api/core";
 import { afterEach, describe, expect, it } from "vitest";
 import App from "./App";
+import { API_COMMANDS } from "./lib/api";
 import { createQueryClient } from "./lib/query-client";
 import type {
   AppError,
@@ -20,12 +19,12 @@ import type {
   TaskResult,
   TaskSkillStatus,
 } from "./lib/types";
-import { healthyReport } from "./test/fixtures";
 import {
-  detailForSkill,
-  makeDirListing,
-  makeFileContent,
-} from "./test/detail-fixtures";
+  createFakeBackend,
+  type FakeBackend,
+  type FakeTask,
+} from "./test/fake-backend";
+import { healthyReport } from "./test/fixtures";
 import {
   attachment,
   group,
@@ -35,15 +34,7 @@ import {
 } from "./test/inventory-fixtures";
 
 interface UninstallState {
-  channels: Channel<TaskEvent>[];
-  indexes: Map<number, number>;
-  uninstallCalls: Array<{ skillId: string }>;
-  cancelCalls: string[];
-  revealCalls: string[];
-  inventoryCalls: number;
-  detailCalls: number;
-  snapshot: InventorySnapshot;
-  startError?: AppError;
+  backend: FakeBackend;
 }
 
 function baseSnapshot(): InventorySnapshot {
@@ -100,89 +91,49 @@ function snapshotWithoutAlpha(): InventorySnapshot {
 }
 
 function setup(startError?: AppError): UninstallState {
-  const state: UninstallState = {
-    channels: [],
-    indexes: new Map(),
-    uninstallCalls: [],
-    cancelCalls: [],
-    revealCalls: [],
-    inventoryCalls: 0,
-    detailCalls: 0,
-    snapshot: baseSnapshot(),
-    startError,
-  };
-  mockIPC((command, payload) => {
-    if (command === "get_environment") return healthyReport();
-    if (command === "get_inventory") {
-      state.inventoryCalls += 1;
-      return state.snapshot;
-    }
-    if (command === "get_skill_detail") {
-      state.detailCalls += 1;
-      const skillId = (payload as { skillId: string }).skillId;
-      const skill = state.snapshot.skills.find(
-        (entry) => entry.name === skillId,
-      );
-      return skill ? detailForSkill(skill) : null;
-    }
-    if (command === "list_skill_dir") {
-      const args = payload as { skillId: string; path?: string };
-      return makeDirListing(args.skillId, args.path ?? "");
-    }
-    if (command === "read_skill_file") {
-      const args = payload as { skillId: string; path: string };
-      return makeFileContent(args.skillId, args.path);
-    }
-    if (command === "open_skill_folder" || command === "open_skill_file") {
-      return null;
-    }
-    if (command === "start_uninstall") {
-      const args = payload as {
-        skillId: string;
-        onEvent: Channel<TaskEvent>;
-      };
-      state.uninstallCalls.push({ skillId: args.skillId });
-      if (state.startError) throw state.startError;
-      state.channels.push(args.onEvent);
-      return `task-uninstall-${state.channels.length}`;
-    }
-    if (command === "cancel_task") {
-      const taskId = (payload as { taskId: string }).taskId;
-      state.cancelCalls.push(taskId);
-      return { taskId, accepted: true, message: "已请求取消" };
-    }
-    if (command === "reveal_app_data") {
-      state.revealCalls.push((payload as { kind: string }).kind);
-      return null;
-    }
-    throw new Error(`unexpected command: ${command}`);
-  });
+  const backend = createFakeBackend({
+    data: {
+      environment: healthyReport(),
+      snapshot: baseSnapshot(),
+    },
+    commands: startError
+      ? {
+          start_uninstall: () => {
+            throw startError;
+          },
+        }
+      : undefined,
+  }).install();
   render(
     <QueryClientProvider client={createQueryClient()}>
       <App />
     </QueryClientProvider>,
   );
-  return state;
+  return { backend };
 }
 
-function emitOn(
-  state: UninstallState,
-  channel: Channel<TaskEvent> | undefined,
-  event: TaskEvent,
-) {
-  if (!channel) throw new Error("channel is not available");
-  const internals = (
-    window as unknown as {
-      __TAURI_INTERNALS__: {
-        runCallback: (id: number, data: unknown) => void;
-      };
-    }
-  ).__TAURI_INTERNALS__;
-  const index = state.indexes.get(channel.id) ?? 0;
-  state.indexes.set(channel.id, index + 1);
-  act(() => {
-    internals.runCallback(channel.id, { index, message: event });
-  });
+function uninstallTask(state: UninstallState, index: number): FakeTask {
+  const task = state.backend.tasks.filter(
+    (entry) => entry.command === API_COMMANDS.startUninstall,
+  )[index];
+  if (!task) throw new Error("channel is not available");
+  return task;
+}
+
+function emitOn(state: UninstallState, index: number, event: TaskEvent) {
+  act(() => uninstallTask(state, index).emit(event));
+}
+
+function uninstallCallsOf(state: UninstallState) {
+  return state.backend
+    .callsOf(API_COMMANDS.startUninstall)
+    .map((call) => ({ skillId: call.payload.skillId }));
+}
+
+function revealCallsOf(state: UninstallState) {
+  return state.backend
+    .callsOf(API_COMMANDS.revealAppData)
+    .map((call) => call.payload.kind);
 }
 
 function taskEvent(
@@ -271,11 +222,10 @@ async function confirmUninstall(dialog: HTMLElement) {
 
 let currentState: UninstallState | null = null;
 function uninstallCalls() {
-  return currentState?.uninstallCalls ?? [];
+  return currentState ? uninstallCallsOf(currentState) : [];
 }
 
 afterEach(() => {
-  clearMocks();
   currentState = null;
 });
 
@@ -340,13 +290,13 @@ describe("uninstall", () => {
 
     await confirmUninstall(dialog);
     await waitFor(() =>
-      expect(state.uninstallCalls).toEqual([{ skillId: "alpha" }]),
+      expect(uninstallCallsOf(state)).toEqual([{ skillId: "alpha" }]),
     );
-    expect(state.uninstallCalls[0]).toEqual({ skillId: "alpha" });
+    expect(uninstallCallsOf(state)[0]).toEqual({ skillId: "alpha" });
 
     emitOn(
       state,
-      state.channels[0],
+      0,
       taskEvent("backup", {
         message: "正在备份 alpha…",
         skill: "alpha",
@@ -356,10 +306,10 @@ describe("uninstall", () => {
     );
     expect(within(dialog).getByText("正在备份")).toBeInTheDocument();
 
-    state.snapshot = snapshotWithoutAlpha();
+    state.backend.update({ snapshot: snapshotWithoutAlpha() });
     emitOn(
       state,
-      state.channels[0],
+      0,
       taskEvent("completed", {
         message: "已彻底卸载「alpha」。",
         completed: 1,
@@ -392,9 +342,9 @@ describe("uninstall", () => {
       ).not.toContain("alpha");
     });
     await waitFor(() =>
-      expect(state.inventoryCalls).toBeGreaterThanOrEqual(2),
+      expect(state.backend.count(API_COMMANDS.getInventory)).toBeGreaterThanOrEqual(2),
     );
-    await waitFor(() => expect(state.detailCalls).toBeGreaterThanOrEqual(2));
+    await waitFor(() => expect(state.backend.count(API_COMMANDS.getSkillDetail)).toBeGreaterThanOrEqual(2));
     expect(
       screen.getByRole("button", { name: /异常 1/ }),
     ).toBeInTheDocument();
@@ -406,7 +356,7 @@ describe("uninstall", () => {
       within(dialog).getByRole("button", { name: "打开日志目录" }),
     );
     await waitFor(() =>
-      expect(state.revealCalls).toEqual(["backups", "logs"]),
+      expect(revealCallsOf(state)).toEqual(["backups", "logs"]),
     );
 
     fireEvent.click(within(dialog).getByRole("button", { name: "完成" }));
@@ -425,7 +375,7 @@ describe("uninstall", () => {
 
     emitOn(
       state,
-      state.channels[0],
+      0,
       taskEvent("completed", {
         message: "卸载未完成：「alpha」仍保留部分文件或 lock 条目。",
         completed: 1,
@@ -470,7 +420,7 @@ describe("uninstall", () => {
     expect(alert).toHaveTextContent("无法彻底卸载");
     expect(alert).toHaveTextContent("Gemini CLI");
     expect(alert).toHaveTextContent("请先在相关 agent 中断开");
-    expect(state.uninstallCalls).toEqual([{ skillId: "alpha" }]);
+    expect(uninstallCallsOf(state)).toEqual([{ skillId: "alpha" }]);
     expect(within(dialog).queryByTestId("uninstall-result")).toBeNull();
     expect(
       within(dialog).getByRole("button", { name: "确认卸载" }),

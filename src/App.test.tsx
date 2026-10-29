@@ -1,11 +1,11 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import App from "./App";
+import { API_COMMANDS } from "./lib/api";
 import { createQueryClient } from "./lib/query-client";
 import type { EnvReport } from "./lib/types";
-import { emptySnapshot } from "./test/inventory-fixtures";
+import { createFakeBackend } from "./test/fake-backend";
 import {
   cliMissingReport,
   gitMissingReport,
@@ -26,20 +26,8 @@ function renderApp() {
 }
 
 function mockEnvironment(report: EnvReport | (() => EnvReport)) {
-  mockIPC((command) => {
-    if (command === "get_environment") {
-      return typeof report === "function" ? report() : report;
-    }
-    if (command === "get_inventory") {
-      return emptySnapshot();
-    }
-    throw new Error(`unexpected command: ${command}`);
-  });
+  return createFakeBackend({ data: { environment: report } }).install();
 }
-
-afterEach(() => {
-  clearMocks();
-});
 
 describe("app shell", () => {
   it("renders the workspace with a healthy environment", async () => {
@@ -120,9 +108,13 @@ describe("app shell", () => {
   }
 
   it("survives an environment probe failure and offers a retry", async () => {
-    mockIPC(() => {
-      throw new Error("后端命令不可用");
-    });
+    createFakeBackend({
+      commands: {
+        get_environment: () => {
+          throw new Error("后端命令不可用");
+        },
+      },
+    }).install();
     renderApp();
 
     expect(await screen.findByText("环境检测失败")).toBeInTheDocument();
@@ -135,14 +127,18 @@ describe("app shell", () => {
   });
 
   it("renders a structured AppError rejection from the backend", async () => {
-    mockIPC(() => {
-      throw {
-        code: "path.app_data",
-        message: "无法创建应用数据目录。",
-        detail: "permission denied",
-        retryable: false,
-      };
-    });
+    createFakeBackend({
+      commands: {
+        get_environment: () => {
+          throw {
+            code: "path.app_data",
+            message: "无法创建应用数据目录。",
+            detail: "permission denied",
+            retryable: false,
+          };
+        },
+      },
+    }).install();
     renderApp();
 
     expect(await screen.findByText("环境检测失败")).toBeInTheDocument();
@@ -153,37 +149,32 @@ describe("app shell", () => {
   });
 
   it("rechecks the environment and refetches the inventory through the single api gateway", async () => {
-    const payloads: Array<{ refresh?: boolean }> = [];
     let envCalls = 0;
-    let inventoryCalls = 0;
-    mockIPC((command, payload) => {
-      if (command === "get_environment") {
-        payloads.push(payload as { refresh?: boolean });
-        envCalls += 1;
-        return envCalls === 1 ? cliMissingReport() : healthyReport();
-      }
-      if (command === "get_inventory") {
-        inventoryCalls += 1;
-        return emptySnapshot();
-      }
-      throw new Error(`unexpected command: ${command}`);
-    });
+    const backend = createFakeBackend({
+      data: {
+        environment: () => {
+          envCalls += 1;
+          return envCalls === 1 ? cliMissingReport() : healthyReport();
+        },
+      },
+    }).install();
 
     renderApp();
     const banner = await screen.findByRole("alert");
     await screen.findByText("暂无 skill");
-    expect(inventoryCalls).toBe(1);
+    expect(backend.count(API_COMMANDS.getInventory)).toBe(1);
 
     fireEvent.click(
       within(banner).getByRole("button", { name: "重新检测" }),
     );
 
     expect(await screen.findByText("环境正常")).toBeInTheDocument();
+    const payloads = backend.callsOf(API_COMMANDS.getEnvironment);
     expect(payloads).toHaveLength(2);
-    expect(payloads[0]?.refresh).toBe(false);
-    expect(payloads[1]?.refresh).toBe(true);
+    expect(payloads[0]?.payload.refresh).toBe(false);
+    expect(payloads[1]?.payload.refresh).toBe(true);
     // One refresh recovers both the environment report and the read model;
     // stale detail/update caches are invalidated by the same handler.
-    expect(inventoryCalls).toBe(2);
+    expect(backend.count(API_COMMANDS.getInventory)).toBe(2);
   });
 });

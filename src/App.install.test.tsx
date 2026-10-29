@@ -1,31 +1,16 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import type { Channel } from "@tauri-apps/api/core";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import App from "./App";
+import { API_COMMANDS } from "./lib/api";
 import { createQueryClient } from "./lib/query-client";
-import type {
-  InstallRequest,
-  InventorySnapshot,
-  PreviewSummary,
-  TaskEvent,
-  TaskPhase,
-} from "./lib/types";
+import type { InventorySnapshot, PreviewSummary, TaskEvent, TaskPhase } from "./lib/types";
+import { createFakeBackend, type FakeBackend, type FakeTask } from "./test/fake-backend";
 import { healthyReport } from "./test/fixtures";
-import {
-  emptySnapshot,
-  makeSkill,
-  makeSnapshot,
-} from "./test/inventory-fixtures";
+import { emptySnapshot, makeSkill, makeSnapshot } from "./test/inventory-fixtures";
 
 interface MockState {
-  channel: Channel<TaskEvent> | null;
-  installChannel: Channel<TaskEvent> | null;
-  index: number;
-  startCalls: Array<{ source: string }>;
-  installCalls: Array<{ request: InstallRequest }>;
-  cancelCalls: Array<{ taskId: string }>;
+  backend: FakeBackend;
 }
 
 interface SetupOptions {
@@ -34,48 +19,25 @@ interface SetupOptions {
 }
 
 function setup(options: SetupOptions = {}): MockState {
-  const state: MockState = {
-    channel: null,
-    installChannel: null,
-    index: 0,
-    startCalls: [],
-    installCalls: [],
-    cancelCalls: [],
-  };
-  mockIPC((command, payload) => {
-    if (command === "get_environment") return healthyReport();
-    if (command === "get_inventory") return options.snapshot ?? emptySnapshot();
-    if (command === "start_preview") {
-      const args = payload as {
-        source: string;
-        onEvent: Channel<TaskEvent>;
-      };
-      state.startCalls.push({ source: args.source });
-      if (options.startError) throw options.startError;
-      state.channel = args.onEvent;
-      return "task-1";
-    }
-    if (command === "start_install") {
-      const args = payload as {
-        request: InstallRequest;
-        onEvent: Channel<TaskEvent>;
-      };
-      state.installCalls.push({ request: args.request });
-      state.installChannel = args.onEvent;
-      return "task-2";
-    }
-    if (command === "cancel_task") {
-      state.cancelCalls.push(payload as { taskId: string });
-      return { taskId: "task-1", accepted: true, message: "已请求取消" };
-    }
-    throw new Error(`unexpected command: ${command}`);
-  });
+  const backend = createFakeBackend({
+    data: {
+      snapshot: options.snapshot ?? emptySnapshot(),
+      environment: healthyReport(),
+    },
+    commands: options.startError
+      ? {
+          start_preview: () => {
+            throw options.startError!;
+          },
+        }
+      : undefined,
+  }).install();
   render(
     <QueryClientProvider client={createQueryClient()}>
       <App />
     </QueryClientProvider>,
   );
-  return state;
+  return { backend };
 }
 
 async function openWizard(): Promise<HTMLElement> {
@@ -88,24 +50,16 @@ async function openWizard(): Promise<HTMLElement> {
   return dialog;
 }
 
-function emit(state: MockState, event: TaskEvent) {
-  const channel = state.channel;
-  if (!channel) throw new Error("preview channel is not available");
-  emitOn(state, channel, event);
+function previewTask(state: MockState): FakeTask {
+  const task = state.backend.tasks.find(
+    (entry) => entry.command === API_COMMANDS.startPreview,
+  );
+  if (!task) throw new Error("preview channel is not available");
+  return task;
 }
 
-function emitOn(state: MockState, channel: Channel<TaskEvent>, event: TaskEvent) {
-  const internals = (
-    window as unknown as {
-      __TAURI_INTERNALS__: {
-        runCallback: (id: number, data: unknown) => void;
-      };
-    }
-  ).__TAURI_INTERNALS__;
-  const index = state.index++;
-  act(() => {
-    internals.runCallback(channel.id, { index, message: event });
-  });
+function emit(state: MockState, event: TaskEvent) {
+  act(() => previewTask(state).emit(event));
 }
 
 function event(
@@ -160,12 +114,14 @@ async function startPreview(
     target: { value: source },
   });
   fireEvent.click(within(dialog).getByRole("button", { name: "预览仓库" }));
-  await waitFor(() => expect(state.channel).not.toBeNull());
+  await waitFor(() =>
+    expect(
+      state.backend.tasks.some(
+        (task) => task.command === API_COMMANDS.startPreview,
+      ),
+    ).toBe(true),
+  );
 }
-
-afterEach(() => {
-  clearMocks();
-});
 
 describe("install wizard steps 1-2", () => {
   it("shows backend source validation errors and blocks empty input", async () => {
@@ -185,7 +141,7 @@ describe("install wizard steps 1-2", () => {
     expect(
       await within(dialog).findByText("请输入公开 GitHub 仓库，例如 owner/repo。"),
     ).toBeInTheDocument();
-    expect(state.startCalls).toHaveLength(0);
+    expect(state.backend.count(API_COMMANDS.startPreview)).toBe(0);
 
     fireEvent.change(within(dialog).getByLabelText("仓库来源"), {
       target: { value: "owner/repo/sub" },
@@ -194,7 +150,11 @@ describe("install wizard steps 1-2", () => {
     const alert = await within(dialog).findByRole("alert");
     expect(alert).toHaveTextContent("不支持子目录");
     expect(within(dialog).getByText("source.unsupported_subdir")).toBeInTheDocument();
-    expect(state.startCalls).toEqual([{ source: "owner/repo/sub" }]);
+    expect(
+      state.backend
+        .callsOf(API_COMMANDS.startPreview)
+        .map((call) => call.payload.source),
+    ).toEqual(["owner/repo/sub"]);
   });
 
   it("renders preview progress, conflicts, selection, agents and the confirm page", async () => {
@@ -374,7 +334,11 @@ describe("install wizard steps 1-2", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "取消预览" }));
 
     await waitFor(() =>
-      expect(state.cancelCalls).toEqual([{ taskId: "task-1" }]),
+      expect(
+        state.backend
+          .callsOf(API_COMMANDS.cancelTask)
+          .map((call) => call.payload),
+      ).toEqual([{ taskId: "task-1" }]),
     );
     emit(state, event("cancelled", { message: "预览已取消。" }));
     expect(await within(dialog).findByText(/预览已取消/)).toBeInTheDocument();
@@ -391,7 +355,11 @@ describe("install wizard steps 1-2", () => {
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await waitFor(() =>
-      expect(state.cancelCalls).toEqual([{ taskId: "task-1" }]),
+      expect(
+        state.backend
+          .callsOf(API_COMMANDS.cancelTask)
+          .map((call) => call.payload),
+      ).toEqual([{ taskId: "task-1" }]),
     );
     expect(document.activeElement).toBe(
       screen.getByRole("button", { name: "安装 skill" }),
@@ -421,6 +389,8 @@ describe("install wizard steps 1-2", () => {
     expect(previewButton).toBeEnabled();
 
     fireEvent.click(previewButton);
-    await waitFor(() => expect(state.startCalls).toHaveLength(2));
+    await waitFor(() =>
+      expect(state.backend.count(API_COMMANDS.startPreview)).toBe(2),
+    );
   });
 });

@@ -1,7 +1,6 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import App from "./App";
 import { createQueryClient } from "./lib/query-client";
 import type {
@@ -9,12 +8,8 @@ import type {
   InventorySkill,
   InventorySnapshot,
 } from "./lib/types";
+import { createFakeBackend } from "./test/fake-backend";
 import { healthyReport, cliMissingReport } from "./test/fixtures";
-import {
-  detailForSkill,
-  makeDirListing,
-  makeFileContent,
-} from "./test/detail-fixtures";
 import {
   attachment,
   codexAgent,
@@ -37,43 +32,25 @@ function renderApp() {
 }
 
 function mockCommands(
-  inventory: InventorySnapshot | (() => InventorySnapshot),
+  inventory: InventorySnapshot,
   options: {
     inventoryError?: Partial<AppError> & { message: string };
     env?: ReturnType<typeof healthyReport>;
   } = {},
 ) {
-  mockIPC((command, payload) => {
-    if (command === "get_environment") {
-      return options.env ?? healthyReport();
-    }
-    if (command === "get_inventory") {
-      if (options.inventoryError) throw options.inventoryError;
-      return typeof inventory === "function" ? inventory() : inventory;
-    }
-    if (command === "get_skill_detail") {
-      const skillId = (payload as { skillId: string }).skillId;
-      const snapshot =
-        typeof inventory === "function" ? inventory() : inventory;
-      const skill = snapshot.skills.find((entry) => entry.name === skillId);
-      return skill ? detailForSkill(skill) : null;
-    }
-    if (command === "list_skill_dir") {
-      const args = payload as { skillId: string; path?: string };
-      return makeDirListing(args.skillId, args.path ?? "");
-    }
-    if (command === "read_skill_file") {
-      const args = payload as { skillId: string; path: string };
-      return makeFileContent(args.skillId, args.path);
-    }
-    if (
-      command === "open_skill_folder" ||
-      command === "open_skill_file"
-    ) {
-      return null;
-    }
-    throw new Error(`unexpected command: ${command}`);
-  });
+  return createFakeBackend({
+    data: {
+      snapshot: inventory,
+      environment: options.env ?? healthyReport(),
+    },
+    commands: options.inventoryError
+      ? {
+          get_inventory: () => {
+            throw options.inventoryError;
+          },
+        }
+      : undefined,
+  }).install();
 }
 
 function rows(): HTMLElement[] {
@@ -103,10 +80,6 @@ function sidebarButton(name: RegExp): HTMLElement {
 function detail() {
   return within(screen.getByRole("complementary", { name: "详情" }));
 }
-
-afterEach(() => {
-  clearMocks();
-});
 
 describe("inventory list", () => {
   it("renders rows with description, source, orthogonal badges, avatars and time", async () => {

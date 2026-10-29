@@ -1,15 +1,15 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
+import { API_COMMANDS } from "./lib/api";
 import { createQueryClient } from "./lib/query-client";
 import type {
   ActiveMutationInfo,
   EnvReport,
   InterruptedReport,
 } from "./lib/types";
-import { emptySnapshot } from "./test/inventory-fixtures";
+import { createFakeBackend } from "./test/fake-backend";
 import { healthyReport } from "./test/fixtures";
 
 const lifecycle = vi.hoisted(() => ({
@@ -36,28 +36,10 @@ function renderApp() {
   );
 }
 
-interface Call {
-  command: string;
-  payload: unknown;
-}
-
-function mockCommands(report: EnvReport | (() => EnvReport)): Call[] {
-  const calls: Call[] = [];
-  mockIPC((command, payload) => {
-    calls.push({ command, payload });
-    switch (command) {
-      case "get_environment":
-        return typeof report === "function" ? report() : report;
-      case "get_inventory":
-        return emptySnapshot();
-      case "dismiss_interrupted_mutation":
-      case "quit_app":
-        return null;
-      default:
-        throw new Error(`unexpected command: ${command}`);
-    }
-  });
-  return calls;
+function mockCommands(report: EnvReport | (() => EnvReport)) {
+  return createFakeBackend({
+    data: { environment: report },
+  }).install();
 }
 
 const activeMutation: ActiveMutationInfo = {
@@ -91,7 +73,6 @@ const interrupted: InterruptedReport = {
 
 afterEach(() => {
   lifecycle.handler = null;
-  clearMocks();
 });
 
 describe("exit protection", () => {
@@ -114,19 +95,19 @@ describe("exit protection", () => {
   });
 
   it("confirms the exit through the quit_app command", async () => {
-    const calls = mockCommands(healthyReport());
+    const backend = mockCommands(healthyReport());
     renderApp();
     expect(await screen.findByText("环境正常")).toBeInTheDocument();
     act(() => lifecycle.handler?.(activeMutation));
 
     fireEvent.click(await screen.findByRole("button", { name: "确认退出" }));
     await waitFor(() =>
-      expect(calls.some((call) => call.command === "quit_app")).toBe(true),
+      expect(backend.count(API_COMMANDS.quitApp)).toBe(1),
     );
   });
 
   it("continue waiting closes the dialog without invoking quit_app", async () => {
-    const calls = mockCommands(healthyReport());
+    const backend = mockCommands(healthyReport());
     renderApp();
     expect(await screen.findByText("环境正常")).toBeInTheDocument();
     act(() => lifecycle.handler?.(activeMutation));
@@ -135,7 +116,7 @@ describe("exit protection", () => {
       await screen.findByRole("button", { name: "继续等待" }),
     );
     expect(screen.queryByTestId("exit-dialog")).toBeNull();
-    expect(calls.some((call) => call.command === "quit_app")).toBe(false);
+    expect(backend.count(API_COMMANDS.quitApp)).toBe(0);
   });
 });
 
@@ -152,20 +133,16 @@ describe("interrupted mutation warning", () => {
   });
 
   it("dismisses the warning and removes it without re-probing the environment", async () => {
-    const calls = mockCommands(healthyReport({ interrupted }));
+    const backend = mockCommands(healthyReport({ interrupted }));
     renderApp();
     expect(await screen.findByTestId("interrupted-banner")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "知道了" }));
     await waitFor(() =>
-      expect(
-        calls.some((call) => call.command === "dismiss_interrupted_mutation"),
-      ).toBe(true),
+      expect(backend.count(API_COMMANDS.dismissInterruptedMutation)).toBe(1),
     );
     expect(screen.queryByTestId("interrupted-banner")).toBeNull();
-    expect(
-      calls.filter((call) => call.command === "get_environment"),
-    ).toHaveLength(1);
+    expect(backend.count(API_COMMANDS.getEnvironment)).toBe(1);
   });
 
   it("warns about a corrupt marker and missing snapshots", async () => {

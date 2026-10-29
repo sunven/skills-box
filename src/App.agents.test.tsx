@@ -1,22 +1,19 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { createQueryClient } from "./lib/query-client";
 import type {
   AgentAttachment,
-  AttachResult,
   InventoryAgent,
   InventorySnapshot,
-  SkillDetail,
 } from "./lib/types";
-import { healthyReport } from "./test/fixtures";
 import {
-  makeDetail,
-  makeDirListing,
-  makeFileContent,
-} from "./test/detail-fixtures";
+  createFakeBackend,
+  type FakeCall,
+  type FakeHandlers,
+} from "./test/fake-backend";
+import { healthyReport } from "./test/fixtures";
 import {
   attachment,
   claudeAgent,
@@ -28,11 +25,6 @@ import {
 vi.mock("@tauri-apps/plugin-opener", () => ({
   openUrl: vi.fn(() => Promise.resolve()),
 }));
-
-interface Call {
-  command: string;
-  payload: unknown;
-}
 
 const workbuddyAgent: InventoryAgent = {
   id: "workbuddy",
@@ -82,88 +74,28 @@ function snapshotWith(
   });
 }
 
-function detailWith(current: AgentAttachment[]): SkillDetail {
-  return makeDetail({
-    name: "alpha",
-    description: "Alpha 的描述",
-    source: "acme/skills",
-    sourceType: "github",
-    canonicalPath: "~/.agents/skills/alpha",
-    directoryPath: "~/.agents/skills/alpha",
-    attachments: current,
-  });
-}
-
 function mockCommands(options: {
   agents: InventoryAgent[];
   initial?: AgentAttachment[];
-  onAttach?: (payload: { skillId: string; agentId: string }) => AttachResult;
   attachError?: { code: string; message: string; detail?: string };
-}): Call[] {
-  const calls: Call[] = [];
-  let current = options.initial ?? [attachment("claude-code")];
-  mockIPC((command, payload) => {
-    calls.push({ command, payload });
-    switch (command) {
-      case "get_environment":
-        return healthyReport();
-      case "get_inventory":
-        return snapshotWith(current, options.agents);
-      case "get_skill_detail":
-        return detailWith(current);
-      case "list_skill_dir": {
-        const args = payload as { skillId: string; path?: string };
-        return makeDirListing(args.skillId, args.path ?? "");
+}): readonly FakeCall[] {
+  const commands: Partial<FakeHandlers> = options.attachError
+    ? {
+        attach_agent: () => {
+          throw options.attachError!;
+        },
       }
-      case "read_skill_file": {
-        const args = payload as { skillId: string; path: string };
-        return makeFileContent(args.skillId, args.path);
-      }
-      case "open_skill_folder":
-      case "open_skill_file":
-        return null;
-      case "attach_agent": {
-        if (options.attachError) throw options.attachError;
-        const request = payload as { skillId: string; agentId: string };
-        current = [
-          ...current,
-          {
-            ...attachment(request.agentId, "link", undefined, true),
-            agentName:
-              options.agents.find((agent) => agent.id === request.agentId)
-                ?.displayName ?? request.agentId,
-          },
-        ];
-        return (
-          options.onAttach?.(request) ?? {
-            skillId: request.skillId,
-            agentId: request.agentId,
-            agentName: "WorkBuddy",
-            attachmentPath: `~/.workbuddy/skills/${request.skillId}`,
-            canonicalPath: "~/.agents/skills/alpha",
-            logPath: "~/Library/Application Support/com.sunven.skills-box/logs/operations.jsonl",
-          }
-        );
-      }
-      case "add_extra_agent": {
-        const args = payload as {
-          agent: { id: string; displayName: string; skillsDir: string };
-        };
-        return { ...args.agent, builtin: false };
-      }
-      case "remove_extra_agent": {
-        const args = payload as { agentId: string };
-        return {
-          id: args.agentId,
-          displayName: "Acme Agent",
-          detached: [],
-        };
-      }
-      default:
-        throw new Error(`unexpected command: ${command}`);
-    }
-  });
-  return calls;
+    : {};
+  return createFakeBackend({
+    data: {
+      environment: healthyReport(),
+      snapshot: snapshotWith(
+        options.initial ?? [attachment("claude-code")],
+        options.agents,
+      ),
+    },
+    commands,
+  }).install().calls;
 }
 
 async function selectAlpha() {
@@ -179,10 +111,6 @@ async function selectAlpha() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-});
-
-afterEach(() => {
-  clearMocks();
 });
 
 describe("extra agent management", () => {

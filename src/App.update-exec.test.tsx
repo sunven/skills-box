@@ -7,10 +7,9 @@ import {
   within,
 } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import type { Channel } from "@tauri-apps/api/core";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import App from "./App";
+import { API_COMMANDS } from "./lib/api";
 import { createQueryClient } from "./lib/query-client";
 import type {
   InventorySnapshot,
@@ -23,12 +22,12 @@ import type {
   UpdateSkillResult,
   UpdateState,
 } from "./lib/types";
-import { healthyReport } from "./test/fixtures";
 import {
-  detailForSkill,
-  makeDirListing,
-  makeFileContent,
-} from "./test/detail-fixtures";
+  createFakeBackend,
+  type FakeBackend,
+  type FakeTask,
+} from "./test/fake-backend";
+import { healthyReport } from "./test/fixtures";
 import {
   attachment,
   makeAnomalies,
@@ -37,13 +36,7 @@ import {
 } from "./test/inventory-fixtures";
 
 interface ExecState {
-  channels: Channel<TaskEvent>[];
-  indexes: Map<number, number>;
-  updateCalls: string[][];
-  revealCalls: string[];
-  inventoryCalls: number;
-  detailCalls: number;
-  checkCalls: number;
+  backend: FakeBackend;
 }
 
 const LAST_SUCCESS = 1793163988000;
@@ -182,88 +175,43 @@ function baseReport(): UpdateCheckReport {
 }
 
 function setup(): ExecState {
-  const state: ExecState = {
-    channels: [],
-    indexes: new Map(),
-    updateCalls: [],
-    revealCalls: [],
-    inventoryCalls: 0,
-    detailCalls: 0,
-    checkCalls: 0,
-  };
-  const snapshot = baseSnapshot();
-  const report = baseReport();
-  mockIPC((command, payload) => {
-    if (command === "get_environment") return healthyReport();
-    if (command === "get_inventory") {
-      state.inventoryCalls += 1;
-      return snapshot;
-    }
-    if (command === "get_skill_detail") {
-      state.detailCalls += 1;
-      const skillId = (payload as { skillId: string }).skillId;
-      const skill = snapshot.skills.find((entry) => entry.name === skillId);
-      return skill ? detailForSkill(skill) : null;
-    }
-    if (command === "list_skill_dir") {
-      const args = payload as { skillId: string; path?: string };
-      return makeDirListing(args.skillId, args.path ?? "");
-    }
-    if (command === "read_skill_file") {
-      const args = payload as { skillId: string; path: string };
-      return makeFileContent(args.skillId, args.path);
-    }
-    if (command === "open_skill_folder" || command === "open_skill_file") {
-      return null;
-    }
-    if (command === "check_updates") {
-      state.checkCalls += 1;
-      return report;
-    }
-    if (command === "start_update") {
-      const args = payload as {
-        skillIds: string[];
-        onEvent: Channel<TaskEvent>;
-      };
-      state.updateCalls.push(args.skillIds);
-      state.channels.push(args.onEvent);
-      return `task-update-${state.channels.length}`;
-    }
-    if (command === "reveal_app_data") {
-      state.revealCalls.push((payload as { kind: string }).kind);
-      return null;
-    }
-    if (command === "cancel_task") {
-      return { taskId: "task-update", accepted: true, message: "已请求取消" };
-    }
-    throw new Error(`unexpected command: ${command}`);
-  });
+  const backend = createFakeBackend({
+    data: {
+      environment: healthyReport(),
+      snapshot: baseSnapshot(),
+      updateReport: baseReport(),
+    },
+  }).install();
   render(
     <QueryClientProvider client={createQueryClient()}>
       <App />
     </QueryClientProvider>,
   );
-  return state;
+  return { backend };
 }
 
-function emitOn(
-  state: ExecState,
-  channel: Channel<TaskEvent> | undefined,
-  event: TaskEvent,
-) {
-  if (!channel) throw new Error("channel is not available");
-  const internals = (
-    window as unknown as {
-      __TAURI_INTERNALS__: {
-        runCallback: (id: number, data: unknown) => void;
-      };
-    }
-  ).__TAURI_INTERNALS__;
-  const index = state.indexes.get(channel.id) ?? 0;
-  state.indexes.set(channel.id, index + 1);
-  act(() => {
-    internals.runCallback(channel.id, { index, message: event });
-  });
+function updateTask(state: ExecState, index: number): FakeTask {
+  const task = state.backend.tasks.filter(
+    (entry) => entry.command === API_COMMANDS.startUpdate,
+  )[index];
+  if (!task) throw new Error("channel is not available");
+  return task;
+}
+
+function emitOn(state: ExecState, index: number, event: TaskEvent) {
+  act(() => updateTask(state, index).emit(event));
+}
+
+function updateCalls(state: ExecState): string[][] {
+  return state.backend
+    .callsOf(API_COMMANDS.startUpdate)
+    .map((call) => call.payload.skillIds);
+}
+
+function revealCalls(state: ExecState): string[] {
+  return state.backend
+    .callsOf(API_COMMANDS.revealAppData)
+    .map((call) => call.payload.kind);
 }
 
 function taskEvent(
@@ -346,14 +294,13 @@ async function openSingleUpdate(name: string) {
   return screen.getByRole("dialog", { name: `更新 skill · ${name}` });
 }
 
-afterEach(() => {
-  clearMocks();
-});
-
 describe("update execution", () => {
   it("confirms a single update, backs up, updates and reveals backup/log paths", async () => {
     const state = setup();
     await checkUpdates();
+    const checksBeforeUpdate = state.backend.count(
+      API_COMMANDS.checkUpdates,
+    );
     const dialog = await openSingleUpdate("alpha");
 
     expect(within(dialog).getByTestId("update-single-confirm")).toHaveTextContent(
@@ -383,12 +330,12 @@ describe("update execution", () => {
     expect(within(dialog).queryByLabelText("确认本地改动")).not.toBeInTheDocument();
 
     fireEvent.click(within(dialog).getByRole("button", { name: "开始更新" }));
-    await waitFor(() => expect(state.updateCalls).toEqual([["alpha"]]));
-    expect(state.updateCalls[0]).toEqual(["alpha"]);
+    await waitFor(() => expect(updateCalls(state)).toEqual([["alpha"]]));
+    expect(updateCalls(state)[0]).toEqual(["alpha"]);
 
     emitOn(
       state,
-      state.channels[0],
+      0,
       taskEvent("backup", {
         message: "正在备份 alpha…",
         skill: "alpha",
@@ -399,7 +346,7 @@ describe("update execution", () => {
     expect(within(dialog).getByText("正在备份")).toBeInTheDocument();
     emitOn(
       state,
-      state.channels[0],
+      0,
       completed(
         updateTaskResult("success", [
           skillResult("alpha", "updated", {
@@ -428,7 +375,7 @@ describe("update execution", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "打开备份目录" }));
     fireEvent.click(within(dialog).getByRole("button", { name: "打开日志目录" }));
     await waitFor(() =>
-      expect(state.revealCalls).toEqual(["backups", "logs"]),
+      expect(revealCalls(state)).toEqual(["backups", "logs"]),
     );
 
     // Successful updates are patched to current without an automatic check.
@@ -437,10 +384,12 @@ describe("update execution", () => {
         within(row("alpha")).getByTestId("update-badge"),
       ).toHaveTextContent("已是最新");
     });
-    expect(state.inventoryCalls).toBeGreaterThanOrEqual(2);
-    await waitFor(() => expect(state.detailCalls).toBeGreaterThanOrEqual(2));
-    // Update execution must never trigger an automatic check.
-    expect(state.checkCalls).toBe(1);
+    expect(state.backend.count(API_COMMANDS.getInventory)).toBeGreaterThanOrEqual(2);
+    await waitFor(() => expect(state.backend.count(API_COMMANDS.getSkillDetail)).toBeGreaterThanOrEqual(2));
+    // Update execution must never trigger another automatic check.
+    expect(state.backend.count(API_COMMANDS.checkUpdates)).toBe(
+      checksBeforeUpdate,
+    );
 
     fireEvent.click(within(dialog).getByRole("button", { name: "完成" }));
     await waitFor(() =>
@@ -461,18 +410,18 @@ describe("update execution", () => {
     const start = within(dialog).getByRole("button", { name: "开始更新" });
     expect(start).toBeDisabled();
     fireEvent.click(start);
-    expect(state.updateCalls).toHaveLength(0);
+    expect(updateCalls(state)).toHaveLength(0);
 
     fireEvent.click(within(dialog).getByLabelText("确认本地改动"));
     expect(start).toBeEnabled();
     fireEvent.click(start);
     await waitFor(() =>
-      expect(state.updateCalls).toEqual([["modified-skill"]]),
+      expect(updateCalls(state)).toEqual([["modified-skill"]]),
     );
 
     emitOn(
       state,
-      state.channels[0],
+      0,
       completed(
         updateTaskResult("success", [
           skillResult("modified-skill", "updated", {
@@ -500,7 +449,7 @@ describe("update execution", () => {
     expect(start).toBeDisabled();
     fireEvent.click(within(dialog).getByLabelText("确认本地改动"));
     expect(start).toBeEnabled();
-    expect(state.updateCalls).toHaveLength(0);
+    expect(updateCalls(state)).toHaveLength(0);
     fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
   });
 
@@ -524,20 +473,23 @@ describe("update execution", () => {
     const start = within(dialog).getByRole("button", { name: "开始更新" });
     expect(start).toBeEnabled();
     fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
-    expect(state.updateCalls).toHaveLength(0);
+    expect(updateCalls(state)).toHaveLength(0);
   });
 
   it("keeps completed skill results when a between-skill cancel arrives", async () => {
     const state = setup();
     await checkUpdates();
+    const checksBeforeUpdate = state.backend.count(
+      API_COMMANDS.checkUpdates,
+    );
     const dialog = await openSingleUpdate("alpha");
 
     fireEvent.click(within(dialog).getByRole("button", { name: "开始更新" }));
-    await waitFor(() => expect(state.updateCalls).toHaveLength(1));
+    await waitFor(() => expect(updateCalls(state)).toHaveLength(1));
 
     emitOn(
       state,
-      state.channels[0],
+      0,
       taskEvent("cancelled", {
         message: "操作已取消。",
         completed: 1,
@@ -561,8 +513,10 @@ describe("update execution", () => {
     expect(within(dialog).getByRole("button", { name: "关闭" })).toBeInTheDocument();
     // A cancelled task still reconciles inventory/detail; the patched report
     // keeps the completed row current without an automatic check.
-    await waitFor(() => expect(state.inventoryCalls).toBeGreaterThanOrEqual(2));
-    expect(state.checkCalls).toBe(1);
+    await waitFor(() => expect(state.backend.count(API_COMMANDS.getInventory)).toBeGreaterThanOrEqual(2));
+    expect(state.backend.count(API_COMMANDS.checkUpdates)).toBe(
+      checksBeforeUpdate,
+    );
     fireEvent.click(within(dialog).getByRole("button", { name: "关闭" }));
   });
 
@@ -598,12 +552,12 @@ describe("update execution", () => {
 
     fireEvent.click(within(dialog).getByRole("button", { name: /开始更新 \(2\)/ }));
     await waitFor(() =>
-      expect(state.updateCalls).toEqual([["alpha", "copy-mount"]]),
+      expect(updateCalls(state)).toEqual([["alpha", "copy-mount"]]),
     );
 
     emitOn(
       state,
-      state.channels[0],
+      0,
       completed(
         updateTaskResult(
           "partial",
@@ -643,7 +597,7 @@ describe("update execution", () => {
       within(resultRows[1]!).getByRole("button", { name: "重试" }),
     );
     await waitFor(() =>
-      expect(state.updateCalls).toEqual([
+      expect(updateCalls(state)).toEqual([
         ["alpha", "copy-mount"],
         ["copy-mount"],
       ]),
@@ -651,7 +605,7 @@ describe("update execution", () => {
 
     emitOn(
       state,
-      state.channels[1],
+      1,
       completed(
         updateTaskResult("success", [
           skillResult("copy-mount", "updated", {

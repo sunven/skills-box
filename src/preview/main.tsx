@@ -1,10 +1,9 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { mockIPC } from "@tauri-apps/api/mocks";
 import App from "../App";
 import { createQueryClient } from "../lib/query-client";
-import type { TaskEvent, TaskResult } from "../lib/types";
+import { createFakeBackend } from "../test/fake-backend";
 import {
   environment,
   listSkillDir,
@@ -16,163 +15,18 @@ import {
 } from "./fixtures";
 import "../index.css";
 
-interface MockChannel {
-  id: number;
-  onmessage?: (message: TaskEvent) => void;
-}
-
-const messageIndex = new WeakMap<object, number>();
-
-function emit(channel: MockChannel, event: TaskEvent) {
-  const index = messageIndex.get(channel) ?? 0;
-  messageIndex.set(channel, index + 1);
-  (
-    window as unknown as {
-      __TAURI_INTERNALS__: {
-        runCallback: (id: number, data: unknown) => void;
-      };
-    }
-  ).__TAURI_INTERNALS__.runCallback(channel.id, { index, message: event });
-}
-
-function finishedResult(
-  action: TaskResult["action"],
-  names: string[],
-  status: "installed" | "updated",
-): TaskResult {
-  return {
-    action,
-    overall: "success",
-    skills: names.map((name) => ({ name, status })),
-    warnings: [],
-    backupPath:
-      "~/Library/Application Support/com.sunven.skills-box/backups/2026-10-28T02-18-42",
-    logPath:
-      "~/Library/Application Support/com.sunven.skills-box/logs/2026-10-28T02-18-42.log",
-    startedAt: Date.now() - 4200,
-    finishedAtEpochMs: Date.now(),
-    preview: action === "preview" ? previewSummary : undefined,
-  };
-}
-
-function simulate(
-  channel: MockChannel,
-  kind: "preview" | "install" | "update",
-  names: string[],
-) {
-  window.setTimeout(() => {
-    emit(channel, {
-      taskId: `preview-${kind}`,
-      phase: kind === "preview" ? "cloning" : "preparing",
-      message: kind === "preview" ? "正在读取仓库…" : "正在准备写入…",
-      completed: 0,
-      total: kind === "preview" ? 1 : names.length,
-    });
-  }, 80);
-  window.setTimeout(() => {
-    const result = finishedResult(
-      kind,
-      kind === "preview" ? [] : names,
-      kind === "update" ? "updated" : "installed",
-    );
-    emit(channel, {
-      taskId: `preview-${kind}`,
-      phase: "completed",
-      message:
-        kind === "preview"
-          ? `找到 ${previewSummary.skills.length} 个 skill`
-          : `${names.length} 个 skill 已完成`,
-      completed: kind === "preview" ? 1 : names.length,
-      total: kind === "preview" ? 1 : names.length,
-      result,
-    });
-  }, 320);
-}
-
-mockIPC(
-  (command, payload) => {
-    switch (command) {
-      case "get_environment":
-        return environment;
-      case "get_inventory":
-        return snapshot;
-      case "get_skill_detail": {
-        const args = payload as { skillId?: string };
-        return skillDetail(args.skillId ?? "agent-browser");
-      }
-      case "list_skill_dir": {
-        const args = payload as { skillId?: string; path?: string };
-        return listSkillDir(
-          args.skillId ?? "agent-browser",
-          args.path ?? "",
-        );
-      }
-      case "read_skill_file": {
-        const args = payload as { skillId?: string; path: string };
-        return readSkillFile(args.skillId ?? "agent-browser", args.path);
-      }
-      case "check_updates":
-        return updateReport;
-      case "start_preview": {
-        const args = payload as { source: string; onEvent: MockChannel };
-        simulate(args.onEvent, "preview", []);
-        return "preview-task";
-      }
-      case "start_install": {
-        const args = payload as {
-          request: { skills: string[] };
-          onEvent: MockChannel;
-        };
-        simulate(args.onEvent, "install", args.request.skills);
-        return "install-task";
-      }
-      case "start_update": {
-        const args = payload as { skillIds: string[]; onEvent: MockChannel };
-        simulate(args.onEvent, "update", args.skillIds);
-        return "update-task";
-      }
-      case "get_active_mutation":
-        return null;
-      case "attach_agent": {
-        const args = payload as { skillId: string; agentId: string };
-        return {
-          skillId: args.skillId,
-          agentId: args.agentId,
-          agentName: args.agentId === "workbuddy" ? "WorkBuddy" : args.agentId,
-          attachmentPath: `~/${args.agentId}/skills/${args.skillId}`,
-          canonicalPath: `~/.agents/skills/${args.skillId}`,
-          logPath: "~/Library/Application Support/com.sunven.skills-box/logs/preview.log",
-        };
-      }
-      case "add_extra_agent": {
-        const args = payload as {
-          agent: { id: string; displayName: string; skillsDir: string };
-        };
-        return { ...args.agent, builtin: false };
-      }
-      case "remove_extra_agent": {
-        const args = payload as { agentId: string };
-        return {
-          id: args.agentId,
-          displayName: "Acme Agent",
-          detached: ["agent-browser"],
-        };
-      }
-      case "reveal_app_data":
-      case "open_skill_folder":
-      case "open_skill_file":
-      case "open_external_url":
-      case "dismiss_interrupted_mutation":
-      case "quit_app":
-        return null;
-      case "cancel_task":
-        return { taskId: "task", accepted: true, message: "已请求取消" };
-      default:
-        throw new Error(`preview: unmocked command ${command}`);
-    }
+createFakeBackend({
+  data: {
+    environment,
+    snapshot,
+    detail: (skillId) => skillDetail(skillId),
+    listDir: listSkillDir,
+    readFile: readSkillFile,
+    updateReport,
+    preview: previewSummary,
   },
-  { shouldMockEvents: true },
-);
+  autoTasks: true,
+}).install({ shouldMockEvents: true });
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

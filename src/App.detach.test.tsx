@@ -1,21 +1,15 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { createQueryClient } from "./lib/query-client";
-import type {
-  AgentAttachment,
-  DetachResult,
-  InventorySnapshot,
-  SkillDetail,
-} from "./lib/types";
-import { healthyReport } from "./test/fixtures";
+import type { AgentAttachment, InventorySnapshot } from "./lib/types";
 import {
-  makeDetail,
-  makeDirListing,
-  makeFileContent,
-} from "./test/detail-fixtures";
+  createFakeBackend,
+  type FakeCall,
+  type FakeHandlers,
+} from "./test/fake-backend";
+import { healthyReport } from "./test/fixtures";
 import {
   attachment,
   makeAnomalies,
@@ -26,11 +20,6 @@ import {
 vi.mock("@tauri-apps/plugin-opener", () => ({
   openUrl: vi.fn(() => Promise.resolve()),
 }));
-
-interface Call {
-  command: string;
-  payload: unknown;
-}
 
 function renderApp() {
   const queryClient = createQueryClient();
@@ -63,75 +52,24 @@ function snapshotWith(current: AgentAttachment[]): InventorySnapshot {
   });
 }
 
-function detailWith(current: AgentAttachment[]): SkillDetail {
-  return makeDetail({
-    name: "alpha",
-    description: "Alpha 的描述",
-    source: "acme/skills",
-    sourceType: "github",
-    canonicalPath: "~/.agents/skills/alpha",
-    directoryPath: "~/.agents/skills/alpha",
-    attachments: current,
-  });
-}
-
-function detachResult(agentId: string, agentName: string): DetachResult {
-  return {
-    skillId: "alpha",
-    agentId,
-    agentName,
-    mode: "copy",
-    attachmentPath: `~/.${agentId}/skills/alpha`,
-    canonicalPath: "~/.agents/skills/alpha",
-    backupPath: "~/Library/Application Support/com.sunven.skills-box/backups/1-detach-alpha",
-    logPath: "~/Library/Application Support/com.sunven.skills-box/logs/operations.jsonl",
-    remainingAgents: [],
-    unattached: true,
-  };
-}
-
 function mockCommands(options: {
   initial?: AgentAttachment[];
-  onDetach?: (payload: { skillId: string; agentId: string }) => DetachResult;
   detachError?: { code: string; message: string; detail?: string; hint?: string };
-}): Call[] {
-  const calls: Call[] = [];
-  let current = options.initial ?? attachments;
-  mockIPC((command, payload) => {
-    calls.push({ command, payload });
-    switch (command) {
-      case "get_environment":
-        return healthyReport();
-      case "get_inventory":
-        return snapshotWith(current);
-      case "get_skill_detail":
-        return detailWith(current);
-      case "list_skill_dir": {
-        const args = payload as { skillId: string; path?: string };
-        return makeDirListing(args.skillId, args.path ?? "");
+}): readonly FakeCall[] {
+  const commands: Partial<FakeHandlers> = options.detachError
+    ? {
+        detach_agent: () => {
+          throw options.detachError!;
+        },
       }
-      case "read_skill_file": {
-        const args = payload as { skillId: string; path: string };
-        return makeFileContent(args.skillId, args.path);
-      }
-      case "open_skill_folder":
-      case "open_skill_file":
-        return null;
-      case "detach_agent": {
-        if (options.detachError) throw options.detachError;
-        const request = payload as { skillId: string; agentId: string };
-        current = current.filter(
-          (entry) => entry.agentId !== request.agentId,
-        );
-        return options.onDetach
-          ? options.onDetach(request)
-          : detachResult(request.agentId, "Qoder");
-      }
-      default:
-        throw new Error(`unexpected command: ${command}`);
-    }
-  });
-  return calls;
+    : {};
+  return createFakeBackend({
+    data: {
+      environment: healthyReport(),
+      snapshot: snapshotWith(options.initial ?? attachments),
+    },
+    commands,
+  }).install().calls;
 }
 
 function detailPane() {
@@ -151,10 +89,6 @@ async function selectAlpha() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-});
-
-afterEach(() => {
-  clearMocks();
 });
 
 describe("detach from one agent", () => {
@@ -304,10 +238,10 @@ describe("detach from one agent", () => {
       "~/.claude/skills/beta",
       false,
     );
-    mockIPC((command, payload) => {
-      if (command === "get_environment") return healthyReport();
-      if (command === "get_inventory") {
-        return makeSnapshot({
+    createFakeBackend({
+      data: {
+        environment: healthyReport(),
+        snapshot: makeSnapshot({
           skills: [
             makeSkill({
               name: "beta",
@@ -324,28 +258,9 @@ describe("detach from one agent", () => {
             }),
           ],
           anomalies: makeAnomalies(),
-        });
-      }
-      if (command === "get_skill_detail") {
-        const skillId = (payload as { skillId: string }).skillId;
-        return makeDetail({
-          name: skillId,
-          management: skillId === "beta" ? "copy_only" : "unmanaged",
-          canonicalPath: null,
-          directoryPath: `~/.claude/skills/${skillId}`,
-          attachments: [copyAttachment],
-        });
-      }
-      if (command === "list_skill_dir") {
-        const args = payload as { skillId: string; path?: string };
-        return makeDirListing(args.skillId, args.path ?? "");
-      }
-      if (command === "read_skill_file") {
-        const args = payload as { skillId: string; path: string };
-        return makeFileContent(args.skillId, args.path);
-      }
-      throw new Error(`unexpected command: ${command}`);
-    });
+        }),
+      },
+    }).install();
     renderApp();
     await screen.findByText("beta");
     for (const name of ["beta", "gamma"]) {

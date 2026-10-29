@@ -6,8 +6,7 @@ import {
   within,
 } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { createQueryClient } from "./lib/query-client";
 import type {
@@ -17,7 +16,11 @@ import type {
   SkillDirListing,
   SkillFileContent,
 } from "./lib/types";
-import { healthyReport } from "./test/fixtures";
+import {
+  createFakeBackend,
+  type FakeBackendData,
+  type FakeHandlers,
+} from "./test/fake-backend";
 import {
   IMAGE_DATA_URL,
   makeDetail,
@@ -31,11 +34,6 @@ import {
   makeSkill,
   makeSnapshot,
 } from "./test/inventory-fixtures";
-
-interface Call {
-  command: string;
-  payload: unknown;
-}
 
 function renderApp() {
   const queryClient = createQueryClient();
@@ -103,46 +101,42 @@ function mockCommands(
     fileError?: { code: string; message: string; hint?: string };
     openError?: { code: string; message: string };
   } = {},
-): Call[] {
-  const calls: Call[] = [];
-  const snapshot = options.snapshot ?? baseSnapshot();
-  mockIPC((command, payload) => {
-    calls.push({ command, payload });
-    switch (command) {
-      case "get_environment":
-        return healthyReport();
-      case "get_inventory":
-        return typeof snapshot === "function" ? snapshot() : snapshot;
-      case "get_skill_detail": {
-        if (options.detailError) throw options.detailError;
-        const skillId = (payload as { skillId: string }).skillId;
-        const detail = options.detail ?? baseDetail();
-        return typeof detail === "function" ? detail(skillId) : detail;
-      }
-      case "list_skill_dir": {
-        const args = payload as { skillId: string; path?: string };
-        return options.listing
-          ? options.listing(args.skillId, args.path ?? "")
-          : makeDirListing(args.skillId, args.path ?? "");
-      }
-      case "read_skill_file": {
-        if (options.fileError) throw options.fileError;
-        const args = payload as { skillId: string; path: string };
-        return options.file
-          ? options.file(args.skillId, args.path)
-          : makeFileContent(args.skillId, args.path);
-      }
-      case "open_skill_folder":
-      case "open_skill_file":
-        if (options.openError) throw options.openError;
-        return null;
-      case "open_external_url":
-        return null;
-      default:
-        throw new Error(`unexpected command: ${command}`);
-    }
-  });
-  return calls;
+) {
+  const snapshot =
+    typeof options.snapshot === "function"
+      ? options.snapshot()
+      : (options.snapshot ?? baseSnapshot());
+  const data: Partial<FakeBackendData> = {
+    snapshot,
+    listDir: options.listing ?? makeDirListing,
+    readFile: options.file ?? makeFileContent,
+  };
+  if (options.detail) {
+    data.detail = (skillId) =>
+      typeof options.detail === "function"
+        ? options.detail(skillId)
+        : options.detail!;
+  }
+  const commands: Partial<FakeHandlers> = {};
+  if (options.detailError) {
+    commands.get_skill_detail = () => {
+      throw options.detailError!;
+    };
+  }
+  if (options.fileError) {
+    commands.read_skill_file = () => {
+      throw options.fileError!;
+    };
+  }
+  if (options.openError) {
+    commands.open_skill_folder = () => {
+      throw options.openError!;
+    };
+    commands.open_skill_file = () => {
+      throw options.openError!;
+    };
+  }
+  return createFakeBackend({ data, commands }).install().calls;
 }
 
 function detailPane() {
@@ -198,10 +192,6 @@ function toolbar() {
 
 beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn();
-});
-
-afterEach(() => {
-  clearMocks();
 });
 
 describe("skill detail drawer", () => {
@@ -796,30 +786,22 @@ describe("skill detail drawer", () => {
 
   it("keeps the drawer usable when detail loading fails and offers a retry", async () => {
     let attempts = 0;
-    mockIPC((command, payload) => {
-      if (command === "get_environment") return healthyReport();
-      if (command === "get_inventory") return baseSnapshot();
-      if (command === "get_skill_detail") {
-        attempts += 1;
-        if (attempts === 1) {
-          throw {
-            code: "skill.read_failed",
-            message: "读取 skill 详情失败。",
-            hint: "请检查该 skill 目录的权限后重试。",
-          };
-        }
-        return baseDetail();
-      }
-      if (command === "list_skill_dir") {
-        const args = payload as { skillId: string; path?: string };
-        return makeDirListing(args.skillId, args.path ?? "");
-      }
-      if (command === "read_skill_file") {
-        const args = payload as { skillId: string; path: string };
-        return makeFileContent(args.skillId, args.path);
-      }
-      throw new Error(`unexpected command: ${command}`);
-    });
+    createFakeBackend({
+      data: {
+        snapshot: baseSnapshot(),
+        detail: () => {
+          attempts += 1;
+          if (attempts === 1) {
+            throw {
+              code: "skill.read_failed",
+              message: "读取 skill 详情失败。",
+              hint: "请检查该 skill 目录的权限后重试。",
+            };
+          }
+          return baseDetail();
+        },
+      },
+    }).install();
     renderApp();
     await screen.findByText("alpha");
     selectAlphaSync();
