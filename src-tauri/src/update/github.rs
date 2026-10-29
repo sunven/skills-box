@@ -11,9 +11,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+use crate::git_tree::{self, GitMode, GitTreeEntry};
+
 pub const GITHUB_API_BASE: &str = "https://api.github.com";
 pub const GITHUB_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-pub const EMPTY_TREE_SHA: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -84,36 +85,18 @@ impl RemoteTree {
             return None;
         }
 
-        let mut rows: Vec<GitTreeRow> = Vec::new();
+        let mut entries = Vec::new();
         for (path, entry) in &self.entries {
             let Some(name) = direct_child_name(path, &folder) else {
                 continue;
             };
             let mode = git_mode(&entry.kind, entry.mode.as_deref())?;
-            let sha = decode_sha(&entry.sha)?;
-            let mut key = name.clone().into_bytes();
-            key.push(if entry.kind == "tree" { b'/' } else { 0 });
-            rows.push((key, name.into_bytes(), mode, sha));
+            let sha = git_tree::decode_sha(&entry.sha)?;
+            entries.push(GitTreeEntry::new(name.into_bytes(), mode, sha));
         }
-
-        if rows.is_empty() {
-            return Some(EMPTY_TREE_SHA.to_string());
-        }
-        rows.sort_by(|left, right| left.0.cmp(&right.0));
-
-        let mut body = Vec::new();
-        for (_, name, mode, sha) in rows {
-            body.extend_from_slice(mode.as_bytes());
-            body.push(b' ');
-            body.extend_from_slice(&name);
-            body.push(0);
-            body.extend_from_slice(&sha);
-        }
-        Some(git_object_hash(b"tree", &body))
+        Some(git_tree::hex(&git_tree::build_tree_sha(entries)))
     }
 }
-
-type GitTreeRow = (Vec<u8>, Vec<u8>, &'static str, [u8; 20]);
 
 /// Normalize a lock `skillPath`/tree path: forward slashes, no `.`/`..`
 /// segments, no leading/trailing slashes.
@@ -151,46 +134,17 @@ fn direct_child_name(path: &str, folder: &str) -> Option<String> {
     Some(rest.to_string())
 }
 
-fn git_mode(kind: &str, mode: Option<&str>) -> Option<&'static str> {
+fn git_mode(kind: &str, mode: Option<&str>) -> Option<GitMode> {
     match kind {
-        "tree" => Some("40000"),
-        "commit" => Some("160000"),
+        "tree" => Some(GitMode::Tree),
+        "commit" => Some(GitMode::Submodule),
         "blob" => match mode {
-            Some("100755") => Some("100755"),
-            Some("120000") => Some("120000"),
-            _ => Some("100644"),
+            Some("100755") => Some(GitMode::Executable),
+            Some("120000") => Some(GitMode::Symlink),
+            _ => Some(GitMode::Blob),
         },
         _ => None,
     }
-}
-
-fn decode_sha(value: &str) -> Option<[u8; 20]> {
-    if value.len() != 40 {
-        return None;
-    }
-    let mut output = [0u8; 20];
-    for (index, byte) in output.iter_mut().enumerate() {
-        let start = index * 2;
-        *byte = u8::from_str_radix(value.get(start..start + 2)?, 16).ok()?;
-    }
-    Some(output)
-}
-
-fn git_object_hash(kind: &[u8], body: &[u8]) -> String {
-    use sha1::{Digest, Sha1};
-
-    let mut hasher = Sha1::new();
-    hasher.update(kind);
-    hasher.update(b" ");
-    hasher.update(body.len().to_string().as_bytes());
-    hasher.update([0]);
-    hasher.update(body);
-    let digest = hasher.finalize();
-    let mut output = String::with_capacity(40);
-    for byte in digest {
-        output.push_str(&format!("{byte:02x}"));
-    }
-    output
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -325,7 +279,7 @@ pub fn parse_tree_response(raw: &str) -> Result<RemoteTree, GitHubFetchError> {
 
     let response: TreeResponse = serde_json::from_str(raw)
         .map_err(|error| GitHubFetchError::parse(format!("GitHub tree 响应无法解析：{error}")))?;
-    if !crate::baseline::is_git_tree_hash(&response.sha) {
+    if !git_tree::is_git_tree_hash(&response.sha) {
         return Err(GitHubFetchError::parse("GitHub tree 响应缺少有效的根 SHA"));
     }
 
@@ -470,6 +424,7 @@ fn truncate_detail(body: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git_tree::EMPTY_TREE_SHA;
 
     const ROOT: &str = "1aee802d9139d4df84d017de44fb1b37a7b614e9";
     const SKILLS_TREE: &str = "12b71a9df5501f6747107c154020a4026ad6d014";

@@ -112,6 +112,10 @@ _Avoid_: auto-update, sync, upgrade
 A skill whose upstream tree hash differs from the hash recorded in its lock entry.
 _Avoid_: outdated skill, dirty skill
 
+**Update target**:
+The normalized GitHub source and optional safe ref resolved from a lock entry; update checks and update execution share it.
+_Avoid_: source spec, repo ref
+
 **Local modification**:
 A difference between a skill's current files and the baseline recorded at its last install or update.
 _Avoid_: dirty copy, user edit

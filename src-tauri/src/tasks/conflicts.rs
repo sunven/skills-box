@@ -56,7 +56,8 @@ pub fn find_conflicts(
         // Present in the strict v3 lock but absent from the snapshot: a stale
         // lock entry. Never install over it silently.
         if let Some(entry) = lock.get(name) {
-            let source = crate::tasks::update::normalized_lock_source(entry)
+            let source = crate::update_target::resolve_source(entry)
+                .ok()
                 .or_else(|| Some(entry.source.clone()));
             conflicts.insert(
                 (*name).to_string(),

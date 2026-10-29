@@ -10,6 +10,7 @@ pub mod detach;
 pub mod detail;
 pub mod env;
 pub mod error;
+pub mod git_tree;
 pub mod interrupted;
 pub mod inventory;
 pub mod lock;
@@ -21,6 +22,7 @@ pub mod security;
 pub mod tasks;
 pub mod timeouts;
 pub mod update;
+pub mod update_target;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

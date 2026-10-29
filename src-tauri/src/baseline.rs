@@ -24,10 +24,10 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use sha1::Sha1;
 use sha2::{Digest, Sha256};
 
 use crate::error::AppError;
+use crate::git_tree::{self, GitMode, GitTreeEntry, is_git_tree_hash};
 use crate::paths::AppPaths;
 
 pub const BASELINE_VERSION: u32 = 1;
@@ -350,18 +350,12 @@ fn executable_marker(metadata: &fs::Metadata) -> u8 {
 /// installed copy and skipping installer-excluded entries. Used only as a
 /// first-scan heuristic against a 40-char lock hash.
 pub fn git_tree_hash(root: &Path) -> io::Result<String> {
-    let hash = hash_git_tree(root)?.unwrap_or_else(empty_tree_hash);
-    Ok(hex(&hash))
+    let hash = hash_git_tree(root)?.unwrap_or_else(|| git_tree::object_sha(b"tree", &[]));
+    Ok(git_tree::hex(&hash))
 }
-
-fn empty_tree_hash() -> [u8; 20] {
-    git_object_hash(b"tree", &[])
-}
-
-type GitTreeRow = (Vec<u8>, Vec<u8>, &'static str, [u8; 20]);
 
 fn hash_git_tree(dir: &Path) -> io::Result<Option<[u8; 20]>> {
-    let mut rows: Vec<GitTreeRow> = Vec::new();
+    let mut entries: Vec<GitTreeEntry> = Vec::new();
     for entry in read_sorted(dir)? {
         let name_os = entry.file_name();
         let name = name_os.to_string_lossy().into_owned();
@@ -374,55 +368,35 @@ fn hash_git_tree(dir: &Path) -> io::Result<Option<[u8; 20]>> {
         if file_type.is_symlink() {
             let target = fs::read_link(&child)?;
             let target = target.to_string_lossy();
-            let hash = git_object_hash(b"blob", target.as_bytes());
-            let mut key = name_bytes.clone();
-            key.push(0);
-            rows.push((key, name_bytes, "120000", hash));
+            entries.push(GitTreeEntry::new(
+                name_bytes,
+                GitMode::Symlink,
+                git_tree::object_sha(b"blob", target.as_bytes()),
+            ));
         } else if file_type.is_dir() {
             if let Some(hash) = hash_git_tree(&child)? {
-                let mut key = name_bytes.clone();
-                key.push(b'/');
-                rows.push((key, name_bytes, "40000", hash));
+                entries.push(GitTreeEntry::new(name_bytes, GitMode::Tree, hash));
             }
         } else if file_type.is_file() {
             let metadata = entry.metadata()?;
             let contents = fs::read(&child)?;
-            let hash = git_object_hash(b"blob", &contents);
             let mode = if metadata.permissions().mode() & 0o111 != 0 {
-                "100755"
+                GitMode::Executable
             } else {
-                "100644"
+                GitMode::Blob
             };
-            let mut key = name_bytes.clone();
-            key.push(0);
-            rows.push((key, name_bytes, mode, hash));
+            entries.push(GitTreeEntry::new(
+                name_bytes,
+                mode,
+                git_tree::object_sha(b"blob", &contents),
+            ));
         }
     }
 
-    if rows.is_empty() {
+    if entries.is_empty() {
         return Ok(None);
     }
-    rows.sort_by(|left, right| left.0.cmp(&right.0));
-
-    let mut body = Vec::new();
-    for (_, name, mode, hash) in rows {
-        body.extend_from_slice(mode.as_bytes());
-        body.push(b' ');
-        body.extend_from_slice(&name);
-        body.push(0);
-        body.extend_from_slice(&hash);
-    }
-    Ok(Some(git_object_hash(b"tree", &body)))
-}
-
-fn git_object_hash(kind: &[u8], body: &[u8]) -> [u8; 20] {
-    let mut hasher = Sha1::new();
-    hasher.update(kind);
-    hasher.update(b" ");
-    hasher.update(body.len().to_string().as_bytes());
-    hasher.update([0]);
-    hasher.update(body);
-    hasher.finalize().into()
+    Ok(Some(git_tree::build_tree_sha(entries)))
 }
 
 fn compare_lock_hash(path: &Path, lock_hash: Option<&str>) -> Option<bool> {
@@ -433,10 +407,6 @@ fn compare_lock_hash(path: &Path, lock_hash: Option<&str>) -> Option<bool> {
     git_tree_hash(path)
         .ok()
         .map(|local| local.eq_ignore_ascii_case(hash))
-}
-
-pub fn is_git_tree_hash(hash: &str) -> bool {
-    hash.len() == 40 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 /// Warning appended when an operation succeeded but its baseline could not be

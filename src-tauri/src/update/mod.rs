@@ -618,7 +618,7 @@ fn checkable_target(entry: &LockEntry) -> Result<Target, String> {
     if hash.is_empty() {
         return Err("未记录版本指纹，无法检查更新。".to_string());
     }
-    if !crate::baseline::is_git_tree_hash(hash) {
+    if !crate::git_tree::is_git_tree_hash(hash) {
         if hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err(
                 "记录的是 64 位内容指纹（SHA-256），无法与 Git tree SHA 比较。".to_string(),
@@ -633,31 +633,21 @@ fn checkable_target(entry: &LockEntry) -> Result<Target, String> {
     else {
         return Err("lock 未记录有效的 skillPath。".to_string());
     };
-    let Some(source) = normalized_github_source(entry) else {
-        return Err("来源不是公开 GitHub 仓库，无法检查更新。".to_string());
-    };
-    let reference = entry
-        .reference
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("HEAD"))
-        .map(str::to_string);
+    let target = crate::update_target::resolve(entry).map_err(|error| match error {
+        crate::update_target::UpdateTargetError::Source { .. } => {
+            "来源不是公开 GitHub 仓库，无法检查更新。".to_string()
+        }
+        crate::update_target::UpdateTargetError::Reference { .. } => {
+            "lock ref 不是安全的分支/标签名，无法检查更新。".to_string()
+        }
+    })?;
     Ok(Target {
-        name: entry.name.clone(),
-        source,
-        reference,
+        name: target.name,
+        source: target.source,
+        reference: target.reference,
         skill_path,
         lock_hash: hash.to_string(),
     })
-}
-
-fn normalized_github_source(entry: &LockEntry) -> Option<String> {
-    for candidate in [entry.source.as_str(), entry.source_url.as_str()] {
-        if let Ok(spec) = crate::tasks::source::validate_source(candidate) {
-            return Some(spec.normalized);
-        }
-    }
-    None
 }
 
 fn uncheckable_result(entry: &LockEntry, note: String) -> UpdateSkillResult {
@@ -1431,6 +1421,13 @@ mod tests {
             ),
             LockSpec::github("empty", "acme/skills", None, "skills/empty/SKILL.md", ""),
             LockSpec::github("no-path", "acme/skills", None, "", ALPHA_TREE),
+            LockSpec::github(
+                "unsafe-ref",
+                "acme/skills",
+                Some("--all"),
+                "skills/unsafe/SKILL.md",
+                ALPHA_TREE,
+            ),
         ]);
         let client = Arc::new(FakeGitHub::default());
         let service = fixture.service(
@@ -1440,7 +1437,7 @@ mod tests {
         );
 
         let report = service.check(None).await.unwrap();
-        for name in ["local", "legacy", "empty", "no-path"] {
+        for name in ["local", "legacy", "empty", "no-path", "unsafe-ref"] {
             assert_eq!(state_of(&report, name), UpdateState::Unknown, "{name}");
             assert!(result_of(&report, name).note.is_some(), "{name}");
         }
@@ -1450,6 +1447,13 @@ mod tests {
                 .as_deref()
                 .unwrap()
                 .contains("64")
+        );
+        assert!(
+            result_of(&report, "unsafe-ref")
+                .note
+                .as_deref()
+                .unwrap()
+                .contains("ref")
         );
         assert!(client.calls().is_empty());
         assert!(report.sources.is_empty());

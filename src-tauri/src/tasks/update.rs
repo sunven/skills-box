@@ -22,7 +22,7 @@ use crate::cli::CliRuntime;
 use crate::error::cli::{self, CliAction};
 use crate::error::{AppError, ErrorCode};
 use crate::inventory::{self, AgentDir, AttachmentLocation, AttachmentMode, ManagementState};
-use crate::lock::{LockEntry, LockFile};
+use crate::lock::LockFile;
 use crate::logs::{OperationEntry, OperationLog};
 use crate::paths::AppPaths;
 use crate::process::{CommandSpec, ExecOutput};
@@ -36,7 +36,6 @@ use super::session::{
     CancellationPolicy, FailureDisposition, FinalProgress, MutationAction, Preflight, Reporter,
     SessionProfile, StartOutcome, UnitOutcome,
 };
-use super::source::validate_source;
 
 #[derive(Debug, Clone)]
 pub struct UpdateItem {
@@ -44,8 +43,6 @@ pub struct UpdateItem {
     /// Normalized `owner/repo`, with `#ref` appended only when the lock pinned
     /// a non-default branch/tag/commit.
     pub source: String,
-    pub lock_source: String,
-    pub reference: Option<String>,
     pub canonical: PathBuf,
     pub lock_hash: String,
     pub local_modification: LocalModification,
@@ -154,12 +151,12 @@ pub fn plan_updates(
             });
             continue;
         };
-        let source = match update_source(name, &entry) {
-            Ok(source) => source,
+        let target = match crate::update_target::resolve(&entry) {
+            Ok(target) => target,
             Err(error) => {
                 plan.skipped.push(UpdateSkip {
                     name: name.clone(),
-                    error,
+                    error: AppError::skill_source_unresolvable(name, error.detail()),
                 });
                 continue;
             }
@@ -215,11 +212,10 @@ pub fn plan_updates(
             Some(&canonical),
             Some(entry.skill_folder_hash.as_str()),
         );
+        let source = target.cli_source();
         plan.items.push(UpdateItem {
-            name: name.clone(),
+            name: target.name,
             source,
-            lock_source: normalized_lock_source(&entry).unwrap_or_else(|| entry.source.clone()),
-            reference: entry.reference.clone(),
             canonical,
             lock_hash: entry.skill_folder_hash.clone(),
             local_modification: assessment.state,
@@ -261,61 +257,6 @@ fn is_directory(path: &std::path::Path) -> bool {
     fs::metadata(path)
         .map(|metadata| metadata.is_dir())
         .unwrap_or(false)
-}
-
-pub fn normalized_lock_source(entry: &LockEntry) -> Option<String> {
-    if !entry.source_type.eq_ignore_ascii_case("github") {
-        return None;
-    }
-    for candidate in [entry.source.as_str(), entry.source_url.as_str()] {
-        if let Ok(spec) = validate_source(candidate) {
-            return Some(spec.normalized);
-        }
-    }
-    None
-}
-
-/// Build the CLI source from the lock. v1 only installs default branches, but
-/// a lock written by another tool may carry `ref`; it is re-validated and
-/// appended as `owner/repo#ref` so the update follows the recorded ref.
-fn update_source(name: &str, entry: &LockEntry) -> Result<String, AppError> {
-    let Some(source) = normalized_lock_source(entry) else {
-        return Err(AppError::skill_source_unresolvable(
-            name,
-            format!(
-                "source={:?} sourceType={:?} sourceUrl={:?}",
-                entry.source, entry.source_type, entry.source_url
-            ),
-        ));
-    };
-    match entry.reference.as_deref() {
-        None => Ok(source),
-        Some(raw) => {
-            let reference = raw.trim();
-            if reference.is_empty() || reference.eq_ignore_ascii_case("HEAD") {
-                return Ok(source);
-            }
-            if !valid_ref(reference) {
-                return Err(AppError::skill_source_unresolvable(
-                    name,
-                    format!("lock ref 不是安全的分支/标签名：{reference:?}"),
-                ));
-            }
-            Ok(format!("{source}#{reference}"))
-        }
-    }
-}
-
-fn valid_ref(reference: &str) -> bool {
-    !reference.is_empty()
-        && reference.len() <= 200
-        && !reference.starts_with('-')
-        && !reference.starts_with('/')
-        && !reference.ends_with('/')
-        && !reference.contains("..")
-        && reference.chars().all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-' | '/')
-        })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -808,7 +749,6 @@ mod tests {
         assert!(plan.skipped.is_empty());
         let item = &plan.items[0];
         assert_eq!(item.source, "acme/skills");
-        assert_eq!(item.lock_source, "acme/skills");
         assert_eq!(item.canonical, fixture.canonical);
         assert_eq!(
             item.agent_ids,
@@ -932,7 +872,6 @@ mod tests {
         let fixture = Fixture::new(&[("alpha", "acme/skills", Some("dev"))]);
         let item = &plan(&fixture, &["alpha"]).items[0];
         assert_eq!(item.source, "acme/skills#dev");
-        assert_eq!(item.reference.as_deref(), Some("dev"));
     }
 
     #[test]
