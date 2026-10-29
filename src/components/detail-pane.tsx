@@ -406,45 +406,123 @@ export const DetailPane = memo(function DetailPane({
           >
             <X className="size-4" aria-hidden="true" />
           </Button>
-          <div className="detail-title-line">
-            <h2 className="detail-title">{detailView.name}</h2>
-            <UpdateStatus
-              skill={{ ...skill, updateResult: updateInfo ?? undefined }}
-            />
-            {management === "copy_only" ? (
-              <span className="skill-note">仅副本</span>
-            ) : null}
-            {management === "unmanaged" ? (
-              <span className="skill-note" data-tone="warning">
-                未受管
-              </span>
-            ) : null}
-            {localWarning ? (
-              <span
-                className="skill-note"
-                data-tone={
-                  localModification === "modified" ? "warning" : undefined
-                }
-                title={
-                  localModification === "modified"
-                    ? "当前文件与基线指纹不一致；更新或卸载前请确认并备份。"
-                    : "首次扫描没有可比较的基线或 lock hash；更新或卸载前请确认。"
-                }
-              >
-                {LOCAL_MODIFICATION_LABELS[localModification]}
-              </span>
-            ) : null}
-            {unattached ? <span className="skill-note">未挂载</span> : null}
-            {broken ? (
-              <span className="skill-note" data-tone="negative">
-                断链
-              </span>
-            ) : null}
-            {warnings.length > 0 ? (
-              <Badge variant="warning" title={warnings.join("\n")}>
-                警告
-              </Badge>
-            ) : null}
+          <div className="detail-heading">
+            <div className="detail-title-line">
+              <h2 className="detail-title">{detailView.name}</h2>
+              <UpdateStatus
+                skill={{ ...skill, updateResult: updateInfo ?? undefined }}
+              />
+              {management === "copy_only" ? (
+                <span className="skill-note">仅副本</span>
+              ) : null}
+              {management === "unmanaged" ? (
+                <span className="skill-note" data-tone="warning">
+                  未受管
+                </span>
+              ) : null}
+              {localWarning ? (
+                <span
+                  className="skill-note"
+                  data-tone={
+                    localModification === "modified" ? "warning" : undefined
+                  }
+                  title={
+                    localModification === "modified"
+                      ? "当前文件与基线指纹不一致；更新或卸载前请确认并备份。"
+                      : "首次扫描没有可比较的基线或 lock hash；更新或卸载前请确认。"
+                  }
+                >
+                  {LOCAL_MODIFICATION_LABELS[localModification]}
+                </span>
+              ) : null}
+              {unattached ? <span className="skill-note">未挂载</span> : null}
+              {broken ? (
+                <span className="skill-note" data-tone="negative">
+                  断链
+                </span>
+              ) : null}
+              {warnings.length > 0 ? (
+                <Badge variant="warning" title={warnings.join("\n")}>
+                  警告
+                </Badge>
+              ) : null}
+            </div>
+            <div
+              className="detail-update-summary"
+              data-testid="detail-update-summary"
+            >
+              {management === "managed" ? (
+                <div className="detail-update-actions">
+                  {onCheckUpdates ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={checkingUpdates}
+                      aria-busy={checkingUpdates}
+                      onClick={() => onCheckUpdates([skill.name])}
+                      title="只读检查该 skill 的来源；不会运行 skills check"
+                    >
+                      <RefreshCw
+                        className={
+                          checkingUpdates
+                            ? "size-3.5 animate-spin"
+                            : "size-3.5"
+                        }
+                        aria-hidden="true"
+                      />
+                      检查更新
+                    </Button>
+                  ) : null}
+                  {update === "update" && onUpdate ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => onUpdate(skill.name)}
+                      title="更新前备份；使用当前物理挂载的 agent 重建 skills add"
+                    >
+                      <ArrowUpCircle className="size-3.5" aria-hidden="true" />
+                      更新
+                    </Button>
+                  ) : null}
+                </div>
+              ) : (
+                <p className="text-[12px] leading-relaxed text-muted-foreground">
+                  {management === "copy_only"
+                    ? "仅副本 skill 不提供更新检查。"
+                    : "未受管 skill 不提供更新检查。"}
+                </p>
+              )}
+              <dl className="detail-update-meta">
+                <MetaRow label="上次检查">
+                  <span
+                    data-testid="detail-last-update-check"
+                    title={
+                      updateInfo?.error?.message ??
+                      updateInfo?.note ??
+                      undefined
+                    }
+                  >
+                    {updateInfo?.lastSuccessAtEpochMs
+                      ? `${formatEpochDateTime(updateInfo.lastSuccessAtEpochMs)}${
+                          updateInfo.cached ? "（缓存）" : ""
+                        }`
+                      : "尚未检查"}
+                  </span>
+                </MetaRow>
+              </dl>
+              {management !== "unmanaged" && onUninstall ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0 border-destructive/35 text-destructive hover:bg-destructive-soft hover:text-destructive"
+                  onClick={() => onUninstall(skill.name)}
+                  title="删除 canonical、所有 agent 挂载、lock 条目与基线；先备份，不自动回滚"
+                >
+                  <Trash2 className="size-3.5" aria-hidden="true" />
+                  彻底卸载
+                </Button>
+              ) : null}
+            </div>
           </div>
           <ClampedDescription
             text={detail?.description ?? skill.description ?? "—"}
@@ -514,6 +592,57 @@ export const DetailPane = memo(function DetailPane({
                     : ""}
                 </div>
               </div>
+            ) : null}
+
+            {updateInfo?.error ? (
+              <div
+                role="alert"
+                data-testid="update-check-error"
+                className="notice"
+                data-tone="negative"
+              >
+                <div>
+                  <p className="font-medium">
+                    检查失败：{updateInfo.error.message}
+                  </p>
+                  {updateInfo.error.detail ? (
+                    <p className="mono mt-0.5 break-all">
+                      {updateInfo.error.detail}
+                    </p>
+                  ) : null}
+                  {updateInfo.error.hint ? (
+                    <p className="mt-0.5">{updateInfo.error.hint}</p>
+                  ) : null}
+                  <p className="mt-0.5">
+                    {updateInfo.lastSuccessAtEpochMs
+                      ? `上次成功检查：${formatEpochDateTime(updateInfo.lastSuccessAtEpochMs)}${
+                          updateInfo.previousState &&
+                          updateInfo.previousState !== "current"
+                            ? ` · 上次结果：${UPDATE_LABELS[updateInfo.previousState]}`
+                            : ""
+                        }`
+                      : "尚未成功检查过该来源；不会显示为已是最新。"}
+                  </p>
+                </div>
+              </div>
+            ) : null}
+
+            {update === "path_missing" ? (
+              <div
+                data-testid="update-path-missing"
+                className="notice"
+                data-tone="negative"
+              >
+                {updateInfo?.note ??
+                  "来源中已找不到该 skill，可能已被删除或移动；更新已禁用。"}
+              </div>
+            ) : null}
+
+            {updateInfo &&
+            !updateInfo.error &&
+            update !== "path_missing" &&
+            updateInfo.note ? (
+              <div className="notice">{updateInfo.note}</div>
             ) : null}
 
             {warnings.length > 0 ? (
@@ -671,133 +800,6 @@ export const DetailPane = memo(function DetailPane({
               )}
             </section>
 
-            <section
-              className="detail-section"
-              data-testid="detail-update-section"
-            >
-              <h4 className="detail-section-title">更新</h4>
-              {management === "managed" ? (
-                <div className="detail-actions mt-2.5">
-                  {onCheckUpdates ? (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={checkingUpdates}
-                      aria-busy={checkingUpdates}
-                      onClick={() => onCheckUpdates([skill.name])}
-                      title="只读检查该 skill 的来源；不会运行 skills check"
-                    >
-                      <RefreshCw
-                        className={
-                          checkingUpdates
-                            ? "size-3.5 animate-spin"
-                            : "size-3.5"
-                        }
-                        aria-hidden="true"
-                      />
-                      检查更新
-                    </Button>
-                  ) : null}
-                  {update === "update" && onUpdate ? (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => onUpdate(skill.name)}
-                      title="更新前备份；使用当前物理挂载的 agent 重建 skills add"
-                    >
-                      <ArrowUpCircle className="size-3.5" aria-hidden="true" />
-                      更新
-                    </Button>
-                  ) : null}
-                </div>
-              ) : (
-                <p className="mt-2 text-[12px] leading-relaxed text-muted-foreground">
-                  {management === "copy_only"
-                    ? "仅副本 skill 不提供更新检查。"
-                    : "未受管 skill 不提供更新检查。"}
-                </p>
-              )}
-
-              <dl className="meta-list mt-2.5">
-                <MetaRow label="上次检查">
-                  <span
-                    data-testid="detail-last-update-check"
-                    title={
-                      updateInfo?.error?.message ??
-                      updateInfo?.note ??
-                      undefined
-                    }
-                  >
-                    {updateInfo?.lastSuccessAtEpochMs
-                      ? `${formatEpochDateTime(updateInfo.lastSuccessAtEpochMs)}${
-                          updateInfo.cached ? "（缓存）" : ""
-                        }`
-                      : "尚未检查"}
-                  </span>
-                </MetaRow>
-                <MetaRow label="远端 tree SHA" mono>
-                  {updateInfo?.remoteHash ? (
-                    <span title={updateInfo.remoteHash}>
-                      {shortHash(updateInfo.remoteHash)}
-                    </span>
-                  ) : (
-                    "—"
-                  )}
-                </MetaRow>
-              </dl>
-
-              {updateInfo?.error ? (
-                <div
-                  role="alert"
-                  data-testid="update-check-error"
-                  className="notice mt-2.5"
-                  data-tone="negative"
-                >
-                  <div>
-                    <p className="font-medium">
-                      检查失败：{updateInfo.error.message}
-                    </p>
-                    {updateInfo.error.detail ? (
-                      <p className="mono mt-0.5 break-all">
-                        {updateInfo.error.detail}
-                      </p>
-                    ) : null}
-                    {updateInfo.error.hint ? (
-                      <p className="mt-0.5">{updateInfo.error.hint}</p>
-                    ) : null}
-                    <p className="mt-0.5">
-                      {updateInfo.lastSuccessAtEpochMs
-                        ? `上次成功检查：${formatEpochDateTime(updateInfo.lastSuccessAtEpochMs)}${
-                            updateInfo.previousState &&
-                            updateInfo.previousState !== "current"
-                              ? ` · 上次结果：${UPDATE_LABELS[updateInfo.previousState]}`
-                              : ""
-                          }`
-                        : "尚未成功检查过该来源；不会显示为已是最新。"}
-                    </p>
-                  </div>
-                </div>
-              ) : null}
-
-              {update === "path_missing" ? (
-                <div
-                  data-testid="update-path-missing"
-                  className="notice mt-2.5"
-                  data-tone="negative"
-                >
-                  {updateInfo?.note ??
-                    "来源中已找不到该 skill，可能已被删除或移动；更新已禁用。"}
-                </div>
-              ) : null}
-
-              {updateInfo &&
-              !updateInfo.error &&
-              update !== "path_missing" &&
-              updateInfo.note ? (
-                <div className="notice mt-2.5">{updateInfo.note}</div>
-              ) : null}
-            </section>
-
             {detail ? (
               <section className="detail-section">
                 <h4 className="detail-section-title">概览</h4>
@@ -859,26 +861,6 @@ export const DetailPane = memo(function DetailPane({
                         : "未受管"}
                   </MetaRow>
                 </dl>
-              </section>
-            ) : null}
-
-            {management !== "unmanaged" && onUninstall ? (
-              <section className="detail-section">
-                <h4 className="detail-section-title">危险操作</h4>
-                <p className="mt-2 text-[12px] leading-relaxed text-muted-foreground">
-                  彻底卸载会删除 canonical、所有 agent 挂载、lock
-                  条目与本地基线；先备份，不自动回滚。
-                </p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="mt-2 border-destructive/35 text-destructive hover:bg-destructive-soft hover:text-destructive"
-                  onClick={() => onUninstall(skill.name)}
-                  title="删除 canonical、所有 agent 挂载、lock 条目与基线；先备份，不自动回滚"
-                >
-                  <Trash2 className="size-3.5" aria-hidden="true" />
-                  彻底卸载
-                </Button>
               </section>
             ) : null}
           </section>

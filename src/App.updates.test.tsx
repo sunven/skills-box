@@ -562,12 +562,21 @@ describe("manual update checking", () => {
       ).toHaveTextContent(LAST_SUCCESS_LABEL);
     });
 
-    fireEvent.click(detail().getByRole("button", { name: "检查更新" }));
+    fireEvent.click(detail().getByRole("tab", { name: "内容" }));
+    const updateSummary = within(detail().getByTestId("detail-update-summary"));
+    expect(
+      updateSummary.getByRole("button", { name: "更新" }),
+    ).toBeVisible();
+    fireEvent.click(updateSummary.getByRole("button", { name: "检查更新" }));
     await waitFor(() => {
       expect(
         detail().getByTestId("update-check-error"),
       ).toHaveTextContent("检查失败");
     });
+    expect(detail().getByTestId("update-check-error")).toBeVisible();
+    expect(detail().getByTestId("detail-alerts")).toContainElement(
+      detail().getByTestId("update-check-error"),
+    );
     expect(detail().getByTestId("update-check-error")).toHaveTextContent(
       "上次成功检查",
     );

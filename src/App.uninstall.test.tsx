@@ -198,7 +198,7 @@ async function openUninstall(name: string) {
     ).toBe(true);
   });
   fireEvent.click(row(name));
-  fireEvent.click(await screen.findByRole("tab", { name: "操作" }));
+  fireEvent.click(await screen.findByRole("tab", { name: "内容" }));
   await waitFor(() => {
     expect(
       detail().getByRole("button", { name: "彻底卸载" }),

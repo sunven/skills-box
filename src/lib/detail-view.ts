@@ -73,7 +73,9 @@ export function selectDetailView(
       management === "copy_only" ||
       localModification === "modified" ||
       localModification === "unknown" ||
-      warnings.length > 0,
+      warnings.length > 0 ||
+      Boolean(skill.updateResult?.error || skill.updateResult?.note) ||
+      skill.update === "path_missing",
     attachableAgents: agents.filter(
       (agent) =>
         agent.detected &&

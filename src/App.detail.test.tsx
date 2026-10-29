@@ -220,6 +220,28 @@ describe("skill detail drawer", () => {
       pane.getByRole("heading", { name: "alpha" }),
     ).toBeInTheDocument();
     expect(pane.getByTestId("detail-update-badge")).toHaveTextContent("未知");
+    const updateSummary = pane.getByTestId("detail-update-summary");
+    expect(updateSummary.closest(".detail-head")).not.toBeNull();
+    expect(
+      within(updateSummary).getByRole("button", { name: "检查更新" }),
+    ).toBeVisible();
+    expect(within(updateSummary).getByText("上次检查")).toBeVisible();
+    const uninstall = within(updateSummary).getByRole("button", {
+      name: "彻底卸载",
+    });
+    expect(uninstall).toBeVisible();
+    expect(uninstall).toHaveAttribute(
+      "title",
+      "删除 canonical、所有 agent 挂载、lock 条目与基线；先备份，不自动回滚",
+    );
+    expect(pane.queryByRole("heading", { name: "危险操作" })).toBeNull();
+    expect(
+      within(pane.getByTestId("detail-actions-panel")).queryByRole("button", {
+        name: "彻底卸载",
+      }),
+    ).toBeNull();
+    expect(pane.queryByText("远端 tree SHA")).not.toBeInTheDocument();
+    expect(pane.queryByTestId("detail-update-section")).not.toBeInTheDocument();
     expect(pane.getAllByText("本地改动").length).toBeGreaterThan(0);
     expect(pane.getAllByText("断链").length).toBeGreaterThan(0);
     expect(pane.getAllByText("警告").length).toBeGreaterThan(0);
@@ -246,6 +268,11 @@ describe("skill detail drawer", () => {
 
     fireEvent.click(tab("内容"));
     expect(tab("内容")).toHaveAttribute("aria-selected", "true");
+    expect(updateSummary).toBeVisible();
+    expect(uninstall).toBeVisible();
+    expect(
+      within(updateSummary).getByRole("button", { name: "检查更新" }),
+    ).toBeVisible();
 
     // Root tree lists directories first and auto-selects SKILL.md.
     const rootRows = pane
@@ -284,7 +311,6 @@ describe("skill detail drawer", () => {
     expect(pane.getByText("main")).toBeInTheDocument();
     expect(pane.getByText("canonical 路径")).toBeInTheDocument();
     expect(pane.getByText("上次检查")).toBeInTheDocument();
-    expect(pane.getByText("远端 tree SHA")).toBeInTheDocument();
     expect(pane.getByTestId("detail-last-update-check")).toHaveTextContent(
       "尚未检查",
     );

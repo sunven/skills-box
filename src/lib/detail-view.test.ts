@@ -79,6 +79,33 @@ describe("detail view selector", () => {
     expect(view.attachableAgents).toEqual([qoderAgent]);
   });
 
+  it.each(["error", "note", "path_missing", "none"] as const)(
+    "derives pinned update alerts for %s",
+    (notice) => {
+      const state: UpdateSkillResult["state"] =
+        notice === "error" || notice === "path_missing"
+          ? notice
+          : notice === "note"
+            ? "unknown"
+            : "current";
+      const skill = {
+        ...makeUpdateViewSkill({ name: "alpha", localModification: "clean" }),
+        update: state,
+        updateResult: {
+          ...updateResult,
+          state,
+          error:
+            notice === "error"
+              ? { code: "network.failed", message: "检查失败", retryable: true }
+              : null,
+          note: notice === "note" ? "无法检查该来源" : null,
+        },
+      };
+      const view = selectDetailView(skill, null, []);
+      expect(view.hasAlerts).toBe(notice !== "none");
+    },
+  );
+
   it("falls back to the row when detail has not loaded", () => {
     const skill = {
       ...makeUpdateViewSkill({
