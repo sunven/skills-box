@@ -175,6 +175,22 @@ export function UpdateDialog({
     [agents],
   );
   const summary = useMemo(() => computeUpdateSummary(skills), [skills]);
+  const grouped = useMemo(() => {
+    const map = new Map<UpdateSkipReason, UpdateSkipItem[]>();
+    for (const item of summary.skipped) {
+      const list = map.get(item.reason) ?? [];
+      list.push(item);
+      map.set(item.reason, list);
+    }
+    return map;
+  }, [summary]);
+  const copyCandidateCount = useMemo(
+    () =>
+      summary.candidates.filter(
+        (skill) => copyAgents(skill, universalIds).length > 0,
+      ).length,
+    [summary, universalIds],
+  );
   const singleEligible = manageableSingle(singleSkill);
   const singleNeedsConfirmation = Boolean(
     singleSkill &&
@@ -249,17 +265,8 @@ export function UpdateDialog({
     mode === "single" && singleSkill
       ? `更新 skill · ${singleSkill.name}`
       : "更新全部";
-  const grouped = new Map<UpdateSkipReason, UpdateSkipItem[]>();
-  for (const item of summary.skipped) {
-    const list = grouped.get(item.reason) ?? [];
-    list.push(item);
-    grouped.set(item.reason, list);
-  }
   const showInitial = !running && !result;
   const closeDisabled = running;
-  const copyCandidateCount = summary.candidates.filter(
-    (skill) => copyAgents(skill, universalIds).length > 0,
-  ).length;
 
   return (
     <div

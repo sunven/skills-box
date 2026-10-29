@@ -578,6 +578,8 @@
   color: var(--foreground);
   text-align: left;
   transition: background-color 120ms ease;
+  content-visibility: auto;
+  contain-intrinsic-size: 0 62px;
 }
 
 .skill-row:hover {

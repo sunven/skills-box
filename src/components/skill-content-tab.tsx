@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   useQueryClient,
   type UseQueryResult,
@@ -46,7 +53,7 @@ interface SkillContentTabProps {
 type DetailView = "rendered" | "raw";
 type ContentAction = "folder" | "file";
 
-export function SkillContentTab({
+export const SkillContentTab = memo(function SkillContentTab({
   skillId,
   frontmatterWarning,
 }: SkillContentTabProps) {
@@ -76,7 +83,7 @@ export function SkillContentTab({
     if (actionError) actionErrorRef.current?.focus();
   }, [actionError]);
 
-  const navigateTo = (path: string) => {
+  const navigateTo = useCallback((path: string) => {
     setSelectedPath(path);
     setExpanded((previous) => {
       const next = new Set(previous);
@@ -86,16 +93,16 @@ export function SkillContentTab({
       }
       return next;
     });
-  };
+  }, []);
 
-  const toggleDir = (path: string) => {
+  const toggleDir = useCallback((path: string) => {
     setExpanded((previous) => {
       const next = new Set(previous);
       if (next.has(path)) next.delete(path);
       else next.add(path);
       return next;
     });
-  };
+  }, []);
 
   const refresh = async () => {
     setRefreshing(true);
@@ -221,7 +228,7 @@ export function SkillContentTab({
       </div>
     </div>
   );
-}
+});
 
 function SkillTree({
   skillId,
@@ -527,11 +534,7 @@ function SkillFilePreview({
   openingFile: boolean;
 }) {
   const query = useSkillFileQuery(skillId, path);
-  const [copied, setCopied] = useState(false);
-
-  useEffect(() => {
-    setCopied(false);
-  }, [path]);
+  const [copiedPath, setCopiedPath] = useState<string | null>(null);
 
   if (path === null) {
     return (
@@ -546,11 +549,14 @@ function SkillFilePreview({
   }
 
   const data = query.data;
+  const copied = copiedPath === path;
   const copyPath = async () => {
     try {
       await navigator.clipboard.writeText(path);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
+      setCopiedPath(path);
+      window.setTimeout(() => {
+        setCopiedPath((current) => (current === path ? null : current));
+      }, 1500);
     } catch {
       // Clipboard access is best-effort; the path is visible above.
     }
@@ -682,6 +688,11 @@ function FileBody({
   onOpenFile: () => void;
   openingFile: boolean;
 }) {
+  const internalLinks = useMemo(
+    () => ({ skillId, baseDir, onNavigate }),
+    [skillId, baseDir, onNavigate],
+  );
+
   if (data.status === "too_large") {
     return (
       <FileState
@@ -762,10 +773,7 @@ function FileBody({
             {content}
           </pre>
         ) : (
-          <SkillMarkdown
-            content={content}
-            internalLinks={{ skillId, baseDir, onNavigate }}
-          />
+          <SkillMarkdown content={content} internalLinks={internalLinks} />
         )}
       </>
     );

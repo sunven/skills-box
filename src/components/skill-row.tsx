@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { Badge } from "./ui/badge";
 import { agentInitials } from "../lib/agent-style";
 import { agentLogoUrl } from "../lib/agent-logos";
@@ -93,7 +94,11 @@ function UpdateStatus({ skill }: { skill: UpdateViewSkill }) {
   );
 }
 
-export function SkillRow({ skill, selected, onSelect }: SkillRowProps) {
+export const SkillRow = memo(function SkillRow({
+  skill,
+  selected,
+  onSelect,
+}: SkillRowProps) {
   const broken = hasBrokenAttachment(skill);
   const unattached =
     skill.attachments.length === 0 && skill.management !== "unmanaged";
@@ -164,4 +169,4 @@ export function SkillRow({ skill, selected, onSelect }: SkillRowProps) {
       </div>
     </button>
   );
-}
+});

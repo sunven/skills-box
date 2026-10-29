@@ -1,5 +1,9 @@
 import {
+  lazy,
+  memo,
+  Suspense,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent,
@@ -19,7 +23,6 @@ import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { AttachDialog } from "./attach-dialog";
 import { DetachDialog, type DetachDialogError } from "./detach-dialog";
-import { SkillContentTab } from "./skill-content-tab";
 import { asAppError, detachAgent } from "../lib/api";
 import { agentInitials } from "../lib/agent-style";
 import { agentLogoUrl } from "../lib/agent-logos";
@@ -47,6 +50,16 @@ import {
 } from "../lib/update-view";
 import { useSkillDetailQuery } from "../hooks/use-skill-detail";
 import { cn } from "../lib/utils";
+
+// The Markdown stack is only needed after a skill is selected; keep it out of
+// the startup bundle.
+const SkillContentTab = lazy(() =>
+  import("./skill-content-tab").then((module) => ({
+    default: module.SkillContentTab,
+  })),
+);
+
+const NO_AGENTS: InventoryAgent[] = [];
 
 interface DetailPaneProps {
   skill: UpdateViewSkill;
@@ -79,8 +92,8 @@ function MetaRow({
 }
 
 function HashValue({ hash }: { hash: string }) {
-  const [expanded, setExpanded] = useState(false);
-  useEffect(() => setExpanded(false), [hash]);
+  const [expandedHash, setExpandedHash] = useState<string | null>(null);
+  const expanded = expandedHash === hash;
   return (
     <span className="inline-flex flex-wrap items-center gap-1.5">
       <code className="mono break-all">
@@ -91,7 +104,7 @@ function HashValue({ hash }: { hash: string }) {
           type="button"
           className="text-[12px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
           aria-label={expanded ? "收起完整 hash" : "查看完整 hash"}
-          onClick={() => setExpanded((value) => !value)}
+          onClick={() => setExpandedHash(expanded ? null : hash)}
         >
           {expanded ? "收起" : "完整"}
         </button>
@@ -103,14 +116,11 @@ function HashValue({ hash }: { hash: string }) {
 const DESCRIPTION_COLLAPSE_LENGTH = 200;
 
 function ClampedDescription({ text }: { text: string }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expandedText, setExpandedText] = useState<string | null>(null);
   const [overflowing, setOverflowing] = useState(false);
   const textRef = useRef<HTMLParagraphElement>(null);
   const measureRef = useRef<HTMLSpanElement>(null);
-
-  useEffect(() => {
-    setExpanded(false);
-  }, [text]);
+  const expanded = expandedText === text;
 
   useEffect(() => {
     const element = textRef.current;
@@ -155,7 +165,7 @@ function ClampedDescription({ text }: { text: string }) {
           type="button"
           className="detail-desc-toggle"
           aria-expanded={expanded}
-          onClick={() => setExpanded((value) => !value)}
+          onClick={() => setExpandedText(expanded ? null : text)}
         >
           {expanded ? "收起" : "展开"}
         </button>
@@ -247,10 +257,10 @@ function AgentAttachmentRow({
   );
 }
 
-export function DetailPane({
+export const DetailPane = memo(function DetailPane({
   skill,
   updateResult,
-  agents = [],
+  agents = NO_AGENTS,
   checkingUpdates = false,
   onCheckUpdates,
   onUpdate,
@@ -270,6 +280,20 @@ export function DetailPane({
   const closeRef = useRef<HTMLButtonElement>(null);
   const detailError = asAppError(query.error);
 
+  // Selecting another skill restarts the drawer UI. Adjusting state during
+  // rendering avoids an extra commit that would flash the previous skill's
+  // tab/dialog state.
+  const [activeSkillId, setActiveSkillId] = useState(skillId);
+  if (activeSkillId !== skillId) {
+    setActiveSkillId(skillId);
+    setTab("actions");
+    setDetachTarget(null);
+    setDetachPending(false);
+    setDetachError(null);
+    setDetachNotice(null);
+    setAttachOpen(false);
+  }
+
   useEffect(() => {
     const previousFocus = document.activeElement as HTMLElement | null;
     closeRef.current?.focus({ preventScroll: true });
@@ -288,15 +312,6 @@ export function DetailPane({
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [onClose]);
 
-  useEffect(() => {
-    setTab("actions");
-    setDetachTarget(null);
-    setDetachPending(false);
-    setDetachError(null);
-    setDetachNotice(null);
-    setAttachOpen(false);
-  }, [skillId]);
-
   const current = detail ?? skill;
   const management = current.management;
   const update = skill.update;
@@ -309,12 +324,16 @@ export function DetailPane({
     attachments,
   });
   const unattached = attachments.length === 0 && management !== "unmanaged";
-  const attachableAgents = agents.filter(
-    (agent) =>
-      agent.detected &&
-      !agent.universal &&
-      !agent.shared &&
-      !attachments.some((attachment) => attachment.agentId === agent.id),
+  const attachableAgents = useMemo(
+    () =>
+      agents.filter(
+        (agent) =>
+          agent.detected &&
+          !agent.universal &&
+          !agent.shared &&
+          !attachments.some((attachment) => attachment.agentId === agent.id),
+      ),
+    [agents, attachments],
   );
   const localWarning = hasLocalModificationWarning({
     ...skill,
@@ -583,11 +602,23 @@ export function DetailPane({
             className="detail-panel detail-panel-content"
             data-testid="detail-content-panel"
           >
-            <SkillContentTab
-              key={skill.name}
-              skillId={skill.name}
-              frontmatterWarning={frontmatterWarning}
-            />
+            <Suspense
+              fallback={
+                <div className="content-empty">
+                  <Loader2
+                    className="size-4 animate-spin"
+                    aria-hidden="true"
+                  />
+                  <p>正在加载内容视图…</p>
+                </div>
+              }
+            >
+              <SkillContentTab
+                key={skill.name}
+                skillId={skill.name}
+                frontmatterWarning={frontmatterWarning}
+              />
+            </Suspense>
           </section>
 
           <section
@@ -904,4 +935,4 @@ export function DetailPane({
       </aside>
     </>
   );
-}
+});

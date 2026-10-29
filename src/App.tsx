@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { AnomalyDialog } from "./components/anomaly-panel";
 import { AppHeader } from "./components/app-header";
@@ -49,7 +55,13 @@ import {
   withUpdateAnomalies,
   type UpdateViewSkill,
 } from "./lib/update-view";
-import type { ActiveMutationInfo, AnomalySummary, EnvReport } from "./lib/types";
+import type {
+  ActiveMutationInfo,
+  AnomalySummary,
+  DetectedAgent,
+  EnvReport,
+  InventoryAgent,
+} from "./lib/types";
 
 const EMPTY_ANOMALIES: AnomalySummary = {
   total: 0,
@@ -58,6 +70,9 @@ const EMPTY_ANOMALIES: AnomalySummary = {
   broken: { count: 0, examples: [] },
   modified: { count: 0, examples: [] },
 };
+const EMPTY_INVENTORY_AGENTS: InventoryAgent[] = [];
+const EMPTY_DETECTED_AGENTS: DetectedAgent[] = [];
+const EMPTY_WARNINGS: string[] = [];
 
 function App() {
   const queryClient = useQueryClient();
@@ -123,9 +138,12 @@ function App() {
     [snapshot, skills],
   );
   const updateSummary = useMemo(() => computeUpdateSummary(skills), [skills]);
+  // Filtering runs on a deferred query so typing stays urgent while the list
+  // and the detail drawer re-render at a lower priority.
+  const deferredQuery = useDeferredValue(query);
   const filters = useMemo<InventoryFilters>(
-    () => ({ query, source, agent, status }),
-    [query, source, agent, status],
+    () => ({ query: deferredQuery, source, agent, status }),
+    [deferredQuery, source, agent, status],
   );
   const visibleSkills = useMemo(
     () => selectVisibleSkills(skills, filters, sort),
@@ -216,17 +234,17 @@ function App() {
       : null;
   const mutationsEnabled = (report?.mutationsEnabled ?? false) && !lockError;
 
+  const mutateCheckUpdates = checkUpdates.mutate;
   const runAutoCheck = useCallback(async () => {
-    if (checkUpdates.isPending) return false;
     try {
       const active = await getActiveMutation();
       if (active) return false;
     } catch {
       return false;
     }
-    checkUpdates.mutate();
+    mutateCheckUpdates();
     return true;
-  }, [checkUpdates]);
+  }, [mutateCheckUpdates]);
 
   useAutoUpdateCheck({
     enabled: inventoryQuery.isSuccess && !lockError && hasManagedSkills,
@@ -245,29 +263,45 @@ function App() {
     void queryClient.invalidateQueries({ queryKey: ["updateReport"] });
   };
 
-  const handleCheckUpdates = (skillIds?: string[]) => {
-    checkUpdates.mutate(skillIds);
-  };
+  const handleCheckUpdates = useCallback(
+    (skillIds?: string[]) => {
+      mutateCheckUpdates(skillIds);
+    },
+    [mutateCheckUpdates],
+  );
 
   const handleRetryInventory = handleRecheck;
 
-  const handleClearFilters = () => {
+  const handleClearFilters = useCallback(() => {
     const defaults = defaultFilters();
     setQuery(defaults.query);
     setSource(defaults.source);
     setAgent(defaults.agent);
     setStatus(defaults.status);
-  };
+  }, []);
 
-  const handleSelectSkill = (name: string) => {
+  const handleSelectSkill = useCallback((name: string) => {
     setSelectedName(name);
     setDetailOpen(true);
-  };
+  }, []);
 
-  const handleCloseDetail = () => {
+  const handleCloseDetail = useCallback(() => {
     setDetailOpen(false);
     setSelectedName(null);
-  };
+  }, []);
+
+  const handleUpdateSkill = useCallback((name: string) => {
+    setUpdateSkillName(name);
+    setUpdateMode("single");
+  }, []);
+
+  const handleUninstallSkill = useCallback(
+    (name: string) => {
+      const target = skills.find((entry) => entry.name === name);
+      if (target) setUninstallSkill(target);
+    },
+    [skills],
+  );
 
   const handleSourceChange = (value: string) => {
     setSource(value);
@@ -372,18 +406,12 @@ function App() {
               <DetailPane
                 skill={selectedSkill}
                 updateResult={selectedSkill.updateResult}
-                agents={snapshot?.agents ?? []}
+                agents={snapshot?.agents ?? EMPTY_INVENTORY_AGENTS}
                 checkingUpdates={checkUpdates.isPending}
                 onCheckUpdates={handleCheckUpdates}
                 onClose={handleCloseDetail}
-                onUpdate={(name) => {
-                  setUpdateSkillName(name);
-                  setUpdateMode("single");
-                }}
-                onUninstall={(name) => {
-                  const target = skills.find((entry) => entry.name === name);
-                  if (target) setUninstallSkill(target);
-                }}
+                onUpdate={handleUpdateSkill}
+                onUninstall={handleUninstallSkill}
               />
             ) : null}
           </main>
@@ -405,7 +433,7 @@ function App() {
         open={updateMode !== null}
         mode={updateMode ?? "all"}
         skills={updateDialogSkills}
-        agents={snapshot?.agents ?? []}
+        agents={snapshot?.agents ?? EMPTY_INVENTORY_AGENTS}
         onClose={() => {
           setUpdateMode(null);
           setUpdateSkillName(null);
@@ -418,16 +446,16 @@ function App() {
       />
       <ManageAgentsDialog
         open={manageAgentsOpen}
-        agents={snapshot?.agents ?? []}
+        agents={snapshot?.agents ?? EMPTY_INVENTORY_AGENTS}
         skills={skills}
-        warnings={snapshot?.warnings ?? []}
+        warnings={snapshot?.warnings ?? EMPTY_WARNINGS}
         onClose={() => setManageAgentsOpen(false)}
         onChanged={handleRecheck}
       />
       <InstallWizard
         open={installOpen}
         inventorySkills={skills}
-        agents={report?.agents ?? []}
+        agents={report?.agents ?? EMPTY_DETECTED_AGENTS}
         onClose={() => setInstallOpen(false)}
       />
       <ExitDialog

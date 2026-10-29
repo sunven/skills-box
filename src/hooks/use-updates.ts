@@ -80,13 +80,15 @@ export function useCheckUpdates() {
       inFlight.current = false;
     },
   });
-  const mutate = useCallback(
-    (skillIds?: string[]) => {
-      if (inFlight.current) return;
-      inFlight.current = true;
-      mutation.mutate(skillIds);
-    },
-    [mutation],
-  );
+  // Keep `mutate` stable so callers can memoize their own handlers; the
+  // in-flight guard already prevents duplicate checks, so it does not need to
+  // depend on the ever-changing mutation result object.
+  const mutateRef = useRef(mutation.mutate);
+  mutateRef.current = mutation.mutate;
+  const mutate = useCallback((skillIds?: string[]) => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    mutateRef.current(skillIds);
+  }, []);
   return { ...mutation, mutate };
 }

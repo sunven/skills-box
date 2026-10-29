@@ -56,10 +56,18 @@ export function ManageAgentsDialog({
     () => agents.filter((agent) => agent.origin !== "catalog"),
     [agents],
   );
-  const attachmentCount = (agentId: string) =>
-    skills.filter((skill) =>
-      skill.attachments.some((attachment) => attachment.agentId === agentId),
-    ).length;
+  const attachmentCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const skill of skills) {
+      const seenAgents = new Set<string>();
+      for (const attachment of skill.attachments) {
+        if (seenAgents.has(attachment.agentId)) continue;
+        seenAgents.add(attachment.agentId);
+        counts.set(attachment.agentId, (counts.get(attachment.agentId) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }, [skills]);
 
   const busy = adding || deleting !== null;
 
@@ -221,7 +229,7 @@ export function ManageAgentsDialog({
             ) : (
               <ul className="mt-2.5 space-y-1.5">
                 {extras.map((agent) => {
-                  const count = attachmentCount(agent.id);
+                  const count = attachmentCounts.get(agent.id) ?? 0;
                   const confirmingThis = confirming === agent.id;
                   return (
                     <li

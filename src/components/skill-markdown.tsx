@@ -1,4 +1,4 @@
-import type { ReactElement, ReactNode } from "react";
+import { memo, useMemo, type ReactElement, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import { openExternalUrl } from "../lib/api";
@@ -119,6 +119,22 @@ function headingId(children: ReactNode): string {
   return slug || "section";
 }
 
+function MarkdownHeading2({ children }: { children?: ReactNode }) {
+  return <h2 id={headingId(children)}>{children}</h2>;
+}
+
+function MarkdownHeading3({ children }: { children?: ReactNode }) {
+  return <h3 id={headingId(children)}>{children}</h3>;
+}
+
+function MarkdownHeading4({ children }: { children?: ReactNode }) {
+  return <h4 id={headingId(children)}>{children}</h4>;
+}
+
+function openExternal(url: string) {
+  void openExternalUrl(url);
+}
+
 function ImageNote({
   label,
   note,
@@ -213,54 +229,61 @@ interface SkillMarkdownProps {
  * and go through the opener. Relative links and images stay inside the skill:
  * they select a file in the content browser, whose backend guards every path.
  */
-export function SkillMarkdown({
+export const SkillMarkdown = memo(function SkillMarkdown({
   content,
   onOpenUrl,
   internalLinks,
 }: SkillMarkdownProps) {
-  const open = onOpenUrl ?? ((url: string) => void openExternalUrl(url));
-  const components: Components = {
-    h1: ({ children }) => <h2 id={headingId(children)}>{children}</h2>,
-    h2: ({ children }) => <h2 id={headingId(children)}>{children}</h2>,
-    h3: ({ children }) => <h3 id={headingId(children)}>{children}</h3>,
-    h4: ({ children }) => <h4 id={headingId(children)}>{children}</h4>,
-    a: ({ href, children }) => (
-      <SafeLink href={href} onOpen={open} internalLinks={internalLinks}>
-        {children}
-      </SafeLink>
-    ),
-    img: ({ src, alt }) => {
-      const url = typeof src === "string" ? src : "";
-      const label = alt?.trim() || "未命名图片";
-      if (isHttpsUrl(url)) {
+  const open = onOpenUrl ?? openExternal;
+  // A stable component map keeps ReactMarkdown from remounting every node when
+  // an unrelated parent re-render happens (e.g. typing in the search box).
+  const components = useMemo<Components>(
+    () => ({
+      h1: MarkdownHeading2,
+      h2: MarkdownHeading2,
+      h3: MarkdownHeading3,
+      h4: MarkdownHeading4,
+      a: ({ href, children }) => (
+        <SafeLink href={href} onOpen={open} internalLinks={internalLinks}>
+          {children}
+        </SafeLink>
+      ),
+      img: ({ src, alt }) => {
+        const url = typeof src === "string" ? src : "";
+        const label = alt?.trim() || "未命名图片";
+        if (isHttpsUrl(url)) {
+          return (
+            <span className="my-1 inline-flex flex-wrap items-center gap-1 rounded-sm border border-border bg-raised px-1.5 py-0.5 text-[12px] text-muted-foreground">
+              <span>图片：{label}</span>
+              <SafeLink href={url} onOpen={open}>
+                打开图片
+              </SafeLink>
+            </span>
+          );
+        }
+        if (internalLinks && url && safeMarkdownUrl(url) === url) {
+          return (
+            <InternalImage
+              src={url}
+              alt={label}
+              internalLinks={internalLinks}
+            />
+          );
+        }
         return (
-          <span className="my-1 inline-flex flex-wrap items-center gap-1 rounded-sm border border-border bg-raised px-1.5 py-0.5 text-[12px] text-muted-foreground">
-            <span>图片：{label}</span>
-            <SafeLink href={url} onOpen={open}>
-              打开图片
-            </SafeLink>
-          </span>
-        );
-      }
-      if (internalLinks && url && safeMarkdownUrl(url) === url) {
-        return (
-          <InternalImage
-            src={url}
-            alt={label}
-            internalLinks={internalLinks}
+          <ImageNote
+            label={label}
+            note={
+              /^https?:\/\//i.test(url)
+                ? "远程图片未加载"
+                : "本地图片未加载"
+            }
           />
         );
-      }
-      return (
-        <ImageNote
-          label={label}
-          note={
-            /^https?:\/\//i.test(url) ? "远程图片未加载" : "本地图片未加载"
-          }
-        />
-      );
-    },
-  };
+      },
+    }),
+    [open, internalLinks],
+  );
 
   return (
     <div className="skill-markdown" data-testid="skill-markdown-rendered">
@@ -274,4 +297,4 @@ export function SkillMarkdown({
       </ReactMarkdown>
     </div>
   );
-}
+});
