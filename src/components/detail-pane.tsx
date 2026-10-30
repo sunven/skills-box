@@ -61,6 +61,8 @@ interface DetailPaneProps {
   scope: ScopeId;
   skill: UpdateViewSkill;
   agents?: InventoryAgent[];
+  /** Unavailable/error scope: every attachment mutation is disabled. */
+  actionsDisabled?: boolean;
   checkingUpdates?: boolean;
   onCheckUpdates?: (skillIds: string[]) => void;
   onUpdate?: (skillName: string) => void;
@@ -192,9 +194,11 @@ function UpdateStatus({ skill }: { skill: UpdateViewSkill }) {
 function AgentAttachmentRow({
   attachment,
   onDetach,
+  disabled = false,
 }: {
   attachment: SkillDetail["attachments"][number];
   onDetach: (attachment: AgentAttachment) => void;
+  disabled?: boolean;
 }) {
   const broken = attachment.mode === "broken";
   const logo = agentLogoUrl(attachment.agentId);
@@ -243,6 +247,7 @@ function AgentAttachmentRow({
           size="sm"
           className="ml-auto h-7 shrink-0 px-2 text-[12px]"
           aria-label={`断开 ${attachment.agentName}`}
+          disabled={disabled}
           onClick={() => onDetach(attachment)}
         >
           <Unlink aria-hidden="true" />
@@ -257,6 +262,7 @@ export const DetailPane = memo(function DetailPane({
   scope,
   skill,
   agents = NO_AGENTS,
+  actionsDisabled = false,
   checkingUpdates = false,
   onCheckUpdates,
   onUpdate,
@@ -341,7 +347,7 @@ export const DetailPane = memo(function DetailPane({
 
   const confirmDetach = async () => {
     const target = detachTarget;
-    if (!target) return;
+    if (!target || actionsDisabled) return;
     await detachMutation.start(
       promiseDriver({
         total: 0,
@@ -779,11 +785,13 @@ export const DetailPane = memo(function DetailPane({
                     size="sm"
                     className="h-7 shrink-0 px-2 text-[12px]"
                     data-testid="detail-attach"
-                    disabled={attachableAgents.length === 0}
+                    disabled={actionsDisabled || attachableAgents.length === 0}
                     title={
-                      attachableAgents.length === 0
-                        ? "没有可挂载的 agent（需已检测、未挂载且不共享 canonical）"
-                        : "为这个 skill 追加一个 agent 挂载"
+                      actionsDisabled
+                        ? "当前作用域不可用，挂载已禁用"
+                        : attachableAgents.length === 0
+                          ? "没有可挂载的 agent（需已检测、未挂载且不共享 canonical）"
+                          : "为这个 skill 追加一个 agent 挂载"
                     }
                     onClick={() => setAttachOpen(true)}
                   >
@@ -802,6 +810,7 @@ export const DetailPane = memo(function DetailPane({
                     <AgentAttachmentRow
                       key={`${attachment.agentId}:${attachment.path}`}
                       attachment={attachment}
+                      disabled={actionsDisabled}
                       onDetach={openDetach}
                     />
                   ))}
@@ -888,6 +897,7 @@ export const DetailPane = memo(function DetailPane({
           error={
             detachMutation.state.startError ?? detachMutation.state.error
           }
+          disabled={actionsDisabled}
           onClose={() => {
             if (detachMutation.state.running) return;
             setDetachTarget(null);
@@ -902,6 +912,7 @@ export const DetailPane = memo(function DetailPane({
           skillName={skill.name}
           agents={agents}
           attachments={attachments}
+          disabled={actionsDisabled}
           onClose={() => setAttachOpen(false)}
         />
       </aside>

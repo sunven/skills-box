@@ -404,6 +404,7 @@ fn build_snapshot(paths: &AppPaths, layout: &ScopeLayout, catalog: &Catalog) -> 
     InventorySnapshot {
         skills,
         agents: agent_rows,
+        install_targets: inventory::install_target_rows(paths, layout),
         anomalies,
         warnings,
         generated_at_epoch_ms: now_ms(),
@@ -432,15 +433,12 @@ fn build_view(
                 LocalModification::Unknown,
                 Some("未受管：没有 lock 条目，无法判断本地改动。".to_string()),
             )
-        } else if project_root.is_some() {
-            // Project baselines are per scope and land with the mutation
-            // tickets; never compare project content against global baselines.
-            (
-                LocalModification::Unknown,
-                Some("项目作用域尚未记录本地基线，无法判断本地改动。".to_string()),
-            )
         } else {
-            let assessment = BaselineStore::new(paths).assess(
+            // Baselines are per scope: a project skill is never compared with
+            // a global baseline of the same name. Project locks carry a
+            // SHA-256 content hash, so only the recorded baseline can decide
+            // clean vs modified; an externally installed skill stays unknown.
+            let assessment = BaselineStore::for_scope(paths, &layout.scope).assess(
                 name,
                 primary,
                 lock_entry

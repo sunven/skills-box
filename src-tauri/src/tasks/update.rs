@@ -64,6 +64,9 @@ impl UpdateItem {
             agent_ids: self.agent_ids.clone(),
             targets: self.targets.clone(),
             retry: false,
+            scope: crate::scope::ScopeId::Global,
+            cwd: None,
+            global: true,
         }
     }
 
@@ -331,12 +334,13 @@ pub fn verify_update(
     }
 
     let plan = item.install_plan();
+    let layout = crate::scope_layout::ScopeLayout::global(paths, crate::inventory::detected_agent_dirs(paths));
     // Extra-agent links point at the canonical folder path, which survives the
     // CLI rewrite, so this is normally a no-op; it still restores a link that
     // vanished and reports a precise error when the path is occupied.
     let link_error =
-        ensure_extra_attachments(paths, &plan, std::slice::from_ref(&item.name)).remove(&item.name);
-    let verification = verify_install(paths, &plan, &cli_results);
+        ensure_extra_attachments(&layout, &plan, std::slice::from_ref(&item.name)).remove(&item.name);
+    let verification = verify_install(&layout, &plan, &cli_results);
     let result = if let Some(error) = link_error {
         Err(error)
     } else {
@@ -1012,7 +1016,11 @@ mod tests {
     struct NoConflicts;
 
     impl ConflictProvider for NoConflicts {
-        fn lookup(&self, _names: &[String]) -> std::collections::HashMap<String, ConflictInfo> {
+        fn lookup(
+            &self,
+            _layout: &crate::scope_layout::ScopeLayout,
+            _names: &[String],
+        ) -> std::collections::HashMap<String, ConflictInfo> {
             std::collections::HashMap::new()
         }
     }

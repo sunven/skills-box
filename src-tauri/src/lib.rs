@@ -59,14 +59,15 @@ impl AppState {
     pub fn new(paths: AppPaths) -> Self {
         let environment = Arc::new(EnvironmentService::from_process(paths.clone()));
         let runtime: Arc<dyn CliRuntimeProvider> = environment.clone();
-        let tasks = TaskManager::new(
+        let projects = Arc::new(ProjectRegistry::new(paths.clone()));
+        let tasks = TaskManager::with_projects(
             runtime,
             Arc::new(TokioExecutor),
             Arc::new(InventoryConflictProvider::new(paths.clone())),
             paths.clone(),
+            Arc::clone(&projects),
             TaskManagerConfig::default(),
         );
-        let projects = Arc::new(ProjectRegistry::new(paths.clone()));
         Self {
             read_model: Arc::new(ReadModel::with_projects(
                 paths.clone(),

@@ -1017,7 +1017,11 @@ mod execution_tests {
     struct NoConflicts;
 
     impl ConflictProvider for NoConflicts {
-        fn lookup(&self, _names: &[String]) -> HashMap<String, ConflictInfo> {
+        fn lookup(
+            &self,
+            _layout: &crate::scope_layout::ScopeLayout,
+            _names: &[String],
+        ) -> HashMap<String, ConflictInfo> {
             HashMap::new()
         }
     }

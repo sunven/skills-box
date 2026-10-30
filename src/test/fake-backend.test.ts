@@ -111,6 +111,119 @@ describe("fake backend", () => {
     expect(getSnapshot(backend).agents).toHaveLength(1);
   });
 
+  it("applies preview and install to the selected scope snapshot", () => {
+    vi.useFakeTimers();
+    try {
+      const scope = "project:p1";
+      const backend = createFakeBackend({
+        data: {
+          projects: {
+            projects: [
+              {
+                id: "p1",
+                root: "/tmp/proj",
+                displayName: "proj",
+                addedAt: 1,
+                lastOpenedAt: 1,
+                available: true,
+              },
+            ],
+            lastActiveScope: scope,
+            warnings: [],
+          },
+          snapshots: { [scope]: makeSnapshot({ agents: [claudeAgent] }) },
+          previews: {
+            [scope]: {
+              source: "proj/skills",
+              skills: [{ name: "beta", description: "Project beta" }],
+              parseFailed: false,
+              noSkills: false,
+            },
+          },
+        },
+        autoTasks: { delayMs: 10 },
+      }).install();
+      const channel = new Channel<TaskEvent>();
+      const received: TaskEvent[] = [];
+      channel.onmessage = (event) => received.push(event);
+
+      backend.dispatch(API_COMMANDS.startPreview, {
+        source: "proj/skills",
+        scope,
+        onEvent: channel,
+      });
+      vi.advanceTimersByTime(50);
+      expect(received[received.length - 1]?.result?.preview?.source).toBe(
+        "proj/skills",
+      );
+
+      backend.dispatch(API_COMMANDS.startInstall, {
+        request: {
+          source: "proj/skills",
+          skills: ["beta"],
+          agents: [],
+        },
+        scope,
+        onEvent: new Channel<TaskEvent>(),
+      });
+      vi.advanceTimersByTime(50);
+
+      const project = backend.dispatch(API_COMMANDS.getInventory, {
+        scope,
+      }) as InventorySnapshot;
+      expect(project.skills).toMatchObject([
+        {
+          name: "beta",
+          id: `${scope}/beta`,
+          canonicalPath: "/tmp/proj/.agents/skills/beta",
+        },
+      ]);
+      const global = backend.dispatch(API_COMMANDS.getInventory, {
+        scope: GLOBAL_SCOPE,
+      }) as InventorySnapshot;
+      expect(global.skills).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("attaches and detaches in the selected scope only", () => {
+    const scope = "project:p1";
+    const projectSnapshot = makeSnapshot({
+      skills: [makeSkill({ id: `${scope}/alpha`, name: "alpha" })],
+      agents: [claudeAgent],
+    });
+    const backend = createFakeBackend({
+      data: {
+        snapshot: snapshotWith(),
+        snapshots: { [scope]: projectSnapshot },
+      },
+    });
+    backend.dispatch(API_COMMANDS.attachAgent, {
+      scope,
+      skillId: `${scope}/alpha`,
+      agentId: "claude-code",
+    });
+    let project = backend.dispatch(API_COMMANDS.getInventory, {
+      scope,
+    }) as InventorySnapshot;
+    expect(project.skills[0]!.attachments).toHaveLength(1);
+    const global = backend.dispatch(API_COMMANDS.getInventory, {
+      scope: GLOBAL_SCOPE,
+    }) as InventorySnapshot;
+    expect(global.skills[0]!.attachments).toHaveLength(0);
+
+    backend.dispatch(API_COMMANDS.detachAgent, {
+      scope,
+      skillId: `${scope}/alpha`,
+      agentId: "claude-code",
+    });
+    project = backend.dispatch(API_COMMANDS.getInventory, {
+      scope,
+    }) as InventorySnapshot;
+    expect(project.skills[0]!.attachments).toHaveLength(0);
+  });
+
   it("lets overrides fail and fall through to the default handler", async () => {
     let attempts = 0;
     createFakeBackend({

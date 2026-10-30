@@ -22,6 +22,8 @@ interface AttachDialogProps {
   skillName: string;
   agents: InventoryAgent[];
   attachments: AgentAttachment[];
+  /** Disabled for unavailable/error scopes. */
+  disabled?: boolean;
   onClose: () => void;
 }
 
@@ -37,6 +39,7 @@ export function AttachDialog({
   skillName,
   agents,
   attachments,
+  disabled = false,
   onClose,
 }: AttachDialogProps) {
   const panelRef = useRef<HTMLDivElement>(null);
@@ -102,7 +105,7 @@ export function AttachDialog({
 
   const confirm = async () => {
     const targets = eligible.filter((agent) => selected.has(agent.id));
-    if (targets.length === 0 || running) return;
+    if (targets.length === 0 || running || disabled) return;
     const outcome = await mutation.start(
       promiseDriver({
         total: targets.length,
@@ -198,7 +201,7 @@ export function AttachDialog({
                       type="checkbox"
                       className="size-4 accent-[var(--primary)]"
                       checked={selected.has(agent.id)}
-                      disabled={running}
+                      disabled={running || disabled}
                       aria-label={`挂载到 ${agent.displayName}`}
                       onChange={() => toggle(agent.id)}
                     />
@@ -267,7 +270,7 @@ export function AttachDialog({
             <Button
               size="sm"
               aria-busy={running}
-              disabled={running || eligible.length === 0 || selected.size === 0}
+              disabled={running || disabled || eligible.length === 0 || selected.size === 0}
               onClick={() => void confirm()}
             >
               {running ? "正在挂载…" : `挂载${selected.size > 0 ? `（${selected.size}）` : ""}`}
