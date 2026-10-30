@@ -5,9 +5,10 @@
 //! killed (confirmed exit while a mutation runs, crash, power loss), the marker
 //! survives together with the mandatory backup snapshots.
 //!
-//! On the next start `inspect` re-reads the strict v3 lock health and reports
-//! which snapshots still exist, so the UI can surface a warning instead of
-//! silently pretending the previous operation either succeeded or never ran.
+//! On the next start `inspect` re-reads the crashed Scope's Lock entry health
+//! (global v3 or project v1) and reports which snapshots still exist, so the UI
+//! can surface a warning instead of silently pretending the previous operation
+//! either succeeded or never ran.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -46,6 +47,11 @@ pub struct InterruptedMutation {
     /// read as global so the next launch still warns.
     #[serde(default)]
     pub scope: crate::scope::ScopeId,
+    /// Lock entry the mutation actually wrote. A Project may be relocated or
+    /// forgotten before the next launch, so the marker must be self-contained.
+    /// Legacy markers omit it and fall back to the global lock.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lock_path: Option<String>,
     pub skills: Vec<String>,
     pub started_at_epoch_ms: u64,
     #[serde(default)]
@@ -160,8 +166,23 @@ impl MarkerStore {
             MarkerRead::Corrupt(detail) => (true, None, Some(detail)),
             MarkerRead::Present(mutation) => (false, Some(mutation), None),
         };
+        let recorded_lock = mutation
+            .as_ref()
+            .and_then(|mutation| mutation.lock_path.as_deref());
+        let (lock_path, lock_schema) = match recorded_lock {
+            Some(path) => {
+                let schema = match mutation.as_ref().map(|mutation| &mutation.scope) {
+                    Some(crate::scope::ScopeId::Project(_)) => lock_health::LockSchema::ProjectV1,
+                    _ => lock_health::LockSchema::GlobalV3,
+                };
+                (PathBuf::from(path), schema)
+            }
+            // A legacy marker has no recorded path; keep inspecting the global
+            // lock even if its scope was serialized as a project.
+            None => (self.lock_path.clone(), lock_health::LockSchema::GlobalV3),
+        };
         let lock =
-            lock_health::inspect_path(&self.lock_path, &self.lock_path.display().to_string());
+            lock_health::inspect_path(&lock_path, &lock_path.display().to_string(), lock_schema);
 
         let mut snapshots_present = Vec::new();
         let mut snapshots_missing = Vec::new();
@@ -247,6 +268,7 @@ mod tests {
             task_id: "task-7".to_string(),
             kind: MutationKind::Update,
             scope: crate::scope::ScopeId::Global,
+            lock_path: None,
             skills: skills.iter().map(|skill| skill.to_string()).collect(),
             started_at_epoch_ms: 1_700_000_000_000,
             snapshot_paths: Vec::new(),
@@ -332,6 +354,56 @@ mod tests {
         assert_eq!(report.lock.status, crate::env::LockStatus::Corrupt);
         assert!(!report.lock_is_healthy());
         assert!(report.snapshots_are_intact(), "no snapshots were recorded");
+    }
+
+    #[test]
+    fn project_marker_inspects_the_project_lock() {
+        let (tmp, paths, store) = fixture();
+        let project_root = tmp.path().join("project");
+        fs::create_dir_all(&project_root).unwrap();
+        let project_lock = project_root.join("skills-lock.json");
+        fs::write(
+            &project_lock,
+            r#"{"version":1,"skills":{"alpha":{"source":"a/b"}}}"#,
+        )
+        .unwrap();
+        // A corrupt global lock must not contaminate the project verdict.
+        fs::create_dir_all(paths.agents_root()).unwrap();
+        fs::write(paths.lock_path(), b"{broken").unwrap();
+
+        let mut record = mutation(&["alpha"]);
+        record.scope = crate::scope::ScopeId::project(uuid::Uuid::new_v4());
+        record.lock_path = Some(project_lock.to_string_lossy().into_owned());
+        store.begin(&record).unwrap();
+
+        let report = store.inspect().unwrap();
+        assert_eq!(report.lock.path, project_lock.to_string_lossy());
+        assert_eq!(report.lock.status, crate::env::LockStatus::Ok);
+        assert!(report.lock_is_healthy());
+
+        fs::write(&project_lock, b"{broken").unwrap();
+        let report = store.inspect().unwrap();
+        assert_eq!(report.lock.status, crate::env::LockStatus::Corrupt);
+        assert!(!report.lock_is_healthy());
+    }
+
+    #[test]
+    fn legacy_marker_without_a_lock_path_inspects_the_global_lock() {
+        let (_tmp, paths, store) = fixture();
+        fs::create_dir_all(paths.agents_root()).unwrap();
+        fs::write(paths.lock_path(), b"{broken").unwrap();
+        let legacy = r#"{
+            "taskId": "task-legacy",
+            "kind": "update",
+            "skills": ["alpha"],
+            "startedAtEpochMs": 1,
+            "snapshotPaths": []
+        }"#;
+        fs::write(store.path(), legacy).unwrap();
+
+        let report = store.inspect().unwrap();
+        assert_eq!(report.lock.path, paths.lock_path().display().to_string());
+        assert_eq!(report.lock.status, crate::env::LockStatus::Corrupt);
     }
 
     #[test]

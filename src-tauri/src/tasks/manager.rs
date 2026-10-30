@@ -271,6 +271,9 @@ enum TaskState {
 #[derive(Debug, Clone)]
 struct MutationState {
     scope: crate::scope::ScopeId,
+    /// Lock entry this mutation writes; recorded in the interruption marker so
+    /// the next launch inspects the crashed Scope, not the global store.
+    lock_path: String,
     kind: MutationKind,
     skills: Vec<String>,
     started_at_epoch_ms: u64,
@@ -339,6 +342,20 @@ impl std::fmt::Debug for TaskManager {
             .debug_struct("TaskManager")
             .field("tasks", &count)
             .finish_non_exhaustive()
+    }
+}
+
+/// One marker record for a running mutation. The two marker writers share it
+/// so the recorded lock path cannot drift from the task state.
+fn mutation_record(task_id: &str, mutation: &MutationState) -> InterruptedMutation {
+    InterruptedMutation {
+        task_id: task_id.to_string(),
+        kind: mutation.kind,
+        scope: mutation.scope.clone(),
+        lock_path: Some(mutation.lock_path.clone()),
+        skills: mutation.skills.clone(),
+        started_at_epoch_ms: mutation.started_at_epoch_ms,
+        snapshot_paths: mutation.snapshot_paths.clone(),
     }
 }
 
@@ -473,14 +490,7 @@ impl TaskManager {
             else {
                 return;
             };
-            InterruptedMutation {
-                task_id: task_id.to_string(),
-                kind: mutation.kind,
-                scope: mutation.scope.clone(),
-                skills: mutation.skills.clone(),
-                started_at_epoch_ms: mutation.started_at_epoch_ms,
-                snapshot_paths: mutation.snapshot_paths.clone(),
-            }
+            mutation_record(task_id, mutation)
         };
         let _ = self.inner.marker.begin(&record);
     }
@@ -500,14 +510,7 @@ impl TaskManager {
             if !mutation.snapshot_paths.contains(&snapshot) {
                 mutation.snapshot_paths.push(snapshot);
             }
-            InterruptedMutation {
-                task_id: task_id.to_string(),
-                kind: mutation.kind,
-                scope: mutation.scope.clone(),
-                skills: mutation.skills.clone(),
-                started_at_epoch_ms: mutation.started_at_epoch_ms,
-                snapshot_paths: mutation.snapshot_paths.clone(),
-            }
+            mutation_record(task_id, mutation)
         };
         let _ = self.inner.marker.begin(&record);
     }
@@ -623,6 +626,7 @@ impl TaskManager {
         kind: MutationKind,
         skills: Vec<String>,
         scope: crate::scope::ScopeId,
+        lock_path: String,
     ) -> (TaskId, CancelToken) {
         let task_id = format!("task-{}", self.inner.next_id.fetch_add(1, Ordering::SeqCst));
         let cancel = CancelToken::new();
@@ -638,6 +642,7 @@ impl TaskManager {
                     cancellable: true,
                     mutation: Some(MutationState {
                         scope,
+                        lock_path,
                         kind,
                         skills,
                         started_at_epoch_ms,
@@ -686,6 +691,7 @@ impl TaskManager {
             MutationKind::Install,
             plan.skills.clone(),
             scope,
+            layout.lock_path.to_string_lossy().into_owned(),
         );
 
         let action = install::InstallAction::new(
@@ -876,6 +882,7 @@ impl TaskManager {
             MutationKind::Update,
             plan.items.iter().map(|item| item.name.clone()).collect(),
             scope,
+            layout.lock_path.to_string_lossy().into_owned(),
         );
 
         let action = update_task::UpdateAction::new(
@@ -929,6 +936,7 @@ impl TaskManager {
             MutationKind::Uninstall,
             vec![plan.name.clone()],
             scope,
+            layout.lock_path.to_string_lossy().into_owned(),
         );
 
         let action = uninstall_task::UninstallAction::new(
@@ -2834,11 +2842,13 @@ mod tests {
     fn mutation_task_result_and_marker_records_carry_the_scope() {
         let (_tmp, _home, _paths, _executor, manager) = hanging_install_fixture();
         let scope = crate::scope::ScopeId::project(uuid::Uuid::new_v4());
+        let lock_path = "/tmp/project/skills-lock.json".to_string();
         let (_task_id, _cancel) = manager.register_mutation(
             TaskAction::Update,
             MutationKind::Update,
             vec!["alpha".to_string()],
             scope.clone(),
+            lock_path.clone(),
         );
         assert_eq!(manager.active_mutation().unwrap().scope, scope);
         let record = MarkerStore::new(&manager.inner.paths).read();
@@ -2846,6 +2856,7 @@ mod tests {
             panic!("mutation marker should exist");
         };
         assert_eq!(record.scope, scope);
+        assert_eq!(record.lock_path, Some(lock_path));
     }
 
     #[tokio::test]

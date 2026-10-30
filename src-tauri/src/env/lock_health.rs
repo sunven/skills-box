@@ -1,8 +1,10 @@
-//! Read-only health check for `~/.agents/.skill-lock.json`.
+//! Read-only health check for one Scope's Lock entry.
 //!
 //! This is not the inventory lock model (a later ticket owns it); it only
-//! tells the environment banner whether the lock is missing (normal on a
-//! fresh machine), valid v3, corrupt, or an unsupported version.
+//! tells the environment banner or the startup interruption report whether the
+//! lock is missing (normal on a fresh machine), valid for its schema, corrupt,
+//! or an unsupported version. Global scopes use the v3 lock; Project roots use
+//! the v1 `skills-lock.json`.
 
 use std::path::Path;
 
@@ -38,14 +40,52 @@ impl LockHealth {
     }
 }
 
+/// Lock schema owned by one Scope. The startup interruption report selects it
+/// from the marker's scope; the environment banner always inspects Global.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockSchema {
+    GlobalV3,
+    ProjectV1,
+}
+
+impl LockSchema {
+    fn expected_version(self) -> u64 {
+        match self {
+            Self::GlobalV3 => 3,
+            Self::ProjectV1 => crate::project_lock::PROJECT_LOCK_VERSION,
+        }
+    }
+
+    fn corrupt(self, detail: impl Into<String>) -> AppError {
+        match self {
+            Self::GlobalV3 => AppError::lock_corrupt(detail),
+            Self::ProjectV1 => AppError::project_lock_corrupt(detail),
+        }
+    }
+
+    fn unsupported(self, version: u64) -> AppError {
+        match self {
+            Self::GlobalV3 => AppError::lock_unsupported_version(version),
+            Self::ProjectV1 => AppError::project_lock_unsupported_version(version),
+        }
+    }
+
+    fn read_failed(self, detail: impl Into<String>) -> AppError {
+        match self {
+            Self::GlobalV3 => AppError::lock_read_failed(detail),
+            Self::ProjectV1 => AppError::project_lock_read_failed(detail),
+        }
+    }
+}
+
 pub fn inspect(paths: &AppPaths) -> LockHealth {
     let path = paths.lock_path();
-    inspect_path(&path, &paths.display(&path))
+    inspect_path(&path, &paths.display(&path), LockSchema::GlobalV3)
 }
 
 /// Same strict rules as [`inspect`] for callers that hold an explicit lock
-/// path (startup interruption verification, tests).
-pub fn inspect_path(path: &Path, display: &str) -> LockHealth {
+/// path and schema (startup interruption verification, tests).
+pub fn inspect_path(path: &Path, display: &str, schema: LockSchema) -> LockHealth {
     let display = display.to_string();
     let raw = match std::fs::read_to_string(path) {
         Ok(raw) => raw,
@@ -66,7 +106,7 @@ pub fn inspect_path(path: &Path, display: &str) -> LockHealth {
                 status: LockStatus::Unreadable,
                 version: None,
                 skill_count: None,
-                error: Some(AppError::lock_read_failed(error.to_string())),
+                error: Some(schema.read_failed(error.to_string())),
             };
         }
     };
@@ -80,21 +120,21 @@ pub fn inspect_path(path: &Path, display: &str) -> LockHealth {
                 status: LockStatus::Corrupt,
                 version: None,
                 skill_count: None,
-                error: Some(AppError::lock_corrupt(error.to_string())),
+                error: Some(schema.corrupt(error.to_string())),
             };
         }
     };
 
     let version = value.get("version").and_then(serde_json::Value::as_u64);
-    if version != Some(3) {
+    if version != Some(schema.expected_version()) {
         let status = if version.is_some() {
             LockStatus::Unsupported
         } else {
             LockStatus::Corrupt
         };
         let error = match version {
-            Some(version) => AppError::lock_unsupported_version(version),
-            None => AppError::lock_corrupt("缺少 version 字段或类型错误"),
+            Some(version) => schema.unsupported(version),
+            None => schema.corrupt("缺少 version 字段或类型错误"),
         };
         return LockHealth {
             path: display,
@@ -113,7 +153,7 @@ pub fn inspect_path(path: &Path, display: &str) -> LockHealth {
             status: LockStatus::Corrupt,
             version,
             skill_count: None,
-            error: Some(AppError::lock_corrupt("skills 字段缺失或不是对象")),
+            error: Some(schema.corrupt("skills 字段缺失或不是对象")),
         };
     };
 
@@ -201,5 +241,46 @@ mod tests {
         let health = inspect(&paths);
         assert_eq!(health.status, LockStatus::Corrupt);
         assert_eq!(health.error.as_ref().unwrap().code, ErrorCode::LockCorrupt);
+    }
+
+    #[test]
+    fn valid_project_v1_lock_is_healthy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("skills-lock.json");
+        std::fs::write(
+            &path,
+            r#"{"version":1,"skills":{"alpha":{"source":"a/b"}}}"#,
+        )
+        .unwrap();
+        let health = inspect_path(&path, "project-lock", LockSchema::ProjectV1);
+        assert_eq!(health.status, LockStatus::Ok);
+        assert_eq!(health.version, Some(1));
+        assert_eq!(health.skill_count, Some(1));
+        assert!(health.healthy());
+    }
+
+    #[test]
+    fn global_v3_lock_is_unsupported_under_the_project_schema() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("skills-lock.json");
+        std::fs::write(&path, r#"{"version":3,"skills":{}}"#).unwrap();
+        let health = inspect_path(&path, "project-lock", LockSchema::ProjectV1);
+        assert_eq!(health.status, LockStatus::Unsupported);
+        assert!(!health.healthy());
+        assert_eq!(
+            health.error.as_ref().unwrap().code,
+            ErrorCode::ProjectLockUnsupported
+        );
+    }
+
+    #[test]
+    fn project_corrupt_json_uses_the_project_message() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("skills-lock.json");
+        std::fs::write(&path, b"{not json").unwrap();
+        let health = inspect_path(&path, "project-lock", LockSchema::ProjectV1);
+        assert_eq!(health.status, LockStatus::Corrupt);
+        assert_eq!(health.error.as_ref().unwrap().code, ErrorCode::LockCorrupt);
+        assert!(health.error.as_ref().unwrap().message.contains("项目"));
     }
 }
