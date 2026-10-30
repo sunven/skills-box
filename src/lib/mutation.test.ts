@@ -3,14 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 import {
   initialMutationState,
   mutationHeading,
-  mutationRefreshKeys,
+  mutationRefreshPlan,
   mutationRunReducer,
   normalizePromiseResult,
   normalizeTaskResult,
   refreshMutationQueries,
 } from "./mutation";
 import type { MutationResultView } from "./mutation";
-import type { TaskResult, UpdateCheckReport } from "./types";
+import type { ScopeId, TaskResult, UpdateCheckReport } from "./types";
 import { GLOBAL_SCOPE } from "./types";
 import { updateReportQueryKey } from "./update-view";
 
@@ -237,18 +237,63 @@ describe("mutation lifecycle", () => {
 
 describe("mutation refresh", () => {
   it("scopes refresh keys to both the scope and the mutated skill", () => {
-    expect(mutationRefreshKeys("attach", GLOBAL_SCOPE, "alpha")).toEqual([
-      ["inventory", GLOBAL_SCOPE],
-      ["skill", GLOBAL_SCOPE, "alpha"],
-      ["skill-dir", GLOBAL_SCOPE, "alpha"],
-      ["skill-file", GLOBAL_SCOPE, "alpha"],
+    expect(mutationRefreshPlan("attach", GLOBAL_SCOPE, "alpha")).toEqual({
+      invalidate: [
+        ["inventory", GLOBAL_SCOPE],
+        ["skill", GLOBAL_SCOPE, "alpha"],
+        ["skill-dir", GLOBAL_SCOPE, "alpha"],
+        ["skill-file", GLOBAL_SCOPE, "alpha"],
+      ],
+      remove: [],
+    });
+    expect(mutationRefreshPlan("update", GLOBAL_SCOPE, "alpha")).toEqual({
+      invalidate: [
+        ["inventory", GLOBAL_SCOPE],
+        ["skill", GLOBAL_SCOPE],
+        ["updateReport", GLOBAL_SCOPE],
+      ],
+      remove: [],
+    });
+    expect(mutationRefreshPlan("manage_add", GLOBAL_SCOPE)).toEqual({
+      invalidate: [],
+      remove: [],
+    });
+  });
+
+  it("removes a forgotten project's scope caches instead of refetching them", () => {
+    const project: ScopeId =
+      "project:11111111-1111-4111-8111-111111111111";
+
+    const relocate = mutationRefreshPlan("project_relocate", project);
+    expect(relocate.invalidate).toEqual(
+      expect.arrayContaining([
+        ["projects"],
+        ["inventory", project],
+        ["skill", project],
+        ["updateReport", project],
+        ["updateCheckState", project],
+        ["updateCheckStates"],
+        ["lastFullCheck", project],
+        ["lastFullAttempt", project],
+      ]),
+    );
+    expect(relocate.remove).toEqual([]);
+
+    const forget = mutationRefreshPlan("project_forget", project);
+    expect(forget.invalidate).toEqual([
+      ["projects"],
+      ["updateCheckStates"],
     ]);
-    expect(mutationRefreshKeys("update", GLOBAL_SCOPE, "alpha")).toEqual([
-      ["inventory", GLOBAL_SCOPE],
-      ["skill", GLOBAL_SCOPE],
-      ["updateReport", GLOBAL_SCOPE],
-    ]);
-    expect(mutationRefreshKeys("manage_add", GLOBAL_SCOPE)).toEqual([]);
+    expect(forget.remove).toEqual(
+      expect.arrayContaining([
+        ["inventory", project],
+        ["skill", project],
+        ["updateReport", project],
+        ["updateCheckState", project],
+        ["lastFullCheck", project],
+        ["lastFullAttempt", project],
+      ]),
+    );
   });
 
   it("patches updated skills to current before invalidating the report", () => {
@@ -288,6 +333,29 @@ describe("mutation refresh", () => {
     });
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: ["updateReport", GLOBAL_SCOPE],
+    });
+  });
+
+  it("uses the result scope for project cache cleanup", () => {
+    const client = new QueryClient();
+    const invalidate = vi
+      .spyOn(client, "invalidateQueries")
+      .mockResolvedValue(undefined);
+    const remove = vi
+      .spyOn(client, "removeQueries")
+      .mockImplementation(() => {});
+    const project: ScopeId =
+      "project:11111111-1111-4111-8111-111111111111";
+
+    refreshMutationQueries(
+      client,
+      { action: "project_forget", scope: GLOBAL_SCOPE },
+      { outcome: "success", warnings: [], rows: [], scope: project },
+    );
+
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["projects"] });
+    expect(remove).toHaveBeenCalledWith({
+      queryKey: ["inventory", project],
     });
   });
 

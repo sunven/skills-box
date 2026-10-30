@@ -13,11 +13,18 @@ import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { asAppError, cancelTask, fallbackError } from "./api";
 import { TASK_SKILL_STATUS_LABELS } from "./task-runner";
 import { inventoryQueryKey } from "../hooks/use-inventory";
+import { projectsQueryKey } from "../hooks/use-projects";
 import { skillQueryKey, skillQueryPrefix } from "../hooks/use-skill-detail";
 import {
   skillDirQueryPrefix,
   skillFileQueryPrefix,
 } from "../hooks/use-skill-content";
+import {
+  lastFullAttemptQueryKey,
+  lastFullCheckQueryKey,
+  updateCheckStateQueryKey,
+  updateCheckStatesQueryKey,
+} from "../hooks/use-updates";
 import type {
   AppError,
   MutationKind,
@@ -43,7 +50,10 @@ export type MutationAction =
   | "attach"
   | "detach"
   | "manage_add"
-  | "manage_remove";
+  | "manage_remove"
+  | "project_add"
+  | "project_relocate"
+  | "project_forget";
 
 export type MutationOutcome = TaskResult["overall"];
 
@@ -67,6 +77,8 @@ export interface MutationResultView {
   warnings: AppError[];
   backupPath?: string;
   logPath?: string;
+  /** Scope the mutation affected; refresh policy prefers it over options. */
+  scope?: ScopeId;
 }
 
 const HEADING_LABELS: Record<
@@ -115,6 +127,24 @@ const HEADING_LABELS: Record<
     failed: "删除失败",
     cancelled: "删除已取消",
   },
+  project_add: {
+    success: "已添加项目",
+    partial: "添加项目部分失败",
+    failed: "添加项目失败",
+    cancelled: "添加项目已取消",
+  },
+  project_relocate: {
+    success: "已重新定位项目",
+    partial: "重新定位部分失败",
+    failed: "重新定位失败",
+    cancelled: "重新定位已取消",
+  },
+  project_forget: {
+    success: "已遗忘项目",
+    partial: "遗忘项目部分失败",
+    failed: "遗忘项目失败",
+    cancelled: "遗忘项目已取消",
+  },
 };
 
 export function mutationHeading(
@@ -149,6 +179,7 @@ export function normalizeTaskResult(result: TaskResult): MutationResultView {
     warnings: result.warnings,
     backupPath: result.backupPath,
     logPath: result.logPath,
+    scope: result.scope,
   };
 }
 
@@ -157,6 +188,8 @@ export interface PromiseMutationResult {
   warnings?: AppError[];
   backupPath?: string;
   logPath?: string;
+  /** Scope the native action affected; refresh policy prefers it. */
+  scope?: ScopeId;
   /** Optional terminal message; the progress message is kept otherwise. */
   message?: string;
 }
@@ -172,6 +205,7 @@ export function normalizePromiseResult(
     warnings: value.warnings ?? [],
     backupPath: value.backupPath,
     logPath: value.logPath,
+    scope: value.scope,
   };
 }
 
@@ -335,43 +369,80 @@ export function mutationRunReducer(
   }
 }
 
+export interface MutationRefreshPlan {
+  invalidate: QueryKey[];
+  remove: QueryKey[];
+}
+
 /**
- * Query prefixes refreshed after an action settles. Attach/detach stay scoped
- * to the mutated skill so an open drawer does not refetch every detail.
+ * Cache policy after an action settles. Attach/detach stay scoped to the
+ * mutated skill so an open drawer does not refetch every detail. Forgetting a
+ * project removes its scope caches instead of refetching a scope that no
+ * longer exists.
  */
-export function mutationRefreshKeys(
+export function mutationRefreshPlan(
   action: MutationAction,
   scope: ScopeId,
   skillId?: string,
-): QueryKey[] {
+): MutationRefreshPlan {
+  const invalidate = (keys: QueryKey[]): MutationRefreshPlan => ({
+    invalidate: keys,
+    remove: [],
+  });
   switch (action) {
     case "install":
-      return [inventoryQueryKey(scope), skillQueryPrefix(scope)];
+      return invalidate([inventoryQueryKey(scope), skillQueryPrefix(scope)]);
     case "update":
     case "uninstall":
-      return [
+      return invalidate([
         inventoryQueryKey(scope),
         skillQueryPrefix(scope),
         updateReportQueryKey(scope),
-      ];
+      ]);
     case "attach":
     case "detach":
-      return skillId
-        ? [
-            inventoryQueryKey(scope),
-            skillQueryKey(scope, skillId),
-            skillDirQueryPrefix(scope, skillId),
-            skillFileQueryPrefix(scope, skillId),
-          ]
-        : [
-            inventoryQueryKey(scope),
-            skillQueryPrefix(scope),
-            skillDirQueryPrefix(scope),
-            skillFileQueryPrefix(scope),
-          ];
+      return invalidate(
+        skillId
+          ? [
+              inventoryQueryKey(scope),
+              skillQueryKey(scope, skillId),
+              skillDirQueryPrefix(scope, skillId),
+              skillFileQueryPrefix(scope, skillId),
+            ]
+          : [
+              inventoryQueryKey(scope),
+              skillQueryPrefix(scope),
+              skillDirQueryPrefix(scope),
+              skillFileQueryPrefix(scope),
+            ],
+      );
     case "manage_add":
     case "manage_remove":
-      return [];
+      return invalidate([]);
+    case "project_add":
+    case "project_relocate":
+      return invalidate([
+        projectsQueryKey,
+        inventoryQueryKey(scope),
+        skillQueryPrefix(scope),
+        updateReportQueryKey(scope),
+        updateCheckStateQueryKey(scope),
+        updateCheckStatesQueryKey,
+        lastFullCheckQueryKey(scope),
+        lastFullAttemptQueryKey(scope),
+      ]);
+    case "project_forget":
+      return {
+        invalidate: [projectsQueryKey, updateCheckStatesQueryKey],
+        remove: [
+          inventoryQueryKey(scope),
+          skillQueryPrefix(scope),
+          updateReportQueryKey(scope),
+          updateCheckStateQueryKey(scope),
+          lastFullCheckQueryKey(scope),
+          lastFullAttemptQueryKey(scope),
+        ],
+      };
   }
 }
 
@@ -389,6 +460,7 @@ export function refreshMutationQueries(
   options: MutationRefreshOptions,
   result: MutationResultView | null,
 ): void {
+  const scope = result?.scope ?? options.scope;
   if (options.action === "update" && result) {
     const updatedNames = result.rows
       .filter(
@@ -399,17 +471,17 @@ export function refreshMutationQueries(
       .map((row) => row.name);
     if (updatedNames.length > 0) {
       queryClient.setQueryData<UpdateCheckReport | undefined>(
-        updateReportQueryKey(options.scope),
+        updateReportQueryKey(scope),
         (previous) => markSkillsCurrent(previous, updatedNames),
       );
     }
   }
-  for (const queryKey of mutationRefreshKeys(
-    options.action,
-    options.scope,
-    options.skillId,
-  )) {
+  const plan = mutationRefreshPlan(options.action, scope, options.skillId);
+  for (const queryKey of plan.invalidate) {
     void queryClient.invalidateQueries({ queryKey });
+  }
+  for (const queryKey of plan.remove) {
+    queryClient.removeQueries({ queryKey });
   }
   if (options.action === "manage_add" || options.action === "manage_remove") {
     options.onEnvironmentRecheck?.();
