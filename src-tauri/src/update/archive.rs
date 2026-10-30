@@ -409,6 +409,22 @@ impl CommitArchiveCache {
     /// Fresh-or-stale load; callers decide freshness. A commit that is not a
     /// 40-char Git SHA never resolves to a path inside the cache.
     pub fn load(&self, commit: &str, limits: ArchiveLimits) -> Option<CachedArchive> {
+        let metadata = self.metadata(commit)?;
+        let raw = fs::read(self.archive_path(commit)).ok()?;
+        let archive = SourceArchive::from_tar_gz(&raw, limits).ok()?;
+        Some(CachedArchive {
+            archive,
+            fetched_at_epoch_ms: metadata.fetched_at_epoch_ms,
+        })
+    }
+
+    /// Timestamp of a valid cache entry without reading its archive payload.
+    pub fn fetched_at(&self, commit: &str) -> Option<u64> {
+        self.metadata(commit)
+            .map(|metadata| metadata.fetched_at_epoch_ms)
+    }
+
+    fn metadata(&self, commit: &str) -> Option<ArchiveMetadata> {
         if !crate::git_tree::is_git_tree_hash(commit) {
             return None;
         }
@@ -417,12 +433,7 @@ impl CommitArchiveCache {
         if metadata.version != ARCHIVE_CACHE_VERSION || metadata.commit != commit {
             return None;
         }
-        let raw = fs::read(self.archive_path(commit)).ok()?;
-        let archive = SourceArchive::from_tar_gz(&raw, limits).ok()?;
-        Some(CachedArchive {
-            archive,
-            fetched_at_epoch_ms: metadata.fetched_at_epoch_ms,
-        })
+        Some(metadata)
     }
 
     pub fn is_fresh(&self, cached: &CachedArchive, now_epoch_ms: u64, ttl_ms: u64) -> bool {
@@ -437,14 +448,7 @@ impl CommitArchiveCache {
             ));
         }
         fs::create_dir_all(&self.dir)?;
-        let temp_archive = self
-            .dir
-            .join(format!(".tmp-{}-{commit}.tar.gz", std::process::id()));
-        fs::write(&temp_archive, raw)?;
-        if let Err(error) = fs::rename(&temp_archive, self.archive_path(commit)) {
-            let _ = fs::remove_file(&temp_archive);
-            return Err(error);
-        }
+        crate::fsutil::write_atomic(&self.archive_path(commit), raw)?;
         let metadata = ArchiveMetadata {
             version: ARCHIVE_CACHE_VERSION,
             commit: commit.to_string(),
@@ -452,14 +456,7 @@ impl CommitArchiveCache {
         };
         let serialized = serde_json::to_vec(&metadata)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        let temp_metadata = self
-            .dir
-            .join(format!(".tmp-{}-{commit}.json", std::process::id()));
-        fs::write(&temp_metadata, serialized)?;
-        if let Err(error) = fs::rename(&temp_metadata, self.metadata_path(commit)) {
-            let _ = fs::remove_file(&temp_metadata);
-            return Err(error);
-        }
+        crate::fsutil::write_atomic(&self.metadata_path(commit), &serialized)?;
         Ok(())
     }
 }

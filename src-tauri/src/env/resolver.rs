@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use semver::Version;
 
@@ -110,7 +110,7 @@ impl EnvResolverConfig {
             search: SearchEnv::from_values(paths.home(), &parent_env),
             node_override: node_override_from_env(&parent_env, cfg!(debug_assertions)),
             parent_env,
-            pinned_cli_version: "1.7.4".to_string(),
+            pinned_cli_version: crate::cli::PINNED_CLI_VERSION.to_string(),
             min_node_version: Version::new(22, 20, 0),
             probe_timeout: max,
             login_shell_timeout: crate::timeouts::LOGIN_SHELL_TIMEOUT,
@@ -264,7 +264,7 @@ impl EnvResolver {
             interrupted: crate::interrupted::inspect(&self.paths),
             issues,
             warnings,
-            checked_at_epoch_ms: epoch_ms(),
+            checked_at_epoch_ms: crate::time::now_ms(),
             pinned_cli_version: self.config.pinned_cli_version.clone(),
         };
         Ok(ResolvedEnvironment {
@@ -1130,13 +1130,6 @@ fn non_empty<'a>(vars: &'a BTreeMap<String, String>, key: &str) -> Option<&'a st
     vars.get(key)
         .map(String::as_str)
         .filter(|value| !value.is_empty())
-}
-
-fn epoch_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

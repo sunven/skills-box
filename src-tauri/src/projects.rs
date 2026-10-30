@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::error::AppError;
+use crate::fsutil::write_atomic;
 use crate::paths::AppPaths;
 use crate::scope::ScopeId;
 
@@ -113,7 +114,7 @@ pub struct ProjectRegistry {
 
 impl ProjectRegistry {
     pub fn new(paths: AppPaths) -> Self {
-        Self::with_clock(paths, Arc::new(epoch_ms))
+        Self::with_clock(paths, Arc::new(crate::time::now_ms))
     }
 
     pub fn with_clock(paths: AppPaths, clock: Arc<dyn Fn() -> u64 + Send + Sync>) -> Self {
@@ -474,32 +475,6 @@ fn warning_message(path: &Path, detail: &str) -> String {
         "项目注册表不可用，已按空列表处理，原文件保持不变（{}）。{detail}",
         path.display()
     )
-}
-
-fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(parent)?;
-    let temp = parent.join(format!(
-        ".tmp-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or_default()
-    ));
-    fs::write(&temp, bytes)?;
-    if let Err(error) = fs::rename(&temp, path) {
-        let _ = fs::remove_file(&temp);
-        return Err(error);
-    }
-    Ok(())
-}
-
-fn epoch_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or_default()
 }
 
 /// Read-only helper for the environment report.

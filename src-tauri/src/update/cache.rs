@@ -83,16 +83,7 @@ impl UpdateCache {
         let serialized = serde_json::to_string(&cached)
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
         let destination = self.path_for(source, reference);
-        let temp = self.dir.join(format!(
-            ".tmp-{}-{}",
-            std::process::id(),
-            cache_key(source, reference)
-        ));
-        fs::write(&temp, serialized)?;
-        if let Err(error) = fs::rename(&temp, &destination) {
-            let _ = fs::remove_file(&temp);
-            return Err(error);
-        }
+        crate::fsutil::write_atomic(&destination, serialized.as_bytes())?;
         Ok(cached)
     }
 }

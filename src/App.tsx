@@ -126,8 +126,12 @@ function App() {
   const [anomaliesOpen, setAnomaliesOpen] = useState(false);
   const [installOpen, setInstallOpen] = useState(false);
   const [manageAgentsOpen, setManageAgentsOpen] = useState(false);
-  const [updateMode, setUpdateMode] = useState<"single" | "all" | null>(null);
-  const [updateSkillName, setUpdateSkillName] = useState<string | null>(null);
+  const [updateTarget, setUpdateTarget] = useState<
+    { mode: "all" } | { mode: "single"; name: string } | null
+  >(null);
+  const updateMode = updateTarget?.mode ?? null;
+  const updateSkillName =
+    updateTarget?.mode === "single" ? updateTarget.name : null;
   // Keep the uninstall target stable across the inventory refresh that follows
   // a successful removal; the row itself may already be gone from `skills`.
   const [uninstallSkill, setUninstallSkill] = useState<UpdateViewSkill | null>(
@@ -328,8 +332,7 @@ function App() {
     setSelectedName(null);
     setFiltersOpen(false);
     setAnomaliesOpen(false);
-    setUpdateMode(null);
-    setUpdateSkillName(null);
+    setUpdateTarget(null);
     setUninstallSkill(null);
   }, []);
 
@@ -390,8 +393,7 @@ function App() {
   }, []);
 
   const handleUpdateSkill = useCallback((name: string) => {
-    setUpdateSkillName(name);
-    setUpdateMode("single");
+    setUpdateTarget({ mode: "single", name });
   }, []);
 
   const handleUninstallSkill = useCallback(
@@ -431,10 +433,7 @@ function App() {
         checkingUpdates={checkUpdates.isPending}
         updatesEnabled={!scopeBlocked}
         onCheckUpdates={() => handleCheckUpdates()}
-        onUpdateAll={() => {
-          setUpdateSkillName(null);
-          setUpdateMode("all");
-        }}
+        onUpdateAll={() => setUpdateTarget({ mode: "all" })}
         updateCandidateCount={view.candidateCount}
         filtersOpen={filtersOpen}
         onToggleFilters={() => setFiltersOpen((open) => !open)}
@@ -565,10 +564,7 @@ function App() {
           open
           scope={scope}
           view={view.updateDialog}
-          onClose={() => {
-            setUpdateMode(null);
-            setUpdateSkillName(null);
-          }}
+          onClose={() => setUpdateTarget(null)}
         />
       ) : null}
       <UninstallDialog

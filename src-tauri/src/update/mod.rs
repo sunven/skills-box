@@ -41,10 +41,7 @@ pub struct SystemClock;
 
 impl Clock for SystemClock {
     fn now_epoch_ms(&self) -> u64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_millis() as u64)
-            .unwrap_or(0)
+        crate::time::now_ms()
     }
 }
 

@@ -216,19 +216,14 @@ impl MarkerStore {
             snapshots_present,
             snapshots_missing,
             lock,
-            detected_at_epoch_ms: epoch_ms(),
+            detected_at_epoch_ms: crate::time::now_ms(),
         })
     }
 
     fn write(&self, mutation: &InterruptedMutation) -> std::io::Result<()> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let temp = self.path.with_extension("json.tmp");
         let body = serde_json::to_vec_pretty(mutation)
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
-        fs::write(&temp, body)?;
-        fs::rename(&temp, &self.path)
+        crate::fsutil::write_atomic(&self.path, &body)
     }
 }
 
@@ -237,13 +232,6 @@ pub enum MarkerRead {
     Absent,
     Present(InterruptedMutation),
     Corrupt(String),
-}
-
-fn epoch_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 pub fn inspect(paths: &AppPaths) -> Option<InterruptedReport> {

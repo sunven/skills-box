@@ -137,7 +137,7 @@ impl BaselineStore {
             file_count: fingerprint.file_count,
             total_bytes: fingerprint.total_bytes,
             verified,
-            recorded_at_epoch_ms: epoch_ms(),
+            recorded_at_epoch_ms: crate::time::now_ms(),
         };
         let serialized =
             serde_json::to_string_pretty(&baseline).map_err(AppError::baseline_serialize_failed)?;
@@ -206,13 +206,24 @@ impl BaselineStore {
 
         let path_key = path.to_string_lossy();
         let existing = self.load(name).filter(|baseline| baseline.path == path_key);
-
-        let lock_matches = compare_lock_hash(path, lock_hash);
+        let unchanged = existing
+            .as_ref()
+            .map(|baseline| baseline.content_hash == fingerprint.content_hash)
+            .unwrap_or(false);
+        // A verified, unchanged baseline is already clean; the git-tree hash
+        // cannot change that verdict and would re-read the whole folder.
+        let lock_matches = if existing
+            .as_ref()
+            .is_some_and(|baseline| baseline.verified && unchanged)
+        {
+            None
+        } else {
+            compare_lock_hash(path, lock_hash)
+        };
         let mut baseline_created = false;
         let mut baseline_updated = false;
 
         let state = if let Some(baseline) = existing {
-            let unchanged = baseline.content_hash == fingerprint.content_hash;
             match lock_matches {
                 Some(true) => {
                     // Current content is provably the installed content. This
@@ -469,13 +480,6 @@ fn hex(bytes: &[u8]) -> String {
         output.push_str(&format!("{byte:02x}"));
     }
     output
-}
-
-fn epoch_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 fn epoch_nanos() -> u128 {

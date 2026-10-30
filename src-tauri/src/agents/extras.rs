@@ -334,10 +334,7 @@ pub fn save_user_entries(paths: &AppPaths, entries: &[UserExtraAgent]) -> Result
     });
     let raw = serde_json::to_string_pretty(&payload)
         .map_err(|error| AppError::extra_agent_config(error.to_string()))?;
-    let temp = path.with_extension("json.tmp");
-    fs::write(&temp, format!("{raw}\n"))
-        .map_err(|error| AppError::extra_agent_config(format!("{}：{error}", temp.display())))?;
-    fs::rename(&temp, &path)
+    crate::fsutil::write_atomic(&path, format!("{raw}\n").as_bytes())
         .map_err(|error| AppError::extra_agent_config(format!("{}：{error}", path.display())))
 }
 

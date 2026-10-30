@@ -21,14 +21,14 @@ use crate::baseline::{BaselineStore, LocalModification, write_warning};
 use crate::cli::CliRuntime;
 use crate::error::cli::CliAction;
 use crate::error::{AppError, ErrorCode};
-use crate::inventory::{AgentDir, AttachmentLocation, AttachmentMode, ManagementState};
+use crate::inventory::{AgentDir, AttachmentMode, ManagementState};
 use crate::logs::{OperationEntry, OperationLog};
 use crate::paths::AppPaths;
 use crate::process::{CommandSpec, ExecOutput};
 
 use super::install::{
-    INSTALL_TIMEOUT, InstallPlan, InstallTarget, UNIVERSAL_AGENT_ID, ensure_extra_attachments,
-    install_command, verify_install,
+    InstallPlan, InstallTarget, UNIVERSAL_AGENT_ID, ensure_extra_attachments, install_command,
+    verify_install,
 };
 use super::manager::{TaskAction, TaskPhase, TaskSkillResult, TaskSkillStatus};
 use super::session::{
@@ -98,14 +98,6 @@ impl UpdatePlan {
     }
 }
 
-pub fn update_command(
-    item: &UpdateItem,
-    runtime: &crate::cli::CliRuntime,
-    timeout: Duration,
-) -> CommandSpec {
-    item.command(runtime, timeout)
-}
-
 /// Resolve the selected names into executable items plus per-skill skips.
 /// A corrupt/non-v3 lock fails the whole plan; per-skill problems only skip
 /// that name so update-all can continue. Project scope reads its own v1 lock,
@@ -116,19 +108,16 @@ pub fn plan_updates(
     names: &[String],
 ) -> Result<UpdatePlan, AppError> {
     let baseline_store = crate::baseline::BaselineStore::for_scope(paths, &layout.scope);
+    let catalog = layout.catalog(paths)?;
     let mut plan = UpdatePlan::default();
 
     for name in names {
-        let located = match layout.locate(paths, name) {
-            Ok(Some(located)) => located,
-            Ok(None) => {
-                plan.skipped.push(UpdateSkip {
-                    name: name.clone(),
-                    error: AppError::skill_not_found(name),
-                });
-                continue;
-            }
-            Err(error) => return Err(error),
+        let Some(located) = crate::inventory::locate_in_catalog(&catalog, name) else {
+            plan.skipped.push(UpdateSkip {
+                name: name.clone(),
+                error: AppError::skill_not_found(name),
+            });
+            continue;
         };
         if let Some(skip) = skip_for_management(&located.management, name) {
             plan.skipped.push(skip);
@@ -173,9 +162,9 @@ pub fn plan_updates(
             .collect();
         let mut targets: HashMap<String, InstallTarget> = HashMap::new();
         let mut copy_agents: Vec<(String, String)> = Vec::new();
-        let mut attachments = Vec::with_capacity(located.attachments.len());
+        let mut attachments: Vec<BackupAttachment> = Vec::with_capacity(located.attachments.len());
         for attachment in &located.attachments {
-            attachments.push(backup_attachment(attachment));
+            attachments.push(attachment.into());
             let Some(agent) = agent_dirs.get(attachment.agent_id.as_str()) else {
                 continue;
             };
@@ -256,15 +245,6 @@ fn skip_for_management(management: &ManagementState, name: &str) -> Option<Updat
     })
 }
 
-fn backup_attachment(attachment: &AttachmentLocation) -> BackupAttachment {
-    BackupAttachment {
-        agent_id: attachment.agent_id.clone(),
-        agent_name: attachment.agent_name.clone(),
-        path: attachment.path.clone(),
-        mode: attachment.mode,
-    }
-}
-
 fn is_directory(path: &std::path::Path) -> bool {
     fs::metadata(path)
         .map(|metadata| metadata.is_dir())
@@ -281,7 +261,6 @@ pub struct UpdateVerification {
 /// Interpret one `add --json` result and verify the filesystem afterwards.
 /// The CLI's `installed` status is never trusted on its own.
 pub fn verify_update(
-    _paths: &AppPaths,
     layout: &crate::scope_layout::ScopeLayout,
     item: &UpdateItem,
     output: &ExecOutput,
@@ -493,7 +472,7 @@ impl MutationAction for UpdateAction {
             format!("正在更新 {}（skills add）…", item.name),
             Some(item.name.as_str()),
         );
-        update_command(item, runtime, self.timeout)
+        item.command(runtime, self.timeout)
     }
 
     fn complete(
@@ -508,7 +487,7 @@ impl MutationAction for UpdateAction {
             format!("正在校验 {} 的 canonical、挂载与 lock…", item.name),
             Some(item.name.as_str()),
         );
-        let verification = verify_update(&self.paths, &self.layout, item, &output);
+        let verification = verify_update(&self.layout, item, &output);
         let mut warnings = verification.warnings;
         let (status, error) = match verification.result {
             Ok(()) => (TaskSkillStatus::Updated, None),
@@ -590,16 +569,6 @@ impl MutationAction for UpdateAction {
         );
     }
 }
-
-pub fn retryable_names(results: &[TaskSkillResult]) -> Vec<String> {
-    results
-        .iter()
-        .filter(|result| result.status == TaskSkillStatus::Failed)
-        .map(|result| result.name.clone())
-        .collect()
-}
-
-pub const UPDATE_TIMEOUT: Duration = INSTALL_TIMEOUT;
 
 #[cfg(test)]
 mod tests {
@@ -952,35 +921,6 @@ mod tests {
         let error =
             plan_updates(&fixture.paths, &fixture.agents, &["alpha".to_string()]).unwrap_err();
         assert_eq!(error.code, ErrorCode::LockCorrupt);
-    }
-
-    #[test]
-    fn retryable_names_include_only_failed_rows() {
-        let results = vec![
-            TaskSkillResult {
-                name: "a".to_string(),
-                status: TaskSkillStatus::Updated,
-                error: None,
-                backup_path: None,
-            },
-            TaskSkillResult {
-                name: "b".to_string(),
-                status: TaskSkillStatus::Failed,
-                error: Some(AppError::verify_failed("x")),
-                backup_path: None,
-            },
-            TaskSkillResult {
-                name: "c".to_string(),
-                status: TaskSkillStatus::Skipped,
-                error: Some(AppError::skill_not_in_source("c", "x")),
-                backup_path: None,
-            },
-        ];
-        assert_eq!(retryable_names(&results), vec!["b".to_string()]);
-        assert_eq!(
-            crate::tasks::summary::overall_for(&results, TaskSkillStatus::Updated),
-            crate::tasks::manager::TaskOverall::Partial
-        );
     }
 
     // ------------------------------------------------------------------

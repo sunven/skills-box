@@ -28,8 +28,7 @@ pub use uninstall::{
     UNINSTALL_TIMEOUT, UninstallPlan, plan_uninstall, uninstall_command, verify_uninstall,
 };
 pub use update::{
-    UPDATE_TIMEOUT, UpdateItem, UpdatePlan, UpdateSkip, UpdateVerification, plan_updates,
-    retryable_names, update_command, verify_update,
+    UpdateItem, UpdatePlan, UpdateSkip, UpdateVerification, plan_updates, verify_update,
 };
 
 #[cfg(test)]
@@ -42,7 +41,6 @@ mod timeout_matrix_tests {
     fn all_mutations_use_the_15_minute_write_cap() {
         assert_eq!(INSTALL_TIMEOUT, Duration::from_secs(900));
         assert_eq!(INSTALL_TIMEOUT, SPEC_WRITE);
-        assert_eq!(UPDATE_TIMEOUT, INSTALL_TIMEOUT);
         assert_eq!(UNINSTALL_TIMEOUT, INSTALL_TIMEOUT);
     }
 

@@ -17,6 +17,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
 use super::{UpdateCheckReport, UpdateSourceStatus};
+use crate::fsutil::write_atomic;
 use crate::paths::AppPaths;
 use crate::scope::ScopeId;
 
@@ -225,26 +226,6 @@ fn parse_scopes(raw: &str) -> Option<BTreeMap<String, UpdateCheckState>> {
         return Some(scopes);
     }
     None
-}
-
-fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let temp = path.with_file_name(format!(
-        ".tmp-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or_default()
-    ));
-    fs::write(&temp, bytes)?;
-    if let Err(error) = fs::rename(&temp, path) {
-        let _ = fs::remove_file(&temp);
-        return Err(error);
-    }
-    Ok(())
 }
 
 #[cfg(test)]

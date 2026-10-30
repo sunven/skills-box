@@ -23,7 +23,7 @@ use crate::time::now_ms;
 use serde::Serialize;
 
 use crate::error::AppError;
-use crate::inventory::AttachmentMode;
+use crate::inventory::{AttachmentLocation, AttachmentMode};
 use crate::paths::AppPaths;
 use crate::security::safe_component;
 
@@ -61,6 +61,17 @@ pub struct BackupAttachment {
     pub agent_name: String,
     pub path: PathBuf,
     pub mode: AttachmentMode,
+}
+
+impl From<&AttachmentLocation> for BackupAttachment {
+    fn from(value: &AttachmentLocation) -> Self {
+        Self {
+            agent_id: value.agent_id.clone(),
+            agent_name: value.agent_name.clone(),
+            path: value.path.clone(),
+            mode: value.mode,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

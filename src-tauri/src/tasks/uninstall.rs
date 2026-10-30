@@ -64,12 +64,7 @@ impl UninstallPlan {
     pub fn backup_attachments(&self) -> Vec<BackupAttachment> {
         self.attachments
             .iter()
-            .map(|attachment| BackupAttachment {
-                agent_id: attachment.agent_id.clone(),
-                agent_name: attachment.agent_name.clone(),
-                path: attachment.path.clone(),
-                mode: attachment.mode,
-            })
+            .map(BackupAttachment::from)
             .collect()
     }
 

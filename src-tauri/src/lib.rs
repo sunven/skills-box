@@ -11,6 +11,7 @@ pub mod detail;
 pub mod env;
 pub mod error;
 pub mod extra_agent_guard;
+mod fsutil;
 pub mod git_tree;
 pub mod interrupted;
 pub mod inventory;

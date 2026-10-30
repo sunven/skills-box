@@ -34,13 +34,9 @@ export function useAutoUpdateCheck({
   const onCheckRef = useRef(onCheck);
   const startedForScope = useRef<ScopeId | null>(null);
   const evaluatedOnce = useRef(false);
-  const [baseline, setBaseline] = useState<{ scope: ScopeId; at: number } | null>(
+  const [anchor, setAnchor] = useState<{ scope: ScopeId; at: number } | null>(
     null,
   );
-  const [skipAnchor, setSkipAnchor] = useState<{
-    scope: ScopeId;
-    at: number;
-  } | null>(null);
 
   useEffect(() => {
     onCheckRef.current = onCheck;
@@ -50,7 +46,6 @@ export function useAutoUpdateCheck({
     if (!enabled || startedForScope.current === scope) return;
     startedForScope.current = scope;
     const now = Date.now();
-    setSkipAnchor(null);
     const firstEvaluation = !evaluatedOnce.current;
     evaluatedOnce.current = true;
     if (
@@ -59,37 +54,34 @@ export function useAutoUpdateCheck({
       now - lastFullAttemptAt < AUTO_UPDATE_CHECK_INTERVAL_MS
     ) {
       // This scope was checked recently; only schedule the remainder.
-      setBaseline({ scope, at: lastFullAttemptAt });
+      setAnchor({ scope, at: lastFullAttemptAt });
       return;
     }
-    setBaseline({ scope, at: now });
+    setAnchor({ scope, at: now });
     void Promise.resolve(onCheckRef.current()).catch(() => {});
   }, [enabled, scope, lastFullAttemptAt]);
 
   useEffect(() => {
     if (!enabled || checking) return;
-    // Wait until this scope's initial evaluation recorded a baseline; until
+    // Wait until this scope's initial evaluation recorded an anchor; until
     // then a stale persisted attempt would schedule an immediate duplicate.
-    if (!baseline || baseline.scope !== scope) return;
-    const baselineAt = baseline.at;
-    const skipAt = skipAnchor?.scope === scope ? skipAnchor.at : null;
-    const anchor = Math.max(
+    if (!anchor || anchor.scope !== scope) return;
+    const latest = Math.max(
       lastFullAttemptAt ?? Number.NEGATIVE_INFINITY,
-      skipAt ?? Number.NEGATIVE_INFINITY,
-      baselineAt ?? Number.NEGATIVE_INFINITY,
+      anchor.at,
     );
-    if (!Number.isFinite(anchor)) return;
+    if (!Number.isFinite(latest)) return;
     const delay = Math.max(
       0,
-      anchor + AUTO_UPDATE_CHECK_INTERVAL_MS - Date.now(),
+      latest + AUTO_UPDATE_CHECK_INTERVAL_MS - Date.now(),
     );
     const timer = setTimeout(() => {
       Promise.resolve(onCheckRef.current())
         .then((started) => {
-          if (started === false) setSkipAnchor({ scope, at: Date.now() });
+          if (started === false) setAnchor({ scope, at: Date.now() });
         })
-        .catch(() => setSkipAnchor({ scope, at: Date.now() }));
+        .catch(() => setAnchor({ scope, at: Date.now() }));
     }, delay);
     return () => clearTimeout(timer);
-  }, [enabled, checking, scope, lastFullAttemptAt, skipAnchor, baseline]);
+  }, [enabled, checking, scope, lastFullAttemptAt, anchor]);
 }

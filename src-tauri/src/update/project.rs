@@ -351,20 +351,23 @@ impl ProjectUpdateService {
     /// Fresh cache hit first; otherwise one download. A stale entry is kept
     /// for "last successful check" reporting when the download fails.
     async fn load_or_download(&self, source: &str, commit: &str) -> ArchiveEntry {
-        let previous = self.cache.load(commit, self.config.limits);
-        let previous_fetched_at = previous.as_ref().map(|cached| cached.fetched_at_epoch_ms);
-        if let Some(cached) = previous
+        let mut previous_fetched_at = self.cache.fetched_at(commit);
+        if let Some(fetched_at) = previous_fetched_at
             && is_fresh(
-                cached.fetched_at_epoch_ms,
+                fetched_at,
                 self.clock.now_epoch_ms(),
                 self.config.cache_ttl_ms,
             )
         {
-            return ArchiveEntry {
-                archive: Ok(Arc::new(cached.archive)),
-                fetched_at_epoch_ms: cached.fetched_at_epoch_ms,
-                cached: true,
-            };
+            if let Some(cached) = self.cache.load(commit, self.config.limits) {
+                return ArchiveEntry {
+                    archive: Ok(Arc::new(cached.archive)),
+                    fetched_at_epoch_ms: cached.fetched_at_epoch_ms,
+                    cached: true,
+                };
+            }
+            // Fresh metadata with an unreadable payload is not a cache hit.
+            previous_fetched_at = None;
         }
         let now = self.clock.now_epoch_ms();
         let result = async {
