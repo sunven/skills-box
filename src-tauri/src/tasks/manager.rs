@@ -725,6 +725,46 @@ impl TaskManager {
         .map_err(|error| AppError::extra_agent_config(format!("保存额外 agent 失败：{error}")))?
     }
 
+    /// Change or clear one user extra's project skills directory. The project
+    /// guard runs before the configuration is written; live project mounts must
+    /// be detached first.
+    pub async fn update_extra_agent(
+        &self,
+        agent_id: String,
+        project_skills_dir: Option<String>,
+    ) -> Result<crate::agents::extras::ExtraAgent, AppError> {
+        self.ensure_not_shutting_down()?;
+        let permit = self.try_acquire_mutation()?;
+        let paths = self.inner.paths.clone();
+        let projects = std::sync::Arc::clone(&self.inner.projects);
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let existing = crate::agents::extras::find(&paths, &agent_id)
+                .ok_or_else(|| AppError::extra_agent_not_found(&agent_id))?;
+            let normalized = match project_skills_dir.as_deref() {
+                Some(raw) => Some(
+                    crate::agents::extras::normalize_project_skills_dir(raw)
+                        .map_err(AppError::extra_agent_invalid)?,
+                ),
+                None => None,
+            };
+            crate::extra_agent_guard::ensure_project_dir_change_allowed(
+                &paths,
+                &projects,
+                &agent_id,
+                existing.project_skills_dir.as_deref(),
+                normalized.as_deref(),
+            )?;
+            crate::agents::extras::set_project_skills_dir(
+                &paths,
+                &agent_id,
+                normalized.as_deref(),
+            )
+        })
+        .await
+        .map_err(|error| AppError::extra_agent_config(format!("保存额外 agent 失败：{error}")))?
+    }
+
     /// Detach every attached skill, then remove one user-defined extra agent.
     /// A failed detach aborts before the definition is removed, so leftovers
     /// never become invisible orphans.
@@ -735,35 +775,10 @@ impl TaskManager {
         self.ensure_not_shutting_down()?;
         let permit = self.try_acquire_mutation()?;
         let paths = self.inner.paths.clone();
+        let projects = std::sync::Arc::clone(&self.inner.projects);
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            let extra = crate::agents::extras::find(&paths, &agent_id)
-                .ok_or_else(|| AppError::extra_agent_not_found(&agent_id))?;
-            if extra.builtin {
-                return Err(AppError::extra_agent_builtin(&extra.display_name));
-            }
-            let agents = crate::inventory::detected_agent_dirs(&paths);
-            let layout = crate::scope_layout::ScopeLayout::global(&paths, agents.clone());
-            let snapshot = crate::inventory::read_with_agents(&paths, &agents)?;
-            let mut detached = Vec::new();
-            for skill in &snapshot.skills {
-                let attached = skill
-                    .attachments
-                    .iter()
-                    .any(|attachment| attachment.agent_id == agent_id && attachment.detachable);
-                if !attached {
-                    continue;
-                }
-                let result =
-                    crate::detach::detach_agent(&paths, &layout, &skill.name, &agent_id)?;
-                detached.push(result.skill_id);
-            }
-            crate::agents::extras::remove_user_agent(&paths, &agent_id)?;
-            Ok(crate::agents::extras::RemoveExtraAgentResult {
-                id: agent_id,
-                display_name: extra.display_name,
-                detached,
-            })
+            crate::extra_agent_guard::remove_extra_agent(&paths, &projects, &agent_id)
         })
         .await
         .map_err(|error| AppError::extra_agent_config(format!("删除额外 agent 失败：{error}")))?

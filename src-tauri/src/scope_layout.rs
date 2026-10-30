@@ -89,10 +89,7 @@ impl ScopeLayout {
         scope: &ScopeId,
     ) -> Result<Self, AppError> {
         match scope {
-            ScopeId::Global => Ok(Self::global(
-                paths,
-                inventory::detected_agent_dirs(paths),
-            )),
+            ScopeId::Global => Ok(Self::global(paths, inventory::detected_agent_dirs(paths))),
             ScopeId::Project(id) => {
                 let entry = projects.lookup(*id)?;
                 if !entry.available {
@@ -251,7 +248,8 @@ impl ScopeLayout {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum ProjectDirState {    Missing,
+enum ProjectDirState {
+    Missing,
     Directory,
     Escape(PathBuf),
     NotDirectory,
@@ -278,7 +276,33 @@ fn project_target_dir(
     if canonical_normalized == Some(normalized.as_path()) {
         return None;
     }
+    if !resolves_inside_root(&dir, root) {
+        return None;
+    }
     Some(dir)
+}
+
+/// Physical containment for a target that may not exist yet: the nearest
+/// existing ancestor must resolve inside the canonicalized project root. This
+/// stops a symlinked parent from turning `create_dir_all` into an escape.
+fn resolves_inside_root(dir: &Path, root: &Path) -> bool {
+    let mut ancestor = dir;
+    loop {
+        match fs::symlink_metadata(ancestor) {
+            Ok(_) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let Some(parent) = ancestor.parent() else {
+                    return false;
+                };
+                ancestor = parent;
+            }
+            Err(_) => return false,
+        }
+    }
+    match (fs::canonicalize(ancestor), fs::canonicalize(root)) {
+        (Ok(resolved), Ok(root)) => resolved.starts_with(root),
+        _ => false,
+    }
 }
 
 fn classify_project_dir(dir: &Path, root: &Path) -> ProjectDirState {
@@ -606,15 +630,43 @@ mod tests {
 
         assert!(ids.contains(&"claude-code"), "{ids:?}");
         assert!(ids.contains(&"acme"), "{ids:?}");
-        assert!(!ids.contains(&"codex"), "universal reads canonical: {ids:?}");
+        assert!(
+            !ids.contains(&"codex"),
+            "universal reads canonical: {ids:?}"
+        );
         assert!(!ids.contains(&"plain"), "unconfigured extra: {ids:?}");
         // Both target directories are absent and are still offered.
-        let claude = targets.iter().find(|agent| agent.id == "claude-code").unwrap();
+        let claude = targets
+            .iter()
+            .find(|agent| agent.id == "claude-code")
+            .unwrap();
         let acme = targets.iter().find(|agent| agent.id == "acme").unwrap();
         assert_eq!(claude.skills_dir, fixture.root.join(".claude/skills"));
         assert_eq!(acme.skills_dir, fixture.root.join(".acme/skills"));
         assert!(!claude.skills_dir.exists());
         assert!(!acme.skills_dir.exists());
+    }
+
+    #[test]
+    fn install_targets_exclude_a_project_dir_that_resolves_outside_via_a_symlink() {
+        let fixture = Fixture::new();
+        let outside = fixture.tmp.path().join("outside-skills");
+        fs::create_dir_all(&outside).unwrap();
+        fs::create_dir_all(fixture.root.join(".acme")).unwrap();
+        symlink(&outside, fixture.root.join(".acme/escape")).unwrap();
+        fixture.write_extra(
+            r#"{
+                "version": 1,
+                "agents": [
+                    {"id": "acme", "displayName": "Acme", "skillsDir": "~/.acme/skills", "projectSkillsDir": ".acme/escape/skills"}
+                ]
+            }"#,
+        );
+        let targets = fixture.layout().install_targets(&[]);
+        assert!(
+            !targets.iter().any(|agent| agent.id == "acme"),
+            "{targets:?}"
+        );
     }
 
     #[test]
@@ -624,11 +676,14 @@ mod tests {
         fs::create_dir_all(&outside).unwrap();
         fs::create_dir_all(fixture.root.join(".claude")).unwrap();
         symlink(&outside, fixture.root.join(".claude/skills")).unwrap();
+        fs::create_dir_all(fixture.root.join(".acme")).unwrap();
+        symlink(&outside, fixture.root.join(".acme/skills")).unwrap();
         fixture.write_extra(
             r#"{
                 "version": 1,
                 "agents": [
-                    {"id": "acme", "displayName": "Acme", "skillsDir": "~/.acme/skills", "projectSkillsDir": "../outside-skills"}
+                    {"id": "acme", "displayName": "Acme", "skillsDir": "~/.acme/skills", "projectSkillsDir": ".acme/skills"},
+                    {"id": "bad", "displayName": "Bad", "skillsDir": "~/.bad/skills", "projectSkillsDir": "../outside-skills"}
                 ]
             }"#,
         );
@@ -636,6 +691,7 @@ mod tests {
         let layout = fixture.layout();
         assert!(!agent_ids(&layout).contains(&"claude-code".to_string()));
         assert!(!agent_ids(&layout).contains(&"acme".to_string()));
+        assert!(!agent_ids(&layout).contains(&"bad".to_string()));
         assert!(
             layout
                 .warnings
@@ -643,6 +699,17 @@ mod tests {
                 .any(|warning| warning.contains("逃逸") || warning.contains("之外")),
             "{:?}",
             layout.warnings
+        );
+        // The config with `..` is rejected at load time; the valid entries that
+        // resolve outside are reported as escapes.
+        assert!(
+            layout
+                .extras
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("忽略额外 agent 配置")),
+            "{:?}",
+            layout.extras.warnings
         );
         assert!(layout.escapes.len() >= 2, "{:?}", layout.escapes);
     }

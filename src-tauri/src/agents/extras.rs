@@ -45,11 +45,22 @@ pub struct ExtraAgent {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ExtraProjectDetachment {
+    pub project_id: String,
+    pub project_name: String,
+    /// Scope-composite skill ids detached from this project.
+    pub detached: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RemoveExtraAgentResult {
     pub id: String,
     pub display_name: String,
-    /// Skill ids detached before the definition was removed.
+    /// Global skill ids detached before the definition was removed.
     pub detached: Vec<String>,
+    /// Project detachments performed before the definition was removed.
+    pub projects: Vec<ExtraProjectDetachment>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -110,6 +121,11 @@ pub fn load(paths: &AppPaths) -> ExtraAgents {
     result.warnings.append(&mut warnings);
 
     let mut seen: BTreeSet<String> = result.agents.iter().map(|agent| agent.id.clone()).collect();
+    let mut seen_project_dirs: BTreeSet<String> = result
+        .agents
+        .iter()
+        .filter_map(|agent| agent.project_skills_dir.clone())
+        .collect();
     for entry in entries {
         match validate(paths, &entry) {
             Ok(agent) => {
@@ -124,6 +140,15 @@ pub fn load(paths: &AppPaths) -> ExtraAgents {
                     result
                         .warnings
                         .push(format!("忽略额外 agent「{}」：id 重复。", entry.id));
+                    continue;
+                }
+                if let Some(dir) = &agent.project_skills_dir
+                    && !seen_project_dirs.insert(dir.clone())
+                {
+                    result.warnings.push(format!(
+                        "忽略额外 agent「{}」：项目内 skills 目录「{dir}」重复。",
+                        entry.id
+                    ));
                     continue;
                 }
                 result.agents.push(agent);
@@ -173,6 +198,17 @@ pub fn add_user_agent(paths: &AppPaths, entry: &UserExtraAgent) -> Result<ExtraA
     {
         return Err(AppError::extra_agent_duplicate(&agent.id));
     }
+    if let Some(dir) = &agent.project_skills_dir
+        && let Some(other) = load(paths)
+            .agents
+            .iter()
+            .find(|other| other.project_skills_dir.as_deref() == Some(dir.as_str()))
+    {
+        return Err(AppError::extra_agent_invalid(format!(
+            "项目内 skills 目录「{dir}」已被额外 agent「{}」使用。",
+            other.display_name
+        )));
+    }
     entries.push(UserExtraAgent {
         id: agent.id.clone(),
         display_name: agent.display_name.clone(),
@@ -198,6 +234,48 @@ pub fn remove_user_agent(paths: &AppPaths, id: &str) -> Result<ExtraAgent, AppEr
     }
     save_user_entries(paths, &entries)?;
     Ok(agent)
+}
+
+/// Set or clear one user entry's project skills directory. The guard against
+/// live project attachments lives in `extra_agent_guard`; this only validates
+/// the value and edits the configuration file.
+pub fn set_project_skills_dir(
+    paths: &AppPaths,
+    id: &str,
+    raw: Option<&str>,
+) -> Result<ExtraAgent, AppError> {
+    let existing = find(paths, id).ok_or_else(|| AppError::extra_agent_not_found(id))?;
+    if existing.builtin {
+        return Err(AppError::extra_agent_builtin(&existing.display_name));
+    }
+    let normalized = match raw {
+        Some(value) => {
+            Some(normalize_project_skills_dir(value).map_err(AppError::extra_agent_invalid)?)
+        }
+        None => None,
+    };
+    if let Some(dir) = &normalized
+        && let Some(other) = load(paths).agents.iter().find(|other| {
+            other.id != id && other.project_skills_dir.as_deref() == Some(dir.as_str())
+        })
+    {
+        return Err(AppError::extra_agent_invalid(format!(
+            "项目内 skills 目录「{dir}」已被额外 agent「{}」使用。",
+            other.display_name
+        )));
+    }
+    let (mut entries, _) = read_user_entries(paths);
+    let entry = entries
+        .iter_mut()
+        .find(|entry| entry.id == id)
+        .ok_or_else(|| AppError::extra_agent_not_found(id))?;
+    entry.project_skills_dir = normalized;
+    save_user_entries(paths, &entries)?;
+    let entry = entries
+        .into_iter()
+        .find(|entry| entry.id == id)
+        .ok_or_else(|| AppError::extra_agent_not_found(id))?;
+    validate(paths, &entry).map_err(AppError::extra_agent_invalid)
 }
 
 #[derive(Debug, Deserialize)]
@@ -290,13 +368,62 @@ fn validate(paths: &AppPaths, entry: &UserExtraAgent) -> Result<ExtraAgent, Stri
     }
 
     let skills_dir = normalize_skills_dir(paths, &entry.skills_dir)?;
+    let project_skills_dir = match entry.project_skills_dir.as_deref() {
+        Some(raw) => Some(normalize_project_skills_dir(raw)?),
+        None => None,
+    };
     Ok(ExtraAgent {
         id: id.to_string(),
         display_name: display_name.to_string(),
         skills_dir,
-        project_skills_dir: entry.project_skills_dir.clone(),
+        project_skills_dir,
         builtin: false,
     })
+}
+
+/// Validate and normalize one project-relative skills directory.
+///
+/// The path must be non-empty, relative, free of `..` (lexical escape), not the
+/// project root itself, and not the canonical project store. Existing callers
+/// join it to a project root and re-check containment before using it.
+pub fn normalize_project_skills_dir(raw: &str) -> Result<String, String> {
+    use std::path::Component;
+
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("项目内 skills 目录不能为空。".to_string());
+    }
+    if trimmed.chars().any(char::is_control) {
+        return Err("项目内 skills 目录不能包含控制字符。".to_string());
+    }
+    let path = Path::new(trimmed);
+    if path.is_absolute() {
+        return Err(format!(
+            "项目内 skills 目录「{trimmed}」必须是相对项目根的路径。"
+        ));
+    }
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                return Err(format!("项目内 skills 目录「{trimmed}」不能包含 `..`。"));
+            }
+            Component::Normal(part) => normalized.push(part),
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(format!(
+                    "项目内 skills 目录「{trimmed}」必须是相对项目根的路径。"
+                ));
+            }
+        }
+    }
+    if normalized.as_os_str().is_empty() {
+        return Err("项目内 skills 目录不能是项目根本身。".to_string());
+    }
+    if normalized == Path::new(".agents/skills") {
+        return Err("项目内 skills 目录不能使用 canonical store（.agents/skills）。".to_string());
+    }
+    Ok(normalized.to_string_lossy().into_owned())
 }
 
 /// Normalize a skills directory template to `~/...` (when under home) or an
@@ -424,6 +551,163 @@ mod tests {
                 .as_deref(),
             Some(".acme/skills")
         );
+    }
+
+    #[test]
+    fn project_skills_dir_validation_normalizes_and_rejects_invalid_values() {
+        assert_eq!(
+            normalize_project_skills_dir("./.acme//skills/").unwrap(),
+            ".acme/skills"
+        );
+        assert_eq!(
+            normalize_project_skills_dir("tools/acme").unwrap(),
+            "tools/acme"
+        );
+        for invalid in [
+            "",
+            "   ",
+            "/abs/skills",
+            "../outside",
+            "tools/../../outside",
+            ".",
+            "./",
+            ".agents/skills",
+            "./.agents//skills/",
+            "bad\npath",
+        ] {
+            assert!(
+                normalize_project_skills_dir(invalid).is_err(),
+                "{invalid:?} should be invalid"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_project_skills_dir_skips_the_entry_with_a_warning() {
+        let (_tmp, paths) = paths();
+        save_user_entries(
+            &paths,
+            &[
+                UserExtraAgent {
+                    id: "escape".to_string(),
+                    display_name: "Escape".to_string(),
+                    skills_dir: "~/.escape/skills".to_string(),
+                    project_skills_dir: Some("../outside".to_string()),
+                },
+                UserExtraAgent {
+                    id: "canonical".to_string(),
+                    display_name: "Canonical".to_string(),
+                    skills_dir: "~/.canonical/skills".to_string(),
+                    project_skills_dir: Some(".agents/skills".to_string()),
+                },
+            ],
+        )
+        .unwrap();
+        let loaded = load(&paths);
+        assert!(!loaded.agents.iter().any(|agent| agent.id == "escape"));
+        assert!(!loaded.agents.iter().any(|agent| agent.id == "canonical"));
+        assert!(
+            loaded
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("项目内 skills 目录")),
+            "{:?}",
+            loaded.warnings
+        );
+    }
+
+    #[test]
+    fn project_skills_dirs_are_unique_across_extras() {
+        let (_tmp, paths) = paths();
+        add_user_agent(
+            &paths,
+            &UserExtraAgent {
+                id: "acme".to_string(),
+                display_name: "Acme".to_string(),
+                skills_dir: "~/.acme/skills".to_string(),
+                project_skills_dir: Some(".acme/skills".to_string()),
+            },
+        )
+        .unwrap();
+        let duplicate_add = add_user_agent(
+            &paths,
+            &UserExtraAgent {
+                id: "other".to_string(),
+                display_name: "Other".to_string(),
+                skills_dir: "~/.other/skills".to_string(),
+                project_skills_dir: Some("./.acme//skills/".to_string()),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(duplicate_add.code, crate::error::ErrorCode::ExtraInvalid);
+
+        add_user_agent(
+            &paths,
+            &UserExtraAgent {
+                id: "other".to_string(),
+                display_name: "Other".to_string(),
+                skills_dir: "~/.other/skills".to_string(),
+                project_skills_dir: Some(".other/skills".to_string()),
+            },
+        )
+        .unwrap();
+        let duplicate_change =
+            set_project_skills_dir(&paths, "other", Some(".acme/skills")).unwrap_err();
+        assert_eq!(duplicate_change.code, crate::error::ErrorCode::ExtraInvalid);
+
+        // Hand-edited duplicates keep the first entry and warn.
+        save_user_entries(
+            &paths,
+            &[
+                UserExtraAgent {
+                    id: "one".to_string(),
+                    display_name: "One".to_string(),
+                    skills_dir: "~/.one/skills".to_string(),
+                    project_skills_dir: Some(".shared/skills".to_string()),
+                },
+                UserExtraAgent {
+                    id: "two".to_string(),
+                    display_name: "Two".to_string(),
+                    skills_dir: "~/.two/skills".to_string(),
+                    project_skills_dir: Some(".shared/skills".to_string()),
+                },
+            ],
+        )
+        .unwrap();
+        let loaded = load(&paths);
+        assert!(loaded.agents.iter().any(|agent| agent.id == "one"));
+        assert!(!loaded.agents.iter().any(|agent| agent.id == "two"));
+        assert!(
+            loaded
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("重复")),
+            "{:?}",
+            loaded.warnings
+        );
+    }
+
+    #[test]
+    fn set_project_skills_dir_updates_clears_and_rejects_builtin() {
+        let (_tmp, paths) = paths();
+        add_user_agent(&paths, &entry("acme", "~/.acme/skills")).unwrap();
+        let updated = set_project_skills_dir(&paths, "acme", Some(".acme/skills")).unwrap();
+        assert_eq!(updated.project_skills_dir.as_deref(), Some(".acme/skills"));
+        assert_eq!(
+            load(&paths)
+                .agents
+                .iter()
+                .find(|agent| agent.id == "acme")
+                .unwrap()
+                .project_skills_dir
+                .as_deref(),
+            Some(".acme/skills")
+        );
+
+        let cleared = set_project_skills_dir(&paths, "acme", None).unwrap();
+        assert_eq!(cleared.project_skills_dir, None);
+        let error = set_project_skills_dir(&paths, "workbuddy", None).unwrap_err();
+        assert_eq!(error.code, crate::error::ErrorCode::ExtraBuiltin);
     }
 
     #[test]

@@ -42,6 +42,7 @@ pub enum ErrorCode {
     ExtraBuiltin,
     ExtraNotFound,
     ExtraConfig,
+    ExtraProjectBlocked,
     PathAppData,
     PathInvalid,
     PathOutsideAllowedRoot,
@@ -133,6 +134,7 @@ impl ErrorCode {
         Self::ExtraBuiltin,
         Self::ExtraNotFound,
         Self::ExtraConfig,
+        Self::ExtraProjectBlocked,
         Self::PathAppData,
         Self::PathInvalid,
         Self::PathOutsideAllowedRoot,
@@ -224,6 +226,7 @@ impl ErrorCode {
             Self::ExtraBuiltin => "extra.builtin",
             Self::ExtraNotFound => "extra.not_found",
             Self::ExtraConfig => "extra.config",
+            Self::ExtraProjectBlocked => "extra.project_blocked",
             Self::PathAppData => "path.app_data",
             Self::PathInvalid => "path.invalid",
             Self::PathOutsideAllowedRoot => "path.outside_allowed_root",
@@ -308,7 +311,7 @@ mod tests {
 
     #[test]
     fn all_codes_are_unique_and_stable() {
-        assert_eq!(ErrorCode::ALL.len(), 87);
+        assert_eq!(ErrorCode::ALL.len(), 88);
         let values: Vec<&str> = ErrorCode::ALL.iter().map(|code| code.as_str()).collect();
         let unique: HashSet<&str> = values.iter().copied().collect();
         assert_eq!(unique.len(), values.len());
@@ -352,6 +355,7 @@ mod tests {
                 "extra.builtin",
                 "extra.not_found",
                 "extra.config",
+                "extra.project_blocked",
                 "path.app_data",
                 "path.invalid",
                 "path.outside_allowed_root",

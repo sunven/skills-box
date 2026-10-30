@@ -622,6 +622,24 @@ impl AppError {
             .retryable(true)
     }
 
+    pub fn extra_agent_remove_blocked(projects: &[String]) -> Self {
+        Self::new(
+            ErrorCode::ExtraProjectBlocked,
+            "无法删除额外 agent：仍有项目不可用。",
+        )
+        .detail(projects.join("\n"))
+        .hint("请先重新定位或遗忘这些项目，再删除该 agent；它的项目挂载尚未被清理。")
+    }
+
+    pub fn extra_agent_project_dir_blocked(projects: &[String]) -> Self {
+        Self::new(
+            ErrorCode::ExtraProjectBlocked,
+            "无法修改额外 agent 的项目目录：项目可能仍保留挂载。",
+        )
+        .detail(projects.join("\n"))
+        .hint("请先在相关项目中卸载该 agent 的挂载；不可用项目需先重新定位或遗忘。")
+    }
+
     pub fn backup_failed(detail: impl Into<String>) -> Self {
         Self::new(ErrorCode::BackupFailed, "无法创建操作前的备份快照。")
             .detail(detail)

@@ -10,6 +10,7 @@ pub mod detach;
 pub mod detail;
 pub mod env;
 pub mod error;
+pub mod extra_agent_guard;
 pub mod git_tree;
 pub mod interrupted;
 pub mod inventory;
@@ -144,6 +145,7 @@ pub fn run() {
             commands::detach_agent,
             commands::attach_agent,
             commands::add_extra_agent,
+            commands::update_extra_agent,
             commands::remove_extra_agent,
             commands::start_uninstall,
             commands::check_updates,

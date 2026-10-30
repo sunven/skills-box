@@ -106,6 +106,10 @@ export interface FakeCommandContract {
     result: AttachResult;
   };
   add_extra_agent: { args: { agent: ExtraAgentInput }; result: ExtraAgent };
+  update_extra_agent: {
+    args: { agentId: string; projectSkillsDir: string | null };
+    result: ExtraAgent;
+  };
   remove_extra_agent: {
     args: { agentId: string };
     result: RemoveExtraAgentResult;
@@ -543,6 +547,7 @@ export function createFakeBackend(
         retryable: false,
       } satisfies AppError;
     }
+    const projectSkillsDir = input.projectSkillsDir?.trim() || null;
     const agent: InventoryAgent = {
       id: input.id,
       displayName: input.displayName,
@@ -551,36 +556,147 @@ export function createFakeBackend(
       globalSkillsDir: input.skillsDir,
       origin: "user",
       detected: true,
+      projectSkillsDir,
     };
     setSnapshot({
       ...data.snapshot,
       agents: [...data.snapshot.agents, agent],
     });
-    return { ...input, builtin: false };
+    return { ...input, projectSkillsDir, builtin: false };
+  };
+
+  const projectScopeOf = (id: string): ScopeId => `project:${id}`;
+
+  const extraProjectBlockers = (agentId: string): string[] => {
+    const blockers: string[] = [];
+    for (const entry of projectList.projects) {
+      if (!entry.available) {
+        blockers.push(
+          `${entry.displayName}（${entry.root}）：项目不可用，无法确认挂载`,
+        );
+        continue;
+      }
+      const count = snapshotFor(projectScopeOf(entry.id)).skills.filter(
+        (skill) =>
+          skill.attachments.some(
+            (attachment) => attachment.agentId === agentId,
+          ),
+      ).length;
+      if (count > 0) {
+        blockers.push(`${entry.displayName}：仍有 ${count} 个挂载`);
+      }
+    }
+    return blockers;
+  };
+
+  const updateExtra = (
+    agentId: string,
+    projectSkillsDir: string | null,
+  ): ExtraAgent => {
+    const agent = findAgent(agentId);
+    if (!agent) throw notFound("agent", agentId);
+    if (agent.origin === "builtin") {
+      throw {
+        code: "extra.builtin",
+        message: `内置额外 agent「${agent.displayName}」不可修改。`,
+        retryable: false,
+      } satisfies AppError;
+    }
+    const next = projectSkillsDir?.trim() || null;
+    if ((agent.projectSkillsDir ?? null) !== next) {
+      const blockers = extraProjectBlockers(agentId);
+      if (blockers.length > 0) {
+        throw {
+          code: "extra.project_blocked",
+          message: "无法修改额外 agent 的项目目录：项目可能仍保留挂载。",
+          detail: blockers.join("\n"),
+          retryable: false,
+        } satisfies AppError;
+      }
+    }
+    const apply = (snapshot: InventorySnapshot): InventorySnapshot => ({
+      ...snapshot,
+      agents: snapshot.agents.map((entry) =>
+        entry.id === agentId ? { ...entry, projectSkillsDir: next } : entry,
+      ),
+      installTargets: snapshot.installTargets.map((entry) =>
+        entry.id === agentId ? { ...entry, projectSkillsDir: next } : entry,
+      ),
+    });
+    setSnapshot(apply(snapshotFor(GLOBAL_SCOPE)));
+    for (const entry of projectList.projects) {
+      const scope = projectScopeOf(entry.id);
+      setSnapshot(apply(snapshotFor(scope)), scope);
+    }
+    return {
+      id: agent.id,
+      displayName: agent.displayName,
+      skillsDir: agent.globalSkillsDir ?? "",
+      projectSkillsDir: next,
+      builtin: false,
+    };
   };
 
   const removeExtra = (agentId: string): RemoveExtraAgentResult => {
     const agent = findAgent(agentId);
     if (!agent) throw notFound("agent", agentId);
+    const unavailable = projectList.projects
+      .filter((entry) => !entry.available)
+      .map(
+        (entry) =>
+          `${entry.displayName}（${entry.root}）：${
+            entry.unavailableReason ?? "项目不可用"
+          }`,
+      );
+    if (unavailable.length > 0) {
+      throw {
+        code: "extra.project_blocked",
+        message: "无法删除额外 agent：仍有项目不可用。",
+        detail: unavailable.join("\n"),
+        retryable: false,
+      } satisfies AppError;
+    }
     const detached = data.snapshot.skills
       .filter((entry) =>
         entry.attachments.some((attachment) => attachment.agentId === agentId),
       )
       .map((entry) => entry.name);
-    setSnapshot({
-      ...data.snapshot,
-      agents: data.snapshot.agents.filter((entry) => entry.id !== agentId),
-      skills: data.snapshot.skills.map((entry) => ({
+    const stripAttachments = (snapshot: InventorySnapshot): InventorySnapshot => ({
+      ...snapshot,
+      agents: snapshot.agents.filter((entry) => entry.id !== agentId),
+      installTargets: snapshot.installTargets.filter(
+        (entry) => entry.id !== agentId,
+      ),
+      skills: snapshot.skills.map((entry) => ({
         ...entry,
         attachments: entry.attachments.filter(
           (attachment) => attachment.agentId !== agentId,
         ),
       })),
     });
+    setSnapshot(stripAttachments(data.snapshot));
+    const projects = projectList.projects.map((entry) => {
+      const scope = projectScopeOf(entry.id);
+      const snapshot = snapshotFor(scope);
+      const detachedIds = snapshot.skills
+        .filter((skill) =>
+          skill.attachments.some(
+            (attachment) => attachment.agentId === agentId,
+          ),
+        )
+        .map((skill) => skill.id);
+      setSnapshot(stripAttachments(snapshot), scope);
+      return {
+        projectId: entry.id,
+        projectName: entry.displayName,
+        detached: detachedIds,
+      };
+    });
     return {
       id: agent.id,
       displayName: agent.displayName,
       detached,
+      projects,
     };
   };
 
@@ -819,6 +935,8 @@ export function createFakeBackend(
     attach_agent: ({ skillId, agentId, scope }) =>
       nativeAttach(skillId, agentId, scope),
     add_extra_agent: ({ agent }) => addExtra(agent),
+    update_extra_agent: ({ agentId, projectSkillsDir }) =>
+      updateExtra(agentId, projectSkillsDir),
     remove_extra_agent: ({ agentId }) => removeExtra(agentId),
     start_uninstall: ({ skillId, scope, onEvent }) => {
       const task = makeTask("start_uninstall", onEvent);

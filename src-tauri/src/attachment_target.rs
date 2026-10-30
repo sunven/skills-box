@@ -24,9 +24,7 @@ pub struct TargetContext<'a> {
 
 impl<'a> TargetContext<'a> {
     pub fn global() -> Self {
-        Self {
-            project_root: None,
-        }
+        Self { project_root: None }
     }
 
     pub fn project(root: &'a Path) -> Self {
@@ -52,6 +50,43 @@ impl<'a> TargetContext<'a> {
         if !target.starts_with(&root) {
             return Err(AppError::path_outside_allowed_root(format!(
                 "{} 位于项目根之外",
+                target.display()
+            )));
+        }
+        // Missing target directories are created by attach, so a lexical check
+        // is not enough: the nearest existing ancestor must resolve inside the
+        // project root. A symlinked parent that points elsewhere would
+        // otherwise let `create_dir_all` escape the project.
+        let root_real = fs::canonicalize(&root).unwrap_or(root);
+        let mut ancestor = target.as_path();
+        loop {
+            match fs::symlink_metadata(ancestor) {
+                Ok(_) => break,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    ancestor = ancestor.parent().ok_or_else(|| {
+                        AppError::path_invalid(format!(
+                            "无法检查目标路径的父目录：{}",
+                            target.display()
+                        ))
+                    })?;
+                }
+                Err(error) => {
+                    return Err(AppError::path_invalid(format!(
+                        "无法检查目标路径 {}：{error}",
+                        ancestor.display()
+                    )));
+                }
+            }
+        }
+        let resolved = fs::canonicalize(ancestor).map_err(|error| {
+            AppError::path_invalid(format!(
+                "无法解析目标路径的父目录 {}：{error}",
+                ancestor.display()
+            ))
+        })?;
+        if !resolved.starts_with(&root_real) {
+            return Err(AppError::path_outside_allowed_root(format!(
+                "{} 的符号链接解析后位于项目根之外",
                 target.display()
             )));
         }
@@ -247,7 +282,8 @@ pub fn resolve_install_link(
     name: &str,
     context: TargetContext<'_>,
 ) -> Result<ResolvedAttachment, AppError> {
-    context.ensure_inside(&agent.skills_dir)?;    let directory_state = match inspect_agent_dir(&agent.skills_dir) {
+    context.ensure_inside(&agent.skills_dir)?;
+    let directory_state = match inspect_agent_dir(&agent.skills_dir) {
         AgentDirectoryState::Symlink => {
             return Err(AppError::agent_attach_failed(format!(
                 "额外 agent 的 skills 目录本身是符号链接：{}",
@@ -814,6 +850,36 @@ mod tests {
         };
         let error = resolve_install_link(&fixture.canonical, &linked, "alpha").unwrap_err();
         assert_eq!(error.code, ErrorCode::AgentAttachFailed);
+    }
+
+    #[test]
+    fn project_target_context_guards_lexical_and_symlink_escapes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("project");
+        let outside = tmp.path().join("outside");
+        fs::create_dir_all(root.join(".acme/skills")).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        symlink(&outside, root.join("escape")).unwrap();
+        symlink(root.join(".acme/skills"), root.join("inside-link")).unwrap();
+        let context = TargetContext::project(&root);
+
+        assert!(context.ensure_inside(&root.join(".acme/skills")).is_ok());
+        assert!(
+            context.ensure_inside(&root.join(".missing/skills")).is_ok(),
+            "a missing directory inside the root is a valid attach target"
+        );
+        assert!(
+            context
+                .ensure_inside(&root.join("inside-link/deeper"))
+                .is_ok()
+        );
+
+        let lexical = context.ensure_inside(&outside).unwrap_err();
+        assert_eq!(lexical.code, ErrorCode::PathOutsideAllowedRoot);
+        let resolved = context
+            .ensure_inside(&root.join("escape/skills"))
+            .unwrap_err();
+        assert_eq!(resolved.code, ErrorCode::PathOutsideAllowedRoot);
     }
 
     #[test]

@@ -109,6 +109,10 @@ pub struct InventoryAgent {
     /// are listed so a freshly added definition is visible, but they cannot be
     /// installed to or attached.
     pub detected: bool,
+    /// Configured project-relative skills directory (extras only). The manage
+    /// agents dialog edits this value; project targets and scans derive from it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_skills_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -223,6 +227,7 @@ pub(crate) fn agent_rows(
             global_skills_dir: Some(paths.display(&agent.skills_dir)),
             origin: origin_of(extra_agents, &agent.id),
             detected: true,
+            project_skills_dir: extra_project_dir(extra_agents, &agent.id),
         })
         .collect();
     if include_undetected_extras {
@@ -238,6 +243,7 @@ pub(crate) fn agent_rows(
                 global_skills_dir: Some(extra.skills_dir.clone()),
                 origin: origin_of(extra_agents, &extra.id),
                 detected: false,
+                project_skills_dir: extra.project_skills_dir.clone(),
             });
         }
     }
@@ -263,11 +269,21 @@ pub(crate) fn install_target_rows(
             global_skills_dir: Some(paths.display(&agent.skills_dir)),
             origin: origin_of(&layout.extras, &agent.id),
             detected: true,
+            project_skills_dir: extra_project_dir(&layout.extras, &agent.id),
         })
         .collect()
 }
 
-fn origin_of(extra_agents: &extras::ExtraAgents, id: &str) -> AgentOrigin {    match extra_agents.agents.iter().find(|agent| agent.id == id) {
+fn extra_project_dir(extra_agents: &extras::ExtraAgents, id: &str) -> Option<String> {
+    extra_agents
+        .agents
+        .iter()
+        .find(|agent| agent.id == id)
+        .and_then(|agent| agent.project_skills_dir.clone())
+}
+
+fn origin_of(extra_agents: &extras::ExtraAgents, id: &str) -> AgentOrigin {
+    match extra_agents.agents.iter().find(|agent| agent.id == id) {
         Some(agent) if agent.builtin => AgentOrigin::Builtin,
         Some(_) => AgentOrigin::User,
         None => AgentOrigin::Catalog,
