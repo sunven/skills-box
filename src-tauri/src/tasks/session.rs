@@ -16,8 +16,8 @@ use crate::process::{CancelToken, CommandSpec, ExecError, ExecOutput, ProcessExe
 use crate::time::now_ms;
 
 use super::manager::{
-    EventSink, FinishOutcome, TaskAction, TaskEvent, TaskOverall, TaskPhase, TaskResult,
-    TaskSkillResult, TaskSkillStatus,
+    EventSink, FinishOutcome, TaskAction, TaskEnvelope, TaskEvent, TaskOverall, TaskPhase,
+    TaskResult, TaskSkillResult, TaskSkillStatus,
 };
 use super::summary;
 
@@ -26,6 +26,8 @@ pub struct SessionContext {
     pub task_id: String,
     pub sink: EventSink,
     pub cancel: CancelToken,
+    /// Task identity captured at registration; every result is built from it.
+    pub envelope: TaskEnvelope,
     pub runtime: Arc<dyn CliRuntimeProvider>,
     pub executor: Arc<dyn ProcessExecutor>,
     pub record_snapshot: Arc<dyn Fn(&Path) + Send + Sync>,
@@ -203,6 +205,7 @@ pub async fn run<A: MutationAction>(
         (ctx.set_cancellable)(true);
         if ctx.cancel.is_cancelled() {
             return cancelled_outcome(
+                &ctx.envelope,
                 &profile,
                 std::mem::take(&mut rows),
                 std::mem::take(&mut warnings),
@@ -258,6 +261,7 @@ pub async fn run<A: MutationAction>(
         if ctx.cancel.is_cancelled() {
             action.on_cancelled(unit, &preflight, None);
             return cancelled_outcome(
+                &ctx.envelope,
                 &profile,
                 std::mem::take(&mut rows),
                 std::mem::take(&mut warnings),
@@ -269,6 +273,7 @@ pub async fn run<A: MutationAction>(
         if ctx.cancel.is_cancelled() {
             action.on_cancelled(unit, &preflight, None);
             return cancelled_outcome(
+                &ctx.envelope,
                 &profile,
                 std::mem::take(&mut rows),
                 std::mem::take(&mut warnings),
@@ -283,6 +288,7 @@ pub async fn run<A: MutationAction>(
             Err(ExecError::Cancelled) => {
                 action.on_cancelled(unit, &preflight, Some(AppError::cli_cancelled()));
                 return cancelled_outcome(
+                    &ctx.envelope,
                     &profile,
                     std::mem::take(&mut rows),
                     std::mem::take(&mut warnings),
@@ -367,12 +373,21 @@ pub async fn run<A: MutationAction>(
     let overall = summary::overall_for(&rows, profile.success_status);
     let message = summary::message(profile.action, overall, &rows);
     FinishOutcome::Completed(
-        build_result(&profile, rows, warnings, &backup_paths, log_path, overall),
+        build_result(
+            &ctx.envelope,
+            &profile,
+            rows,
+            warnings,
+            &backup_paths,
+            log_path,
+            overall,
+        ),
         message,
     )
 }
 
 fn cancelled_outcome(
+    envelope: &TaskEnvelope,
     profile: &SessionProfile,
     rows: Vec<TaskSkillResult>,
     warnings: Vec<AppError>,
@@ -385,12 +400,21 @@ fn cancelled_outcome(
     let overall = TaskOverall::Cancelled;
     let message = summary::message(profile.action, overall, &rows);
     FinishOutcome::Completed(
-        build_result(profile, rows, warnings, backup_paths, log_path, overall),
+        build_result(
+            envelope,
+            profile,
+            rows,
+            warnings,
+            backup_paths,
+            log_path,
+            overall,
+        ),
         message,
     )
 }
 
 fn build_result(
+    envelope: &TaskEnvelope,
     profile: &SessionProfile,
     rows: Vec<TaskSkillResult>,
     warnings: Vec<AppError>,
@@ -400,13 +424,13 @@ fn build_result(
 ) -> TaskResult {
     TaskResult {
         action: profile.action,
-        scope: crate::scope::ScopeId::Global,
+        scope: envelope.scope.clone(),
         overall,
         skills: rows,
         warnings,
         backup_path: (backup_paths.len() == 1).then(|| backup_paths[0].clone()),
         log_path,
-        started_at: 0,
+        started_at: envelope.started_at,
         finished_at_epoch_ms: now_ms(),
         preview: None,
     }
@@ -683,6 +707,11 @@ mod tests {
                 task_id: "task-1".to_string(),
                 sink,
                 cancel,
+                envelope: TaskEnvelope {
+                    action: TaskAction::Install,
+                    scope: crate::scope::ScopeId::Global,
+                    started_at: 1,
+                },
                 runtime: Arc::new(FakeRuntime),
                 executor,
                 record_snapshot,
@@ -735,6 +764,8 @@ mod tests {
             panic!("expected completed");
         };
         assert_eq!(result.action, TaskAction::Install);
+        assert_eq!(result.scope, crate::scope::ScopeId::Global);
+        assert_eq!(result.started_at, 1);
         assert_eq!(result.overall, TaskOverall::Success);
         assert_eq!(result.skills.len(), 1);
         assert_eq!(result.skills[0].status, TaskSkillStatus::Installed);

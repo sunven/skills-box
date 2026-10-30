@@ -112,6 +112,16 @@ pub struct TaskResult {
     pub preview: Option<PreviewSummary>,
 }
 
+/// Identity of a running task, captured at registration. The session builds
+/// its `TaskResult` from this, so a completed result is valid at construction
+/// instead of being patched by `finish`.
+#[derive(Debug, Clone)]
+pub struct TaskEnvelope {
+    pub action: TaskAction,
+    pub scope: crate::scope::ScopeId,
+    pub started_at: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreviewSkill {
@@ -290,6 +300,12 @@ struct TaskEntry {
     mutation: Option<MutationState>,
     action: TaskAction,
     started_at_epoch_ms: u64,
+}
+
+struct RegisteredMutation {
+    task_id: TaskId,
+    cancel: CancelToken,
+    envelope: TaskEnvelope,
 }
 
 #[derive(Debug)]
@@ -627,10 +643,15 @@ impl TaskManager {
         skills: Vec<String>,
         scope: crate::scope::ScopeId,
         lock_path: String,
-    ) -> (TaskId, CancelToken) {
+    ) -> RegisteredMutation {
         let task_id = format!("task-{}", self.inner.next_id.fetch_add(1, Ordering::SeqCst));
         let cancel = CancelToken::new();
         let started_at_epoch_ms = now_ms();
+        let envelope = TaskEnvelope {
+            action,
+            scope: scope.clone(),
+            started_at: started_at_epoch_ms,
+        };
         {
             let mut tasks = self.lock_tasks();
             tasks.insert(
@@ -654,7 +675,11 @@ impl TaskManager {
             );
         }
         self.begin_marker(&task_id);
-        (task_id, cancel)
+        RegisteredMutation {
+            task_id,
+            cancel,
+            envelope,
+        }
     }
 
     /// Validate a mutation request synchronously, acquire the single-writer
@@ -686,7 +711,7 @@ impl TaskManager {
         .await
         .map_err(|error| AppError::task_internal("安装", error))??;
 
-        let (task_id, cancel) = self.register_mutation(
+        let registered = self.register_mutation(
             TaskAction::Install,
             MutationKind::Install,
             plan.skills.clone(),
@@ -698,18 +723,18 @@ impl TaskManager {
             self.inner.paths.clone(),
             layout,
             self.inner.config.install_timeout,
-            task_id.clone(),
+            registered.task_id.clone(),
         );
         let finish_sink = on_event.clone();
-        let ctx = self.session_context(&task_id, on_event, cancel);
+        let ctx = self.session_context(&registered, on_event);
         let manager = self.clone();
-        let spawned_id = task_id.clone();
+        let spawned_id = registered.task_id.clone();
         tokio::spawn(async move {
             let _permit = permit;
             let outcome = session::run(ctx, action, plan).await;
             manager.finish(&spawned_id, &finish_sink, outcome);
         });
-        Ok(task_id)
+        Ok(registered.task_id)
     }
 
     pub fn cancel_task(&self, task_id: &str) -> Result<CancelAck, AppError> {
@@ -877,7 +902,7 @@ impl TaskManager {
             }
         };
 
-        let (task_id, cancel) = self.register_mutation(
+        let registered = self.register_mutation(
             TaskAction::Update,
             MutationKind::Update,
             plan.items.iter().map(|item| item.name.clone()).collect(),
@@ -891,15 +916,15 @@ impl TaskManager {
             self.inner.config.install_timeout,
         );
         let finish_sink = on_event.clone();
-        let ctx = self.session_context(&task_id, on_event, cancel);
+        let ctx = self.session_context(&registered, on_event);
         let manager = self.clone();
-        let spawned_id = task_id.clone();
+        let spawned_id = registered.task_id.clone();
         tokio::spawn(async move {
             let _permit = permit;
             let outcome = session::run(ctx, action, plan).await;
             manager.finish(&spawned_id, &finish_sink, outcome);
         });
-        Ok(task_id)
+        Ok(registered.task_id)
     }
 
     /// Validate an uninstall target synchronously, acquire the single-writer
@@ -931,7 +956,7 @@ impl TaskManager {
             }
         };
 
-        let (task_id, cancel) = self.register_mutation(
+        let registered = self.register_mutation(
             TaskAction::Uninstall,
             MutationKind::Uninstall,
             vec![plan.name.clone()],
@@ -945,15 +970,15 @@ impl TaskManager {
             self.inner.config.install_timeout,
         );
         let finish_sink = on_event.clone();
-        let ctx = self.session_context(&task_id, on_event, cancel);
+        let ctx = self.session_context(&registered, on_event);
         let manager = self.clone();
-        let spawned_id = task_id.clone();
+        let spawned_id = registered.task_id.clone();
         tokio::spawn(async move {
             let _permit = permit;
             let outcome = session::run(ctx, action, plan).await;
             manager.finish(&spawned_id, &finish_sink, outcome);
         });
-        Ok(task_id)
+        Ok(registered.task_id)
     }
 
     /// Toggle cancellation acceptance for update tasks. Updates accept a
@@ -970,28 +995,63 @@ impl TaskManager {
     /// marker directly.
     fn session_context(
         &self,
-        task_id: &str,
+        task: &RegisteredMutation,
         sink: EventSink,
-        cancel: CancelToken,
     ) -> session::SessionContext {
         let snapshot_manager = self.clone();
-        let snapshot_task = task_id.to_string();
+        let snapshot_task = task.task_id.clone();
         let record_snapshot = Arc::new(move |path: &Path| {
             snapshot_manager.record_snapshot(&snapshot_task, path);
         });
         let cancellable_manager = self.clone();
-        let cancellable_task = task_id.to_string();
+        let cancellable_task = task.task_id.clone();
         let set_cancellable = Arc::new(move |value: bool| {
             cancellable_manager.set_task_cancellable(&cancellable_task, value);
         });
         session::SessionContext {
-            task_id: task_id.to_string(),
+            task_id: task.task_id.clone(),
             sink,
-            cancel,
+            cancel: task.cancel.clone(),
+            envelope: task.envelope.clone(),
             runtime: Arc::clone(&self.inner.runtime),
             executor: Arc::clone(&self.inner.executor),
             record_snapshot,
             set_cancellable,
+        }
+    }
+
+    /// Envelope of a registered task. Preview tasks finish only after
+    /// registration, so the entry must exist.
+    fn task_envelope(&self, task_id: &str) -> TaskEnvelope {
+        let tasks = self.lock_tasks();
+        let entry = tasks
+            .get(task_id)
+            .expect("preview task is registered before its result");
+        TaskEnvelope {
+            action: entry.action,
+            scope: entry.scope.clone(),
+            started_at: entry.started_at_epoch_ms,
+        }
+    }
+
+    fn preview_result(
+        &self,
+        task_id: &str,
+        warnings: Vec<AppError>,
+        preview: PreviewSummary,
+    ) -> TaskResult {
+        let envelope = self.task_envelope(task_id);
+        TaskResult {
+            action: envelope.action,
+            scope: envelope.scope,
+            overall: TaskOverall::Success,
+            skills: Vec::new(),
+            warnings,
+            backup_path: None,
+            log_path: None,
+            started_at: envelope.started_at,
+            finished_at_epoch_ms: now_ms(),
+            preview: Some(preview),
         }
     }
 
@@ -1091,24 +1151,17 @@ impl TaskManager {
                     })
                     .collect();
                 let count = preview_skills.len() as u32;
-                let result = TaskResult {
-                    action: TaskAction::Preview,
-                    scope: crate::scope::ScopeId::Global,
-                    overall: TaskOverall::Success,
-                    skills: Vec::new(),
-                    warnings: Vec::new(),
-                    backup_path: None,
-                    log_path: None,
-                    started_at: 0,
-                    finished_at_epoch_ms: now_ms(),
-                    preview: Some(PreviewSummary {
+                let result = self.preview_result(
+                    &task_id,
+                    Vec::new(),
+                    PreviewSummary {
                         source: source.normalized.clone(),
                         skills: preview_skills,
                         raw_output: None,
                         parse_failed: false,
                         no_skills: false,
-                    }),
-                };
+                    },
+                );
                 self.finish(
                     &task_id,
                     &sink,
@@ -1120,24 +1173,17 @@ impl TaskManager {
                     &sink,
                     TaskEvent::progress(&task_id, TaskPhase::Verifying, "正在确认预览结果…", 0, 1),
                 );
-                let result = TaskResult {
-                    action: TaskAction::Preview,
-                    scope: crate::scope::ScopeId::Global,
-                    overall: TaskOverall::Success,
-                    skills: Vec::new(),
-                    warnings: Vec::new(),
-                    backup_path: None,
-                    log_path: None,
-                    started_at: 0,
-                    finished_at_epoch_ms: now_ms(),
-                    preview: Some(PreviewSummary {
+                let result = self.preview_result(
+                    &task_id,
+                    Vec::new(),
+                    PreviewSummary {
                         source: source.normalized.clone(),
                         skills: Vec::new(),
                         raw_output: None,
                         parse_failed: false,
                         no_skills: true,
-                    }),
-                };
+                    },
+                );
                 self.finish(
                     &task_id,
                     &sink,
@@ -1162,24 +1208,17 @@ impl TaskManager {
                     let warning = AppError::source_preview_failed(
                         "预览输出无法解析，已展示原始文本；可手动输入 skill 名。",
                     );
-                    let result = TaskResult {
-                        action: TaskAction::Preview,
-                        scope: crate::scope::ScopeId::Global,
-                        overall: TaskOverall::Success,
-                        skills: Vec::new(),
-                        warnings: vec![warning],
-                        backup_path: None,
-                        log_path: None,
-                        started_at: 0,
-                        finished_at_epoch_ms: now_ms(),
-                        preview: Some(PreviewSummary {
+                    let result = self.preview_result(
+                        &task_id,
+                        vec![warning],
+                        PreviewSummary {
                             source: source.normalized.clone(),
                             skills: Vec::new(),
                             raw_output: Some(raw),
                             parse_failed: true,
                             no_skills: false,
-                        }),
-                    };
+                        },
+                    );
                     self.finish(
                         &task_id,
                         &sink,
@@ -1256,10 +1295,10 @@ impl TaskManager {
             outcome
         };
         let event = match outcome {
-            FinishOutcome::Completed(mut result, message) => {
-                result.action = action;
-                result.scope = scope;
-                result.started_at = started_at;
+            FinishOutcome::Completed(result, message) => {
+                debug_assert_eq!(result.action, action);
+                debug_assert_eq!(result.scope, scope);
+                debug_assert_eq!(result.started_at, started_at);
                 let phase = if result.overall == TaskOverall::Cancelled {
                     TaskPhase::Cancelled
                 } else {
@@ -1526,6 +1565,9 @@ mod tests {
         assert_eq!(final_event.completed, Some(1));
         assert_eq!(final_event.total, Some(1));
         let result = final_event.result.unwrap();
+        assert_eq!(result.action, TaskAction::Preview);
+        assert_eq!(result.scope, crate::scope::ScopeId::Global);
+        assert!(result.started_at > 0);
         assert_eq!(result.overall, TaskOverall::Success);
         let preview = result.preview.unwrap();
         assert_eq!(preview.source, "owner/repo");
@@ -2843,7 +2885,7 @@ mod tests {
         let (_tmp, _home, _paths, _executor, manager) = hanging_install_fixture();
         let scope = crate::scope::ScopeId::project(uuid::Uuid::new_v4());
         let lock_path = "/tmp/project/skills-lock.json".to_string();
-        let (_task_id, _cancel) = manager.register_mutation(
+        let _registered = manager.register_mutation(
             TaskAction::Update,
             MutationKind::Update,
             vec!["alpha".to_string()],
