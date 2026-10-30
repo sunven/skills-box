@@ -347,8 +347,8 @@ pub fn verify_update(
     // Extra-agent links point at the canonical folder path, which survives the
     // CLI rewrite, so this is normally a no-op; it still restores a link that
     // vanished and reports a precise error when the path is occupied.
-    let link_error =
-        ensure_extra_attachments(layout, &plan, std::slice::from_ref(&item.name)).remove(&item.name);
+    let link_error = ensure_extra_attachments(layout, &plan, std::slice::from_ref(&item.name))
+        .remove(&item.name);
     let verification = verify_install(layout, &plan, &cli_results);
     let result = if let Some(error) = link_error {
         Err(error)
@@ -525,9 +525,8 @@ impl MutationAction for UpdateAction {
             Err(error) => (TaskSkillStatus::Failed, Some(error)),
         };
         if status == TaskSkillStatus::Updated
-            && let Err(error) =
-                BaselineStore::for_scope(&self.paths, &self.layout.scope)
-                    .record_from_dir(&item.name, &item.canonical, true)
+            && let Err(error) = BaselineStore::for_scope(&self.paths, &self.layout.scope)
+                .record_from_dir(&item.name, &item.canonical, true)
         {
             warnings.push(write_warning(error));
         }
@@ -1183,7 +1182,11 @@ mod tests {
     async fn run_update_task(manager: &TaskManager, names: &[&str]) -> (Vec<TaskPhase>, TaskEvent) {
         let (sink, mut receiver) = sink();
         manager
-            .start_update(crate::scope::ScopeId::Global, names.iter().map(|name| name.to_string()).collect(), sink)
+            .start_update(
+                crate::scope::ScopeId::Global,
+                names.iter().map(|name| name.to_string()).collect(),
+                sink,
+            )
             .await
             .unwrap();
         let mut phases = Vec::new();
@@ -1480,7 +1483,11 @@ mod tests {
         let manager = update_manager(&fixture.paths, executor.clone());
         let (sink, _receiver) = sink();
         let error = manager
-            .start_update(crate::scope::ScopeId::Global, vec!["alpha".to_string()], sink)
+            .start_update(
+                crate::scope::ScopeId::Global,
+                vec!["alpha".to_string()],
+                sink,
+            )
             .await
             .unwrap_err();
         assert_eq!(error.code, crate::error::ErrorCode::LockCorrupt);
@@ -1545,7 +1552,11 @@ mod tests {
         let manager = update_manager(&fixture.paths, executor.clone());
         let (sink, mut receiver) = sink();
         let task_id = manager
-            .start_update(crate::scope::ScopeId::Global, vec!["alpha".to_string()], sink)
+            .start_update(
+                crate::scope::ScopeId::Global,
+                vec!["alpha".to_string()],
+                sink,
+            )
             .await
             .unwrap();
         loop {
@@ -1590,7 +1601,11 @@ mod tests {
         let manager = update_manager(&fixture.paths, executor.clone());
         let (sink, mut receiver) = sink();
         let task_id = manager
-            .start_update(crate::scope::ScopeId::Global, vec!["alpha".to_string()], sink)
+            .start_update(
+                crate::scope::ScopeId::Global,
+                vec!["alpha".to_string()],
+                sink,
+            )
             .await
             .unwrap();
         loop {
@@ -1637,7 +1652,11 @@ mod tests {
         let manager = update_manager(&fixture.paths, executor.clone());
         let (sink, mut receiver) = sink();
         let task_id = manager
-            .start_update(crate::scope::ScopeId::Global, vec!["alpha".to_string(), "beta".to_string()], sink)
+            .start_update(
+                crate::scope::ScopeId::Global,
+                vec!["alpha".to_string(), "beta".to_string()],
+                sink,
+            )
             .await
             .unwrap();
 
@@ -1848,7 +1867,10 @@ mod project_update_tests {
                 "--json"
             ]
         );
-        assert!(!spec.args.iter().any(|arg| arg == "acme"), "extra agents never reach argv");
+        assert!(
+            !spec.args.iter().any(|arg| arg == "acme"),
+            "extra agents never reach argv"
+        );
     }
 
     struct FakeRuntime;

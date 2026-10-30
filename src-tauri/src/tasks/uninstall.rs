@@ -26,9 +26,9 @@ use crate::baseline::BaselineStore;
 use crate::cli::CliRuntime;
 use crate::error::AppError;
 use crate::error::cli::{self, CliAction};
-use crate::inventory::{AttachmentLocation, AttachmentMode, ManagementState};
 #[cfg(test)]
 use crate::inventory::AgentDir;
+use crate::inventory::{AttachmentLocation, AttachmentMode, ManagementState};
 #[cfg(test)]
 use crate::lock::LockFile;
 use crate::logs::{OperationEntry, OperationLog};
@@ -451,7 +451,8 @@ impl MutationAction for UninstallAction {
         };
         let error = outcome.err();
         if status == TaskSkillStatus::Removed
-            && let Err(clear_error) = BaselineStore::for_scope(&self.paths, &plan.scope).clear(&plan.name)
+            && let Err(clear_error) =
+                BaselineStore::for_scope(&self.paths, &plan.scope).clear(&plan.name)
         {
             warnings.push(AppError::baseline_clear_failed(clear_error));
         }
@@ -1708,8 +1709,8 @@ mod execution_tests {
 mod project_uninstall_tests {
     use super::*;
     use crate::baseline::BaselineStore;
-    use crate::error::ErrorCode;
     use crate::cli::{CliRuntime, CliRuntimeProvider, PINNED_CLI_VERSION};
+    use crate::error::ErrorCode;
     use crate::process::{CancelToken, ExecError, ProcessExecutor};
     use crate::projects::{Project, ProjectRegistry};
     use crate::scope::ScopeId;
@@ -1842,12 +1843,8 @@ mod project_uninstall_tests {
     fn project_uninstall_plan_is_scoped_and_includes_extra_attachments() {
         let fixture = ProjectFixture::new();
         let layout = fixture.layout();
-        let plan = super::plan_uninstall(
-            &fixture.paths,
-            &layout,
-            &layout.scope.skill_id("alpha"),
-        )
-        .unwrap();
+        let plan = super::plan_uninstall(&fixture.paths, &layout, &layout.scope.skill_id("alpha"))
+            .unwrap();
         assert_eq!(plan.scope, layout.scope);
         assert_eq!(
             plan.canonical.as_deref(),
@@ -2028,8 +2025,7 @@ mod project_uninstall_tests {
     #[tokio::test]
     async fn project_uninstall_only_removes_the_project_scope_and_backs_it_up() {
         let fixture = ProjectFixture::new();
-        let (_manager, executor, scope, final_event) =
-            run_project_uninstall(&fixture, false).await;
+        let (_manager, executor, scope, final_event) = run_project_uninstall(&fixture, false).await;
         assert_eq!(final_event.phase, TaskPhase::Completed);
         let result = final_event.result.unwrap();
         assert_eq!(result.scope, scope);
@@ -2049,9 +2045,10 @@ mod project_uninstall_tests {
         assert!(!fixture.root.join(".qoder/skills/alpha").exists());
         assert!(!fixture.claude.join("alpha").exists());
         assert!(!fixture.acme.join("alpha").exists());
-        let lock: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(fixture.root.join("skills-lock.json")).unwrap())
-                .unwrap();
+        let lock: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(fixture.root.join("skills-lock.json")).unwrap(),
+        )
+        .unwrap();
         assert!(lock["skills"].get("alpha").is_none());
 
         // Global scope with the same skill name is untouched.
@@ -2102,8 +2099,7 @@ mod project_uninstall_tests {
     #[tokio::test]
     async fn a_failed_project_uninstall_never_touches_the_global_scope() {
         let fixture = ProjectFixture::new();
-        let (_manager, _executor, scope, final_event) =
-            run_project_uninstall(&fixture, true).await;
+        let (_manager, _executor, scope, final_event) = run_project_uninstall(&fixture, true).await;
         let result = final_event.result.unwrap();
         assert_eq!(result.scope, scope);
         assert_eq!(result.overall, TaskOverall::Failed);
@@ -2111,7 +2107,10 @@ mod project_uninstall_tests {
             result.skills[0].error.as_ref().unwrap().code,
             ErrorCode::VerifyCanonicalPresent
         );
-        assert!(fixture.canonical.exists(), "failed removal leaves the project canonical");
+        assert!(
+            fixture.canonical.exists(),
+            "failed removal leaves the project canonical"
+        );
         assert!(fixture.global_canonical.is_dir());
         assert!(fixture.global_qoder_link.is_symlink());
         assert!(

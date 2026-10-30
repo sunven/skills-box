@@ -6,8 +6,8 @@ use std::fs;
 
 use skills_box_lib::agents::extras::{self, AgentOrigin, UserExtraAgent};
 use skills_box_lib::inventory::{self, AttachmentMode, ManagementState};
-use skills_box_lib::scope_layout::ScopeLayout;
 use skills_box_lib::paths::AppPaths;
+use skills_box_lib::scope_layout::ScopeLayout;
 use skills_box_lib::tasks::install::{self, InstallRequest, validate_request};
 use skills_box_lib::tasks::uninstall;
 use skills_box_lib::{attach, detach};

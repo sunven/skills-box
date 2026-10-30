@@ -294,30 +294,33 @@ fn validate_project_agents(
     let available = layout.install_targets(&crate::inventory::detected_agent_dirs(paths));
     let mut targets = Vec::new();
     for id in order {
-        let target = available.iter().find(|agent| agent.id == id).ok_or_else(|| {
-            let catalog_definition = catalog()
-                .agents
-                .iter()
-                .find(|definition| definition.id == id);
-            let extra = crate::agents::extras::find(paths, &id);
-            let display_name = catalog_definition
-                .map(|definition| definition.display_name.clone())
-                .or_else(|| extra.as_ref().map(|extra| extra.display_name.clone()))
-                .unwrap_or_else(|| id.clone());
-            match catalog_definition {
-                Some(definition) if definition.universal => {
-                    AppError::agent_unsupported_global(&display_name)
-                }
-                Some(_) => AppError::agent_not_detected(&display_name),
-                None => match extra {
-                    Some(extra) if extra.project_skills_dir.is_some() => {
-                        AppError::agent_not_detected(&display_name)
+        let target = available
+            .iter()
+            .find(|agent| agent.id == id)
+            .ok_or_else(|| {
+                let catalog_definition = catalog()
+                    .agents
+                    .iter()
+                    .find(|definition| definition.id == id);
+                let extra = crate::agents::extras::find(paths, &id);
+                let display_name = catalog_definition
+                    .map(|definition| definition.display_name.clone())
+                    .or_else(|| extra.as_ref().map(|extra| extra.display_name.clone()))
+                    .unwrap_or_else(|| id.clone());
+                match catalog_definition {
+                    Some(definition) if definition.universal => {
+                        AppError::agent_unsupported_global(&display_name)
                     }
                     Some(_) => AppError::agent_not_detected(&display_name),
-                    None => AppError::agent_invalid(format!("未知 agent：{id}")),
-                },
-            }
-        })?;
+                    None => match extra {
+                        Some(extra) if extra.project_skills_dir.is_some() => {
+                            AppError::agent_not_detected(&display_name)
+                        }
+                        Some(_) => AppError::agent_not_detected(&display_name),
+                        None => AppError::agent_invalid(format!("未知 agent：{id}")),
+                    },
+                }
+            })?;
         targets.push(InstallTarget {
             id: target.id.clone(),
             display_name: target.display_name.clone(),
@@ -1750,11 +1753,7 @@ mod tests {
             global: false,
         };
 
-        let errors = super::ensure_extra_attachments(
-            &layout,
-            &plan,
-            &["find-skills".to_string()],
-        );
+        let errors = super::ensure_extra_attachments(&layout, &plan, &["find-skills".to_string()]);
         assert!(errors.is_empty(), "{errors:?}");
         let link = extra_dir.join("find-skills");
         assert!(
@@ -1763,8 +1762,14 @@ mod tests {
                 .file_type()
                 .is_symlink()
         );
-        assert_eq!(fs::canonicalize(&link).unwrap(), fs::canonicalize(&canonical).unwrap());
-        assert!(!paths.canonical_skills_dir().exists(), "global store untouched");
+        assert_eq!(
+            fs::canonicalize(&link).unwrap(),
+            fs::canonicalize(&canonical).unwrap()
+        );
+        assert!(
+            !paths.canonical_skills_dir().exists(),
+            "global store untouched"
+        );
 
         let results = vec![CliSkillResult {
             name: Some("find-skills".to_string()),

@@ -771,11 +771,7 @@ impl TaskManager {
                 existing.project_skills_dir.as_deref(),
                 normalized.as_deref(),
             )?;
-            crate::agents::extras::set_project_skills_dir(
-                &paths,
-                &agent_id,
-                normalized.as_deref(),
-            )
+            crate::agents::extras::set_project_skills_dir(&paths, &agent_id, normalized.as_deref())
         })
         .await
         .map_err(|error| AppError::extra_agent_config(format!("保存额外 agent 失败：{error}")))?
@@ -1454,7 +1450,11 @@ mod tests {
         );
         let (sink, mut receiver) = sink();
         let task_id = manager
-            .start_preview(crate::scope::ScopeId::global(), "https://github.com/owner/repo", sink)
+            .start_preview(
+                crate::scope::ScopeId::global(),
+                "https://github.com/owner/repo",
+                sink,
+            )
             .await
             .unwrap();
         assert!(task_id.starts_with("task-"));
@@ -1513,7 +1513,10 @@ mod tests {
             Duration::from_secs(60),
         );
         let (sink, mut receiver) = sink();
-        manager.start_preview(crate::scope::ScopeId::global(), "owner/repo", sink).await.unwrap();
+        manager
+            .start_preview(crate::scope::ScopeId::global(), "owner/repo", sink)
+            .await
+            .unwrap();
         let event = final_event(&mut receiver).await;
 
         assert_eq!(event.phase, TaskPhase::Completed);
@@ -1537,7 +1540,10 @@ mod tests {
             Duration::from_secs(60),
         );
         let (sink, mut receiver) = sink();
-        manager.start_preview(crate::scope::ScopeId::global(), "owner/repo", sink).await.unwrap();
+        manager
+            .start_preview(crate::scope::ScopeId::global(), "owner/repo", sink)
+            .await
+            .unwrap();
         let event = final_event(&mut receiver).await;
 
         assert_eq!(event.phase, TaskPhase::Completed);
@@ -1558,7 +1564,10 @@ mod tests {
             Duration::from_secs(60),
         );
         let (sink, mut receiver) = sink();
-        manager.start_preview(crate::scope::ScopeId::global(), "owner/repo", sink).await.unwrap();
+        manager
+            .start_preview(crate::scope::ScopeId::global(), "owner/repo", sink)
+            .await
+            .unwrap();
         let event = final_event(&mut receiver).await;
 
         assert_eq!(event.phase, TaskPhase::Failed);
@@ -1576,7 +1585,10 @@ mod tests {
             Duration::from_millis(30),
         );
         let (sink, mut receiver) = sink();
-        manager.start_preview(crate::scope::ScopeId::global(), "owner/repo", sink).await.unwrap();
+        manager
+            .start_preview(crate::scope::ScopeId::global(), "owner/repo", sink)
+            .await
+            .unwrap();
         let event = tokio::time::timeout(Duration::from_secs(2), final_event(&mut receiver))
             .await
             .expect("timeout should finish the task");
@@ -1593,7 +1605,10 @@ mod tests {
             Duration::from_secs(60),
         );
         let (sink, mut receiver) = sink();
-        manager.start_preview(crate::scope::ScopeId::global(), "owner/repo", sink).await.unwrap();
+        manager
+            .start_preview(crate::scope::ScopeId::global(), "owner/repo", sink)
+            .await
+            .unwrap();
         let event = tokio::time::timeout(Duration::from_secs(2), final_event(&mut receiver))
             .await
             .expect("spawn failure should finish the task");
@@ -1610,7 +1625,10 @@ mod tests {
             Duration::from_secs(60),
         );
         let (sink, mut receiver) = sink();
-        let task_id = manager.start_preview(crate::scope::ScopeId::global(), "owner/repo", sink).await.unwrap();
+        let task_id = manager
+            .start_preview(crate::scope::ScopeId::global(), "owner/repo", sink)
+            .await
+            .unwrap();
 
         loop {
             let event = receiver.recv().await.unwrap();
@@ -1643,7 +1661,10 @@ mod tests {
             },
         );
         let (sink, mut receiver) = sink();
-        let task_id = manager.start_preview(crate::scope::ScopeId::global(), "owner/repo", sink).await.unwrap();
+        let task_id = manager
+            .start_preview(crate::scope::ScopeId::global(), "owner/repo", sink)
+            .await
+            .unwrap();
         let event = receiver.recv().await.unwrap();
         assert_eq!(event.phase, TaskPhase::Preparing);
 
@@ -1662,7 +1683,10 @@ mod tests {
             Duration::from_secs(60),
         );
         let (sink, mut receiver) = sink();
-        let task_id = manager.start_preview(crate::scope::ScopeId::global(), "owner/repo", sink).await.unwrap();
+        let task_id = manager
+            .start_preview(crate::scope::ScopeId::global(), "owner/repo", sink)
+            .await
+            .unwrap();
         let event = final_event(&mut receiver).await;
         assert_eq!(event.phase, TaskPhase::Completed);
 
@@ -1684,7 +1708,10 @@ mod tests {
         assert_eq!(busy.code, ErrorCode::TaskBusy);
 
         let (sink, mut receiver) = sink();
-        manager.start_preview(crate::scope::ScopeId::global(), "owner/repo", sink).await.unwrap();
+        manager
+            .start_preview(crate::scope::ScopeId::global(), "owner/repo", sink)
+            .await
+            .unwrap();
         let event = tokio::time::timeout(Duration::from_secs(2), final_event(&mut receiver))
             .await
             .expect("preview must not wait for the write lock");
@@ -1720,7 +1747,10 @@ mod tests {
             FakeRuntime::err(AppError::env_node_missing("no node")),
         );
         let (sink, mut receiver) = sink();
-        manager.start_preview(crate::scope::ScopeId::global(), "owner/repo", sink).await.unwrap();
+        manager
+            .start_preview(crate::scope::ScopeId::global(), "owner/repo", sink)
+            .await
+            .unwrap();
         let event = final_event(&mut receiver).await;
 
         assert_eq!(event.phase, TaskPhase::Failed);
@@ -2223,7 +2253,11 @@ mod tests {
         let (sink, mut receiver) = sink();
         let error = fixture
             .manager
-            .start_install(crate::scope::ScopeId::global(), install_request(&["find-skills"], &["qoder"]), sink)
+            .start_install(
+                crate::scope::ScopeId::global(),
+                install_request(&["find-skills"], &["qoder"]),
+                sink,
+            )
             .await
             .unwrap_err();
         assert_eq!(error.code, ErrorCode::SkillConflict);
@@ -2266,7 +2300,11 @@ mod tests {
 
         let (sink, _receiver) = sink();
         let error = manager
-            .start_install(crate::scope::ScopeId::global(), install_request(&["find-skills"], &["qoder"]), sink)
+            .start_install(
+                crate::scope::ScopeId::global(),
+                install_request(&["find-skills"], &["qoder"]),
+                sink,
+            )
             .await
             .unwrap_err();
         assert_eq!(
@@ -2295,7 +2333,11 @@ mod tests {
         let (sink, _receiver) = sink();
         let error = fixture
             .manager
-            .start_install(crate::scope::ScopeId::global(), install_request(&["find-skills"], &["qoder"]), sink)
+            .start_install(
+                crate::scope::ScopeId::global(),
+                install_request(&["find-skills"], &["qoder"]),
+                sink,
+            )
             .await
             .unwrap_err();
         assert_eq!(error.code, ErrorCode::LockCorrupt);
@@ -2330,7 +2372,11 @@ mod tests {
 
         let (sink, mut receiver) = sink();
         let task_id = manager
-            .start_install(crate::scope::ScopeId::global(), install_request(&["find-skills"], &["qoder"]), sink)
+            .start_install(
+                crate::scope::ScopeId::global(),
+                install_request(&["find-skills"], &["qoder"]),
+                sink,
+            )
             .await
             .unwrap();
         loop {
@@ -2386,7 +2432,11 @@ mod tests {
 
         let (sink, mut receiver) = sink();
         let task_id = manager
-            .start_install(crate::scope::ScopeId::global(), install_request(&["find-skills"], &["qoder"]), sink)
+            .start_install(
+                crate::scope::ScopeId::global(),
+                install_request(&["find-skills"], &["qoder"]),
+                sink,
+            )
             .await
             .unwrap();
         loop {
@@ -2435,12 +2485,20 @@ mod tests {
 
         let (event_sink, mut receiver) = sink();
         manager
-            .start_install(crate::scope::ScopeId::global(), install_request(&["find-skills"], &["qoder"]), event_sink)
+            .start_install(
+                crate::scope::ScopeId::global(),
+                install_request(&["find-skills"], &["qoder"]),
+                event_sink,
+            )
             .await
             .unwrap();
         let (second_sink, _second_receiver) = sink();
         let error = manager
-            .start_install(crate::scope::ScopeId::global(), install_request(&["other-skill"], &["qoder"]), second_sink)
+            .start_install(
+                crate::scope::ScopeId::global(),
+                install_request(&["other-skill"], &["qoder"]),
+                second_sink,
+            )
             .await
             .unwrap_err();
         assert_eq!(error.code, ErrorCode::TaskBusy);
@@ -2479,7 +2537,11 @@ mod tests {
 
         let permit = manager.try_acquire_mutation().unwrap();
         let error = manager
-            .detach_agent(crate::scope::ScopeId::global(), "alpha".to_string(), "qoder".to_string())
+            .detach_agent(
+                crate::scope::ScopeId::global(),
+                "alpha".to_string(),
+                "qoder".to_string(),
+            )
             .await
             .unwrap_err();
         assert_eq!(error.code, ErrorCode::TaskBusy);
@@ -2487,7 +2549,11 @@ mod tests {
         drop(permit);
 
         let result = manager
-            .detach_agent(crate::scope::ScopeId::global(), "alpha".to_string(), "qoder".to_string())
+            .detach_agent(
+                crate::scope::ScopeId::global(),
+                "alpha".to_string(),
+                "qoder".to_string(),
+            )
             .await
             .unwrap();
         assert_eq!(result.skill_id, "alpha");
@@ -2514,7 +2580,11 @@ mod tests {
         );
         manager.shutdown_mutations().await;
         let error = manager
-            .detach_agent(crate::scope::ScopeId::global(), "alpha".to_string(), "qoder".to_string())
+            .detach_agent(
+                crate::scope::ScopeId::global(),
+                "alpha".to_string(),
+                "qoder".to_string(),
+            )
             .await
             .unwrap_err();
         assert_eq!(error.code, ErrorCode::TaskShuttingDown);
@@ -2569,7 +2639,11 @@ mod tests {
         let (sink, mut receiver) = sink();
         fixture
             .manager
-            .start_install(crate::scope::ScopeId::global(), install_request(&["find-skills"], &["qoder"]), sink)
+            .start_install(
+                crate::scope::ScopeId::global(),
+                install_request(&["find-skills"], &["qoder"]),
+                sink,
+            )
             .await
             .unwrap();
 
@@ -2593,7 +2667,11 @@ mod tests {
         let (_tmp, _home, paths, executor, manager) = hanging_install_fixture();
         let (event_sink, mut receiver) = sink();
         let task_id = manager
-            .start_install(crate::scope::ScopeId::global(), install_request(&["find-skills"], &["qoder"]), event_sink)
+            .start_install(
+                crate::scope::ScopeId::global(),
+                install_request(&["find-skills"], &["qoder"]),
+                event_sink,
+            )
             .await
             .unwrap();
         wait_for_phase(&mut receiver, TaskPhase::RunningCli).await;
@@ -2640,7 +2718,11 @@ mod tests {
         let (_tmp, _home, paths, _executor, manager) = hanging_install_fixture();
         let (event_sink, mut receiver) = sink();
         manager
-            .start_install(crate::scope::ScopeId::global(), install_request(&["find-skills"], &["qoder"]), event_sink)
+            .start_install(
+                crate::scope::ScopeId::global(),
+                install_request(&["find-skills"], &["qoder"]),
+                event_sink,
+            )
             .await
             .unwrap();
         wait_for_phase(&mut receiver, TaskPhase::RunningCli).await;
@@ -2672,7 +2754,11 @@ mod tests {
         // No new task may start while the app is exiting.
         let (again_sink, _again_receiver) = sink();
         let error = manager
-            .start_install(crate::scope::ScopeId::global(), install_request(&["other"], &["qoder"]), again_sink)
+            .start_install(
+                crate::scope::ScopeId::global(),
+                install_request(&["other"], &["qoder"]),
+                again_sink,
+            )
             .await
             .unwrap_err();
         assert_eq!(error.code, ErrorCode::TaskShuttingDown);
