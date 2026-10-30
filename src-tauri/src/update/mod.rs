@@ -1735,7 +1735,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(scoped.skills.len(), 1);
-        assert_eq!(service.read_state(&crate::scope::ScopeId::Global), Some(state));
+        assert_eq!(
+            service.read_state(&crate::scope::ScopeId::Global),
+            Some(state)
+        );
     }
 
     #[tokio::test]

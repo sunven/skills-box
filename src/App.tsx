@@ -26,6 +26,9 @@ import { environmentQueryKey, useEnvironmentQuery, useRecheckEnvironment } from 
 import { useInventoryQuery } from "./hooks/use-inventory";
 import { projectsQueryKey, useProjectsQuery, useScopeCheckStates } from "./hooks/use-projects";
 import {
+  lastFullAttemptQueryKey,
+  lastFullCheckQueryKey,
+  updateCheckStateQueryKey,
   useCheckUpdates,
   useLastFullAttemptQuery,
   useLastFullCheckQuery,
@@ -49,6 +52,7 @@ import {
   projectScope,
   resolveInitialScope,
 } from "./lib/scope";
+import { updateReportQueryKey } from "./lib/update-view";
 import { buildWorkspaceView } from "./lib/workspace-view";
 import { GLOBAL_SCOPE } from "./lib/types";
 import type {
@@ -350,6 +354,26 @@ function App() {
     [queryClient, resetWorkspaceState, scope, scopeReady],
   );
 
+  // Forgetting or relocating clears the backend's per-scope check state, so
+  // drop the cached badges/report for that scope instead of showing stale data.
+  const clearScopeCheckCache = useCallback(
+    (target: ScopeId) => {
+      void queryClient.removeQueries({
+        queryKey: updateCheckStateQueryKey(target),
+      });
+      void queryClient.removeQueries({
+        queryKey: lastFullCheckQueryKey(target),
+      });
+      void queryClient.removeQueries({
+        queryKey: lastFullAttemptQueryKey(target),
+      });
+      void queryClient.removeQueries({
+        queryKey: updateReportQueryKey(target),
+      });
+    },
+    [queryClient],
+  );
+
   const cacheProjectList = useCallback(
     (update: (previous: typeof projects) => typeof projects) => {
       queryClient.setQueryData(projectsQueryKey, update);
@@ -402,9 +426,10 @@ function App() {
         };
       });
       setActiveScope(projectScope(entry.id));
+      clearScopeCheckCache(projectScope(entry.id));
       void queryClient.invalidateQueries({ queryKey: projectsQueryKey });
     },
-    [cacheProjectList, queryClient, resetWorkspaceState],
+    [cacheProjectList, clearScopeCheckCache, queryClient, resetWorkspaceState],
   );
 
   const handleProjectForgotten = useCallback(
@@ -435,9 +460,10 @@ function App() {
       void queryClient.removeQueries({
         queryKey: ["skill", forgottenScope],
       });
+      clearScopeCheckCache(forgottenScope);
       void queryClient.invalidateQueries({ queryKey: projectsQueryKey });
     },
-    [cacheProjectList, queryClient, resetWorkspaceState, scope],
+    [cacheProjectList, clearScopeCheckCache, queryClient, resetWorkspaceState, scope],
   );
 
   const handleSelectSkill = useCallback((name: string) => {

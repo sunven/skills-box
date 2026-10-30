@@ -25,8 +25,8 @@ use super::content_hash::{self, FolderHashError};
 use super::state::{UpdateCheckState, UpdateCheckStateStore};
 use super::{
     Clock, SystemClock, UPDATE_CHECK_CACHE_TTL_MS, UPDATE_CHECK_CONCURRENCY,
-    UPDATE_CHECK_DEADLINE_MS, UPDATE_CHECK_MAX_SOURCES, UpdateCheckReport, UpdateSourceResult,
-    UpdateSourceStatus, UpdateSkillResult, uncheckable_result,
+    UPDATE_CHECK_DEADLINE_MS, UPDATE_CHECK_MAX_SOURCES, UpdateCheckReport, UpdateSkillResult,
+    UpdateSourceResult, UpdateSourceStatus, uncheckable_result,
 };
 use crate::error::AppError;
 use crate::inventory::UpdateState;
@@ -107,12 +107,7 @@ impl ProjectUpdateService {
         let now = self.clock.now_epoch_ms();
         let selected = skill_ids.map(|ids| {
             ids.into_iter()
-                .map(|id| {
-                    scope
-                        .parse_skill_id(&id)
-                        .map(str::to_string)
-                        .unwrap_or(id)
-                })
+                .map(|id| scope.parse_skill_id(&id).map(str::to_string).unwrap_or(id))
                 .collect::<BTreeSet<_>>()
         });
         if selected.as_ref().is_some_and(BTreeSet::is_empty) {
@@ -144,9 +139,7 @@ impl ProjectUpdateService {
         let mut source_results = Vec::new();
         let mut warnings = Vec::new();
         for group in skipped {
-            let note = format!(
-                "本次检查达到来源上限（{max_sources} 个），该来源尚未检查。"
-            );
+            let note = format!("本次检查达到来源上限（{max_sources} 个），该来源尚未检查。");
             let skills: Vec<UpdateSkillResult> = group
                 .targets
                 .iter()
@@ -529,9 +522,7 @@ fn collect_targets(
 
 /// Validation order mirrors the global check: source type, fingerprint domain,
 /// skillPath, then the shared source/ref resolver (ADR 0009).
-fn checkable_target(
-    entry: &LockEntry,
-) -> Result<(ProjectTarget, String, Option<String>), String> {
+fn checkable_target(entry: &LockEntry) -> Result<(ProjectTarget, String, Option<String>), String> {
     if !entry.source_type.eq_ignore_ascii_case("github") {
         return Err("仅支持公开 GitHub 来源，无法检查更新。".to_string());
     }
@@ -541,9 +532,7 @@ fn checkable_target(
     }
     if !content_hash::is_content_hash(hash) {
         if crate::git_tree::is_git_tree_hash(hash) {
-            return Err(
-                "记录的是 40 位 Git tree SHA，无法与内容指纹比较。".to_string(),
-            );
+            return Err("记录的是 40 位 Git tree SHA，无法与内容指纹比较。".to_string());
         }
         return Err("版本指纹不是 64 位 SHA-256 内容指纹，无法比较。".to_string());
     }
@@ -554,16 +543,15 @@ fn checkable_target(
     else {
         return Err("lock 未记录有效的 skillPath。".to_string());
     };
-    let target: UpdateTarget = crate::update_target::resolve(entry).map_err(|error| {
-        match error {
+    let target: UpdateTarget =
+        crate::update_target::resolve(entry).map_err(|error| match error {
             crate::update_target::UpdateTargetError::Source { .. } => {
                 "来源不是公开 GitHub 仓库，无法检查更新。".to_string()
             }
             crate::update_target::UpdateTargetError::Reference { .. } => {
                 "lock ref 不是安全的分支/标签名，无法检查更新。".to_string()
             }
-        }
-    })?;
+        })?;
     Ok((
         ProjectTarget {
             name: target.name,
@@ -647,11 +635,9 @@ mod tests {
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
     const COMMIT_A: &str = "1aee802d9139d4df84d017de44fb1b37a7b614e9";
-    const COMMIT_B: &str = "2bff913e024de5ef95e128ee55fc2c48b8c725fa";
     const ALPHA_HASH: &str = "b9d08da8ac776d566beb814c50480e5edfc5422384e327cdc58629d102b491f1";
     const BETA_HASH: &str = "894071b670b3c183fb53284dba3e725204618c4ef085eb7b6208d2961969534e";
-    const ALPHA_OLD_HASH: &str =
-        "9a669b2c5f46470c263ccd0b72686556915cd9085ad0de4a04d5ca18c9ca0a17";
+    const ALPHA_OLD_HASH: &str = "9a669b2c5f46470c263ccd0b72686556915cd9085ad0de4a04d5ca18c9ca0a17";
 
     struct TestClock(AtomicU64);
 
@@ -702,8 +688,10 @@ mod tests {
             reference: Option<&str>,
             error: GitHubFetchError,
         ) -> Self {
-            self.commits
-                .insert((source.to_string(), reference.map(str::to_string)), Err(error));
+            self.commits.insert(
+                (source.to_string(), reference.map(str::to_string)),
+                Err(error),
+            );
             self
         }
 
@@ -727,9 +715,7 @@ mod tests {
             self.commits
                 .get(&(source.to_string(), reference.map(str::to_string)))
                 .cloned()
-                .unwrap_or_else(|| {
-                    Err(GitHubFetchError::http(404, "no scripted commit"))
-                })
+                .unwrap_or_else(|| Err(GitHubFetchError::http(404, "no scripted commit")))
         }
 
         async fn download_archive(
@@ -741,9 +727,7 @@ mod tests {
             self.archives
                 .get(&(source.to_string(), commit.to_string()))
                 .cloned()
-                .unwrap_or_else(|| {
-                    Err(GitHubFetchError::http(404, "no scripted archive"))
-                })
+                .unwrap_or_else(|| Err(GitHubFetchError::http(404, "no scripted archive")))
         }
     }
 
@@ -795,12 +779,8 @@ mod tests {
     ) -> (ProjectUpdateService, tempfile::TempDir) {
         let tmp = tempfile::tempdir().unwrap();
         let paths = AppPaths::new(tmp.path().join("home"), tmp.path().join("app-data"));
-        let service = ProjectUpdateService::with_dependencies(
-            paths,
-            Arc::new(client),
-            clock,
-            config,
-        );
+        let service =
+            ProjectUpdateService::with_dependencies(paths, Arc::new(client), clock, config);
         (service, tmp)
     }
 
@@ -828,8 +808,12 @@ mod tests {
                 "local": entry("/tmp/local", "local", "SKILL.md", ALPHA_HASH),
             }),
         );
-        let client = FakeArchiveClient::default()
-            .with_group("acme/skills", Some("main"), COMMIT_A, scoped_archive());
+        let client = FakeArchiveClient::default().with_group(
+            "acme/skills",
+            Some("main"),
+            COMMIT_A,
+            scoped_archive(),
+        );
         let commit_calls = Arc::clone(&client.commit_calls);
         let download_calls = Arc::clone(&client.download_calls);
         let clock = Arc::new(TestClock::new(1_000));
@@ -887,7 +871,12 @@ mod tests {
         // The second group reports the shared commit as cached, but there is
         // exactly one network download for it.
         assert_eq!(report.skills.len(), 2);
-        assert!(report.skills.iter().all(|s| s.state == UpdateState::Current));
+        assert!(
+            report
+                .skills
+                .iter()
+                .all(|s| s.state == UpdateState::Current)
+        );
         let statuses: Vec<_> = report.sources.iter().map(|s| s.status).collect();
         assert!(statuses.contains(&UpdateSourceStatus::Ok));
         assert!(statuses.contains(&UpdateSourceStatus::Cached));
@@ -902,8 +891,12 @@ mod tests {
                 "alpha": entry("acme/skills", "github", "alpha/SKILL.md", ALPHA_HASH),
             }),
         );
-        let client = FakeArchiveClient::default()
-            .with_group("acme/skills", Some("main"), COMMIT_A, scoped_archive());
+        let client = FakeArchiveClient::default().with_group(
+            "acme/skills",
+            Some("main"),
+            COMMIT_A,
+            scoped_archive(),
+        );
         let clock = Arc::new(TestClock::new(1_000));
         let (service, tmp) = service(client, clock, ProjectCheckConfig::default());
         let paths = AppPaths::new(tmp.path().join("home"), tmp.path().join("app-data"));
@@ -918,6 +911,70 @@ mod tests {
         assert_eq!(report.skills[0].state, UpdateState::Current);
         // Timestamps come from the cache entry, not the check time.
         assert_eq!(report.skills[0].last_success_at_epoch_ms, Some(900));
+    }
+
+    #[tokio::test]
+    async fn a_stale_cached_archive_is_redownloaded_and_a_failed_redownload_keeps_it() {
+        let root = project_root();
+        write_lock(
+            root.path(),
+            serde_json::json!({
+                "alpha": entry("acme/skills", "github", "alpha/SKILL.md", ALPHA_HASH),
+            }),
+        );
+        let paths_for_cache = |tmp: &tempfile::TempDir| {
+            AppPaths::new(tmp.path().join("home"), tmp.path().join("app-data"))
+        };
+
+        // Stale but successful download: the fresh copy is stored anew.
+        let client = FakeArchiveClient::default().with_group(
+            "acme/skills",
+            Some("main"),
+            COMMIT_A,
+            scoped_archive(),
+        );
+        let downloads = Arc::clone(&client.download_calls);
+        let clock = Arc::new(TestClock::new(1_000));
+        let config = ProjectCheckConfig {
+            cache_ttl_ms: 100,
+            ..ProjectCheckConfig::default()
+        };
+        let (fresh_service, tmp) = service(client, Arc::clone(&clock), config.clone());
+        CommitArchiveCache::new(&paths_for_cache(&tmp))
+            .store(COMMIT_A, &scoped_archive(), 0)
+            .unwrap();
+        clock.set(200);
+        let report = fresh_service
+            .check(&scope(), root.path(), None)
+            .await
+            .unwrap();
+        assert_eq!(downloads.load(Ordering::SeqCst), 1);
+        assert_eq!(report.sources[0].status, UpdateSourceStatus::Ok);
+        assert_eq!(report.skills[0].last_success_at_epoch_ms, Some(200));
+
+        // Stale cache and a failing download: the source fails but reports the
+        // previous successful check time.
+        // The commit resolves, but the archive download fails (unscripted).
+        let mut client = FakeArchiveClient::default();
+        client.commits.insert(
+            ("acme/skills".to_string(), Some("main".to_string())),
+            Ok(COMMIT_A.to_string()),
+        );
+        let clock = Arc::new(TestClock::new(1_000));
+        let (failing_service, tmp) = service(client, clock, config);
+        CommitArchiveCache::new(&paths_for_cache(&tmp))
+            .store(COMMIT_A, &scoped_archive(), 0)
+            .unwrap();
+        let report = failing_service
+            .check(&scope(), root.path(), None)
+            .await
+            .unwrap();
+        assert_eq!(report.sources[0].status, UpdateSourceStatus::Error);
+        assert_eq!(report.skills[0].last_success_at_epoch_ms, Some(0));
+        assert_eq!(
+            report.skills[0].note.as_deref(),
+            Some("已保留上次成功检查结果。")
+        );
     }
 
     #[tokio::test]
@@ -945,7 +1002,10 @@ mod tests {
         assert_eq!(alpha.state, UpdateState::Current);
         let beta = report.skills.iter().find(|s| s.name == "beta").unwrap();
         assert_eq!(beta.state, UpdateState::Error);
-        assert_eq!(beta.error.as_ref().unwrap().code, crate::error::ErrorCode::NetworkOffline);
+        assert_eq!(
+            beta.error.as_ref().unwrap().code,
+            crate::error::ErrorCode::NetworkOffline
+        );
         assert_eq!(report.sources.len(), 2);
         let state = service.read_state(&scope()).unwrap();
         use crate::update::state::UpdateCheckOutcome;
@@ -964,8 +1024,12 @@ mod tests {
                 "alpha": entry("acme/skills", "github", "alpha/SKILL.md", ALPHA_HASH),
             }),
         );
-        let client = FakeArchiveClient::default()
-            .with_group("acme/skills", Some("main"), COMMIT_A, scoped_archive());
+        let client = FakeArchiveClient::default().with_group(
+            "acme/skills",
+            Some("main"),
+            COMMIT_A,
+            scoped_archive(),
+        );
         let clock = Arc::new(TestClock::new(1_000));
         let config = ProjectCheckConfig {
             limits: ArchiveLimits {
@@ -996,8 +1060,12 @@ mod tests {
                 "beta": entry("acme/skills", "github", "beta/SKILL.md", ALPHA_OLD_HASH),
             }),
         );
-        let client = FakeArchiveClient::default()
-            .with_group("acme/skills", Some("main"), COMMIT_A, scoped_archive());
+        let client = FakeArchiveClient::default().with_group(
+            "acme/skills",
+            Some("main"),
+            COMMIT_A,
+            scoped_archive(),
+        );
         let clock = Arc::new(TestClock::new(1_000));
         let (service, _tmp) = service(client, clock, ProjectCheckConfig::default());
 
@@ -1006,7 +1074,11 @@ mod tests {
         assert_eq!(state.candidate_count, full.candidate_count());
 
         let scoped = service
-            .check(&scope(), root.path(), Some(vec![format!("{}/alpha", scope().as_string())]))
+            .check(
+                &scope(),
+                root.path(),
+                Some(vec![format!("{}/alpha", scope().as_string())]),
+            )
             .await
             .unwrap();
         assert_eq!(scoped.skills.len(), 1);
@@ -1059,9 +1131,11 @@ mod tests {
         let clock = Arc::new(TestClock::new(1_000));
         let (service, _tmp) = service(client, clock, ProjectCheckConfig::default());
 
-        let error = service.check(&scope(), root.path(), None).await.unwrap_err();
+        let error = service
+            .check(&scope(), root.path(), None)
+            .await
+            .unwrap_err();
         assert_eq!(error.code, crate::error::ErrorCode::LockCorrupt);
         assert!(service.read_state(&scope()).is_none());
     }
-
 }

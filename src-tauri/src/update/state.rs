@@ -45,6 +45,7 @@ pub struct UpdateCheckState {
     pub skipped_source_count: usize,
     /// Skills whose remote fingerprint differs from the lock. Sidebar badges
     /// read this instead of re-deriving it from a report they may not have.
+    #[serde(default)]
     pub candidate_count: usize,
 }
 
@@ -323,7 +324,11 @@ mod tests {
     #[test]
     fn derives_outcomes_and_candidate_count_from_a_report() {
         let ok = UpdateCheckState::from_report(&report(
-            &[UpdateState::Current, UpdateState::Update, UpdateState::Update],
+            &[
+                UpdateState::Current,
+                UpdateState::Update,
+                UpdateState::Update,
+            ],
             &[UpdateSourceStatus::Ok, UpdateSourceStatus::Cached],
             Some(900),
         ));

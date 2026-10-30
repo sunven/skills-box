@@ -204,8 +204,11 @@ fn is_installer_exclusion(path: &str) -> bool {
 pub trait ArchiveClient: Send + Sync {
     /// Latest commit SHA for `source` at the lock's ref (default branch when
     /// no ref is pinned). Must be a 40-character Git SHA.
-    async fn latest_commit(&self, source: &str, reference: Option<&str>)
-    -> Result<String, GitHubFetchError>;
+    async fn latest_commit(
+        &self,
+        source: &str,
+        reference: Option<&str>,
+    ) -> Result<String, GitHubFetchError>;
 
     /// Raw `tar.gz` bytes. Implementations enforce the compressed size cap.
     async fn download_archive(
@@ -311,10 +314,7 @@ fn http_status_error(status: u16) -> GitHubFetchError {
     }
 }
 
-pub fn commit_url(
-    source: &str,
-    reference: Option<&str>,
-) -> Result<reqwest::Url, GitHubFetchError> {
+pub fn commit_url(source: &str, reference: Option<&str>) -> Result<reqwest::Url, GitHubFetchError> {
     let (owner, repo) = split_source(source)?;
     let reference = reference
         .map(str::trim)
@@ -439,12 +439,7 @@ impl CommitArchiveCache {
         is_fresh(cached.fetched_at_epoch_ms, now_epoch_ms, ttl_ms)
     }
 
-    pub fn store(
-        &self,
-        commit: &str,
-        raw: &[u8],
-        fetched_at_epoch_ms: u64,
-    ) -> io::Result<()> {
+    pub fn store(&self, commit: &str, raw: &[u8], fetched_at_epoch_ms: u64) -> io::Result<()> {
         if !crate::git_tree::is_git_tree_hash(commit) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -533,10 +528,7 @@ mod tests {
 
     #[test]
     fn rejects_archives_over_file_count_and_size_caps() {
-        let raw = tar_gz(&[
-            ("root/a.txt", b"aaaa"),
-            ("root/b.txt", b"bbbb"),
-        ]);
+        let raw = tar_gz(&[("root/a.txt", b"aaaa"), ("root/b.txt", b"bbbb")]);
         let limits = ArchiveLimits {
             max_files: 1,
             ..ArchiveLimits::default()

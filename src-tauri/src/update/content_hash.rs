@@ -40,8 +40,9 @@ pub fn folder_hash(root: &Path) -> Result<String, FolderHashError> {
     collect_files(root, root, &mut files)?;
     let mut entries = Vec::with_capacity(files.len());
     for (relative_path, full_path) in files {
-        let content = fs::read(&full_path)
-            .map_err(|error| FolderHashError::Io(format!("无法读取 {}：{error}", full_path.display())))?;
+        let content = fs::read(&full_path).map_err(|error| {
+            FolderHashError::Io(format!("无法读取 {}：{error}", full_path.display()))
+        })?;
         entries.push((relative_path, content));
     }
     hash_entries(entries)
@@ -49,9 +50,7 @@ pub fn folder_hash(root: &Path) -> Result<String, FolderHashError> {
 
 /// SHA-256 over already-extracted files. Paths are relative to the skill
 /// folder and use `/` separators.
-pub fn hash_entries(
-    mut entries: Vec<(String, Vec<u8>)>,
-) -> Result<String, FolderHashError> {
+pub fn hash_entries(mut entries: Vec<(String, Vec<u8>)>) -> Result<String, FolderHashError> {
     for (path, _) in &entries {
         if !is_orderable_ascii(path) {
             return Err(FolderHashError::UnsupportedPath(format!(
@@ -85,8 +84,9 @@ fn collect_files(
         let name = entry.file_name();
         let name = name.to_string_lossy().to_string();
         let full_path = entry.path();
-        let metadata = fs::symlink_metadata(&full_path)
-            .map_err(|error| FolderHashError::Io(format!("无法读取 {}：{error}", full_path.display())))?;
+        let metadata = fs::symlink_metadata(&full_path).map_err(|error| {
+            FolderHashError::Io(format!("无法读取 {}：{error}", full_path.display()))
+        })?;
         let file_type = metadata.file_type();
         if file_type.is_dir() {
             if name == ".git" || name == "node_modules" {
@@ -94,9 +94,9 @@ fn collect_files(
             }
             collect_files(base, &full_path, results)?;
         } else if file_type.is_file() {
-            let relative = full_path
-                .strip_prefix(base)
-                .map_err(|_| FolderHashError::Io(format!("路径不在 skill 目录内：{}", full_path.display())))?;
+            let relative = full_path.strip_prefix(base).map_err(|_| {
+                FolderHashError::Io(format!("路径不在 skill 目录内：{}", full_path.display()))
+            })?;
             let relative = relative
                 .components()
                 .map(|component| component.as_os_str().to_string_lossy().to_string())
@@ -197,7 +197,8 @@ mod tests {
     /// Golden vectors generated with the pinned CLI's exact algorithm
     /// (`skills@1.7.4` `computeSkillFolderHash`) over these fixture files.
     const GOLDEN_FIXTURE: &str = "c2b938685901acfd5e4034a048958b3f3cda94c434443f426e4e262856446697";
-    const GOLDEN_COLLATION: &str = "039f90c5eca0719c6e308d2632f43868d9e8174444d480771fc23af07f08e9b2";
+    const GOLDEN_COLLATION: &str =
+        "039f90c5eca0719c6e308d2632f43868d9e8174444d480771fc23af07f08e9b2";
     const GOLDEN_SINGLE: &str = "3b249edf79dfeb7efa564530ccf0971694cb306a612c4f0bcbb719bcac103311";
 
     fn write(path: &Path, content: &str) {
@@ -219,7 +220,10 @@ mod tests {
         write(&root.join("assets/logo.bin"), "not-really-an-image\n");
         // Excluded by the CLI algorithm.
         write(&root.join(".git/config"), "[core]\n");
-        write(&root.join("node_modules/dep/index.js"), "module.exports = 1;\n");
+        write(
+            &root.join("node_modules/dep/index.js"),
+            "module.exports = 1;\n",
+        );
 
         assert_eq!(folder_hash(&root).unwrap(), GOLDEN_FIXTURE);
     }
@@ -281,9 +285,7 @@ mod tests {
         assert!(is_content_hash(
             "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
         ));
-        assert!(!is_content_hash(
-            "0123456789abcdef0123456789abcdef01234567"
-        ));
+        assert!(!is_content_hash("0123456789abcdef0123456789abcdef01234567"));
         assert!(!is_content_hash(
             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdeg"
         ));
