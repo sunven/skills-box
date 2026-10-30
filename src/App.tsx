@@ -30,6 +30,7 @@ import {
   lastFullAttemptQueryKey,
   lastFullCheckQueryKey,
   updateCheckStateQueryKey,
+  updateCheckStatesQueryKey,
   useCheckUpdates,
   useLastFullAttemptQuery,
   useLastFullCheckQuery,
@@ -369,6 +370,10 @@ function App() {
       });
       void queryClient.removeQueries({
         queryKey: updateReportQueryKey(target),
+      });
+      // The scope switcher reads every state in one batched query.
+      void queryClient.invalidateQueries({
+        queryKey: updateCheckStatesQueryKey,
       });
     },
     [queryClient],

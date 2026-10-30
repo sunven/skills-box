@@ -18,7 +18,7 @@ import type {
   SkillDirListing,
   SkillFileContent,
   TaskEvent,
-  UpdateCheckReport,
+  UpdateCheckResponse,
   UpdateCheckState,
   AppError,
 } from "./types";
@@ -47,6 +47,7 @@ export const API_COMMANDS = {
   startInstall: "start_install",
   checkUpdates: "check_updates",
   getUpdateCheckState: "get_update_check_state",
+  getUpdateCheckStates: "get_update_check_states",
   startUpdate: "start_update",
   detachAgent: "detach_agent",
   attachAgent: "attach_agent",
@@ -228,8 +229,8 @@ export function startInstall(
 export function checkUpdates(
   skillIds?: string[],
   scope: ScopeId = GLOBAL_SCOPE,
-): Promise<UpdateCheckReport> {
-  return invoke<UpdateCheckReport>(API_COMMANDS.checkUpdates, {
+): Promise<UpdateCheckResponse> {
+  return invoke<UpdateCheckResponse>(API_COMMANDS.checkUpdates, {
     skillIds: skillIds ?? null,
     scope,
   });
@@ -242,6 +243,15 @@ export function getUpdateCheckState(
   return invoke<UpdateCheckState | null>(API_COMMANDS.getUpdateCheckState, {
     scope,
   });
+}
+
+/** Every scope's persisted summary, in one file read. */
+export function getUpdateCheckStates(): Promise<
+  Record<string, UpdateCheckState>
+> {
+  return invoke<Record<string, UpdateCheckState>>(
+    API_COMMANDS.getUpdateCheckStates,
+  );
 }
 
 /**

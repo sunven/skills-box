@@ -407,7 +407,10 @@ describe("fake backend", () => {
         skillIds: null,
         scope: projectScope,
       }),
-    ).toMatchObject({ skills: [{ name: "alpha", state: "update" }] });
+    ).toMatchObject({
+      report: { skills: [{ name: "alpha", state: "update" }] },
+      state: { candidateCount: 1 },
+    });
     expect(
       backend.dispatch(API_COMMANDS.getUpdateCheckState, {
         scope: projectScope,
@@ -424,6 +427,15 @@ describe("fake backend", () => {
         scope: GLOBAL_SCOPE,
       }),
     ).toBeNull();
+    expect(
+      backend.dispatch(API_COMMANDS.getUpdateCheckStates, {}),
+    ).toMatchObject({
+      [projectScope]: {
+        version: 1,
+        lastAttemptAt: 123,
+        candidateCount: 1,
+      },
+    });
   });
 
   it("auto-completes preview tasks only when asked", () => {

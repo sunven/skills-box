@@ -15,7 +15,6 @@ import {
   formatEpochDateTime,
   markSkillsCurrent,
   mergeUpdateReports,
-  summarizeFullCheck,
   selectUpdateDialog,
   summarizePersistedState,
   updateBadgeTitle,
@@ -303,92 +302,6 @@ describe("badges and formatting", () => {
 });
 
 describe("last check summaries", () => {
-  it("derives outcome and counts from a full report", () => {
-    const full = report([], {
-      sources: [
-        {
-          source: "acme/skills",
-          ref: "main",
-          status: "ok",
-          skillCount: 1,
-          cached: false,
-          truncated: false,
-          lastSuccessAtEpochMs: 1793163988000,
-          error: null,
-          note: null,
-        },
-        {
-          source: "acme/other",
-          ref: null,
-          status: "error",
-          skillCount: 1,
-          cached: false,
-          truncated: false,
-          lastSuccessAtEpochMs: null,
-          error: {
-            code: "network.offline",
-            message: "offline",
-            retryable: true,
-          },
-          note: null,
-        },
-        {
-          source: "acme/cached",
-          ref: null,
-          status: "cached",
-          skillCount: 1,
-          cached: true,
-          truncated: false,
-          lastSuccessAtEpochMs: 1793163980000,
-          error: null,
-          note: null,
-        },
-      ],
-      skippedSourceCount: 1,
-      cachedSourceCount: 1,
-      checkedAtEpochMs: 1793163990000,
-      lastSuccessAtEpochMs: 1793163988000,
-      warnings: ["警告"],
-    });
-
-    expect(summarizeFullCheck(full)).toEqual({
-      lastAttemptAt: 1793163990000,
-      lastSuccessAt: 1793163988000,
-      outcome: "partial",
-      failedSourceCount: 1,
-      cachedSourceCount: 1,
-      skippedSourceCount: 1,
-      warnings: ["警告"],
-    });
-  });
-
-  it("marks a report with only errors as failed", () => {
-    const full = report([], {
-      sources: [
-        {
-          source: "acme/skills",
-          ref: null,
-          status: "error",
-          skillCount: 1,
-          cached: false,
-          truncated: false,
-          lastSuccessAtEpochMs: null,
-          error: {
-            code: "network.offline",
-            message: "offline",
-            retryable: true,
-          },
-          note: null,
-        },
-      ],
-      lastSuccessAtEpochMs: null,
-    });
-
-    const summary = summarizeFullCheck(full);
-    expect(summary.outcome).toBe("failed");
-    expect(summary.lastSuccessAt).toBeNull();
-  });
-
   it("maps a persisted state without warnings", () => {
     const state: UpdateCheckState = {
       version: 1,

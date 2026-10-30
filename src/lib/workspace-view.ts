@@ -34,7 +34,6 @@ import {
   computeUpdateSummary,
   formatEpochDateTime,
   selectUpdateDialog,
-  summarizeFullCheck,
   summarizePersistedState,
   withUpdateAnomalies,
   type LastCheckSummary,
@@ -153,11 +152,12 @@ export function buildWorkspaceView(input: WorkspaceViewInput): WorkspaceView {
   const statusCounts = computeStatusCounts(skills);
   const sourceOptions = computeSourceOptions(skills);
   const agentOptions = computeAgentOptions(skills, agents);
-  const lastCheck = input.lastFullCheck
-    ? summarizeFullCheck(input.lastFullCheck)
-    : input.updateCheckState
-      ? summarizePersistedState(input.updateCheckState)
-      : null;
+  const lastCheck = input.updateCheckState
+    ? {
+        ...summarizePersistedState(input.updateCheckState),
+        warnings: input.lastFullCheck?.warnings ?? [],
+      }
+    : null;
   const hasManagedSkills = snapshotSkills.some(
     (skill) => skill.management === "managed",
   );

@@ -27,6 +27,7 @@ import type {
   TaskEvent,
   TaskResult,
   UpdateCheckReport,
+  UpdateCheckResponse,
   UpdateCheckState,
 } from "../lib/types";
 import { healthyReport } from "./fixtures";
@@ -87,11 +88,15 @@ export interface FakeCommandContract {
   };
   check_updates: {
     args: { skillIds: string[] | null; scope: ScopeId };
-    result: UpdateCheckReport;
+    result: UpdateCheckResponse;
   };
   get_update_check_state: {
     args: { scope: ScopeId };
     result: UpdateCheckState | null;
+  };
+  get_update_check_states: {
+    args: Record<string, never>;
+    result: Record<string, UpdateCheckState>;
   };
   start_update: {
     args: { skillIds: string[]; scope: ScopeId; onEvent: Channel<TaskEvent> };
@@ -891,6 +896,23 @@ export function createFakeBackend(
     return null;
   };
 
+  const allCheckStates = (): Record<string, UpdateCheckState> => {
+    const states: Record<string, UpdateCheckState> = {};
+    const global = factoryValue(data.updateCheckState);
+    if (global) states[GLOBAL_SCOPE] = global;
+    for (const [scope, factory] of Object.entries(
+      data.updateCheckStates ?? {},
+    )) {
+      if (!factory) continue;
+      const state = factoryValue(factory);
+      if (state) states[scope] = state;
+    }
+    for (const [scope, state] of checkedStates) {
+      states[scope] = state;
+    }
+    return states;
+  };
+
   const stateFromReport = (report: UpdateCheckReport): UpdateCheckState => {
     const failedSourceCount = report.sources.filter(
       (source) => source.status === "error",
@@ -956,10 +978,12 @@ export function createFakeBackend(
     },
     check_updates: ({ scope }) => {
       const report = reportFor(scope);
-      checkedStates.set(scope, stateFromReport(report));
-      return report;
+      const state = stateFromReport(report);
+      checkedStates.set(scope, state);
+      return { report, state };
     },
     get_update_check_state: ({ scope }) => checkStateFor(scope),
+    get_update_check_states: () => allCheckStates(),
     start_update: ({ skillIds, scope, onEvent }) => {
       const task = makeTask("start_update", onEvent);
       scheduleAutoTask(task, "update", skillIds, scope);

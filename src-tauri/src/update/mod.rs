@@ -143,6 +143,17 @@ impl UpdateCheckReport {
     }
 }
 
+/// One `check_updates` response. A full check also returns the normalized
+/// summary it persisted, so the UI never re-derives the outcome from a report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateCheckResponse {
+    pub report: UpdateCheckReport,
+    /// Absent for scoped per-skill checks, which never advance last-check state.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<UpdateCheckState>,
+}
+
 pub struct UpdateService {
     paths: AppPaths,
     client: Arc<dyn GitHubTreeClient>,

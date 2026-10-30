@@ -159,6 +159,7 @@ pub fn run() {
             commands::start_uninstall,
             commands::check_updates,
             commands::get_update_check_state,
+            commands::get_update_check_states,
             commands::cancel_task,
             commands::get_active_mutation,
             commands::dismiss_interrupted_mutation,

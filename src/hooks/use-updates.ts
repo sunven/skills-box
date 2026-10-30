@@ -10,6 +10,7 @@ import {
 
 export const updateCheckStateQueryKey = (scope: ScopeId) =>
   ["updateCheckState", scope] as const;
+export const updateCheckStatesQueryKey = ["updateCheckStates"] as const;
 export const lastFullCheckQueryKey = (scope: ScopeId) =>
   ["lastFullCheck", scope] as const;
 export const lastFullAttemptQueryKey = (scope: ScopeId) =>
@@ -23,7 +24,7 @@ export const lastFullAttemptQueryKey = (scope: ScopeId) =>
 export function useUpdateReportQuery(scope: ScopeId = GLOBAL_SCOPE) {
   return useQuery({
     queryKey: updateReportQueryKey(scope),
-    queryFn: () => checkUpdates(undefined, scope),
+    queryFn: async () => (await checkUpdates(undefined, scope)).report,
     enabled: false,
   });
 }
@@ -60,7 +61,8 @@ export function useCheckUpdates(scope: ScopeId = GLOBAL_SCOPE) {
   const inFlight = useRef(false);
   const mutation = useMutation({
     mutationFn: (skillIds?: string[]) => checkUpdates(skillIds, scope),
-    onSuccess: (report, skillIds) => {
+    onSuccess: (response, skillIds) => {
+      const report = response.report;
       const full = skillIds === undefined;
       queryClient.setQueryData<UpdateCheckReport>(
         updateReportQueryKey(scope),
@@ -72,8 +74,18 @@ export function useCheckUpdates(scope: ScopeId = GLOBAL_SCOPE) {
           lastFullAttemptQueryKey(scope),
           report.checkedAtEpochMs,
         );
+        if (response.state) {
+          queryClient.setQueryData(
+            updateCheckStateQueryKey(scope),
+            response.state,
+          );
+        } else {
+          void queryClient.invalidateQueries({
+            queryKey: updateCheckStateQueryKey(scope),
+          });
+        }
         void queryClient.invalidateQueries({
-          queryKey: updateCheckStateQueryKey(scope),
+          queryKey: updateCheckStatesQueryKey,
         });
       }
     },

@@ -401,6 +401,12 @@ export interface UpdateCheckReport {
   warnings: string[];
 }
 
+/** One check_updates response; full checks also return the persisted summary. */
+export interface UpdateCheckResponse {
+  report: UpdateCheckReport;
+  state?: UpdateCheckState | null;
+}
+
 export type UpdateCheckOutcome = "ok" | "partial" | "failed";
 
 /** Persisted summary of the last full check; scoped checks never write it. */

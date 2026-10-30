@@ -1,6 +1,7 @@
 //! Tauri command boundary. Commands are thin: validate nothing from the
 //! frontend beyond typed inputs, delegate to services, return typed results.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -24,7 +25,7 @@ use crate::projects::{ProjectEntry, ProjectList};
 use crate::scope::ScopeId;
 use crate::tasks::{ActiveMutationInfo, CancelAck, EventSink, InstallRequest, TaskEvent, TaskId};
 use crate::timeouts::READ_TIMEOUT;
-use crate::update::UpdateCheckReport;
+use crate::update::UpdateCheckResponse;
 use crate::update::state::UpdateCheckState;
 
 /// Forward task events to the renderer. A closed window must not fail a
@@ -279,9 +280,10 @@ pub async fn check_updates(
     state: State<'_, AppState>,
     scope: ScopeId,
     skill_ids: Option<Vec<String>>,
-) -> Result<UpdateCheckReport, AppError> {
-    match &scope {
-        ScopeId::Global => state.updates.check(skill_ids).await,
+) -> Result<UpdateCheckResponse, AppError> {
+    let full_check = skill_ids.is_none();
+    let report = match &scope {
+        ScopeId::Global => state.updates.check(skill_ids).await?,
         ScopeId::Project(_) => {
             let layout = crate::scope_layout::ScopeLayout::resolve(
                 &state.paths,
@@ -289,9 +291,20 @@ pub async fn check_updates(
                 &scope,
                 &[],
             )?;
-            state.project_updates.check(&layout, skill_ids).await
+            state.project_updates.check(&layout, skill_ids).await?
         }
-    }
+    };
+    Ok(UpdateCheckResponse {
+        state: full_check.then(|| UpdateCheckState::from_report(&report)),
+        report,
+    })
+}
+
+/// Persisted check summary for every scope, for the scope switcher. One file
+/// read instead of one request per project.
+#[tauri::command]
+pub fn get_update_check_states(state: State<'_, AppState>) -> BTreeMap<String, UpdateCheckState> {
+    state.check_states.load_all()
 }
 
 /// Last persisted full-check summary for one scope, if any. Read-only; no

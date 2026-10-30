@@ -258,32 +258,6 @@ export interface LastCheckSummary {
   warnings: string[];
 }
 
-export function summarizeFullCheck(
-  report: UpdateCheckReport,
-): LastCheckSummary {
-  const failedSourceCount = report.sources.filter(
-    (source) => source.status === "error",
-  ).length;
-  const successfulSourceCount = report.sources.filter(
-    (source) => source.status === "ok" || source.status === "cached",
-  ).length;
-  const outcome: UpdateCheckOutcome =
-    failedSourceCount > 0 && successfulSourceCount === 0
-      ? "failed"
-      : failedSourceCount > 0 || report.skippedSourceCount > 0
-        ? "partial"
-        : "ok";
-  return {
-    lastAttemptAt: report.checkedAtEpochMs,
-    lastSuccessAt: report.lastSuccessAtEpochMs,
-    outcome,
-    failedSourceCount,
-    cachedSourceCount: report.cachedSourceCount,
-    skippedSourceCount: report.skippedSourceCount,
-    warnings: report.warnings,
-  };
-}
-
 export function summarizePersistedState(
   state: UpdateCheckState,
 ): LastCheckSummary {
