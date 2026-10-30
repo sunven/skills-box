@@ -84,13 +84,13 @@ pub fn relocate_project(
     id: String,
     root: String,
 ) -> Result<ProjectEntry, AppError> {
-    state.tasks.ensure_project_registry_idle()?;
+    let _change = state.tasks.begin_registry_change()?;
     state.projects.relocate(&id, &root)
 }
 
 #[tauri::command]
 pub fn forget_project(state: State<'_, AppState>, id: String) -> Result<(), AppError> {
-    state.tasks.ensure_project_registry_idle()?;
+    let _change = state.tasks.begin_registry_change()?;
     state.projects.forget(&id)
 }
 

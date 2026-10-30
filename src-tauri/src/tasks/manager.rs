@@ -11,8 +11,8 @@ use serde::Serialize;
 use tokio::sync::{Notify, Semaphore};
 
 use crate::cli::{CliRuntimeProvider, preview_command};
-use crate::error::AppError;
 use crate::error::cli::{self, CliAction};
+use crate::error::{AppError, ErrorCode};
 use crate::interrupted::{InterruptedMutation, MarkerStore, MutationKind};
 use crate::paths::AppPaths;
 use crate::process::{CancelToken, ExecError, ProcessExecutor};
@@ -296,10 +296,27 @@ pub(super) enum FinishOutcome {
     Cancelled,
 }
 
-/// Held for the duration of a mutation. `try_acquire_mutation` backs the
-/// serialized install/update/uninstall queue; preview never takes this permit.
+/// Held for the duration of a mutation or a Project root change.
+/// `try_acquire_mutation` backs the serialized write slot; preview never takes
+/// this permit. Lock order is always permit, then the Project registry mutex.
 pub struct MutationPermit {
     _permit: tokio::sync::OwnedSemaphorePermit,
+}
+
+/// Held across a Relocate or Forget so no mutation can pin a layout to a root
+/// while the registry rewrites that root. Add, active-scope switching, reads
+/// and project update checks stay outside the slot.
+#[must_use = "hold the guard until the registry write finishes"]
+pub struct RegistryChangeGuard {
+    _permit: MutationPermit,
+}
+
+impl std::fmt::Debug for RegistryChangeGuard {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RegistryChangeGuard")
+            .finish_non_exhaustive()
+    }
 }
 
 impl std::fmt::Debug for MutationPermit {
@@ -365,9 +382,12 @@ impl TaskManager {
         }
     }
 
-    /// Resolve one mutation scope before any work starts. Unavailable roots and
-    /// corrupt/unsupported project locks are rejected here; global keeps its
-    /// historical behavior.
+    /// Resolve one mutation scope before any work starts. Mutation callers hold
+    /// the write slot first: the layout pins the Project root for the mutation,
+    /// and a registry change can only move a root while the slot is free. Lock
+    /// order is permit, then the registry mutex. Preview resolves without the
+    /// slot because it is read-only; a concurrent Relocate makes it fail as a
+    /// Scope error.
     fn scope_layout(
         &self,
         scope: &crate::scope::ScopeId,
@@ -381,8 +401,10 @@ impl TaskManager {
         Ok(layout)
     }
 
-    /// Try to become the single active mutation. Concurrent callers get
-    /// `task.busy` immediately (no queueing) so the UI can report it.
+    /// Try to become the single active writer. Concurrent callers get
+    /// `task.busy` immediately (no queueing) so the UI can report it. Every
+    /// mutation takes this before resolving its layout, so a held permit is
+    /// also what keeps a Project root from moving.
     pub fn try_acquire_mutation(&self) -> Result<MutationPermit, AppError> {
         self.ensure_not_shutting_down()?;
         Arc::clone(&self.inner.mutation_slots)
@@ -422,16 +444,23 @@ impl TaskManager {
         self.active_mutation().is_some()
     }
 
-    /// Project registry changes (relocate/forget) invalidate roots that a
-    /// running mutation may already be writing, so they wait for it to end.
-    pub fn ensure_project_registry_idle(&self) -> Result<(), AppError> {
-        match self.active_mutation() {
-            Some(active) => Err(AppError::task_busy().detail(format!(
-                "项目变更被拒绝：{} 正在执行（{}）。",
-                active.kind.label(),
-                active.skills.join("、")
-            ))),
-            None => Ok(()),
+    /// Acquire the write slot for a Project root change. Relocate and Forget
+    /// hold the guard across the whole registry call, so no mutation can pin a
+    /// layout to a root while it moves. The busy detail names a registered
+    /// task; native attach/detach hold the permit without registering, so the
+    /// generic message is the honest fallback.
+    pub fn begin_registry_change(&self) -> Result<RegistryChangeGuard, AppError> {
+        match self.try_acquire_mutation() {
+            Ok(permit) => Ok(RegistryChangeGuard { _permit: permit }),
+            Err(error) if error.code == ErrorCode::TaskBusy => match self.active_mutation() {
+                Some(active) => Err(error.detail(format!(
+                    "项目变更被拒绝：{} 正在执行（{}）。",
+                    active.kind.label(),
+                    active.skills.join("、")
+                ))),
+                None => Err(error.detail("另一个写入操作正在进行，请等待完成后再试。")),
+            },
+            Err(error) => Err(error),
         }
     }
 
@@ -633,6 +662,9 @@ impl TaskManager {
         on_event: EventSink,
     ) -> Result<TaskId, AppError> {
         self.ensure_not_shutting_down()?;
+        // The layout is resolved under the write slot: a pinned Project root
+        // must never move between resolution and execution.
+        let permit = self.try_acquire_mutation()?;
         let paths = self.inner.paths.clone();
         let layout = self.scope_layout(&scope)?;
         let planning_layout = layout.clone();
@@ -649,9 +681,6 @@ impl TaskManager {
         .await
         .map_err(|error| AppError::task_internal("安装", error))??;
 
-        // The permit is taken after validation so invalid requests do not
-        // briefly occupy the write slot, and held for the whole task.
-        let permit = self.try_acquire_mutation()?;
         let (task_id, cancel) = self.register_mutation(
             TaskAction::Install,
             MutationKind::Install,
@@ -694,8 +723,9 @@ impl TaskManager {
     }
 
     /// Run a serialized native detach. The single-writer permit is acquired
-    /// before any filesystem scan, so detach cannot interleave with an
-    /// install/update/uninstall. No CLI process is ever spawned here.
+    /// before layout resolution or any filesystem scan, so detach cannot
+    /// interleave with an install/update/uninstall or a root change. No CLI
+    /// process is ever spawned here.
     pub async fn detach_agent(
         &self,
         scope: crate::scope::ScopeId,
@@ -703,8 +733,8 @@ impl TaskManager {
         agent_id: String,
     ) -> Result<crate::detach::DetachResult, AppError> {
         self.ensure_not_shutting_down()?;
-        let layout = self.scope_layout(&scope)?;
         let permit = self.try_acquire_mutation()?;
+        let layout = self.scope_layout(&scope)?;
         let paths = self.inner.paths.clone();
         tokio::task::spawn_blocking(move || {
             // Keep the write slot for the whole scan + unlink/delete.
@@ -716,7 +746,8 @@ impl TaskManager {
     }
 
     /// Serialized native attach (the inverse of detach). Takes the same
-    /// single-writer permit; no CLI process is spawned.
+    /// single-writer permit before resolving the layout; no CLI process is
+    /// spawned.
     pub async fn attach_agent(
         &self,
         scope: crate::scope::ScopeId,
@@ -724,8 +755,8 @@ impl TaskManager {
         agent_id: String,
     ) -> Result<crate::attach::AttachResult, AppError> {
         self.ensure_not_shutting_down()?;
-        let layout = self.scope_layout(&scope)?;
         let permit = self.try_acquire_mutation()?;
+        let layout = self.scope_layout(&scope)?;
         let paths = self.inner.paths.clone();
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
@@ -822,11 +853,11 @@ impl TaskManager {
     ) -> Result<TaskId, AppError> {
         self.ensure_not_shutting_down()?;
         let names = install::validate_skill_names(&skill_ids)?;
+        // Hold the write slot from layout resolution through execution so the
+        // root cannot move and the lock snapshot stays stable under planning.
+        let permit = self.try_acquire_mutation()?;
         let layout = self.scope_layout(&scope)?;
         let planning_layout = layout.clone();
-        // Hold the write slot while planning so the lock/inventory snapshot
-        // cannot be read in the middle of another mutation.
-        let permit = self.try_acquire_mutation()?;
         let paths = self.inner.paths.clone();
         let plan = match tokio::task::spawn_blocking(move || {
             update_task::plan_updates(&paths, &planning_layout, &names)
@@ -875,11 +906,11 @@ impl TaskManager {
         on_event: EventSink,
     ) -> Result<TaskId, AppError> {
         self.ensure_not_shutting_down()?;
+        // Hold the write slot from layout resolution through execution so the
+        // root cannot move and the lock snapshot stays stable under planning.
+        let permit = self.try_acquire_mutation()?;
         let layout = self.scope_layout(&scope)?;
         let planning_layout = layout.clone();
-        // Hold the write slot while planning so the lock/inventory snapshot
-        // cannot be read in the middle of another mutation.
-        let permit = self.try_acquire_mutation()?;
         let paths = self.inner.paths.clone();
         let plan = match tokio::task::spawn_blocking(move || {
             uninstall_task::plan_uninstall(&paths, &planning_layout, &skill_id)
@@ -1308,6 +1339,7 @@ mod tests {
     use crate::error::ErrorCode;
     use crate::process::fake::{ScriptedExecutor, ScriptedResponse};
     use crate::process::{CommandSpec, ExecOutput};
+    use crate::projects::ProjectRegistry;
     use crate::tasks::conflicts::ConflictProvider;
     use std::collections::BTreeMap;
     use std::fs;
@@ -1726,6 +1758,26 @@ mod tests {
 
         drop(permit);
         assert!(manager.try_acquire_mutation().is_ok());
+    }
+
+    #[tokio::test]
+    async fn registry_change_guard_shares_the_write_slot() {
+        let (manager, _) = manager(
+            ScriptedExecutor::new().expect_any(ScriptedResponse::ok(SINGLE_CI)),
+            HashMap::new(),
+            Duration::from_secs(60),
+        );
+        let permit = manager.try_acquire_mutation().unwrap();
+        let busy = manager.begin_registry_change().unwrap_err();
+        assert_eq!(busy.code, ErrorCode::TaskBusy);
+        assert!(
+            busy.detail.unwrap().contains("写入操作"),
+            "native actions never register, so the generic fallback is used"
+        );
+        drop(permit);
+
+        let guard = manager.begin_registry_change().unwrap();
+        drop(guard);
     }
 
     #[tokio::test]
@@ -2517,13 +2569,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn project_registry_changes_are_refused_while_a_mutation_runs() {
+    async fn project_registry_changes_wait_for_a_running_mutation() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home");
         fs::create_dir_all(&home).unwrap();
         fs::create_dir_all(home.join(".qoder")).unwrap();
         let paths = AppPaths::new(&home, tmp.path().join("app-data"));
         paths.ensure_dirs().unwrap();
+        let old_root = tmp.path().join("project-old");
+        let new_root = tmp.path().join("project-new");
+        fs::create_dir_all(&old_root).unwrap();
+        fs::create_dir_all(&new_root).unwrap();
+        let projects = Arc::new(ProjectRegistry::new(paths.clone()));
+        let entry = projects.add(old_root.to_str().unwrap()).unwrap();
+        let old_canonical = fs::canonicalize(&old_root).unwrap();
+        let new_canonical = fs::canonicalize(&new_root).unwrap();
+        assert_eq!(
+            projects.lookup(entry.project.id).unwrap().project.root,
+            old_canonical
+        );
+
         let executor = Arc::new(InstallExecutor::new(
             InstallResponse::success(
                 INSTALL_SUCCESS,
@@ -2534,15 +2599,15 @@ mod tests {
             )
             .delayed(Duration::from_millis(150)),
         ));
-        let manager = TaskManager::new(
+        let manager = TaskManager::with_projects(
             Arc::new(FakeRuntime::ok()),
             executor,
             Arc::new(FakeConflicts::default()),
             paths,
+            Arc::clone(&projects),
             TaskManagerConfig::default(),
         );
 
-        assert!(manager.ensure_project_registry_idle().is_ok());
         let (event_sink, mut receiver) = sink();
         manager
             .start_install(
@@ -2552,15 +2617,31 @@ mod tests {
             )
             .await
             .unwrap();
-        let error = manager.ensure_project_registry_idle().unwrap_err();
+
+        let error = manager.begin_registry_change().unwrap_err();
         assert_eq!(error.code, ErrorCode::TaskBusy);
         assert!(error.detail.unwrap().contains("安装"));
+        assert_eq!(
+            projects.lookup(entry.project.id).unwrap().project.root,
+            old_canonical,
+            "the root must not move while the install holds the slot"
+        );
 
         let final_event = tokio::time::timeout(Duration::from_secs(2), final_event(&mut receiver))
             .await
             .expect("install should finish");
         assert_eq!(final_event.phase, TaskPhase::Completed);
-        assert!(manager.ensure_project_registry_idle().is_ok());
+
+        {
+            let _change = manager.begin_registry_change().unwrap();
+            projects
+                .relocate(&entry.project.id.to_string(), new_root.to_str().unwrap())
+                .unwrap();
+        }
+        assert_eq!(
+            projects.lookup(entry.project.id).unwrap().project.root,
+            new_canonical
+        );
     }
 
     #[tokio::test]
