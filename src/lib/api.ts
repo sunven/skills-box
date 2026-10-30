@@ -209,7 +209,7 @@ export function quitApp(): Promise<void> {
 export function startInstall(
   request: InstallRequest,
   onEvent: (event: TaskEvent) => void,
-  scope: ScopeId = GLOBAL_SCOPE,
+  scope: ScopeId,
 ): Promise<string> {
   const channel = new Channel<TaskEvent>();
   channel.onmessage = onEvent;
@@ -252,7 +252,7 @@ export function getUpdateCheckState(
 export function startUpdate(
   skillIds: string[],
   onEvent: (event: TaskEvent) => void,
-  scope: ScopeId = GLOBAL_SCOPE,
+  scope: ScopeId,
 ): Promise<string> {
   const channel = new Channel<TaskEvent>();
   channel.onmessage = onEvent;
@@ -271,7 +271,7 @@ export function startUpdate(
 export function detachAgent(
   skillId: string,
   agentId: string,
-  scope: ScopeId = GLOBAL_SCOPE,
+  scope: ScopeId,
 ): Promise<DetachResult> {
   return invoke<DetachResult>(API_COMMANDS.detachAgent, {
     skillId,
@@ -288,7 +288,7 @@ export function detachAgent(
 export function attachAgent(
   skillId: string,
   agentId: string,
-  scope: ScopeId = GLOBAL_SCOPE,
+  scope: ScopeId,
 ): Promise<AttachResult> {
   return invoke<AttachResult>(API_COMMANDS.attachAgent, {
     skillId,
@@ -334,7 +334,7 @@ export function removeExtraAgent(
 export function startUninstall(
   skillId: string,
   onEvent: (event: TaskEvent) => void,
-  scope: ScopeId = GLOBAL_SCOPE,
+  scope: ScopeId,
 ): Promise<string> {
   const channel = new Channel<TaskEvent>();
   channel.onmessage = onEvent;

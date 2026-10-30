@@ -15,7 +15,7 @@ export function useProjectsQuery() {
 
 /**
  * Persisted check state for every scope in the switcher. Badge counts come
- * from the backend state (ticket 05 supplies per-scope candidate counts).
+ * from the backend state, which records per-scope candidate counts.
  */
 export function useScopeCheckStates(scopes: ScopeId[]) {
   const results = useQueries({

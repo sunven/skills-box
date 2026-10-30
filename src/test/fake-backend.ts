@@ -974,6 +974,15 @@ export function createFakeBackend(
       updateExtra(agentId, projectSkillsDir),
     remove_extra_agent: ({ agentId }) => removeExtra(agentId),
     start_uninstall: ({ skillId, scope, onEvent }) => {
+      // Rust resolves the name with `ScopeId::parse_skill_id`, so a project
+      // uninstall must carry the scope-qualified id or it is rejected.
+      if (scope !== GLOBAL_SCOPE && !skillId.startsWith(`${scope}/`)) {
+        throw {
+          code: "path.invalid",
+          message: `skill id 不属于当前项目 scope：${skillId}`,
+          retryable: false,
+        } satisfies AppError;
+      }
       const task = makeTask("start_uninstall", onEvent);
       scheduleAutoTask(task, "uninstall", [skillId], scope);
       return task.taskId;

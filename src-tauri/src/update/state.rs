@@ -126,21 +126,6 @@ impl UpdateCheckStateStore {
             .cloned()
     }
 
-    /// Every readable scope entry, keyed by scope string. Used by tests and by
-    /// callers that need to know whether a scope was ever checked.
-    pub fn load_all(&self) -> BTreeMap<String, UpdateCheckState> {
-        fs::read_to_string(&self.path)
-            .ok()
-            .and_then(|raw| parse_scopes(&raw))
-            .map(|scopes| {
-                scopes
-                    .into_iter()
-                    .filter(|(_, state)| state.version == UPDATE_CHECK_STATE_ENTRY_VERSION)
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
     /// Persist one scope. Reading a version-1 file migrates its global state
     /// into the version-2 map, so no other scope's history is lost.
     pub fn store(&self, scope: &ScopeId, state: &UpdateCheckState) -> io::Result<()> {

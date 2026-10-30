@@ -28,6 +28,7 @@ import {
   projectForScope,
   projectScope,
 } from "./scope";
+import { isLockError } from "./api";
 import {
   applyUpdateReport,
   computeUpdateSummary,
@@ -122,18 +123,18 @@ function lockView(
 ): { label: string; tone: ProjectLockTone } {
   if (unavailable) return { label: "—", tone: "muted" };
   if (error) {
-    switch (error.code) {
-      case "project.lock_corrupt":
-        return { label: "锁损坏", tone: "negative" };
-      case "project.lock_unsupported":
-        return { label: "锁版本不支持", tone: "negative" };
-      case "lock.read_failed":
-        return { label: "锁读取失败", tone: "negative" };
-      case "project.root_unavailable":
-        return { label: "路径不可用", tone: "negative" };
-      default:
-        return { label: "读取失败", tone: "negative" };
+    if (error.code === "project.lock_unsupported") {
+      return { label: "锁版本不支持", tone: "negative" };
     }
+    if (isLockError(error)) {
+      return error.code === "lock.corrupt"
+        ? { label: "锁损坏", tone: "negative" }
+        : { label: "锁读取失败", tone: "negative" };
+    }
+    if (error.code === "project.root_unavailable") {
+      return { label: "路径不可用", tone: "negative" };
+    }
+    return { label: "读取失败", tone: "negative" };
   }
   if (loading) return { label: "读取中", tone: "muted" };
   return { label: "正常", tone: "ok" };
@@ -198,7 +199,10 @@ export function buildWorkspaceView(input: WorkspaceViewInput): WorkspaceView {
             : (state?.candidateCount ?? 0)
           : (state?.candidateCount ?? 0),
         checkFailed: state?.lastOutcome === "failed",
-        error: active && scopeError !== null,
+        error:
+          project.lockError != null ||
+          state?.lastOutcome === "failed" ||
+          (active && scopeError !== null),
       };
     });
   const projectHeader: ProjectHeaderView | null = activeProject

@@ -67,6 +67,7 @@ import type {
 
 const EMPTY_INVENTORY_AGENTS: InventoryAgent[] = [];
 const EMPTY_DETECTED_AGENTS: DetectedAgent[] = [];
+const EMPTY_PROJECTS: ProjectEntry[] = [];
 const EMPTY_WARNINGS: string[] = [];
 
 function App() {
@@ -410,6 +411,7 @@ function App() {
     (entry: ProjectEntry) => {
       resetWorkspaceState();
       setProjectDialog(null);
+      const relocatedScope = projectScope(entry.id);
       cacheProjectList((previous) => {
         const list = previous ?? {
           projects: [],
@@ -422,12 +424,23 @@ function App() {
             entry,
             ...list.projects.filter((item) => item.id !== entry.id),
           ],
-          lastActiveScope: projectScope(entry.id),
+          lastActiveScope: relocatedScope,
         };
       });
-      setActiveScope(projectScope(entry.id));
-      clearScopeCheckCache(projectScope(entry.id));
-      void queryClient.invalidateQueries({ queryKey: projectsQueryKey });
+      setActiveScope(relocatedScope);
+      clearScopeCheckCache(relocatedScope);
+      // The backend already persists this on relocate; the explicit command
+      // keeps the cached list and a restart aligned when it races with a
+      // concurrent registry read.
+      void persistActiveScope(relocatedScope)
+        .then(() =>
+          queryClient.invalidateQueries({ queryKey: projectsQueryKey }),
+        )
+        .catch((error: unknown) => {
+          const typed = asAppError(error) ?? fallbackError("无法保存当前作用域。");
+          setScopeNotice(typed.message);
+          void queryClient.invalidateQueries({ queryKey: projectsQueryKey });
+        });
     },
     [cacheProjectList, clearScopeCheckCache, queryClient, resetWorkspaceState],
   );
@@ -676,9 +689,11 @@ function App() {
         open={installOpen}
         scope={scope}
         project={activeProject}
+        projects={projects?.projects ?? EMPTY_PROJECTS}
         inventorySkills={view.skills}
         agents={report?.agents ?? EMPTY_DETECTED_AGENTS}
         installTargets={snapshot?.installTargets ?? EMPTY_INVENTORY_AGENTS}
+        onSelectScope={handleSelectScope}
         onClose={() => setInstallOpen(false)}
       />
       <ProjectDialogs

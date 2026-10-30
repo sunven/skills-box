@@ -59,7 +59,7 @@ export function ProjectHeader({
           disabled={refreshing}
           aria-busy={refreshing}
           onClick={onRefresh}
-          title="检查当前项目的更新并刷新清单（ticket 05 按 scope 隔离）"
+          title="检查当前项目的更新并刷新清单（按 scope 隔离）"
         >
           <RefreshCw
             className={refreshing ? "size-3.5 animate-spin" : "size-3.5"}

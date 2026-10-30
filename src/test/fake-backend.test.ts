@@ -344,6 +344,7 @@ describe("fake backend", () => {
         agents: ["claude-code"],
       },
       (event) => received.push(event),
+      GLOBAL_SCOPE,
     );
     const task = backend.lastTask;
     expect(task).not.toBeNull();

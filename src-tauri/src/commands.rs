@@ -75,11 +75,13 @@ pub fn relocate_project(
     id: String,
     root: String,
 ) -> Result<ProjectEntry, AppError> {
+    state.tasks.ensure_project_registry_idle()?;
     state.projects.relocate(&id, &root)
 }
 
 #[tauri::command]
 pub fn forget_project(state: State<'_, AppState>, id: String) -> Result<(), AppError> {
+    state.tasks.ensure_project_registry_idle()?;
     state.projects.forget(&id)
 }
 
@@ -382,7 +384,6 @@ pub async fn detach_agent(
     skill_id: String,
     agent_id: String,
 ) -> Result<DetachResult, AppError> {
-    // Project attachment scope lands in ticket 04.
     state.tasks.detach_agent(scope, skill_id, agent_id).await
 }
 
@@ -395,7 +396,6 @@ pub async fn attach_agent(
     skill_id: String,
     agent_id: String,
 ) -> Result<AttachResult, AppError> {
-    // Project attachment scope lands in ticket 04.
     state.tasks.attach_agent(scope, skill_id, agent_id).await
 }
 

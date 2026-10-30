@@ -18,3 +18,4 @@ Global update checks compare lock v3 `skillFolderHash` — a 40-character Git tr
 - Rust must mirror the CLI folder-hash algorithm exactly and stay pinned to the vendored CLI version; parity is enforced with golden vectors.
 - The existing Git tree implementation in `git_tree.rs` is untouched; the content-hash path adds its own walker and archive cache.
 - Project lock entries carry no install/update timestamps, so the UI shows "—" for those fields.
+- The hash walker only orders printable ASCII paths. A skill folder containing a non-ASCII relative path is reported unsupported ("无法检测") instead of being hashed with a guessed collation order: a wrong order would produce a false "update available". Projects whose skill contents use non-ASCII file names therefore never report Current/Update until the CLI itself changes its ordering rule. This is an accepted limitation, not an ICU work item.
