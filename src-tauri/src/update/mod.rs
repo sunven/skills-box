@@ -6,7 +6,9 @@
 //! computed from that response. Network failures are isolated per source and
 //! keep the previous successful result; they never become "current".
 
+pub mod archive;
 pub mod cache;
+pub mod content_hash;
 pub mod github;
 pub mod state;
 
@@ -115,6 +117,17 @@ pub struct UpdateCheckReport {
     pub skipped_source_count: usize,
     pub cached_source_count: usize,
     pub warnings: Vec<String>,
+}
+
+impl UpdateCheckReport {
+    /// Skills with a newer remote fingerprint. Persisted per scope so sidebar
+    /// badges do not depend on a live report.
+    pub fn candidate_count(&self) -> usize {
+        self.skills
+            .iter()
+            .filter(|skill| skill.state == UpdateState::Update)
+            .count()
+    }
 }
 
 pub struct UpdateService {
@@ -263,7 +276,7 @@ impl UpdateService {
         };
         if full_check {
             let state = UpdateCheckState::from_report(&report);
-            if let Err(error) = self.state.store(&state) {
+            if let Err(error) = self.state.store(&crate::scope::ScopeId::Global, &state) {
                 report
                     .warnings
                     .push(format!("无法写入更新检查状态：{error}"));
@@ -272,9 +285,10 @@ impl UpdateService {
         Ok(report)
     }
 
-    /// Last persisted full-check summary, if the file exists and is valid.
-    pub fn read_state(&self) -> Option<UpdateCheckState> {
-        self.state.load()
+    /// Last persisted full-check summary for one scope, if it exists and is
+    /// valid. Version-1 files are read as the global scope.
+    pub fn read_state(&self, scope: &crate::scope::ScopeId) -> Option<UpdateCheckState> {
+        self.state.load(scope)
     }
 
     fn collect_targets(
@@ -747,7 +761,7 @@ mod tests {
     use crate::error::ErrorCode;
     use crate::process::fake::ScriptedExecutor;
     use crate::update::github::GitHubFetchError;
-    use crate::update::state::{UPDATE_CHECK_STATE_VERSION, UpdateCheckOutcome};
+    use crate::update::state::{UPDATE_CHECK_STATE_ENTRY_VERSION, UpdateCheckOutcome};
     use std::collections::HashMap;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -1251,7 +1265,7 @@ mod tests {
         assert_eq!(second.skills[0].last_success_at_epoch_ms, Some(1_000_000));
         assert_eq!(second.last_success_at_epoch_ms, Some(1_000_000));
         assert_eq!(second.cached_source_count, 1);
-        let state = service.read_state().unwrap();
+        let state = service.read_state(&crate::scope::ScopeId::Global).unwrap();
         assert_eq!(
             state.last_attempt_at,
             1_000_000 + UPDATE_CHECK_CACHE_TTL_MS - 1
@@ -1607,7 +1621,7 @@ mod tests {
                 .iter()
                 .any(|warning| warning.contains("来源上限"))
         );
-        let state = service.read_state().unwrap();
+        let state = service.read_state(&crate::scope::ScopeId::Global).unwrap();
         assert_eq!(state.last_outcome, UpdateCheckOutcome::Partial);
         assert_eq!(state.failed_source_count, 0);
         assert_eq!(state.skipped_source_count, 5);
@@ -1699,14 +1713,15 @@ mod tests {
         );
 
         let full = service.check(None).await.unwrap();
-        let state = service.read_state().unwrap();
-        assert_eq!(state.version, UPDATE_CHECK_STATE_VERSION);
+        let state = service.read_state(&crate::scope::ScopeId::Global).unwrap();
+        assert_eq!(state.version, UPDATE_CHECK_STATE_ENTRY_VERSION);
         assert_eq!(state.last_attempt_at, full.checked_at_epoch_ms);
         assert_eq!(state.last_success_at, full.last_success_at_epoch_ms);
         assert_eq!(state.last_outcome, UpdateCheckOutcome::Ok);
         assert_eq!(state.failed_source_count, 0);
         assert_eq!(state.cached_source_count, 0);
         assert_eq!(state.skipped_source_count, 0);
+        assert_eq!(state.candidate_count, full.candidate_count());
 
         clock.set(1_000_000 + UPDATE_CHECK_CACHE_TTL_MS + 1);
         client.set_error(
@@ -1719,7 +1734,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(scoped.skills.len(), 1);
-        assert_eq!(service.read_state(), Some(state));
+        assert_eq!(service.read_state(&crate::scope::ScopeId::Global), Some(state));
     }
 
     #[tokio::test]
@@ -1757,7 +1772,7 @@ mod tests {
         );
         let report = service.check(None).await.unwrap();
         assert_eq!(report.last_success_at_epoch_ms, Some(1_000));
-        let state = service.read_state().unwrap();
+        let state = service.read_state(&crate::scope::ScopeId::Global).unwrap();
         assert_eq!(state.last_outcome, UpdateCheckOutcome::Partial);
         assert_eq!(state.failed_source_count, 1);
         assert_eq!(state.last_success_at, Some(1_000));
@@ -1782,7 +1797,7 @@ mod tests {
         );
         let report = service.check(None).await.unwrap();
         assert_eq!(report.last_success_at_epoch_ms, None);
-        let state = service.read_state().unwrap();
+        let state = service.read_state(&crate::scope::ScopeId::Global).unwrap();
         assert_eq!(state.last_outcome, UpdateCheckOutcome::Failed);
         assert_eq!(state.failed_source_count, 1);
         assert_eq!(state.last_success_at, None);
@@ -1817,7 +1832,7 @@ mod tests {
                 .iter()
                 .any(|warning| warning.contains("无法写入更新检查状态"))
         );
-        assert_eq!(service.read_state(), None);
+        assert_eq!(service.read_state(&crate::scope::ScopeId::Global), None);
     }
 
     #[tokio::test]

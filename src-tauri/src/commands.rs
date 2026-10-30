@@ -280,7 +280,7 @@ pub fn get_update_check_state(
 ) -> Option<UpdateCheckState> {
     // Per-scope update state arrives with ticket 05.
     let _ = scope;
-    state.updates.read_state()
+    state.updates.read_state(&scope)
 }
 
 #[tauri::command]
