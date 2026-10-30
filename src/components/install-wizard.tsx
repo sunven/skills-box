@@ -32,11 +32,15 @@ interface InstallWizardProps {
   scope: ScopeId;
   /** Active project for project scope; null for global. */
   project?: ProjectEntry | null;
+  /** Registered projects for the compact scope shortcut. */
+  projects?: ProjectEntry[];
   inventorySkills: InventorySkill[];
   /** Globally detected catalog agents plus extras (global target set). */
   agents: DetectedAgent[];
   /** Explicit scope target set (project scope); missing dirs stay listed. */
   installTargets?: InventoryAgent[];
+  /** Switch the app's active scope; the wizard resets to step 1. */
+  onSelectScope?: (scope: ScopeId) => void;
   onClose: () => void;
 }
 
@@ -128,9 +132,11 @@ export function InstallWizard({
   open,
   scope,
   project = null,
+  projects = [],
   inventorySkills,
   agents,
   installTargets = [],
+  onSelectScope,
   onClose,
 }: InstallWizardProps) {
   const panelRef = useRef<HTMLDivElement>(null);
@@ -290,7 +296,7 @@ export function InstallWizard({
     setSelectedAgents(new Set());
     lastInstallRef.current = null;
     agentsTouchedRef.current = false;
-  }, [open, installMutation.reset, previewDriver.reset]);
+  }, [open, scope, installMutation.reset, previewDriver.reset]);
 
   useModalFocus({
     open,
@@ -493,6 +499,32 @@ export function InstallWizard({
               目标作用域：{targetScopeLabel} · canonical{" "}
               <span className="mono">{canonicalPath}</span>
             </p>
+            <label className="mt-1 flex items-center gap-1.5 text-[12px] text-muted-foreground">
+              切换目标作用域
+              <select
+                aria-label="目标作用域"
+                data-testid="install-scope-select"
+                value={scope}
+                disabled={writingLocked || !onSelectScope}
+                onChange={(event) => {
+                  const next = event.target.value as ScopeId;
+                  if (next !== scope) onSelectScope?.(next);
+                }}
+                className="h-7 rounded-md border border-border-strong bg-card px-1.5 text-[12px] text-foreground"
+              >
+                <option value={GLOBAL_SCOPE}>全局</option>
+                {projects.map((entry) => (
+                  <option
+                    key={entry.id}
+                    value={`project:${entry.id}`}
+                    disabled={!entry.available}
+                  >
+                    {entry.displayName}
+                    {entry.available ? "" : "（不可用）"}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
           <Button
             ref={closeRef}
