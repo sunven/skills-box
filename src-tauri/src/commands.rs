@@ -364,14 +364,12 @@ pub async fn start_update(
     skill_ids: Vec<String>,
     on_event: Channel<TaskEvent>,
 ) -> Result<TaskId, AppError> {
-    // Project update lands in ticket 06.
-    let _ = scope;
     let sink: EventSink = Arc::new(move |event| {
         // A closed window must not abort a mutation that may already be
         // writing; the task still finishes and its result is discarded.
         let _ = on_event.send(event);
     });
-    state.tasks.start_update(skill_ids, sink).await
+    state.tasks.start_update(scope, skill_ids, sink).await
 }
 
 /// Native detach from one agent. Runs through the same single-writer slot as
@@ -430,14 +428,12 @@ pub async fn start_uninstall(
     skill_id: String,
     on_event: Channel<TaskEvent>,
 ) -> Result<TaskId, AppError> {
-    // Project uninstall lands in ticket 06.
-    let _ = scope;
     let sink: EventSink = Arc::new(move |event| {
         // A closed window must not abort a mutation that may already be
         // writing; the task still finishes and its result is discarded.
         let _ = on_event.send(event);
     });
-    state.tasks.start_uninstall(skill_id, sink).await
+    state.tasks.start_uninstall(scope, skill_id, sink).await
 }
 
 /// Open one of the app-data directories (backups / logs / cache / baselines).

@@ -228,6 +228,7 @@ function taskResult(
   kind: "preview" | "install" | "update" | "uninstall",
   names: string[],
   preview: PreviewSummary,
+  scope: ScopeId = GLOBAL_SCOPE,
 ): TaskResult {
   const status =
     kind === "install"
@@ -237,6 +238,7 @@ function taskResult(
         : "removed";
   return {
     action: kind,
+    scope,
     overall: "success",
     skills:
       kind === "preview"
@@ -347,7 +349,9 @@ export function createFakeBackend(
     timers.add(
       window.setTimeout(() => {
         if (kind === "install") installInto(scope, names);
-        const result = taskResult(kind, names, previewFor(scope));
+        if (kind === "update") updateInto(scope, names);
+        if (kind === "uninstall") uninstallFrom(scope, names);
+        const result = taskResult(kind, names, previewFor(scope), scope);
         const message =
           kind === "preview"
             ? `找到 ${previewFor(scope).skills.length} 个 skill`
@@ -428,6 +432,37 @@ export function createFakeBackend(
       { ...snapshot, skills: [...snapshot.skills, ...added] },
       scope,
     );
+  };
+
+  /** Apply a completed update to the scope's own inventory snapshot. */
+  const updateInto = (scope: ScopeId, names: string[]) => {
+    if (names.length === 0) return;
+    const snapshot = snapshotFor(scope);
+    const selected = new Set(names);
+    const updatedAt = new Date().toISOString();
+    const skills = snapshot.skills.map((skill) =>
+      selected.has(skill.name) || selected.has(skill.id)
+        ? {
+            ...skill,
+            management: "managed" as const,
+            localModification: "clean" as const,
+            updatedAt,
+          }
+        : skill,
+    );
+    setSnapshot({ ...snapshot, skills }, scope);
+  };
+
+  /** Remove uninstalled rows from the scope's snapshot only. */
+  const uninstallFrom = (scope: ScopeId, ids: string[]) => {
+    if (ids.length === 0) return;
+    const snapshot = snapshotFor(scope);
+    const selected = new Set(ids);
+    const skills = snapshot.skills.filter(
+      (skill) => !selected.has(skill.id) && !selected.has(skill.name),
+    );
+    if (skills.length === snapshot.skills.length) return;
+    setSnapshot({ ...snapshot, skills }, scope);
   };
 
   const findSkill = (

@@ -666,13 +666,13 @@ pub fn snapshot_lock(
 
 /// One scope's strict lock: v3 for global, v1 for a project. Read-only; the
 /// app never writes either file.
-enum ScopeLock {
+pub(crate) enum ScopeLock {
     Global(LockFile),
     Project(crate::project_lock::ProjectLockFile),
 }
 
 impl ScopeLock {
-    fn read(layout: &crate::scope_layout::ScopeLayout) -> Result<Self, AppError> {
+    pub(crate) fn read(layout: &crate::scope_layout::ScopeLayout) -> Result<Self, AppError> {
         if layout.is_global() {
             Ok(Self::Global(LockFile::read(&layout.lock_path)?))
         } else {
@@ -682,10 +682,17 @@ impl ScopeLock {
         }
     }
 
-    fn get(&self, name: &str) -> Option<&crate::lock::LockEntry> {
+    pub(crate) fn get(&self, name: &str) -> Option<&crate::lock::LockEntry> {
         match self {
             Self::Global(lock) => lock.get(name),
             Self::Project(lock) => lock.get(name),
+        }
+    }
+
+    pub(crate) fn contains(&self, name: &str) -> bool {
+        match self {
+            Self::Global(lock) => lock.contains(name),
+            Self::Project(lock) => lock.contains(name),
         }
     }
 }

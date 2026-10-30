@@ -528,6 +528,7 @@ function App() {
       />
       <InterruptedBanner
         report={report?.interrupted ?? null}
+        scope={scope}
         onDismiss={handleDismissInterrupted}
         onRevealBackups={handleRevealBackups}
       />

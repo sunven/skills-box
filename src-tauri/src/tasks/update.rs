@@ -21,8 +21,7 @@ use crate::baseline::{BaselineStore, LocalModification, write_warning};
 use crate::cli::CliRuntime;
 use crate::error::cli::{self, CliAction};
 use crate::error::{AppError, ErrorCode};
-use crate::inventory::{self, AgentDir, AttachmentLocation, AttachmentMode, ManagementState};
-use crate::lock::LockFile;
+use crate::inventory::{AgentDir, AttachmentLocation, AttachmentMode, ManagementState};
 use crate::logs::{OperationEntry, OperationLog};
 use crate::paths::AppPaths;
 use crate::process::{CommandSpec, ExecOutput};
@@ -54,6 +53,12 @@ pub struct UpdateItem {
     pub attachments: Vec<BackupAttachment>,
     /// Display names of copy attachments that will become symlinks.
     pub copy_agents: Vec<String>,
+    /// Scope this update writes to; also keys the baseline store.
+    pub scope: crate::scope::ScopeId,
+    /// Project root as CLI cwd for project scope; `None` uses the runtime cwd.
+    pub cwd: Option<PathBuf>,
+    /// Global updates keep `-g`; project updates never pass it.
+    pub global: bool,
 }
 
 impl UpdateItem {
@@ -64,9 +69,9 @@ impl UpdateItem {
             agent_ids: self.agent_ids.clone(),
             targets: self.targets.clone(),
             retry: false,
-            scope: crate::scope::ScopeId::Global,
-            cwd: None,
-            global: true,
+            scope: self.scope.clone(),
+            cwd: self.cwd.clone(),
+            global: self.global,
         }
     }
 
@@ -103,18 +108,18 @@ pub fn update_command(
 
 /// Resolve the selected names into executable items plus per-skill skips.
 /// A corrupt/non-v3 lock fails the whole plan; per-skill problems only skip
-/// that name so update-all can continue.
+/// that name so update-all can continue. Project scope reads its own v1 lock,
+/// canonical store and agent directories from the resolved layout.
 pub fn plan_updates(
     paths: &AppPaths,
-    agents: &[AgentDir],
+    layout: &crate::scope_layout::ScopeLayout,
     names: &[String],
 ) -> Result<UpdatePlan, AppError> {
-    let lock = LockFile::read(&paths.lock_path())?;
-    let baseline_store = crate::baseline::BaselineStore::new(paths);
+    let baseline_store = crate::baseline::BaselineStore::for_scope(paths, &layout.scope);
     let mut plan = UpdatePlan::default();
 
     for name in names {
-        let located = match inventory::locate_with_agents(paths, agents, name) {
+        let located = match layout.locate(paths, name) {
             Ok(Some(located)) => located,
             Ok(None) => {
                 plan.skipped.push(UpdateSkip {
@@ -143,11 +148,7 @@ pub fn plan_updates(
             });
             continue;
         }
-        let Some(entry) = located
-            .lock_entry
-            .clone()
-            .or_else(|| lock.get(name).cloned())
-        else {
+        let Some(entry) = located.lock_entry.clone() else {
             plan.skipped.push(UpdateSkip {
                 name: name.clone(),
                 error: AppError::skill_unmanaged(name),
@@ -165,7 +166,8 @@ pub fn plan_updates(
             }
         };
 
-        let agent_dirs: HashMap<&str, &AgentDir> = agents
+        let agent_dirs: HashMap<&str, &AgentDir> = layout
+            .agents
             .iter()
             .map(|agent| (agent.id.as_str(), agent))
             .collect();
@@ -230,6 +232,13 @@ pub fn plan_updates(
                 .into_iter()
                 .map(|(_, display_name)| display_name)
                 .collect(),
+            scope: layout.scope.clone(),
+            cwd: if layout.is_global() {
+                None
+            } else {
+                Some(layout.cli_cwd(paths))
+            },
+            global: layout.is_global(),
         });
     }
     Ok(plan)
@@ -272,7 +281,8 @@ pub struct UpdateVerification {
 /// Interpret one `add --json` result and verify the filesystem afterwards.
 /// The CLI's `installed` status is never trusted on its own.
 pub fn verify_update(
-    paths: &AppPaths,
+    _paths: &AppPaths,
+    layout: &crate::scope_layout::ScopeLayout,
     item: &UpdateItem,
     output: &ExecOutput,
 ) -> UpdateVerification {
@@ -334,13 +344,12 @@ pub fn verify_update(
     }
 
     let plan = item.install_plan();
-    let layout = crate::scope_layout::ScopeLayout::global(paths, crate::inventory::detected_agent_dirs(paths));
     // Extra-agent links point at the canonical folder path, which survives the
     // CLI rewrite, so this is normally a no-op; it still restores a link that
     // vanished and reports a precise error when the path is occupied.
     let link_error =
-        ensure_extra_attachments(&layout, &plan, std::slice::from_ref(&item.name)).remove(&item.name);
-    let verification = verify_install(&layout, &plan, &cli_results);
+        ensure_extra_attachments(layout, &plan, std::slice::from_ref(&item.name)).remove(&item.name);
+    let verification = verify_install(layout, &plan, &cli_results);
     let result = if let Some(error) = link_error {
         Err(error)
     } else {
@@ -379,12 +388,21 @@ pub fn status_label(status: TaskSkillStatus) -> &'static str {
 /// window and the result envelope.
 pub(crate) struct UpdateAction {
     paths: AppPaths,
+    layout: crate::scope_layout::ScopeLayout,
     timeout: Duration,
 }
 
 impl UpdateAction {
-    pub(crate) fn new(paths: AppPaths, timeout: Duration) -> Self {
-        Self { paths, timeout }
+    pub(crate) fn new(
+        paths: AppPaths,
+        layout: crate::scope_layout::ScopeLayout,
+        timeout: Duration,
+    ) -> Self {
+        Self {
+            paths,
+            layout,
+            timeout,
+        }
     }
 }
 
@@ -403,7 +421,7 @@ impl MutationAction for UpdateAction {
     }
 
     fn begin(&self, plan: &Self::Plan) -> Result<StartOutcome<Self::Unit>, AppError> {
-        let log = OperationLog::new(&self.paths);
+        let log = OperationLog::for_scope(&self.paths, &self.layout.scope);
         let mut initial_rows = Vec::new();
         for skip in &plan.skipped {
             let _ = log.append(&OperationEntry::new(
@@ -449,7 +467,7 @@ impl MutationAction for UpdateAction {
             ));
         }
 
-        let backups = BackupStore::new(&self.paths);
+        let backups = BackupStore::for_layout(&self.paths, &self.layout);
         let backup = backups
             .create(
                 BackupAction::Update,
@@ -459,7 +477,7 @@ impl MutationAction for UpdateAction {
                 &item.agent_ids,
             )
             .inspect_err(|error| {
-                let log = OperationLog::new(&self.paths);
+                let log = OperationLog::for_scope(&self.paths, &self.layout.scope);
                 let _ = log.append(&OperationEntry::new(
                     "update",
                     &item.name,
@@ -497,7 +515,7 @@ impl MutationAction for UpdateAction {
             format!("正在校验 {} 的 canonical、挂载与 lock…", item.name),
             Some(item.name.as_str()),
         );
-        let verification = verify_update(&self.paths, item, &output);
+        let verification = verify_update(&self.paths, &self.layout, item, &output);
         let mut warnings = verification.warnings;
         let (status, error) = match verification.result {
             Ok(()) => (TaskSkillStatus::Updated, None),
@@ -508,13 +526,14 @@ impl MutationAction for UpdateAction {
         };
         if status == TaskSkillStatus::Updated
             && let Err(error) =
-                BaselineStore::new(&self.paths).record_from_dir(&item.name, &item.canonical, true)
+                BaselineStore::for_scope(&self.paths, &self.layout.scope)
+                    .record_from_dir(&item.name, &item.canonical, true)
         {
             warnings.push(write_warning(error));
         }
 
         let backup_display = self.paths.display(&preflight.snapshot);
-        let log = OperationLog::new(&self.paths);
+        let log = OperationLog::for_scope(&self.paths, &self.layout.scope);
         let _ = log.append(&OperationEntry::new(
             "update",
             &item.name,
@@ -547,7 +566,7 @@ impl MutationAction for UpdateAction {
         preflight: Option<&Preflight>,
         _reporter: &Reporter,
     ) -> FailureDisposition {
-        let log = OperationLog::new(&self.paths);
+        let log = OperationLog::for_scope(&self.paths, &self.layout.scope);
         let Some(preflight) = preflight else {
             let _ = log.append(&OperationEntry::new(
                 "update",
@@ -586,7 +605,7 @@ impl MutationAction for UpdateAction {
     }
 
     fn on_cancelled(&self, item: &Self::Unit, preflight: &Preflight, error: Option<AppError>) {
-        let log = OperationLog::new(&self.paths);
+        let log = OperationLog::for_scope(&self.paths, &self.layout.scope);
         let _ = log.append(&OperationEntry::new(
             "update",
             &item.name,
@@ -613,7 +632,20 @@ mod tests {
     use super::*;
     use crate::error::ErrorCode;
     use crate::inventory::AgentDir;
+    use crate::lock::LockFile;
     use std::os::unix::fs::symlink;
+
+    fn global_layout(paths: &AppPaths, agents: &[AgentDir]) -> crate::scope_layout::ScopeLayout {
+        crate::scope_layout::ScopeLayout::global(paths, agents.to_vec())
+    }
+
+    fn plan_updates(
+        paths: &AppPaths,
+        agents: &[AgentDir],
+        names: &[String],
+    ) -> Result<UpdatePlan, AppError> {
+        super::plan_updates(paths, &global_layout(paths, agents), names)
+    }
 
     struct Fixture {
         _tmp: tempfile::TempDir,
@@ -1151,7 +1183,7 @@ mod tests {
     async fn run_update_task(manager: &TaskManager, names: &[&str]) -> (Vec<TaskPhase>, TaskEvent) {
         let (sink, mut receiver) = sink();
         manager
-            .start_update(names.iter().map(|name| name.to_string()).collect(), sink)
+            .start_update(crate::scope::ScopeId::Global, names.iter().map(|name| name.to_string()).collect(), sink)
             .await
             .unwrap();
         let mut phases = Vec::new();
@@ -1448,7 +1480,7 @@ mod tests {
         let manager = update_manager(&fixture.paths, executor.clone());
         let (sink, _receiver) = sink();
         let error = manager
-            .start_update(vec!["alpha".to_string()], sink)
+            .start_update(crate::scope::ScopeId::Global, vec!["alpha".to_string()], sink)
             .await
             .unwrap_err();
         assert_eq!(error.code, crate::error::ErrorCode::LockCorrupt);
@@ -1513,7 +1545,7 @@ mod tests {
         let manager = update_manager(&fixture.paths, executor.clone());
         let (sink, mut receiver) = sink();
         let task_id = manager
-            .start_update(vec!["alpha".to_string()], sink)
+            .start_update(crate::scope::ScopeId::Global, vec!["alpha".to_string()], sink)
             .await
             .unwrap();
         loop {
@@ -1558,7 +1590,7 @@ mod tests {
         let manager = update_manager(&fixture.paths, executor.clone());
         let (sink, mut receiver) = sink();
         let task_id = manager
-            .start_update(vec!["alpha".to_string()], sink)
+            .start_update(crate::scope::ScopeId::Global, vec!["alpha".to_string()], sink)
             .await
             .unwrap();
         loop {
@@ -1605,7 +1637,7 @@ mod tests {
         let manager = update_manager(&fixture.paths, executor.clone());
         let (sink, mut receiver) = sink();
         let task_id = manager
-            .start_update(vec!["alpha".to_string(), "beta".to_string()], sink)
+            .start_update(crate::scope::ScopeId::Global, vec!["alpha".to_string(), "beta".to_string()], sink)
             .await
             .unwrap();
 
@@ -1643,5 +1675,380 @@ mod tests {
             !fixture.paths.interrupted_marker_path().exists(),
             "a user cancel clears the interruption marker"
         );
+    }
+}
+
+#[cfg(test)]
+mod project_update_tests {
+    use super::*;
+    use crate::cli::{CliRuntime, CliRuntimeProvider, PINNED_CLI_VERSION};
+    use crate::process::{CancelToken, ExecError, ProcessExecutor};
+    use crate::projects::{Project, ProjectRegistry};
+    use crate::scope::ScopeId;
+    use crate::tasks::conflicts::{ConflictInfo, ConflictProvider};
+    use crate::tasks::manager::{
+        EventSink, TaskEvent, TaskManager, TaskManagerConfig, TaskOverall, TaskPhase,
+        TaskSkillStatus,
+    };
+    use std::os::unix::fs::symlink;
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
+
+    struct ProjectFixture {
+        tmp: tempfile::TempDir,
+        paths: AppPaths,
+        root: PathBuf,
+        canonical: PathBuf,
+        qoder: PathBuf,
+        claude: PathBuf,
+        windsurf: PathBuf,
+        acme: PathBuf,
+        project: Project,
+    }
+
+    impl ProjectFixture {
+        fn new() -> Self {
+            let tmp = tempfile::tempdir().unwrap();
+            let home = tmp.path().join("home");
+            let paths = AppPaths::new(&home, tmp.path().join("app-data"));
+            let root = tmp.path().join("projects/app");
+            let canonical = root.join(".agents/skills/alpha");
+            fs::create_dir_all(&canonical).unwrap();
+            fs::write(
+                canonical.join("SKILL.md"),
+                b"---\nname: alpha\ndescription: alpha\n---\n# alpha project v1\n",
+            )
+            .unwrap();
+            let qoder = root.join(".qoder/skills");
+            let claude = root.join(".claude/skills");
+            let windsurf = root.join(".windsurf/skills");
+            let acme = root.join(".acme/skills");
+            for dir in [&qoder, &claude, &windsurf, &acme] {
+                fs::create_dir_all(dir).unwrap();
+            }
+            symlink(&canonical, qoder.join("alpha")).unwrap();
+            fs::create_dir_all(claude.join("alpha")).unwrap();
+            fs::write(claude.join("alpha/SKILL.md"), "# alpha project copy\n").unwrap();
+            // Extra agent configured for the project and already attached.
+            fs::create_dir_all(paths.app_data()).unwrap();
+            fs::write(
+                paths.agents_config_path(),
+                r#"{
+                    "version": 1,
+                    "agents": [
+                        {"id": "acme", "displayName": "Acme", "skillsDir": "~/.acme/skills", "projectSkillsDir": ".acme/skills"}
+                    ]
+                }"#,
+            )
+            .unwrap();
+            symlink(&canonical, acme.join("alpha")).unwrap();
+            fs::write(
+                root.join("skills-lock.json"),
+                serde_json::json!({
+                    "version": 1,
+                    "skills": {
+                        "alpha": {
+                            "source": "acme/skills",
+                            "sourceType": "github",
+                            "sourceUrl": "https://github.com/acme/skills.git",
+                            "skillPath": "skills/alpha/SKILL.md",
+                            "computedHash": "a".repeat(64)
+                        }
+                    }
+                })
+                .to_string(),
+            )
+            .unwrap();
+            let root = fs::canonicalize(root).unwrap();
+            let project = Project {
+                id: uuid::Uuid::new_v4(),
+                root,
+                display_name: "app".to_string(),
+                added_at: 1,
+                last_opened_at: 1,
+            };
+            Self {
+                tmp,
+                paths,
+                root: project.root.clone(),
+                canonical,
+                qoder,
+                claude,
+                windsurf,
+                acme,
+                project,
+            }
+        }
+
+        fn scope(&self) -> ScopeId {
+            self.project.scope()
+        }
+
+        fn layout(&self) -> crate::scope_layout::ScopeLayout {
+            crate::scope_layout::ScopeLayout::project(&self.paths, self.project.clone())
+        }
+    }
+
+    #[test]
+    fn project_update_plan_preserves_attachments_adds_universal_and_runs_in_the_project_root() {
+        let fixture = ProjectFixture::new();
+        let layout = fixture.layout();
+        let plan = plan_updates(&fixture.paths, &layout, &["alpha".to_string()]).unwrap();
+        assert!(plan.skipped.is_empty(), "{:?}", plan.skipped);
+        let item = &plan.items[0];
+        assert_eq!(item.scope, fixture.scope());
+        assert_eq!(item.cwd, Some(fixture.root.clone()));
+        assert!(!item.global);
+        assert_eq!(
+            item.agent_ids,
+            vec![
+                "claude-code".to_string(),
+                "qoder".to_string(),
+                "universal".to_string()
+            ],
+            "extra acme is linked natively; detached windsurf stays detached"
+        );
+        assert!(
+            item.targets.iter().any(|target| target.id == "acme"),
+            "{:?}",
+            item.targets
+        );
+
+        let runtime = crate::cli::CliRuntime {
+            npx_path: PathBuf::from("/node/bin/npx"),
+            node_dir: PathBuf::from("/node/bin"),
+            git_dir: Some(PathBuf::from("/usr/bin")),
+            cwd: PathBuf::from("/app-data/cli-cwd"),
+            home: fixture.paths.home().to_path_buf(),
+            env: std::collections::BTreeMap::from([
+                ("CI".to_string(), "true".to_string()),
+                ("DISABLE_TELEMETRY".to_string(), "1".to_string()),
+            ]),
+            pinned_version: PINNED_CLI_VERSION.to_string(),
+        };
+        let spec = item.command(&runtime, Duration::from_secs(5));
+        assert_eq!(spec.cwd, fixture.root);
+        assert!(!spec.args.iter().any(|arg| arg == "-g"), "{:?}", spec.args);
+        assert_eq!(
+            spec.args,
+            vec![
+                "-y",
+                "skills@1.7.4",
+                "add",
+                "acme/skills",
+                "-s",
+                "alpha",
+                "-a",
+                "claude-code",
+                "-a",
+                "qoder",
+                "-a",
+                "universal",
+                "-y",
+                "--json"
+            ]
+        );
+        assert!(!spec.args.iter().any(|arg| arg == "acme"), "extra agents never reach argv");
+    }
+
+    struct FakeRuntime;
+
+    #[async_trait::async_trait]
+    impl CliRuntimeProvider for FakeRuntime {
+        async fn cli_runtime(&self) -> Result<CliRuntime, AppError> {
+            Ok(CliRuntime {
+                npx_path: PathBuf::from("/node/bin/npx"),
+                node_dir: PathBuf::from("/node/bin"),
+                git_dir: Some(PathBuf::from("/usr/bin")),
+                cwd: PathBuf::from("/app-data/cli-cwd"),
+                home: PathBuf::from("/tmp/skills-box-home"),
+                env: std::collections::BTreeMap::new(),
+                pinned_version: PINNED_CLI_VERSION.to_string(),
+            })
+        }
+    }
+
+    #[derive(Default)]
+    struct NoConflicts;
+
+    impl ConflictProvider for NoConflicts {
+        fn lookup(
+            &self,
+            _layout: &crate::scope_layout::ScopeLayout,
+            _names: &[String],
+        ) -> std::collections::HashMap<String, ConflictInfo> {
+            std::collections::HashMap::new()
+        }
+    }
+
+    struct Executor {
+        calls: Mutex<Vec<CommandSpec>>,
+        post: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ProcessExecutor for Executor {
+        async fn run(
+            &self,
+            spec: CommandSpec,
+            _cancel: CancelToken,
+        ) -> Result<ExecOutput, ExecError> {
+            self.calls.lock().unwrap().push(spec);
+            if let Some(post) = self.post.lock().unwrap().take() {
+                post();
+            }
+            Ok(ExecOutput {
+                code: Some(0),
+                signal: None,
+                stdout: serde_json::json!([{
+                    "name": "alpha",
+                    "status": "installed",
+                    "source": "acme/skills"
+                }])
+                .to_string(),
+                stderr: String::new(),
+                duration: Duration::ZERO,
+            })
+        }
+    }
+
+    fn sink() -> (EventSink, UnboundedReceiver<TaskEvent>) {
+        let (sender, receiver) = unbounded_channel();
+        let sink: EventSink = Arc::new(move |event| {
+            let _ = sender.send(event);
+        });
+        (sink, receiver)
+    }
+
+    #[tokio::test]
+    async fn project_update_rewrites_in_scope_verifies_and_backs_up_the_project() {
+        let fixture = ProjectFixture::new();
+        let canonical = fixture.canonical.clone();
+        let qoder = fixture.qoder.clone();
+        let claude = fixture.claude.clone();
+        let lock_path = fixture.root.join("skills-lock.json");
+        let post = move || {
+            fs::write(canonical.join("SKILL.md"), "# alpha project v2\n").unwrap();
+            for dir in [&qoder, &claude] {
+                let path = dir.join("alpha");
+                if fs::symlink_metadata(&path).is_ok() {
+                    let _ = fs::remove_file(&path);
+                    let _ = fs::remove_dir_all(&path);
+                }
+                symlink(&canonical, path).unwrap();
+            }
+            let mut lock: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&lock_path).unwrap()).unwrap();
+            lock["skills"]["alpha"]["computedHash"] = serde_json::json!("b".repeat(64));
+            fs::write(&lock_path, lock.to_string()).unwrap();
+        };
+        let executor = Arc::new(Executor {
+            calls: Mutex::new(Vec::new()),
+            post: Mutex::new(Some(Box::new(post))),
+        });
+        let projects = Arc::new(ProjectRegistry::new(fixture.paths.clone()));
+        let entry = projects.add(fixture.root.to_str().unwrap()).unwrap();
+        let scope = entry.project.scope();
+        let project_id = entry.project.id;
+        let manager = TaskManager::with_projects(
+            Arc::new(FakeRuntime),
+            executor.clone(),
+            Arc::new(NoConflicts),
+            fixture.paths.clone(),
+            projects,
+            TaskManagerConfig {
+                preview_timeout: Duration::from_secs(60),
+                install_timeout: Duration::from_secs(5),
+            },
+        );
+
+        let (sink, mut receiver) = sink();
+        manager
+            .start_update(scope.clone(), vec!["alpha".to_string()], sink)
+            .await
+            .unwrap();
+        let mut phases = Vec::new();
+        let final_event = loop {
+            let event = receiver.recv().await.unwrap();
+            phases.push(event.phase);
+            if event.phase.is_final() {
+                break event;
+            }
+        };
+        assert_eq!(final_event.phase, TaskPhase::Completed);
+        assert!(phases.contains(&TaskPhase::Backup), "{phases:?}");
+        let result = final_event.result.unwrap();
+        assert_eq!(result.scope, scope);
+        assert_eq!(result.overall, TaskOverall::Success);
+        assert_eq!(result.skills[0].status, TaskSkillStatus::Updated);
+
+        // Command shape: project root cwd, no -g.
+        let calls = executor.calls.lock().unwrap().clone();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].cwd, fixture.root);
+        assert!(!calls[0].args.iter().any(|arg| arg == "-g"));
+
+        // Attachment set preserved and rebuilt natively.
+        assert_eq!(
+            fs::read_to_string(fixture.canonical.join("SKILL.md")).unwrap(),
+            "# alpha project v2\n"
+        );
+        assert_eq!(
+            fs::canonicalize(fixture.qoder.join("alpha")).unwrap(),
+            fs::canonicalize(&fixture.canonical).unwrap()
+        );
+        assert_eq!(
+            fs::canonicalize(fixture.claude.join("alpha")).unwrap(),
+            fs::canonicalize(&fixture.canonical).unwrap()
+        );
+        assert_eq!(
+            fs::canonicalize(fixture.acme.join("alpha")).unwrap(),
+            fs::canonicalize(&fixture.canonical).unwrap(),
+            "extra link is recreated against the canonical folder"
+        );
+        assert!(!fixture.windsurf.join("alpha").exists());
+
+        // Backup is scope-isolated and backs up the project lock.
+        let backup = PathBuf::from(result.backup_path.unwrap());
+        assert_eq!(
+            backup.parent().unwrap(),
+            fixture
+                .paths
+                .backups_dir()
+                .join(format!("project-{project_id}"))
+        );
+        assert!(backup.join("skills-lock.json").is_file());
+        assert!(!backup.join("skill-lock.json").exists());
+        assert_eq!(
+            fs::read_to_string(backup.join("canonical/SKILL.md")).unwrap(),
+            "---\nname: alpha\ndescription: alpha\n---\n# alpha project v1\n"
+        );
+        let manifest: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(backup.join("attachment-manifest.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(manifest["scope"], serde_json::json!(scope.as_string()));
+        assert_eq!(manifest["action"], "update");
+
+        // Global scope is untouched.
+        assert!(!fixture.paths.lock_path().exists());
+        assert!(!fixture.paths.canonical_skills_dir().join("alpha").exists());
+        assert!(!fixture.paths.interrupted_marker_path().exists());
+        assert!(
+            crate::baseline::BaselineStore::for_scope(&fixture.paths, &scope)
+                .load("alpha")
+                .is_some(),
+            "project baseline is refreshed"
+        );
+        assert!(
+            crate::baseline::BaselineStore::new(&fixture.paths)
+                .load("alpha")
+                .is_none(),
+            "global baseline is untouched"
+        );
+        let log = fs::read_to_string(fixture.paths.logs_dir().join("operations.jsonl")).unwrap();
+        let line: serde_json::Value = serde_json::from_str(log.lines().next().unwrap()).unwrap();
+        assert_eq!(line["scope"], scope.as_string());
+        let _ = fixture.tmp;
     }
 }

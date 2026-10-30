@@ -51,6 +51,7 @@ impl OperationEntry {
 
 pub struct OperationLog {
     path: PathBuf,
+    scope: crate::scope::ScopeId,
     write_lock: Mutex<()>,
 }
 
@@ -68,9 +69,20 @@ impl OperationLog {
         Self::from_path(paths.logs_dir().join(OPERATIONS_LOG_FILE))
     }
 
+    /// One shared log file; every line is tagged with the scope that owns the
+    /// mutation so global and project entries stay distinguishable.
+    pub fn for_scope(paths: &AppPaths, scope: &crate::scope::ScopeId) -> Self {
+        Self {
+            path: paths.logs_dir().join(OPERATIONS_LOG_FILE),
+            scope: scope.clone(),
+            write_lock: Mutex::new(()),
+        }
+    }
+
     pub fn from_path(path: impl Into<PathBuf>) -> Self {
         Self {
             path: path.into(),
+            scope: crate::scope::ScopeId::Global,
             write_lock: Mutex::new(()),
         }
     }
@@ -94,6 +106,7 @@ impl OperationLog {
             time: format_iso8601(now),
             time_epoch_ms: now,
             action: &entry.action,
+            scope: &self.scope.as_string(),
             skill: &entry.skill,
             agents: &entry.agents,
             result: &entry.result,
@@ -124,6 +137,7 @@ struct LogLine<'a> {
     time: String,
     time_epoch_ms: u64,
     action: &'a str,
+    scope: &'a str,
     skill: &'a str,
     agents: &'a [String],
     result: &'a str,
@@ -231,6 +245,27 @@ mod tests {
         let log = OperationLog::from_path(path);
         let error = log.append(&entry("updated", None)).unwrap_err();
         assert_eq!(error.code, crate::error::ErrorCode::LogWriteFailed);
+    }
+
+    #[test]
+    fn scoped_logs_tag_each_line_with_its_scope() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(tmp.path().join("home"), tmp.path().join("app-data"));
+        let project = crate::scope::ScopeId::project(uuid::Uuid::new_v4());
+        OperationLog::for_scope(&paths, &project)
+            .append(&entry("updated", None))
+            .unwrap();
+        OperationLog::new(&paths)
+            .append(&entry("updated", None))
+            .unwrap();
+
+        let lines = fs::read_to_string(paths.logs_dir().join(OPERATIONS_LOG_FILE)).unwrap();
+        let lines: Vec<serde_json::Value> = lines
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(lines[0]["scope"], project.as_string());
+        assert_eq!(lines[1]["scope"], "global");
     }
 
     #[test]
