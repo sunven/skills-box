@@ -158,16 +158,33 @@ impl Sandbox {
         self.cli_retry(args, label, 1)
     }
 
+    /// Run in a project root. No `--dir` flag exists: the pinned CLI treats the
+    /// process cwd as the project scope, exactly like the app's project tasks.
+    fn cli_in(&mut self, cwd: &Path, args: &[&str], label: &str) -> CommandResult {
+        self.cli_retry_in(cwd, args, label, 1)
+    }
+
     /// Retries are only used for idempotent commands (version/list) because
     /// the sandbox npm cache may need a network fetch on a cold run.
     fn cli_retry(&mut self, args: &[&str], label: &str, attempts: usize) -> CommandResult {
+        let cwd = self.root.join("tmp");
+        self.cli_retry_in(&cwd, args, label, attempts)
+    }
+
+    fn cli_retry_in(
+        &mut self,
+        cwd: &Path,
+        args: &[&str],
+        label: &str,
+        attempts: usize,
+    ) -> CommandResult {
         for attempt in 0..attempts {
             let attempt_label = if attempt == 0 {
                 label.to_string()
             } else {
                 format!("{label}-retry{attempt}")
             };
-            match self.try_cli(args, &attempt_label) {
+            match self.try_cli_in(cwd, args, &attempt_label) {
                 Ok(result) => return result,
                 Err(message) if attempt + 1 < attempts => {
                     eprintln!(
@@ -183,7 +200,12 @@ impl Sandbox {
         unreachable!("attempts is at least one")
     }
 
-    fn try_cli(&mut self, args: &[&str], label: &str) -> Result<CommandResult, String> {
+    fn try_cli_in(
+        &mut self,
+        cwd: &Path,
+        args: &[&str],
+        label: &str,
+    ) -> Result<CommandResult, String> {
         if let Some(reason) = forbidden_argv(args) {
             panic!("refusing to run a forbidden CLI form ({reason}): {args:?}");
         }
@@ -192,10 +214,10 @@ impl Sandbox {
         let mut argv = vec!["-y".to_string(), PINNED.to_string()];
         argv.extend(args.iter().map(|arg| arg.to_string()));
 
-        let display = format!("npx {}", argv.join(" "));
+        let display = format!("(cwd {}) npx {}", cwd.display(), argv.join(" "));
         println!("$ {display}");
         let started = Instant::now();
-        let result = run_npx(&self.root, &argv);
+        let result = run_npx(&self.root, cwd, &argv);
         let duration = started.elapsed();
 
         let stdout_path = self
@@ -246,6 +268,18 @@ impl Sandbox {
             Ok(raw) => Some(serde_json::from_str(&raw).expect("lock is JSON")),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
             Err(error) => panic!("cannot read lock: {error}"),
+        }
+    }
+
+    fn project_root(&self, name: &str) -> PathBuf {
+        self.root.join("projects").join(name)
+    }
+
+    fn read_project_lock(&self, project: &Path) -> Option<Value> {
+        match fs::read_to_string(project.join("skills-lock.json")) {
+            Ok(raw) => Some(serde_json::from_str(&raw).expect("project lock is JSON")),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => panic!("cannot read project lock: {error}"),
         }
     }
 
@@ -450,14 +484,14 @@ struct RawOutput {
     stderr: String,
 }
 
-fn run_npx(root: &Path, argv: &[String]) -> RawOutput {
+fn run_npx(root: &Path, cwd: &Path, argv: &[String]) -> RawOutput {
     let npx = find_on_path("npx").expect("npx must be on PATH to run the real-CLI sandbox test");
     let path = env::var("PATH").unwrap_or_default();
     let tmp = root.join("tmp");
     let mut command = Command::new(&npx);
     command
         .args(argv)
-        .current_dir(&tmp)
+        .current_dir(cwd)
         .env_clear()
         .env("PATH", &path)
         .env("HOME", root.join("home"))
@@ -1004,6 +1038,213 @@ fn real_cli_sandbox_install_update_detach_uninstall_and_regression() {
     sbx.summary_line(
         "NOTE GUI render/startup timings require the release .app and are not covered by this test.",
     );
+}
+
+/// Real pinned CLI in project scope: the process cwd is the project root, so
+/// `add`/`remove` must write and clean only `<project>/.agents/skills`,
+/// `<project>/skills-lock.json` and the agent's project skills directory.
+/// A second project and the global fixtures prove isolation. The real HOME is
+/// never read because `run_npx` clears the environment and points HOME and
+/// XDG_STATE_HOME inside the sandbox.
+#[test]
+#[ignore = "network + real npx skills@1.7.4 sandbox; run explicitly"]
+fn real_cli_project_scope_add_and_remove_stay_inside_the_project() {
+    let mut sbx = Sandbox::new();
+    let started = Instant::now();
+    sbx.summary_line(&format!(
+        "sandbox project scope: repo={REPO} pinned={PINNED} home={}",
+        sbx.home.display()
+    ));
+
+    let version = sbx.cli_retry(&["--version"], "project-version", 3);
+    assert_eq!(version.stdout.trim(), "1.7.4");
+
+    let project_raw = sbx.project_root("alpha");
+    let other_raw = sbx.project_root("beta");
+    for root in [&project_raw, &other_raw] {
+        fs::create_dir_all(root.join(".agents/skills")).expect("project canonical dir");
+        fs::create_dir_all(root.join(".claude/skills")).expect("project agent dir");
+        write_skill(
+            &root.join(".agents/skills/project-keep"),
+            "project-keep",
+            "unmanaged project fixture",
+        );
+        write_skill(
+            &root.join(".claude/skills/project-keep-agent"),
+            "project-keep-agent",
+            "unmanaged project agent fixture",
+        );
+    }
+    // macOS temp dirs are reached through /var -> /private/var; the CLI prints
+    // resolved paths, so compare against canonicalized project roots.
+    let project = fs::canonicalize(&project_raw).expect("resolve project root");
+    let other = fs::canonicalize(&other_raw).expect("resolve other project root");
+
+    // Project add: no `-g`, no `-s`-less prompt, explicit catalog agent plus
+    // universal. `add --json` must report the canonical project path.
+    let add = sbx.cli_in(
+        &project,
+        &[
+            "add",
+            REPO,
+            "-s",
+            "code-review",
+            "-a",
+            "claude-code",
+            "-a",
+            "universal",
+            "-y",
+            "--json",
+        ],
+        "project-add",
+    );
+    let rows = install_json(&add);
+    let row = rows
+        .iter()
+        .find(|row| row["name"].as_str() == Some("code-review"))
+        .unwrap_or_else(|| panic!("code-review missing from project add --json: {rows:?}"));
+    assert_eq!(row["status"].as_str(), Some("installed"), "{row}");
+    assert_eq!(row["mode"].as_str(), Some("symlink"), "{row}");
+    assert_eq!(
+        PathBuf::from(row["path"].as_str().expect("install path")),
+        project.join(".agents/skills/code-review"),
+        "{row}"
+    );
+    // The CLI reports the cwd scope; the app's project tasks rely on this.
+    assert_eq!(row["scope"].as_str(), Some("project"), "{row}");
+
+    sbx.assert_symlink_to(
+        &project.join(".claude/skills/code-review"),
+        &project.join(".agents/skills/code-review"),
+    );
+    assert!(
+        project
+            .join(".agents/skills/code-review/SKILL.md")
+            .is_file(),
+        "canonical project skill must exist"
+    );
+    let lock = sbx
+        .read_project_lock(&project)
+        .expect("project add must write skills-lock.json");
+    assert_eq!(lock["version"].as_u64(), Some(1), "project lock is v1");
+    let entry = lock["skills"]
+        .get("code-review")
+        .unwrap_or_else(|| panic!("project lock is missing code-review: {lock}"));
+    assert_eq!(entry["source"].as_str(), Some(REPO));
+    assert_eq!(entry["sourceType"].as_str(), Some("github"));
+    let hash = entry["computedHash"]
+        .as_str()
+        .expect("project lock entry has computedHash");
+    assert_eq!(hash.len(), 64, "project computedHash is 64 hex: {hash}");
+    assert!(
+        hash.chars().all(|character| character.is_ascii_hexdigit()),
+        "project computedHash is hex: {hash}"
+    );
+    // The app's SHA-256 fingerprint must equal the pinned CLI's output for the
+    // same installed folder; otherwise every project check would report a
+    // phantom update.
+    assert_eq!(
+        row["hash"].as_str(),
+        Some(hash),
+        "add --json hash must match the project lock computedHash"
+    );
+    let local_hash = skills_box_lib::update::content_hash::folder_hash(
+        &project.join(".agents/skills/code-review"),
+    )
+    .expect("hash the installed project skill");
+    assert_eq!(
+        local_hash, hash,
+        "app folder_hash must match the pinned CLI computedHash"
+    );
+    sbx.summary_line(&format!("PASS project-add: paths + v1 lock ({hash})"));
+
+    // A second project installs a different skill so removal can prove
+    // isolation between projects.
+    let other_add = sbx.cli_in(
+        &other,
+        &[
+            "add",
+            REPO,
+            "-s",
+            "implement",
+            "-a",
+            "claude-code",
+            "-a",
+            "universal",
+            "-y",
+            "--json",
+        ],
+        "project-other-add",
+    );
+    let other_rows = install_json(&other_add);
+    let other_row = other_rows
+        .iter()
+        .find(|row| row["name"].as_str() == Some("implement"))
+        .unwrap_or_else(|| panic!("implement missing from other project: {other_rows:?}"));
+    assert_eq!(
+        PathBuf::from(other_row["path"].as_str().expect("other path")),
+        other.join(".agents/skills/implement")
+    );
+    sbx.assert_symlink_to(
+        &other.join(".claude/skills/implement"),
+        &other.join(".agents/skills/implement"),
+    );
+
+    // Project remove: no `-g`. Canonical folder, agent link and lock entry all
+    // go; unmanaged project entries, the other project and global scope stay.
+    sbx.cli_in(
+        &project,
+        &["remove", "-s", "code-review", "-y"],
+        "project-remove",
+    );
+    sbx.assert_missing(&project.join(".agents/skills/code-review"));
+    sbx.assert_missing(&project.join(".claude/skills/code-review"));
+    match sbx.read_project_lock(&project) {
+        Some(lock) => assert!(
+            !lock["skills"]
+                .as_object()
+                .expect("project lock skills is an object")
+                .contains_key("code-review"),
+            "project remove must delete the lock entry: {lock}"
+        ),
+        None => {}
+    }
+    assert!(
+        project
+            .join(".agents/skills/project-keep/SKILL.md")
+            .is_file(),
+        "project remove must not delete unmanaged canonical skills"
+    );
+    assert!(
+        project
+            .join(".claude/skills/project-keep-agent/SKILL.md")
+            .is_file(),
+        "project remove must not delete unmanaged agent skills"
+    );
+    sbx.assert_symlink_to(
+        &other.join(".claude/skills/implement"),
+        &other.join(".agents/skills/implement"),
+    );
+    assert!(
+        other.join(".agents/skills/implement/SKILL.md").is_file(),
+        "removing in one project must not touch another project"
+    );
+    sbx.assert_missing(&sbx.canonical("code-review"));
+    assert!(
+        sbx.canonical("unmanaged-keep").is_dir(),
+        "global canonical fixtures must survive project mutations"
+    );
+    assert!(
+        sbx.read_lock().is_none(),
+        "project add/remove must not create the global lock"
+    );
+
+    sbx.assert_no_forbidden_invocations();
+    sbx.summary_line(&format!(
+        "PASS project scope closure in {} ms ({} npx invocations)",
+        started.elapsed().as_millis(),
+        sbx.sequence
+    ));
 }
 
 #[test]
