@@ -19,7 +19,7 @@ use std::time::Duration;
 use crate::backup::{BackupAction, BackupAttachment, BackupStore};
 use crate::baseline::{BaselineStore, LocalModification, write_warning};
 use crate::cli::CliRuntime;
-use crate::error::cli::{self, CliAction};
+use crate::error::cli::CliAction;
 use crate::error::{AppError, ErrorCode};
 use crate::inventory::{AgentDir, AttachmentLocation, AttachmentMode, ManagementState};
 use crate::logs::{OperationEntry, OperationLog};
@@ -27,8 +27,8 @@ use crate::paths::AppPaths;
 use crate::process::{CommandSpec, ExecOutput};
 
 use super::install::{
-    INSTALL_TIMEOUT, InstallOutput, InstallPlan, InstallTarget, UNIVERSAL_AGENT_ID,
-    ensure_extra_attachments, install_command, parse_install_output, verify_install,
+    INSTALL_TIMEOUT, InstallPlan, InstallTarget, UNIVERSAL_AGENT_ID, ensure_extra_attachments,
+    install_command, verify_install,
 };
 use super::manager::{TaskAction, TaskPhase, TaskSkillResult, TaskSkillStatus};
 use super::session::{
@@ -286,18 +286,11 @@ pub fn verify_update(
     item: &UpdateItem,
     output: &ExecOutput,
 ) -> UpdateVerification {
-    let cli_results = match parse_install_output(&output.stdout) {
-        InstallOutput::Results(results) => results,
-        InstallOutput::Fatal(detail) => {
+    let cli_results = match super::install::add_results(output, CliAction::Update) {
+        Ok(results) => results,
+        Err(error) => {
             return UpdateVerification {
-                result: Err(cli::classify_add_failure(&detail, &output.stderr)
-                    .to_app_error(CliAction::Update)),
-                warnings: Vec::new(),
-            };
-        }
-        InstallOutput::Unrecognized(detail) => {
-            return UpdateVerification {
-                result: Err(AppError::cli_invalid_json(detail)),
+                result: Err(error),
                 warnings: Vec::new(),
             };
         }
@@ -565,54 +558,36 @@ impl MutationAction for UpdateAction {
         preflight: Option<&Preflight>,
         _reporter: &Reporter,
     ) -> FailureDisposition {
-        let log = OperationLog::for_scope(&self.paths, &self.layout.scope);
-        let Some(preflight) = preflight else {
-            let _ = log.append(&OperationEntry::new(
-                "update",
-                &item.name,
-                item.agent_ids.clone(),
-                "failed",
-                None,
-                Some(error.clone()),
-            ));
-            return FailureDisposition::TaskFailed(error);
-        };
-        let backup_display = self.paths.display(&preflight.snapshot);
-        let _ = log.append(&OperationEntry::new(
-            "update",
-            &item.name,
-            item.agent_ids.clone(),
-            "failed",
-            Some(backup_display.clone()),
-            Some(error.clone()),
-        ));
-        FailureDisposition::UnitFailed(UnitOutcome {
-            rows: vec![TaskSkillResult {
-                name: item.name.clone(),
-                status: TaskSkillStatus::Failed,
-                error: Some(error),
-                backup_path: Some(backup_display.clone()),
-            }],
-            warnings: Vec::new(),
-            backup_path: backup_display,
-            final_progress: Some(FinalProgress {
+        super::session::unit_failure(
+            &self.paths,
+            &self.layout.scope,
+            super::session::FailedUnit {
+                action: "update",
+                name: &item.name,
+                agents: &item.agent_ids,
+            },
+            error,
+            preflight,
+            Some(FinalProgress {
                 phase: TaskPhase::Verifying,
                 message: format!("已处理 {}", item.name),
                 skill: Some(item.name.clone()),
             }),
-        })
+        )
     }
 
     fn on_cancelled(&self, item: &Self::Unit, preflight: &Preflight, error: Option<AppError>) {
-        let log = OperationLog::for_scope(&self.paths, &self.layout.scope);
-        let _ = log.append(&OperationEntry::new(
-            "update",
-            &item.name,
-            item.agent_ids.clone(),
-            "cancelled",
-            Some(self.paths.display(&preflight.snapshot)),
+        super::session::log_unit_cancelled(
+            &self.paths,
+            &self.layout.scope,
+            super::session::FailedUnit {
+                action: "update",
+                name: &item.name,
+                agents: &item.agent_ids,
+            },
+            &preflight.snapshot,
             error,
-        ));
+        );
     }
 }
 

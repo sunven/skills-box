@@ -536,6 +536,30 @@ pub enum InstallOutput {
     Unrecognized(String),
 }
 
+/// Parse one `add --json` result and map infrastructure failures for the
+/// action. Install and update share this mapping so their error precedence
+/// cannot drift.
+pub(crate) fn add_results(
+    output: &ExecOutput,
+    action: CliAction,
+) -> Result<Vec<CliSkillResult>, AppError> {
+    match parse_install_output(&output.stdout) {
+        InstallOutput::Results(results) => Ok(results),
+        InstallOutput::Fatal(detail) => {
+            Err(cli::classify_add_failure(&detail, &output.stderr).to_app_error(action))
+        }
+        InstallOutput::Unrecognized(detail) => {
+            let stderr = output.stderr.trim();
+            let detail = if stderr.is_empty() {
+                detail
+            } else {
+                format!("{detail}\n{stderr}")
+            };
+            Err(AppError::cli_invalid_json(detail))
+        }
+    }
+}
+
 pub fn parse_install_output(raw: &str) -> InstallOutput {
     let value: serde_json::Value = match serde_json::from_str(raw.trim()) {
         Ok(value) => value,
@@ -905,19 +929,7 @@ impl MutationAction for InstallAction {
             "正在校验 canonical、agent 挂载与 lock…",
             None,
         );
-        let cli_results = match parse_install_output(&output.stdout) {
-            InstallOutput::Results(results) => results,
-            InstallOutput::Fatal(detail) => {
-                return Err(cli::classify_add_failure(&detail, &output.stderr)
-                    .to_app_error(CliAction::Install));
-            }
-            InstallOutput::Unrecognized(detail) => {
-                return Err(AppError::cli_invalid_json(format!(
-                    "{detail}\n{}",
-                    output.stderr.trim()
-                )));
-            }
-        };
+        let cli_results = add_results(&output, CliAction::Install)?;
 
         let installed_names: Vec<String> = cli_results
             .iter()
@@ -1680,6 +1692,23 @@ mod tests {
         assert_eq!(project_snapshot.parent().unwrap(), project_root);
         assert!(project_snapshot.join("skills-lock.json").is_file());
         assert!(!project_snapshot.join("skill-lock.json").exists());
+    }
+
+    #[test]
+    fn add_results_appends_stderr_to_unrecognized_output() {
+        let output = ExecOutput {
+            code: Some(0),
+            signal: None,
+            stdout: "not json".to_string(),
+            stderr: "  npm warning  ".to_string(),
+            duration: Duration::ZERO,
+        };
+        let error = super::add_results(&output, CliAction::Update).unwrap_err();
+        assert_eq!(error.code, ErrorCode::CliInvalidJson);
+        let detail = error.detail.unwrap();
+        assert!(detail.contains("CLI 输出不是 JSON"));
+        assert!(detail.contains("npm warning"));
+        assert!(!detail.ends_with('\n'));
     }
 
     #[test]

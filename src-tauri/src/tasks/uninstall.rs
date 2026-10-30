@@ -492,50 +492,32 @@ impl MutationAction for UninstallAction {
         preflight: Option<&Preflight>,
         _reporter: &Reporter,
     ) -> FailureDisposition {
-        let log = OperationLog::for_scope(&self.paths, &self.layout.scope);
-        let Some(preflight) = preflight else {
-            let _ = log.append(&OperationEntry::new(
-                "uninstall",
-                &plan.name,
-                plan.agent_ids.clone(),
-                "failed",
-                None,
-                Some(error.clone()),
-            ));
-            return FailureDisposition::TaskFailed(error);
-        };
-        let backup_display = self.paths.display(&preflight.snapshot);
-        let _ = log.append(&OperationEntry::new(
-            "uninstall",
-            &plan.name,
-            plan.agent_ids.clone(),
-            "failed",
-            Some(backup_display.clone()),
-            Some(error.clone()),
-        ));
-        FailureDisposition::UnitFailed(UnitOutcome {
-            rows: vec![TaskSkillResult {
-                name: plan.name.clone(),
-                status: TaskSkillStatus::Failed,
-                error: Some(error),
-                backup_path: Some(backup_display.clone()),
-            }],
-            warnings: Vec::new(),
-            backup_path: backup_display,
-            final_progress: None,
-        })
+        super::session::unit_failure(
+            &self.paths,
+            &self.layout.scope,
+            super::session::FailedUnit {
+                action: "uninstall",
+                name: &plan.name,
+                agents: &plan.agent_ids,
+            },
+            error,
+            preflight,
+            None,
+        )
     }
 
     fn on_cancelled(&self, plan: &Self::Unit, preflight: &Preflight, error: Option<AppError>) {
-        let log = OperationLog::for_scope(&self.paths, &self.layout.scope);
-        let _ = log.append(&OperationEntry::new(
-            "uninstall",
-            &plan.name,
-            plan.agent_ids.clone(),
-            "cancelled",
-            Some(self.paths.display(&preflight.snapshot)),
+        super::session::log_unit_cancelled(
+            &self.paths,
+            &self.layout.scope,
+            super::session::FailedUnit {
+                action: "uninstall",
+                name: &plan.name,
+                agents: &plan.agent_ids,
+            },
+            &preflight.snapshot,
             error,
-        ));
+        );
     }
 }
 

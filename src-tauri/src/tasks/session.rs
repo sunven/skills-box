@@ -12,6 +12,8 @@ use std::sync::Arc;
 use crate::cli::{CliRuntime, CliRuntimeProvider};
 use crate::error::AppError;
 use crate::error::cli::{self, CliAction};
+use crate::logs::{OperationEntry, OperationLog};
+use crate::paths::AppPaths;
 use crate::process::{CancelToken, CommandSpec, ExecError, ExecOutput, ProcessExecutor};
 use crate::time::now_ms;
 
@@ -96,6 +98,75 @@ pub struct UnitOutcome {
 pub enum FailureDisposition {
     TaskFailed(AppError),
     UnitFailed(UnitOutcome),
+}
+
+/// Identity of the unit a shared failure record belongs to.
+pub(crate) struct FailedUnit<'a> {
+    pub action: &'a str,
+    pub name: &'a str,
+    pub agents: &'a [String],
+}
+
+/// Shared bookkeeping for a unit whose infrastructure failed. Without a
+/// preflight there is no completed unit to keep, so the task fails.
+pub(crate) fn unit_failure(
+    paths: &AppPaths,
+    scope: &crate::scope::ScopeId,
+    unit: FailedUnit<'_>,
+    error: AppError,
+    preflight: Option<&Preflight>,
+    final_progress: Option<FinalProgress>,
+) -> FailureDisposition {
+    let log = OperationLog::for_scope(paths, scope);
+    let Some(preflight) = preflight else {
+        let _ = log.append(&OperationEntry::new(
+            unit.action,
+            unit.name,
+            unit.agents.to_vec(),
+            "failed",
+            None,
+            Some(error.clone()),
+        ));
+        return FailureDisposition::TaskFailed(error);
+    };
+    let backup_display = paths.display(&preflight.snapshot);
+    let _ = log.append(&OperationEntry::new(
+        unit.action,
+        unit.name,
+        unit.agents.to_vec(),
+        "failed",
+        Some(backup_display.clone()),
+        Some(error.clone()),
+    ));
+    FailureDisposition::UnitFailed(UnitOutcome {
+        rows: vec![TaskSkillResult {
+            name: unit.name.to_string(),
+            status: TaskSkillStatus::Failed,
+            error: Some(error),
+            backup_path: Some(backup_display.clone()),
+        }],
+        warnings: Vec::new(),
+        backup_path: backup_display,
+        final_progress,
+    })
+}
+
+pub(crate) fn log_unit_cancelled(
+    paths: &AppPaths,
+    scope: &crate::scope::ScopeId,
+    unit: FailedUnit<'_>,
+    snapshot: &Path,
+    error: Option<AppError>,
+) {
+    let log = OperationLog::for_scope(paths, scope);
+    let _ = log.append(&OperationEntry::new(
+        unit.action,
+        unit.name,
+        unit.agents.to_vec(),
+        "cancelled",
+        Some(paths.display(snapshot)),
+        error,
+    ));
 }
 
 pub trait MutationAction: Send + Sync + 'static {
