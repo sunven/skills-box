@@ -741,6 +741,9 @@ impl TaskManager {
             let _permit = permit;
             let existing = crate::agents::extras::find(&paths, &agent_id)
                 .ok_or_else(|| AppError::extra_agent_not_found(&agent_id))?;
+            if existing.builtin {
+                return Err(AppError::extra_agent_builtin(&existing.display_name));
+            }
             let normalized = match project_skills_dir.as_deref() {
                 Some(raw) => Some(
                     crate::agents::extras::normalize_project_skills_dir(raw)
