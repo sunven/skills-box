@@ -23,14 +23,10 @@ import { UninstallDialog } from "./components/uninstall-dialog";
 import { UpdateDialog } from "./components/update-dialog";
 import { useAutoUpdateCheck } from "./hooks/use-auto-update-check";
 import { environmentQueryKey, useEnvironmentQuery, useRecheckEnvironment } from "./hooks/use-environment";
-import { inventoryQueryKey, useInventoryQuery } from "./hooks/use-inventory";
+import { useInventoryQuery } from "./hooks/use-inventory";
 import { skillQueryPrefix } from "./hooks/use-skill-detail";
 import { projectsQueryKey, useProjectsQuery, useScopeCheckStates } from "./hooks/use-projects";
 import {
-  lastFullAttemptQueryKey,
-  lastFullCheckQueryKey,
-  updateCheckStateQueryKey,
-  updateCheckStatesQueryKey,
   useCheckUpdates,
   useLastFullAttemptQuery,
   useLastFullCheckQuery,
@@ -355,125 +351,34 @@ function App() {
     [queryClient, resetWorkspaceState, scope, scopeReady],
   );
 
-  // Forgetting or relocating clears the backend's per-scope check state, so
-  // drop the cached badges/report for that scope instead of showing stale data.
-  const clearScopeCheckCache = useCallback(
-    (target: ScopeId) => {
-      void queryClient.removeQueries({
-        queryKey: updateCheckStateQueryKey(target),
-      });
-      void queryClient.removeQueries({
-        queryKey: lastFullCheckQueryKey(target),
-      });
-      void queryClient.removeQueries({
-        queryKey: lastFullAttemptQueryKey(target),
-      });
-      void queryClient.removeQueries({
-        queryKey: updateReportQueryKey(target),
-      });
-      // The scope switcher reads every state in one batched query.
-      void queryClient.invalidateQueries({
-        queryKey: updateCheckStatesQueryKey,
-      });
-    },
-    [queryClient],
-  );
-
-  const cacheProjectList = useCallback(
-    (update: (previous: typeof projects) => typeof projects) => {
-      queryClient.setQueryData(projectsQueryKey, update);
-    },
-    [queryClient],
-  );
-
-  const upsertProject = useCallback(
-    (entry: ProjectEntry) => {
-      const nextScope = projectScope(entry.id);
-      cacheProjectList((previous) => {
-        const list = previous ?? {
-          projects: [],
-          lastActiveScope: GLOBAL_SCOPE,
-          warnings: [],
-        };
-        return {
-          ...list,
-          projects: [
-            entry,
-            ...list.projects.filter((item) => item.id !== entry.id),
-          ],
-          lastActiveScope: nextScope,
-        };
-      });
-      setActiveScope(nextScope);
-      return nextScope;
-    },
-    [cacheProjectList],
-  );
-
   const handleProjectAdded = useCallback(
     (entry: ProjectEntry) => {
       resetWorkspaceState();
       setProjectDialog(null);
-      upsertProject(entry);
-      void queryClient.invalidateQueries({ queryKey: projectsQueryKey });
+      setActiveScope(projectScope(entry.id));
     },
-    [queryClient, resetWorkspaceState, upsertProject],
+    [resetWorkspaceState],
   );
 
   const handleProjectRelocated = useCallback(
     (entry: ProjectEntry) => {
       resetWorkspaceState();
       setProjectDialog(null);
-      const relocatedScope = upsertProject(entry);
-      clearScopeCheckCache(relocatedScope);
-      // The backend already persists this on relocate; the explicit command
-      // keeps the cached list and a restart aligned when it races with a
-      // concurrent registry read.
-      void persistActiveScope(relocatedScope)
-        .then(() =>
-          queryClient.invalidateQueries({ queryKey: projectsQueryKey }),
-        )
-        .catch((error: unknown) => {
-          const typed = asAppError(error) ?? fallbackError("无法保存当前作用域。");
-          setScopeNotice(typed.message);
-          void queryClient.invalidateQueries({ queryKey: projectsQueryKey });
-        });
+      setScopeNotice(null);
+      setActiveScope(projectScope(entry.id));
     },
-    [clearScopeCheckCache, queryClient, resetWorkspaceState, upsertProject],
+    [resetWorkspaceState],
   );
 
   const handleProjectForgotten = useCallback(
     (projectId: string) => {
       setProjectDialog(null);
-      const forgottenScope = projectScope(projectId);
-      const wasActive = scope === forgottenScope;
-      if (wasActive) {
+      if (scope === projectScope(projectId)) {
         resetWorkspaceState();
         setActiveScope(GLOBAL_SCOPE);
       }
-      cacheProjectList((previous) =>
-        previous
-          ? {
-              ...previous,
-              projects: previous.projects.filter(
-                (entry) => entry.id !== projectId,
-              ),
-              lastActiveScope: wasActive
-                ? GLOBAL_SCOPE
-                : previous.lastActiveScope,
-            }
-          : previous,
-      );
-      void queryClient.removeQueries({
-        queryKey: inventoryQueryKey(forgottenScope),
-      });
-      void queryClient.removeQueries({
-        queryKey: skillQueryPrefix(forgottenScope),
-      });
-      clearScopeCheckCache(forgottenScope);
-      void queryClient.invalidateQueries({ queryKey: projectsQueryKey });
     },
-    [cacheProjectList, clearScopeCheckCache, queryClient, resetWorkspaceState, scope],
+    [resetWorkspaceState, scope],
   );
 
   const handleSelectSkill = useCallback((name: string) => {

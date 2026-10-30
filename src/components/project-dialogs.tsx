@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, FolderOpen, X } from "lucide-react";
 import { Button } from "./ui/button";
+import { MutationError } from "./mutation/mutation-error";
 import { useModalFocus } from "../hooks/use-modal-focus";
 import {
   addProject,
@@ -9,7 +10,10 @@ import {
   forgetProject,
   relocateProject,
 } from "../lib/api";
+import { promiseDriver, useMutation } from "../lib/mutation";
 import { pickProjectFolder } from "../lib/folder-picker";
+import { projectScope } from "../lib/scope";
+import { GLOBAL_SCOPE } from "../lib/types";
 import type { AppError, ProjectEntry } from "../lib/types";
 
 export type ProjectDialogState =
@@ -42,21 +46,59 @@ export function ProjectDialogs({
   const closeRef = useRef<HTMLButtonElement>(null);
   const [path, setPath] = useState("");
   const [picking, setPicking] = useState(false);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<AppError | null>(null);
+  const entryRef = useRef<ProjectEntry | null>(null);
+  const addMutation = useMutation({
+    action: "project_add",
+    scope: GLOBAL_SCOPE,
+    fallbackFailure: "保存项目失败。",
+    fallbackStart: "保存项目失败。",
+  });
+  const relocateMutation = useMutation({
+    action: "project_relocate",
+    scope: GLOBAL_SCOPE,
+    fallbackFailure: "保存项目失败。",
+    fallbackStart: "保存项目失败。",
+  });
+  const forgetMutation = useMutation({
+    action: "project_forget",
+    scope: GLOBAL_SCOPE,
+    fallbackFailure: "遗忘项目失败。",
+    fallbackStart: "遗忘项目失败。",
+  });
 
   const mode = state?.mode ?? null;
   const project = state?.mode === "relocate" || state?.mode === "forget"
     ? state.project
     : null;
+  const busy =
+    picking ||
+    addMutation.state.running ||
+    relocateMutation.state.running ||
+    forgetMutation.state.running;
+  const requestError =
+    mode === "forget"
+      ? (forgetMutation.state.error ?? forgetMutation.state.startError)
+      : mode === "relocate"
+        ? (relocateMutation.state.error ?? relocateMutation.state.startError)
+        : (addMutation.state.error ?? addMutation.state.startError);
+  const displayError = requestError ?? error;
 
   useEffect(() => {
     if (!state) return;
     setPath("");
     setPicking(false);
-    setBusy(false);
     setError(null);
-  }, [state]);
+    entryRef.current = null;
+    addMutation.reset();
+    relocateMutation.reset();
+    forgetMutation.reset();
+  }, [
+    state,
+    addMutation.reset,
+    relocateMutation.reset,
+    forgetMutation.reset,
+  ]);
 
   useModalFocus({
     open: state !== null,
@@ -89,35 +131,58 @@ export function ProjectDialogs({
   };
 
   const handleConfirm = async () => {
+    setError(null);
     if (mode === "forget") {
       if (!project) return;
-      setBusy(true);
-      setError(null);
-      try {
-        await forgetProject(project.id);
-        onForgotten(project.id);
-      } catch (cause) {
-        setError(asAppError(cause) ?? fallbackError("遗忘项目失败。"));
-        setBusy(false);
-      }
+      const forgottenId = project.id;
+      const result = await forgetMutation.start(
+        promiseDriver({
+          total: 1,
+          message: "正在遗忘项目…",
+          indeterminate: true,
+          run: async () => {
+            await forgetProject(forgottenId);
+            return {
+              rows: [],
+              message: "已遗忘项目",
+              scope: projectScope(forgottenId),
+            };
+          },
+        }),
+      );
+      if (result) onForgotten(forgottenId);
       return;
     }
     if (!path) {
       setError(fallbackError("请选择一个项目目录。"));
       return;
     }
-    setBusy(true);
-    setError(null);
-    try {
-      const entry =
-        mode === "relocate" && project
-          ? await relocateProject(project.id, path)
-          : await addProject(path);
-      if (mode === "relocate") onRelocated(entry);
-      else onAdded(entry);
-    } catch (cause) {
-      setError(asAppError(cause) ?? fallbackError("保存项目失败。"));
-      setBusy(false);
+    if (mode === "relocate" && !project) return;
+    const relocate = mode === "relocate";
+    const projectId = project?.id ?? null;
+    entryRef.current = null;
+    const result = await (relocate ? relocateMutation : addMutation).start(
+      promiseDriver({
+        total: 1,
+        message: relocate ? "正在重新定位项目…" : "正在添加项目…",
+        indeterminate: true,
+        run: async () => {
+          const entry =
+            relocate && projectId
+              ? await relocateProject(projectId, path)
+              : await addProject(path);
+          entryRef.current = entry;
+          return {
+            rows: [],
+            message: relocate ? "已重新定位项目" : "已添加项目",
+            scope: projectScope(entry.id),
+          };
+        },
+      }),
+    );
+    if (result && entryRef.current) {
+      if (relocate) onRelocated(entryRef.current);
+      else onAdded(entryRef.current);
     }
   };
 
@@ -214,16 +279,7 @@ export function ProjectDialogs({
             </>
           )}
 
-          {error ? (
-            <p
-              role="alert"
-              data-testid="project-dialog-error"
-              className="mt-3 text-[12.5px] text-destructive"
-            >
-              {error.message}
-              {error.detail ? ` · ${error.detail}` : ""}
-            </p>
-          ) : null}
+          <MutationError error={displayError} testId="project-dialog-error" />
         </div>
 
         <div className="modal-foot">

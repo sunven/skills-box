@@ -469,6 +469,40 @@ describe("scope switcher", () => {
     });
   });
 
+  it("keeps the project dialog open when adding fails", async () => {
+    vi.mocked(pickProjectFolder).mockResolvedValue("/tmp/newproj");
+    createFakeBackend({
+      commands: {
+        add_project: () => {
+          throw {
+            code: "project.root_unavailable",
+            message: "项目目录不可用。",
+            detail: "/tmp/newproj：目录不存在",
+            retryable: true,
+          };
+        },
+      },
+    }).install();
+
+    renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: "添加项目" }));
+    const dialog = await screen.findByTestId("project-dialog");
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "选择文件夹" }),
+    );
+    await waitFor(() => {
+      expect(within(dialog).getByText("/tmp/newproj")).toBeInTheDocument();
+    });
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "添加项目" }),
+    );
+
+    const error = await within(dialog).findByTestId("project-dialog-error");
+    expect(error).toHaveTextContent("项目目录不可用。");
+    expect(error).toHaveTextContent("/tmp/newproj：目录不存在");
+    expect(screen.getByTestId("project-dialog")).toBeInTheDocument();
+  });
+
   it("relocates an unavailable project without changing its id", async () => {
     vi.mocked(pickProjectFolder).mockResolvedValue("/tmp/moved-proj");
     const unavailable = project({
@@ -503,14 +537,9 @@ describe("scope switcher", () => {
       id: PROJECT_ID,
       root: "/tmp/moved-proj",
     });
-    // The relocated scope is persisted as the active scope for the restart.
-    await waitFor(() => {
-      expect(
-        backend
-          .callsOf("set_active_scope")
-          .map((call) => call.payload.scope),
-      ).toEqual([PROJECT_SCOPE]);
-    });
+    // Relocate already persists the active scope on the backend, so the
+    // dialog does not issue a second set_active_scope call.
+    expect(backend.callsOf("set_active_scope")).toHaveLength(0);
     const header = await screen.findByTestId("project-header");
     expect(within(header).getByText("/tmp/moved-proj")).toBeInTheDocument();
   });
