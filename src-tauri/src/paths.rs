@@ -89,6 +89,11 @@ impl AppPaths {
         self.app_data.join("agents.json")
     }
 
+    /// Registered project roots and the last active scope.
+    pub fn projects_path(&self) -> PathBuf {
+        self.app_data.join("projects.json")
+    }
+
     pub fn baselines_dir(&self) -> PathBuf {
         self.app_data.join("baselines")
     }
@@ -209,6 +214,10 @@ mod tests {
         assert_eq!(
             paths.update_check_state_path(),
             tmp.path().join("app-data/update-check.json")
+        );
+        assert_eq!(
+            paths.projects_path(),
+            tmp.path().join("app-data/projects.json")
         );
     }
 

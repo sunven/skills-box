@@ -28,7 +28,7 @@ export function useUpdateReportQuery() {
 export function useUpdateCheckStateQuery() {
   return useQuery({
     queryKey: updateCheckStateQueryKey,
-    queryFn: getUpdateCheckState,
+    queryFn: () => getUpdateCheckState(),
     staleTime: Infinity,
   });
 }

@@ -1,11 +1,17 @@
 import { Channel } from "@tauri-apps/api/core";
 import { describe, expect, it, vi } from "vitest";
-import { API_COMMANDS, getInventory, startInstall } from "../lib/api";
+import {
+  API_COMMANDS,
+  getInventory,
+  listProjects,
+  startInstall,
+} from "../lib/api";
 import type {
   AgentAttachment,
   InventorySnapshot,
   TaskEvent,
 } from "../lib/types";
+import { GLOBAL_SCOPE } from "../lib/types";
 import {
   attachment,
   claudeAgent,
@@ -52,6 +58,16 @@ describe("fake backend", () => {
     expect(backend.calls).toHaveLength(1);
     expect(backend.calls[0]).toMatchObject({
       command: API_COMMANDS.getInventory,
+      payload: { scope: GLOBAL_SCOPE },
+    });
+  });
+
+  it("exposes an empty project registry by default", async () => {
+    createFakeBackend().install();
+    await expect(listProjects()).resolves.toEqual({
+      projects: [],
+      lastActiveScope: GLOBAL_SCOPE,
+      warnings: [],
     });
   });
 
@@ -61,6 +77,7 @@ describe("fake backend", () => {
     });
 
     const attached = backend.dispatch(API_COMMANDS.attachAgent, {
+      scope: GLOBAL_SCOPE,
       skillId: "alpha",
       agentId: "claude-code",
     });
@@ -70,6 +87,7 @@ describe("fake backend", () => {
     expect(snapshot.skills[0]!.attachments).toHaveLength(1);
 
     const detached = backend.dispatch(API_COMMANDS.detachAgent, {
+      scope: GLOBAL_SCOPE,
       skillId: "alpha",
       agentId: "claude-code",
     });
@@ -107,7 +125,7 @@ describe("fake backend", () => {
           }
           return current.dispatch(
             API_COMMANDS.getInventory,
-            {},
+            { scope: GLOBAL_SCOPE },
           ) as InventorySnapshot;
         },
       },
@@ -160,6 +178,7 @@ describe("fake backend", () => {
 
       backend.dispatch(API_COMMANDS.startPreview, {
         source: "acme/skills",
+        scope: GLOBAL_SCOPE,
         onEvent: channel,
       });
       vi.advanceTimersByTime(50);
@@ -175,5 +194,7 @@ describe("fake backend", () => {
 });
 
 function getSnapshot(backend: ReturnType<typeof createFakeBackend>): InventorySnapshot {
-  return backend.dispatch(API_COMMANDS.getInventory, {}) as InventorySnapshot;
+  return backend.dispatch(API_COMMANDS.getInventory, {
+    scope: GLOBAL_SCOPE,
+  }) as InventorySnapshot;
 }

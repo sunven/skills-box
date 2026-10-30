@@ -45,6 +45,11 @@ pub enum ErrorCode {
     PathAppData,
     PathInvalid,
     PathOutsideAllowedRoot,
+    ProjectNotFound,
+    ProjectInvalidRoot,
+    ProjectRootUnavailable,
+    ProjectDuplicate,
+    ProjectRegistryCorrupt,
     OpenFailed,
     SourceMissing,
     SourceInvalid,
@@ -130,6 +135,11 @@ impl ErrorCode {
         Self::PathAppData,
         Self::PathInvalid,
         Self::PathOutsideAllowedRoot,
+        Self::ProjectNotFound,
+        Self::ProjectInvalidRoot,
+        Self::ProjectRootUnavailable,
+        Self::ProjectDuplicate,
+        Self::ProjectRegistryCorrupt,
         Self::OpenFailed,
         Self::SourceMissing,
         Self::SourceInvalid,
@@ -215,6 +225,11 @@ impl ErrorCode {
             Self::PathAppData => "path.app_data",
             Self::PathInvalid => "path.invalid",
             Self::PathOutsideAllowedRoot => "path.outside_allowed_root",
+            Self::ProjectNotFound => "project.not_found",
+            Self::ProjectInvalidRoot => "project.invalid_root",
+            Self::ProjectRootUnavailable => "project.root_unavailable",
+            Self::ProjectDuplicate => "project.duplicate",
+            Self::ProjectRegistryCorrupt => "project.registry_corrupt",
             Self::OpenFailed => "open.failed",
             Self::SourceMissing => "source.missing",
             Self::SourceInvalid => "source.invalid",
@@ -290,7 +305,7 @@ mod tests {
 
     #[test]
     fn all_codes_are_unique_and_stable() {
-        assert_eq!(ErrorCode::ALL.len(), 81);
+        assert_eq!(ErrorCode::ALL.len(), 86);
         let values: Vec<&str> = ErrorCode::ALL.iter().map(|code| code.as_str()).collect();
         let unique: HashSet<&str> = values.iter().copied().collect();
         assert_eq!(unique.len(), values.len());
@@ -337,6 +352,11 @@ mod tests {
                 "path.app_data",
                 "path.invalid",
                 "path.outside_allowed_root",
+                "project.not_found",
+                "project.invalid_root",
+                "project.root_unavailable",
+                "project.duplicate",
+                "project.registry_corrupt",
                 "open.failed",
                 "source.missing",
                 "source.invalid",

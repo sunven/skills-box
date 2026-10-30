@@ -17,7 +17,9 @@ pub mod lock;
 pub mod logs;
 pub mod paths;
 pub mod process;
+pub mod projects;
 pub mod read_model;
+pub mod scope;
 pub mod security;
 pub mod tasks;
 pub mod timeouts;
@@ -33,6 +35,7 @@ use cli::CliRuntimeProvider;
 use env::EnvironmentService;
 use paths::AppPaths;
 use process::tokio_executor::TokioExecutor;
+use projects::ProjectRegistry;
 use read_model::ReadModel;
 use tasks::{InventoryConflictProvider, TaskManager, TaskManagerConfig};
 use update::UpdateService;
@@ -41,6 +44,7 @@ pub struct AppState {
     pub paths: AppPaths,
     pub environment: Arc<EnvironmentService>,
     pub read_model: Arc<ReadModel>,
+    pub projects: ProjectRegistry,
     pub tasks: TaskManager,
     pub updates: UpdateService,
     /// Set by `quit_app` so window/exit events stop preventing the exit.
@@ -60,6 +64,7 @@ impl AppState {
         );
         Self {
             read_model: Arc::new(ReadModel::new(paths.clone())),
+            projects: ProjectRegistry::new(paths.clone()),
             updates: UpdateService::new(paths.clone()),
             paths,
             environment,
@@ -108,6 +113,11 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_environment,
+            commands::list_projects,
+            commands::add_project,
+            commands::relocate_project,
+            commands::forget_project,
+            commands::set_active_scope,
             commands::get_inventory,
             commands::get_skill_detail,
             commands::list_skill_dir,

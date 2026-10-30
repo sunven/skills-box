@@ -17,7 +17,10 @@ import type {
   InventorySkill,
   InventorySnapshot,
   PreviewSummary,
+  ProjectEntry,
+  ProjectList,
   RemoveExtraAgentResult,
+  ScopeId,
   SkillDetail,
   SkillDirListing,
   SkillFileContent,
@@ -29,27 +32,42 @@ import type {
 import { healthyReport } from "./fixtures";
 import { detailForSkill, makeDirListing, makeFileContent } from "./detail-fixtures";
 import { emptySnapshot } from "./inventory-fixtures";
+import { GLOBAL_SCOPE } from "../lib/types";
 
 type Factory<T> = T | (() => T);
 type MaybePromise<T> = T | Promise<T>;
 
 export interface FakeCommandContract {
   get_environment: { args: { refresh?: boolean }; result: EnvReport };
-  get_inventory: { args: Record<string, never>; result: InventorySnapshot };
-  get_skill_detail: { args: { skillId: string }; result: SkillDetail };
-  open_skill_folder: { args: { skillId: string }; result: void };
+  list_projects: { args: Record<string, never>; result: ProjectList };
+  add_project: { args: { root: string }; result: ProjectEntry };
+  relocate_project: { args: { id: string; root: string }; result: ProjectEntry };
+  forget_project: { args: { id: string }; result: void };
+  set_active_scope: { args: { scope: ScopeId }; result: void };
+  get_inventory: {
+    args: { scope: ScopeId };
+    result: InventorySnapshot;
+  };
+  get_skill_detail: {
+    args: { scope: ScopeId; skillId: string };
+    result: SkillDetail;
+  };
+  open_skill_folder: { args: { scope: ScopeId; skillId: string }; result: void };
   list_skill_dir: {
-    args: { skillId: string; path?: string };
+    args: { scope: ScopeId; skillId: string; path?: string };
     result: SkillDirListing;
   };
   read_skill_file: {
-    args: { skillId: string; path: string };
+    args: { scope: ScopeId; skillId: string; path: string };
     result: SkillFileContent;
   };
-  open_skill_file: { args: { skillId: string; path: string }; result: void };
+  open_skill_file: {
+    args: { scope: ScopeId; skillId: string; path: string };
+    result: void;
+  };
   open_external_url: { args: { url: string }; result: void };
   start_preview: {
-    args: { source: string; onEvent: Channel<TaskEvent> };
+    args: { source: string; scope: ScopeId; onEvent: Channel<TaskEvent> };
     result: string;
   };
   cancel_task: { args: { taskId: string }; result: CancelAck };
@@ -60,27 +78,31 @@ export interface FakeCommandContract {
   dismiss_interrupted_mutation: { args: Record<string, never>; result: void };
   quit_app: { args: Record<string, never>; result: void };
   start_install: {
-    args: { request: InstallRequest; onEvent: Channel<TaskEvent> };
+    args: {
+      request: InstallRequest;
+      scope: ScopeId;
+      onEvent: Channel<TaskEvent>;
+    };
     result: string;
   };
   check_updates: {
-    args: { skillIds: string[] | null };
+    args: { skillIds: string[] | null; scope: ScopeId };
     result: UpdateCheckReport;
   };
   get_update_check_state: {
-    args: Record<string, never>;
+    args: { scope: ScopeId };
     result: UpdateCheckState | null;
   };
   start_update: {
-    args: { skillIds: string[]; onEvent: Channel<TaskEvent> };
+    args: { skillIds: string[]; scope: ScopeId; onEvent: Channel<TaskEvent> };
     result: string;
   };
   detach_agent: {
-    args: { skillId: string; agentId: string };
+    args: { skillId: string; agentId: string; scope: ScopeId };
     result: DetachResult;
   };
   attach_agent: {
-    args: { skillId: string; agentId: string };
+    args: { skillId: string; agentId: string; scope: ScopeId };
     result: AttachResult;
   };
   add_extra_agent: { args: { agent: ExtraAgentInput }; result: ExtraAgent };
@@ -89,7 +111,7 @@ export interface FakeCommandContract {
     result: RemoveExtraAgentResult;
   };
   start_uninstall: {
-    args: { skillId: string; onEvent: Channel<TaskEvent> };
+    args: { skillId: string; scope: ScopeId; onEvent: Channel<TaskEvent> };
     result: string;
   };
   reveal_app_data: { args: { kind: AppDataKind }; result: void };
@@ -111,6 +133,7 @@ export type FakeCall = {
 
 export interface FakeBackendData {
   environment: Factory<EnvReport>;
+  projects: Factory<ProjectList>;
   snapshot: InventorySnapshot;
   detail: (skillId: string, snapshot: InventorySnapshot) => SkillDetail;
   listDir: (skillId: string, path: string) => SkillDirListing;
@@ -217,6 +240,11 @@ export function createFakeBackend(
 ): FakeBackend {
   const defaultData: FakeBackendData = {
     environment: healthyReport(),
+    projects: {
+      projects: [],
+      lastActiveScope: GLOBAL_SCOPE,
+      warnings: [],
+    },
     snapshot: emptySnapshot(),
     detail: (skillId, snapshot) => {
       const skill = snapshot.skills.find((entry) => entry.name === skillId);
@@ -453,8 +481,26 @@ export function createFakeBackend(
     };
   };
 
+  let projectCounter = 0;
+  const fakeProject = (root: string, id?: string): ProjectEntry => {
+    const now = Date.now();
+    return {
+      id: id ?? `project-${++projectCounter}`,
+      root,
+      displayName: root.replace(/\/+$/, "").split("/").pop() || root,
+      addedAt: now,
+      lastOpenedAt: now,
+      available: true,
+    };
+  };
+
   const defaultHandlers: FakeHandlers = {
     get_environment: () => factoryValue(data.environment),
+    list_projects: () => factoryValue(data.projects),
+    add_project: ({ root }) => fakeProject(root),
+    relocate_project: ({ id, root }) => fakeProject(root, id),
+    forget_project: () => undefined,
+    set_active_scope: () => undefined,
     get_inventory: () => data.snapshot,
     get_skill_detail: ({ skillId }) => data.detail(skillId, data.snapshot),
     open_skill_folder: () => undefined,
@@ -554,6 +600,7 @@ export function createFakeBackend(
       calls.length = 0;
       tasks.length = 0;
       taskCounter = 0;
+      projectCounter = 0;
       channelIndexes.clear();
       data = { ...initialData };
     },

@@ -20,6 +20,8 @@ use crate::env::EnvReport;
 use crate::error::AppError;
 use crate::inventory::InventorySnapshot;
 use crate::paths::AppPaths;
+use crate::projects::{ProjectEntry, ProjectList};
+use crate::scope::ScopeId;
 use crate::tasks::{ActiveMutationInfo, CancelAck, EventSink, InstallRequest, TaskEvent, TaskId};
 use crate::timeouts::READ_TIMEOUT;
 use crate::update::UpdateCheckReport;
@@ -54,10 +56,47 @@ pub async fn get_environment(
     state.environment.get(refresh).await
 }
 
+/// Registry snapshot with per-entry availability and the restored active
+/// scope. A corrupt registry is an empty list plus an app-level warning; the
+/// global scope stays usable.
+#[tauri::command]
+pub fn list_projects(state: State<'_, AppState>) -> ProjectList {
+    state.projects.list()
+}
+
+#[tauri::command]
+pub fn add_project(state: State<'_, AppState>, root: String) -> Result<ProjectEntry, AppError> {
+    state.projects.add(&root)
+}
+
+#[tauri::command]
+pub fn relocate_project(
+    state: State<'_, AppState>,
+    id: String,
+    root: String,
+) -> Result<ProjectEntry, AppError> {
+    state.projects.relocate(&id, &root)
+}
+
+#[tauri::command]
+pub fn forget_project(state: State<'_, AppState>, id: String) -> Result<(), AppError> {
+    state.projects.forget(&id)
+}
+
+#[tauri::command]
+pub fn set_active_scope(state: State<'_, AppState>, scope: ScopeId) -> Result<(), AppError> {
+    state.projects.set_active_scope(&scope)
+}
+
 /// Full read-model projection. Filesystem scanning happens on the blocking
 /// pool so a large inventory never stalls the UI thread, under a 30s cap.
 #[tauri::command]
-pub async fn get_inventory(state: State<'_, AppState>) -> Result<InventorySnapshot, AppError> {
+pub async fn get_inventory(
+    state: State<'_, AppState>,
+    scope: ScopeId,
+) -> Result<InventorySnapshot, AppError> {
+    // Scope plumbing only in this ticket: project reads land in ticket 02.
+    let _ = scope;
     let read_model = Arc::clone(&state.read_model);
     read_with_timeout("库存", READ_TIMEOUT, async move {
         tauri::async_runtime::spawn_blocking(move || read_model.snapshot())
@@ -70,8 +109,10 @@ pub async fn get_inventory(state: State<'_, AppState>) -> Result<InventorySnapsh
 #[tauri::command]
 pub async fn get_skill_detail(
     state: State<'_, AppState>,
+    scope: ScopeId,
     skill_id: String,
 ) -> Result<SkillDetail, AppError> {
+    let _ = scope;
     let read_model = Arc::clone(&state.read_model);
     read_with_timeout("skill 详情", READ_TIMEOUT, async move {
         tauri::async_runtime::spawn_blocking(move || read_model.detail(&skill_id))
@@ -86,9 +127,11 @@ pub async fn get_skill_detail(
 #[tauri::command]
 pub async fn list_skill_dir(
     state: State<'_, AppState>,
+    scope: ScopeId,
     skill_id: String,
     path: String,
 ) -> Result<SkillDirListing, AppError> {
+    let _ = scope;
     let paths = state.paths.clone();
     let read_model = Arc::clone(&state.read_model);
     blocking_read("skill 内容目录", move || {
@@ -103,9 +146,11 @@ pub async fn list_skill_dir(
 #[tauri::command]
 pub async fn read_skill_file(
     state: State<'_, AppState>,
+    scope: ScopeId,
     skill_id: String,
     path: String,
 ) -> Result<SkillFileContent, AppError> {
+    let _ = scope;
     let paths = state.paths.clone();
     let read_model = Arc::clone(&state.read_model);
     blocking_read("skill 文件", move || {
@@ -119,8 +164,10 @@ pub async fn read_skill_file(
 pub async fn open_skill_folder(
     app: AppHandle,
     state: State<'_, AppState>,
+    scope: ScopeId,
     skill_id: String,
 ) -> Result<(), AppError> {
+    let _ = scope;
     let read_model = Arc::clone(&state.read_model);
     let resolved = blocking_read("skill 路径", move || read_model.resolve_root(&skill_id)).await?;
     app.opener()
@@ -132,9 +179,11 @@ pub async fn open_skill_folder(
 pub async fn open_skill_file(
     app: AppHandle,
     state: State<'_, AppState>,
+    scope: ScopeId,
     skill_id: String,
     path: String,
 ) -> Result<(), AppError> {
+    let _ = scope;
     let read_model = Arc::clone(&state.read_model);
     let resolved = blocking_read("skill 文件路径", move || {
         let root = read_model.resolve_root(&skill_id)?;
@@ -201,9 +250,12 @@ where
 #[tauri::command]
 pub async fn start_preview(
     state: State<'_, AppState>,
+    scope: ScopeId,
     source: String,
     on_event: Channel<TaskEvent>,
 ) -> Result<TaskId, AppError> {
+    // Project preview uses the project root as cwd in ticket 04.
+    let _ = scope;
     let sink: EventSink = Arc::new(move |event| {
         // A closed window must not fail a read-only task; the task simply ends.
         let _ = on_event.send(event);
@@ -216,23 +268,34 @@ pub async fn start_preview(
 #[tauri::command]
 pub async fn check_updates(
     state: State<'_, AppState>,
+    scope: ScopeId,
     skill_ids: Option<Vec<String>>,
 ) -> Result<UpdateCheckReport, AppError> {
+    // Per-scope update state arrives with ticket 05.
+    let _ = scope;
     state.updates.check(skill_ids).await
 }
 
 /// Last persisted full-check summary, if any. Read-only; no network or CLI.
 #[tauri::command]
-pub fn get_update_check_state(state: State<'_, AppState>) -> Option<UpdateCheckState> {
+pub fn get_update_check_state(
+    state: State<'_, AppState>,
+    scope: ScopeId,
+) -> Option<UpdateCheckState> {
+    // Per-scope update state arrives with ticket 05.
+    let _ = scope;
     state.updates.read_state()
 }
 
 #[tauri::command]
 pub async fn start_install(
     state: State<'_, AppState>,
+    scope: ScopeId,
     request: InstallRequest,
     on_event: Channel<TaskEvent>,
 ) -> Result<TaskId, AppError> {
+    // Project install lands in ticket 04.
+    let _ = scope;
     let sink: EventSink = Arc::new(move |event| {
         // A closed window must not abort a mutation that may already be
         // writing; the task still finishes and its result is discarded.
@@ -287,9 +350,12 @@ pub async fn quit_app(app: AppHandle, state: State<'_, AppState>) -> Result<(), 
 #[tauri::command]
 pub async fn start_update(
     state: State<'_, AppState>,
+    scope: ScopeId,
     skill_ids: Vec<String>,
     on_event: Channel<TaskEvent>,
 ) -> Result<TaskId, AppError> {
+    // Project update lands in ticket 06.
+    let _ = scope;
     let sink: EventSink = Arc::new(move |event| {
         // A closed window must not abort a mutation that may already be
         // writing; the task still finishes and its result is discarded.
@@ -304,9 +370,12 @@ pub async fn start_update(
 #[tauri::command]
 pub async fn detach_agent(
     state: State<'_, AppState>,
+    scope: ScopeId,
     skill_id: String,
     agent_id: String,
 ) -> Result<DetachResult, AppError> {
+    // Project attachment scope lands in ticket 04.
+    let _ = scope;
     state.tasks.detach_agent(skill_id, agent_id).await
 }
 
@@ -315,9 +384,12 @@ pub async fn detach_agent(
 #[tauri::command]
 pub async fn attach_agent(
     state: State<'_, AppState>,
+    scope: ScopeId,
     skill_id: String,
     agent_id: String,
 ) -> Result<AttachResult, AppError> {
+    // Project attachment scope lands in ticket 04.
+    let _ = scope;
     state.tasks.attach_agent(skill_id, agent_id).await
 }
 
@@ -346,9 +418,12 @@ pub async fn remove_extra_agent(
 #[tauri::command]
 pub async fn start_uninstall(
     state: State<'_, AppState>,
+    scope: ScopeId,
     skill_id: String,
     on_event: Channel<TaskEvent>,
 ) -> Result<TaskId, AppError> {
+    // Project uninstall lands in ticket 06.
+    let _ = scope;
     let sink: EventSink = Arc::new(move |event| {
         // A closed window must not abort a mutation that may already be
         // writing; the task still finishes and its result is discarded.

@@ -179,10 +179,12 @@ describe("detach from one agent", () => {
     expect(detachCalls[0]!.payload).toEqual({
       skillId: "alpha",
       agentId: "qoder",
+      scope: "global",
     });
     expect(Object.keys(detachCalls[0]!.payload as object)).toEqual([
       "skillId",
       "agentId",
+      "scope",
     ]);
     expect(
       calls.filter((call) => call.command === "get_skill_detail").length,

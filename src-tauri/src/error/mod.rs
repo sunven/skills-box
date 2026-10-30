@@ -167,6 +167,26 @@ mod tests {
             AppError::path_outside_allowed_root("x").code,
             ErrorCode::PathOutsideAllowedRoot
         );
+        assert_eq!(
+            AppError::project_not_found("id").code,
+            ErrorCode::ProjectNotFound
+        );
+        assert_eq!(
+            AppError::project_invalid_root("x").code,
+            ErrorCode::ProjectInvalidRoot
+        );
+        assert_eq!(
+            AppError::project_root_unavailable("alpha", "x").code,
+            ErrorCode::ProjectRootUnavailable
+        );
+        assert_eq!(
+            AppError::project_duplicate(std::path::Path::new("/a"), "alpha").code,
+            ErrorCode::ProjectDuplicate
+        );
+        assert_eq!(
+            AppError::project_registry_corrupt("x").code,
+            ErrorCode::ProjectRegistryCorrupt
+        );
         assert_eq!(AppError::open_failed("x").code, ErrorCode::OpenFailed);
         assert_eq!(
             AppError::agent_not_attached("Claude Code").code,
