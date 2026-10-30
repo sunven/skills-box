@@ -673,6 +673,10 @@ export function createFakeBackend(
     updateProjectList({ lastActiveScope: GLOBAL_SCOPE });
   };
 
+  // A check made during a test replaces the persisted state for that scope
+  // only, so per-scope badges and last-check labels behave like Rust.
+  const checkedStates = new Map<ScopeId, UpdateCheckState>();
+
   const reportFor = (scope: ScopeId): UpdateCheckReport => {
     const scoped = data.updateReports?.[scope];
     if (scoped) return factoryValue(scoped);
@@ -681,10 +685,38 @@ export function createFakeBackend(
   };
 
   const checkStateFor = (scope: ScopeId): UpdateCheckState | null => {
+    const checked = checkedStates.get(scope);
+    if (checked) return checked;
     const scoped = data.updateCheckStates?.[scope];
     if (scoped !== undefined) return factoryValue(scoped);
     if (scope === GLOBAL_SCOPE) return factoryValue(data.updateCheckState);
     return null;
+  };
+
+  const stateFromReport = (report: UpdateCheckReport): UpdateCheckState => {
+    const failedSourceCount = report.sources.filter(
+      (source) => source.status === "error",
+    ).length;
+    const successfulSourceCount = report.sources.filter(
+      (source) => source.status === "ok" || source.status === "cached",
+    ).length;
+    const lastOutcome =
+      failedSourceCount > 0 && successfulSourceCount === 0
+        ? "failed"
+        : failedSourceCount > 0 || report.skippedSourceCount > 0
+          ? "partial"
+          : "ok";
+    return {
+      version: 1,
+      lastAttemptAt: report.checkedAtEpochMs,
+      lastSuccessAt: report.lastSuccessAtEpochMs,
+      lastOutcome,
+      failedSourceCount,
+      cachedSourceCount: report.cachedSourceCount,
+      skippedSourceCount: report.skippedSourceCount,
+      candidateCount: report.skills.filter((skill) => skill.state === "update")
+        .length,
+    };
   };
 
   const defaultHandlers: FakeHandlers = {
@@ -724,7 +756,11 @@ export function createFakeBackend(
       scheduleAutoTask(task, "install", request.skills);
       return task.taskId;
     },
-    check_updates: ({ scope }) => reportFor(scope),
+    check_updates: ({ scope }) => {
+      const report = reportFor(scope);
+      checkedStates.set(scope, stateFromReport(report));
+      return report;
+    },
     get_update_check_state: ({ scope }) => checkStateFor(scope),
     start_update: ({ skillIds, onEvent }) => {
       const task = makeTask("start_update", onEvent);

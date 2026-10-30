@@ -9,7 +9,9 @@ import {
 import type {
   AgentAttachment,
   InventorySnapshot,
+  ScopeId,
   TaskEvent,
+  UpdateSkillResult,
 } from "../lib/types";
 import { GLOBAL_SCOPE } from "../lib/types";
 import {
@@ -18,7 +20,7 @@ import {
   makeSnapshot,
   makeSkill,
 } from "./inventory-fixtures";
-import { createFakeBackend } from "./fake-backend";
+import { createFakeBackend, emptyUpdateReport } from "./fake-backend";
 
 function snapshotWith(
   attachments: AgentAttachment[] = [],
@@ -163,6 +165,71 @@ describe("fake backend", () => {
     ]);
     expect(backend.tasks).toHaveLength(1);
     expect(backend.count(API_COMMANDS.startInstall)).toBe(1);
+  });
+
+  it("serves per-scope check reports and derives each scope's state", () => {
+    const projectScope: ScopeId =
+      "project:11111111-1111-4111-8111-111111111111";
+    const candidate: UpdateSkillResult = {
+      name: "alpha",
+      source: "acme/skills",
+      ref: "main",
+      lockHash: "a".repeat(64),
+      remoteHash: "b".repeat(64),
+      state: "update",
+      cached: false,
+      lastSuccessAtEpochMs: 123,
+      previousState: null,
+      error: null,
+      note: null,
+    };
+    const backend = createFakeBackend({
+      data: {
+        updateReports: {
+          [projectScope]: emptyUpdateReport({
+            skills: [candidate],
+            checkedAtEpochMs: 123,
+            lastSuccessAtEpochMs: 123,
+            sources: [
+              {
+                source: "acme/skills",
+                ref: "main",
+                status: "ok",
+                skillCount: 1,
+                cached: false,
+                truncated: false,
+                lastSuccessAtEpochMs: 123,
+                error: null,
+                note: null,
+              },
+            ],
+          }),
+        },
+      },
+    });
+
+    expect(
+      backend.dispatch(API_COMMANDS.checkUpdates, {
+        skillIds: null,
+        scope: projectScope,
+      }),
+    ).toMatchObject({ skills: [{ name: "alpha", state: "update" }] });
+    expect(
+      backend.dispatch(API_COMMANDS.getUpdateCheckState, {
+        scope: projectScope,
+      }),
+    ).toMatchObject({
+      version: 1,
+      lastAttemptAt: 123,
+      lastOutcome: "ok",
+      candidateCount: 1,
+    });
+    // Other scopes keep their own (empty) state.
+    expect(
+      backend.dispatch(API_COMMANDS.getUpdateCheckState, {
+        scope: GLOBAL_SCOPE,
+      }),
+    ).toBeNull();
   });
 
   it("auto-completes preview tasks only when asked", () => {

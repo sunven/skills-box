@@ -108,9 +108,18 @@ describe("scope switcher", () => {
     expect(within(header).getByTestId("project-lock-state")).toHaveTextContent(
       "正常",
     );
-    expect(
-      within(header).getByTestId("project-last-check"),
-    ).toHaveTextContent("尚未检查");
+    // The active scope is checked at launch when it has managed skills and no
+    // recorded attempt, so the header moves from "never checked" to a time.
+    await waitFor(() => {
+      expect(backend.callsOf("check_updates")[0]?.payload.scope).toBe(
+        PROJECT_SCOPE,
+      );
+    });
+    await waitFor(() => {
+      expect(
+        within(header).getByTestId("project-last-check"),
+      ).toHaveTextContent("上次检查");
+    });
 
     const inventories = backend.callsOf("get_inventory");
     expect(inventories).toHaveLength(1);
@@ -266,6 +275,92 @@ describe("scope switcher", () => {
         name: "重新定位项目 missing-proj",
       }),
     ).toBeInTheDocument();
+  });
+
+  it("auto-checks a stale project scope on switch without rechecking the global scope", async () => {
+    const backend = createFakeBackend({
+      data: {
+        projects: projectList([project()], GLOBAL_SCOPE),
+        snapshots: {
+          [PROJECT_SCOPE]: makeSnapshot({
+            skills: [
+              makeSkill({
+                id: `${PROJECT_SCOPE}/alpha`,
+                name: "alpha",
+                canonicalPath: `${PROJECT_CANONICAL}/alpha`,
+              }),
+            ],
+          }),
+        },
+        updateCheckStates: {
+          [PROJECT_SCOPE]: checkState({
+            lastAttemptAt: Date.now() - 7 * 60 * 60 * 1000,
+            candidateCount: 1,
+          }),
+        },
+      },
+    }).install();
+
+    renderApp();
+    await screen.findByRole("button", { name: "切换到项目 skills-proj" });
+    // Global has no managed skills, so it does not check at launch.
+    expect(backend.callsOf("check_updates")).toHaveLength(0);
+
+    fireEvent.click(scopeRow("skills-proj"));
+    await waitFor(() => {
+      expect(
+        backend.callsOf("check_updates").map((call) => call.payload.scope),
+      ).toContain(PROJECT_SCOPE);
+    });
+    const scopes = backend
+      .callsOf("check_updates")
+      .map((call) => call.payload.scope);
+    expect(scopes.filter((scope) => scope === PROJECT_SCOPE)).toHaveLength(1);
+
+    // Returning to global does not add a check for either scope.
+    fireEvent.click(screen.getByRole("button", { name: "切换到全局" }));
+    await screen.findByRole("button", { name: "切换到项目 skills-proj" });
+    expect(backend.callsOf("check_updates")).toHaveLength(scopes.length);
+  });
+
+  it("leaves a fresh project scope alone until the user refreshes it", async () => {
+    const backend = createFakeBackend({
+      data: {
+        projects: projectList([project()], PROJECT_SCOPE),
+        snapshots: {
+          [PROJECT_SCOPE]: makeSnapshot({
+            skills: [
+              makeSkill({
+                id: `${PROJECT_SCOPE}/alpha`,
+                name: "alpha",
+                canonicalPath: `${PROJECT_CANONICAL}/alpha`,
+              }),
+            ],
+          }),
+        },
+        updateCheckStates: {
+          [PROJECT_SCOPE]: checkState({ lastAttemptAt: Date.now() }),
+        },
+      },
+    }).install();
+
+    renderApp();
+    await screen.findByText("alpha");
+    await waitFor(() => {
+      expect(backend.callsOf("get_inventory").length).toBeGreaterThan(0);
+    });
+    // A fresh persisted attempt means switching to the scope does not check.
+    expect(backend.callsOf("check_updates")).toHaveLength(0);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "刷新项目" }),
+    );
+    await waitFor(() => {
+      expect(backend.callsOf("check_updates")).toHaveLength(1);
+    });
+    expect(backend.callsOf("check_updates")[0]?.payload.scope).toBe(
+      PROJECT_SCOPE,
+    );
   });
 
   it("keeps project lock errors inside the project view and offers a retry", async () => {
