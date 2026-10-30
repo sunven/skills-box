@@ -1,6 +1,6 @@
 //! Pre-operation backup snapshots.
 //!
-//! Every update (and later uninstall/detach) writes a snapshot under app data
+//! Every install, update, uninstall and detach writes a snapshot under app data
 //! `backups/<timestamp>-<action>-<skill>/` before touching the disk:
 //!
 //! - `skill-lock.json` — a byte copy of the strict v3 lock (or
@@ -38,6 +38,7 @@ pub const BACKUP_MANIFEST_VERSION: u32 = 1;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BackupAction {
+    Install,
     Update,
     Uninstall,
     Detach,
@@ -46,6 +47,7 @@ pub enum BackupAction {
 impl BackupAction {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Install => "install",
             Self::Update => "update",
             Self::Uninstall => "uninstall",
             Self::Detach => "detach",

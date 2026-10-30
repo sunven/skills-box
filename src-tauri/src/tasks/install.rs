@@ -18,7 +18,7 @@ use crate::agents::catalog;
 #[cfg(test)]
 use crate::agents::{DetectionContext, resolve_global_skills_dir};
 use crate::attachment_target::{self, AgentDirectoryState, TargetState};
-use crate::backup::BackupStore;
+use crate::backup::{BackupAction, BackupStore};
 use crate::baseline::{BaselineStore, write_warning};
 use crate::cli::CliRuntime;
 #[cfg(test)]
@@ -31,8 +31,6 @@ use crate::inventory::{AgentDir, ManagementState};
 use crate::lock::ScopedLock;
 use crate::paths::AppPaths;
 use crate::process::{CommandSpec, ExecOutput};
-use crate::security;
-use crate::time::now_ms;
 
 use super::conflicts::find_conflicts;
 use super::manager::{TaskAction, TaskPhase, TaskSkillResult, TaskSkillStatus};
@@ -641,49 +639,23 @@ pub fn parse_install_output(raw: &str) -> InstallOutput {
     InstallOutput::Results(results)
 }
 
-/// Copy `~/.agents/.skill-lock.json` into `backups/<ms>-install-<task>/`
-/// before the CLI runs. Project snapshots use the same scope-isolated root as
-/// update/uninstall (`backups/project-<id>/`). A missing lock is a normal
-/// fresh-machine state and is recorded as absent.
+/// Snapshot the scope lock into `backups/<ms>-install-<task>/` before the CLI
+/// runs. Install is task-scoped, so the snapshot is lock-only (no canonical or
+/// attachments) and carries the same manifest as every other backup. A missing
+/// lock is a normal fresh-machine state and is recorded as absent.
 pub fn snapshot_lock(
     paths: &AppPaths,
     layout: &crate::scope_layout::ScopeLayout,
     task_id: &str,
 ) -> Result<PathBuf, AppError> {
-    let backups = BackupStore::for_layout(paths, layout);
-    let directory = backups.root().join(format!(
-        "{}-install-{}",
-        now_ms(),
-        security::safe_component(task_id)
-    ));
-    fs::create_dir_all(&directory)
-        .map_err(|error| AppError::backup_failed(format!("{}：{error}", directory.display())))?;
-    let source = &layout.lock_path;
-    let file_name = if layout.is_global() {
-        "skill-lock.json"
-    } else {
-        "skills-lock.json"
-    };
-    let target = directory.join(file_name);
-    match fs::copy(source, &target) {
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            fs::write(
-                directory.join("lock-absent.txt"),
-                b"skill lock did not exist before install\n",
-            )
-            .map_err(|error| {
-                AppError::backup_failed(format!("{}：{error}", directory.display()))
-            })?;
-        }
-        Err(error) => {
-            return Err(AppError::backup_failed(format!(
-                "{}：{error}",
-                source.display()
-            )));
-        }
-    }
-    Ok(directory)
+    let snapshot = BackupStore::for_layout(paths, layout).create(
+        BackupAction::Install,
+        task_id,
+        None,
+        &[],
+        &[],
+    )?;
+    Ok(snapshot.path)
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -1676,6 +1648,11 @@ mod tests {
         assert_eq!(global_snapshot.parent().unwrap(), paths.backups_dir());
         assert!(global_snapshot.join("skill-lock.json").is_file());
         assert!(!global_snapshot.to_string_lossy().contains("project-"));
+        let manifest: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(global_snapshot.join(crate::backup::BACKUP_MANIFEST_FILE)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(manifest["action"], "install");
 
         let project = crate::projects::Project {
             id: uuid::Uuid::new_v4(),
