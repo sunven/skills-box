@@ -250,13 +250,12 @@ pub async fn start_preview(
     source: String,
     on_event: Channel<TaskEvent>,
 ) -> Result<TaskId, AppError> {
-    // Project preview uses the project root as cwd in ticket 04.
-    let _ = scope;
+    // Project preview uses the project root as cwd and never `-g`.
     let sink: EventSink = Arc::new(move |event| {
         // A closed window must not fail a read-only task; the task simply ends.
         let _ = on_event.send(event);
     });
-    state.tasks.start_preview(&source, sink).await
+    state.tasks.start_preview(scope, &source, sink).await
 }
 
 /// Read-only update check. Rust reads lock v3 and GitHub trees directly; no
@@ -290,14 +289,13 @@ pub async fn start_install(
     request: InstallRequest,
     on_event: Channel<TaskEvent>,
 ) -> Result<TaskId, AppError> {
-    // Project install lands in ticket 04.
-    let _ = scope;
+    // Project install runs in the project root without `-g`.
     let sink: EventSink = Arc::new(move |event| {
         // A closed window must not abort a mutation that may already be
         // writing; the task still finishes and its result is discarded.
         let _ = on_event.send(event);
     });
-    state.tasks.start_install(request, sink).await
+    state.tasks.start_install(scope, request, sink).await
 }
 
 #[tauri::command]
@@ -371,8 +369,7 @@ pub async fn detach_agent(
     agent_id: String,
 ) -> Result<DetachResult, AppError> {
     // Project attachment scope lands in ticket 04.
-    let _ = scope;
-    state.tasks.detach_agent(skill_id, agent_id).await
+    state.tasks.detach_agent(scope, skill_id, agent_id).await
 }
 
 /// Native attach: add one agent attachment to an already-installed managed
@@ -385,8 +382,7 @@ pub async fn attach_agent(
     agent_id: String,
 ) -> Result<AttachResult, AppError> {
     // Project attachment scope lands in ticket 04.
-    let _ = scope;
-    state.tasks.attach_agent(skill_id, agent_id).await
+    state.tasks.attach_agent(scope, skill_id, agent_id).await
 }
 
 /// Persist a user-defined extra agent in the app-data `agents.json`.

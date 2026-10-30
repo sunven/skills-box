@@ -135,6 +135,10 @@ pub struct AnomalySummary {
 pub struct InventorySnapshot {
     pub skills: Vec<InventorySkill>,
     pub agents: Vec<InventoryAgent>,
+    /// Scope install/attach target set (spec §3.5). Project scope includes
+    /// globally detected catalog agents and configured extras whose project
+    /// directory does not exist yet.
+    pub install_targets: Vec<InventoryAgent>,
     pub anomalies: AnomalySummary,
     pub warnings: Vec<String>,
     pub generated_at_epoch_ms: u64,
@@ -240,8 +244,30 @@ pub(crate) fn agent_rows(
     rows
 }
 
-fn origin_of(extra_agents: &extras::ExtraAgents, id: &str) -> AgentOrigin {
-    match extra_agents.agents.iter().find(|agent| agent.id == id) {
+/// Install/attach target rows for one scope. These are UI-visible agents even
+/// when their target directory does not exist yet; `detected` means "eligible
+/// in this scope", which is what attach eligibility consumes.
+pub(crate) fn install_target_rows(
+    paths: &AppPaths,
+    layout: &crate::scope_layout::ScopeLayout,
+) -> Vec<InventoryAgent> {
+    let detected = detected_agent_dirs(paths);
+    layout
+        .install_targets(&detected)
+        .into_iter()
+        .map(|agent| InventoryAgent {
+            shared: same_dir(&agent.skills_dir, &layout.canonical_dir),
+            id: agent.id.clone(),
+            display_name: agent.display_name.clone(),
+            universal: agent.universal,
+            global_skills_dir: Some(paths.display(&agent.skills_dir)),
+            origin: origin_of(&layout.extras, &agent.id),
+            detected: true,
+        })
+        .collect()
+}
+
+fn origin_of(extra_agents: &extras::ExtraAgents, id: &str) -> AgentOrigin {    match extra_agents.agents.iter().find(|agent| agent.id == id) {
         Some(agent) if agent.builtin => AgentOrigin::Builtin,
         Some(_) => AgentOrigin::User,
         None => AgentOrigin::Catalog,

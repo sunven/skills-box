@@ -392,6 +392,7 @@ const skills: InventorySkill[] = seeds.map((seed) => ({
 export const snapshot: InventorySnapshot = {
   skills,
   agents,
+  installTargets: agents,
   anomalies: {
     total: 5,
     stale: { count: 1, examples: ["ghost-skill"] },

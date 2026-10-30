@@ -584,7 +584,8 @@ function App() {
               <DetailPane
                 scope={scope}
                 skill={view.selectedSkill}
-                agents={snapshot?.agents ?? EMPTY_INVENTORY_AGENTS}
+                agents={snapshot?.installTargets ?? EMPTY_INVENTORY_AGENTS}
+                actionsDisabled={scopeBlocked}
                 checkingUpdates={checkUpdates.isPending}
                 onCheckUpdates={handleCheckUpdates}
                 onClose={handleCloseDetail}
@@ -635,8 +636,10 @@ function App() {
       <InstallWizard
         open={installOpen}
         scope={scope}
+        project={activeProject}
         inventorySkills={view.skills}
         agents={report?.agents ?? EMPTY_DETECTED_AGENTS}
+        installTargets={snapshot?.installTargets ?? EMPTY_INVENTORY_AGENTS}
         onClose={() => setInstallOpen(false)}
       />
       <ProjectDialogs

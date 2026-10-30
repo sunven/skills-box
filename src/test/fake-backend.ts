@@ -156,6 +156,8 @@ export interface FakeBackendData {
   >;
   activeMutation: Factory<ActiveMutationInfo | null>;
   preview: PreviewSummary;
+  /** Per-scope preview summaries; projects default to the global preview. */
+  previews?: Partial<Record<ScopeId, Factory<PreviewSummary>>>;
 }
 
 export interface FakeBackendOptions {
@@ -327,6 +329,7 @@ export function createFakeBackend(
     task: FakeTask,
     kind: "preview" | "install" | "update" | "uninstall",
     names: string[],
+    scope: ScopeId = GLOBAL_SCOPE,
   ) => {
     if (!autoTasks) return;
     const total = kind === "preview" ? 1 : Math.max(1, names.length);
@@ -343,10 +346,11 @@ export function createFakeBackend(
     );
     timers.add(
       window.setTimeout(() => {
-        const result = taskResult(kind, names, data.preview);
+        if (kind === "install") installInto(scope, names);
+        const result = taskResult(kind, names, previewFor(scope));
         const message =
           kind === "preview"
-            ? `找到 ${data.preview.skills.length} 个 skill`
+            ? `找到 ${previewFor(scope).skills.length} 个 skill`
             : kind === "uninstall"
               ? `已卸载 ${names.length} 个 skill`
               : `${names.length} 个 skill 已完成`;
@@ -381,6 +385,49 @@ export function createFakeBackend(
       ...data,
       snapshots: { ...data.snapshots, [scope]: snapshot },
     };
+  };
+
+  const previewFor = (scope: ScopeId = GLOBAL_SCOPE): PreviewSummary => {
+    const scoped = data.previews?.[scope];
+    if (scoped) return factoryValue(scoped);
+    return factoryValue(data.preview);
+  };
+
+  const canonicalRootFor = (scope: ScopeId = GLOBAL_SCOPE): string => {
+    if (scope === GLOBAL_SCOPE) return "~/.agents/skills";
+    const id = scope.slice("project:".length);
+    const root = projectList.projects.find((entry) => entry.id === id)?.root;
+    return root
+      ? `${root.replace(/\/+$/, "")}/.agents/skills`
+      : "~/.agents/skills";
+  };
+
+  /** Apply a completed install to the scope's own inventory snapshot. */
+  const installInto = (scope: ScopeId, names: string[]) => {
+    if (names.length === 0) return;
+    const snapshot = snapshotFor(scope);
+    const source = previewFor(scope).source;
+    const canonicalRoot = canonicalRootFor(scope);
+    const existing = new Set(snapshot.skills.map((skill) => skill.name));
+    const added: InventorySkill[] = names
+      .filter((name) => !existing.has(name))
+      .map((name) => ({
+        id: scope === GLOBAL_SCOPE ? name : `${scope}/${name}`,
+        name,
+        description: null,
+        source,
+        management: "managed",
+        updatedAt: null,
+        canonicalPath: `${canonicalRoot}/${name}`,
+        attachments: [],
+        localModification: "clean",
+        warnings: [],
+      }));
+    if (added.length === 0) return;
+    setSnapshot(
+      { ...snapshot, skills: [...snapshot.skills, ...added] },
+      scope,
+    );
   };
 
   const findSkill = (
@@ -706,9 +753,9 @@ export function createFakeBackend(
     read_skill_file: ({ skillId, path }) => data.readFile(skillId, path),
     open_skill_file: () => undefined,
     open_external_url: () => undefined,
-    start_preview: ({ onEvent }) => {
+    start_preview: ({ scope, onEvent }) => {
       const task = makeTask("start_preview", onEvent);
-      scheduleAutoTask(task, "preview", []);
+      scheduleAutoTask(task, "preview", [], scope);
       return task.taskId;
     },
     cancel_task: ({ taskId }) => ({
@@ -719,16 +766,16 @@ export function createFakeBackend(
     get_active_mutation: () => factoryValue(data.activeMutation),
     dismiss_interrupted_mutation: () => undefined,
     quit_app: () => undefined,
-    start_install: ({ request, onEvent }) => {
+    start_install: ({ request, scope, onEvent }) => {
       const task = makeTask("start_install", onEvent);
-      scheduleAutoTask(task, "install", request.skills);
+      scheduleAutoTask(task, "install", request.skills, scope);
       return task.taskId;
     },
     check_updates: ({ scope }) => reportFor(scope),
     get_update_check_state: ({ scope }) => checkStateFor(scope),
-    start_update: ({ skillIds, onEvent }) => {
+    start_update: ({ skillIds, scope, onEvent }) => {
       const task = makeTask("start_update", onEvent);
-      scheduleAutoTask(task, "update", skillIds);
+      scheduleAutoTask(task, "update", skillIds, scope);
       return task.taskId;
     },
     detach_agent: ({ skillId, agentId, scope }) =>
@@ -737,9 +784,9 @@ export function createFakeBackend(
       nativeAttach(skillId, agentId, scope),
     add_extra_agent: ({ agent }) => addExtra(agent),
     remove_extra_agent: ({ agentId }) => removeExtra(agentId),
-    start_uninstall: ({ skillId, onEvent }) => {
+    start_uninstall: ({ skillId, scope, onEvent }) => {
       const task = makeTask("start_uninstall", onEvent);
-      scheduleAutoTask(task, "uninstall", [skillId]);
+      scheduleAutoTask(task, "uninstall", [skillId], scope);
       return task.taskId;
     },
     reveal_app_data: () => undefined,

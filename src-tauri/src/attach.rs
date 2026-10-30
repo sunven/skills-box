@@ -12,13 +12,11 @@
 use serde::Serialize;
 use std::fs;
 
-use crate::attachment_target::{self, AgentDirectoryState};
+use crate::attachment_target::{self, AgentDirectoryState, TargetContext};
 use crate::error::AppError;
-use crate::inventory::{self, AgentDir};
-use crate::lock::LockFile;
 use crate::logs::{OperationEntry, OperationLog};
 use crate::paths::AppPaths;
-use crate::security;
+use crate::scope_layout::ScopeLayout;
 
 const ATTACH_ACTION: &str = "attach";
 
@@ -35,18 +33,33 @@ pub struct AttachResult {
 
 pub fn attach_agent(
     paths: &AppPaths,
-    agents: &[AgentDir],
+    layout: &ScopeLayout,
     skill_id: &str,
     agent_id: &str,
 ) -> Result<AttachResult, AppError> {
-    security::validate_skill_id(skill_id)?;
-    super::tasks::install::validate_skill_name(skill_id)?;
-    // A corrupt or non-v3 lock blocks every mutation, including attach.
-    LockFile::read(&paths.lock_path())?;
+    let name = layout.scope.parse_skill_id(skill_id)?.to_string();
+    super::tasks::install::validate_skill_name(&name)?;
+    // A corrupt lock for this scope blocks every mutation, including attach.
+    layout.ensure_mutation_ready()?;
 
-    let located = inventory::locate_with_agents(paths, agents, skill_id)?
+    let located = layout
+        .locate(paths, &name)?
         .ok_or_else(|| AppError::skill_not_found(skill_id))?;
-    let resolved = attachment_target::resolve_attach(paths, &located, agents, agent_id)?;
+    // Project scope attaches against the spec §3.5 target set: globally
+    // detected catalog agents plus configured extras, even when the project
+    // directory does not exist yet (it is created below).
+    let targets = if layout.is_global() {
+        layout.agents.clone()
+    } else {
+        layout.install_targets(&crate::inventory::detected_agent_dirs(paths))
+    };
+    let resolved = attachment_target::resolve_attach(
+        &layout.canonical_dir,
+        &located,
+        &targets,
+        agent_id,
+        TargetContext::for_layout(layout),
+    )?;
     let agent = &resolved.agent;
     let canonical = &resolved.canonical;
     let target = &resolved.target;
@@ -109,7 +122,18 @@ pub fn attach_agent(
 mod tests {
     use super::*;
     use crate::error::ErrorCode;
+    use crate::inventory::AgentDir;
     use std::path::PathBuf;
+
+    fn attach_agent(
+        paths: &AppPaths,
+        agents: &[AgentDir],
+        skill_id: &str,
+        agent_id: &str,
+    ) -> Result<AttachResult, AppError> {
+        let layout = ScopeLayout::global(paths, agents.to_vec());
+        super::attach_agent(paths, &layout, skill_id, agent_id)
+    }
 
     struct Fixture {
         _tmp: tempfile::TempDir,
@@ -236,5 +260,78 @@ mod tests {
         let error =
             attach_agent(&fixture.paths, &fixture.agents, "beta", "claude-code").unwrap_err();
         assert_eq!(error.code, ErrorCode::SkillCopyOnly);
+    }
+
+    #[test]
+    fn project_attach_links_into_the_project_and_creates_a_missing_extra_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let root = tmp.path().join("projects/app");
+        fs::create_dir_all(&home).unwrap();
+        let paths = AppPaths::new(&home, tmp.path().join("app-data"));
+        paths.ensure_dirs().unwrap();
+        fs::write(
+            paths.agents_config_path(),
+            r#"{
+                "version": 1,
+                "agents": [
+                    {"id": "acme", "displayName": "Acme", "skillsDir": "~/.acme/skills", "projectSkillsDir": ".acme/skills"}
+                ]
+            }"#,
+        )
+        .unwrap();
+        let canonical = root.join(".agents/skills/alpha");
+        fs::create_dir_all(&canonical).unwrap();
+        fs::write(
+            canonical.join("SKILL.md"),
+            "---\nname: alpha\ndescription: alpha\n---\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("skills-lock.json"),
+            serde_json::json!({
+                "version": 1,
+                "skills": {
+                    "alpha": {
+                        "source": "acme/skills",
+                        "sourceType": "github",
+                        "sourceUrl": "https://github.com/acme/skills.git",
+                        "skillPath": "skills/alpha/SKILL.md",
+                        "computedHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let project = crate::projects::Project {
+            id: uuid::Uuid::new_v4(),
+            root,
+            display_name: "app".to_string(),
+            added_at: 1,
+            last_opened_at: 1,
+        };
+        let layout = ScopeLayout::project(&paths, project);
+        let skill_id = layout.scope.skill_id("alpha");
+        let extra_dir = layout.root.join(".acme/skills");
+        assert!(!extra_dir.exists());
+
+        let result = super::attach_agent(&paths, &layout, &skill_id, "acme").unwrap();
+        assert_eq!(result.agent_name, "Acme");
+        let link = extra_dir.join("alpha");
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            fs::canonicalize(&link).unwrap(),
+            fs::canonicalize(layout.canonical_dir.join("alpha")).unwrap()
+        );
+        assert!(
+            !paths.canonical_skills_dir().exists(),
+            "global canonical store untouched"
+        );
     }
 }

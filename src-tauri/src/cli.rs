@@ -35,26 +35,30 @@ pub trait CliRuntimeProvider: Send + Sync {
     async fn cli_runtime(&self) -> Result<CliRuntime, AppError>;
 }
 
-/// `npx -y skills@1.7.4 add <source> -l -g`.
+/// `npx -y skills@1.7.4 add <source> -l [-g]`.
 ///
 /// `-l` is human-only and mutually exclusive with `--json`; `-y` is not needed
 /// because list mode exits before any prompt. The source must already be
-/// normalized to `owner/repo`.
-pub fn preview_command(runtime: &CliRuntime, source: &str, timeout: Duration) -> CommandSpec {
-    CommandSpec::new(
-        &runtime.npx_path,
-        vec![
-            "-y".to_string(),
-            format!("skills@{}", runtime.pinned_version),
-            "add".to_string(),
-            source.to_string(),
-            "-l".to_string(),
-            "-g".to_string(),
-        ],
-        &runtime.cwd,
-        runtime.env.clone(),
-        timeout,
-    )
+/// normalized to `owner/repo`. Project previews run in the project root without
+/// `-g`; global previews keep the isolated cwd and `-g`.
+pub fn preview_command(
+    runtime: &CliRuntime,
+    source: &str,
+    timeout: Duration,
+    cwd: std::path::PathBuf,
+    global: bool,
+) -> CommandSpec {
+    let mut args = vec![
+        "-y".to_string(),
+        format!("skills@{}", runtime.pinned_version),
+        "add".to_string(),
+        source.to_string(),
+        "-l".to_string(),
+    ];
+    if global {
+        args.push("-g".to_string());
+    }
+    CommandSpec::new(&runtime.npx_path, args, cwd, runtime.env.clone(), timeout)
 }
 
 #[cfg(test)]
@@ -79,7 +83,13 @@ mod tests {
 
     #[test]
     fn preview_command_is_pinned_and_read_only() {
-        let spec = preview_command(&runtime(), "owner/repo", Duration::from_secs(60));
+        let spec = preview_command(
+            &runtime(),
+            "owner/repo",
+            Duration::from_secs(60),
+            PathBuf::from("/app-data/cli-cwd"),
+            true,
+        );
         assert_eq!(spec.program, PathBuf::from("/node/bin/npx"));
         assert_eq!(
             spec.args,
@@ -97,5 +107,22 @@ mod tests {
                 "{forbidden} must never be part of preview"
             );
         }
+    }
+
+    #[test]
+    fn project_preview_runs_in_the_project_root_without_global() {
+        let spec = preview_command(
+            &runtime(),
+            "owner/repo",
+            Duration::from_secs(60),
+            PathBuf::from("/projects/app"),
+            false,
+        );
+        assert_eq!(
+            spec.args,
+            vec!["-y", "skills@1.7.4", "add", "owner/repo", "-l"]
+        );
+        assert_eq!(spec.cwd, PathBuf::from("/projects/app"));
+        assert!(!spec.args.iter().any(|arg| arg == "-g"));
     }
 }

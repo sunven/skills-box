@@ -10,8 +10,8 @@ use serde::Serialize;
 
 use crate::error::AppError;
 use crate::inventory::ManagementState;
-use crate::lock::LockFile;
 use crate::paths::AppPaths;
+use crate::scope_layout::ScopeLayout;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,38 +29,38 @@ pub struct ConflictInfo {
 /// managed conflicts too (spec §7.1).
 pub fn find_conflicts(
     paths: &AppPaths,
+    layout: &ScopeLayout,
     names: &[String],
 ) -> Result<HashMap<String, ConflictInfo>, AppError> {
     if names.is_empty() {
         return Ok(HashMap::new());
     }
-    let snapshot = crate::inventory::read(paths)?;
-    let lock = LockFile::read(&paths.lock_path())?;
-    let wanted: std::collections::HashSet<&str> = names.iter().map(String::as_str).collect();
+    let catalog = layout.catalog(paths)?;
     let mut conflicts = HashMap::new();
-    for skill in snapshot.skills {
-        if wanted.contains(skill.name.as_str()) {
+    for name in names {
+        if let Some(located) = crate::inventory::locate_in_catalog(&catalog, name) {
+            let source = located.lock_entry.as_ref().map(|entry| {
+                crate::update_target::resolve_source(entry)
+                    .ok()
+                    .unwrap_or_else(|| entry.source.clone())
+            });
             conflicts.insert(
-                skill.name,
+                name.clone(),
                 ConflictInfo {
-                    management: skill.management,
-                    source: skill.source,
+                    management: located.management,
+                    source,
                 },
             );
-        }
-    }
-    for name in &wanted {
-        if conflicts.contains_key(*name) {
             continue;
         }
-        // Present in the strict v3 lock but absent from the snapshot: a stale
-        // lock entry. Never install over it silently.
-        if let Some(entry) = lock.get(name) {
+        // Present in the strict scope lock but absent from the snapshot: a
+        // stale lock entry. Never install over it silently.
+        if let Some(entry) = catalog.lock.get(name) {
             let source = crate::update_target::resolve_source(entry)
                 .ok()
                 .or_else(|| Some(entry.source.clone()));
             conflicts.insert(
-                (*name).to_string(),
+                name.clone(),
                 ConflictInfo {
                     management: ManagementState::Managed,
                     source,
@@ -72,7 +72,7 @@ pub fn find_conflicts(
 }
 
 pub trait ConflictProvider: Send + Sync {
-    fn lookup(&self, names: &[String]) -> HashMap<String, ConflictInfo>;
+    fn lookup(&self, layout: &ScopeLayout, names: &[String]) -> HashMap<String, ConflictInfo>;
 }
 
 /// Production adapter over the inventory read model. A read failure degrades to
@@ -89,8 +89,8 @@ impl InventoryConflictProvider {
 }
 
 impl ConflictProvider for InventoryConflictProvider {
-    fn lookup(&self, names: &[String]) -> HashMap<String, ConflictInfo> {
-        find_conflicts(&self.paths, names).unwrap_or_default()
+    fn lookup(&self, layout: &ScopeLayout, names: &[String]) -> HashMap<String, ConflictInfo> {
+        find_conflicts(&self.paths, layout, names).unwrap_or_default()
     }
 }
 
@@ -98,6 +98,14 @@ impl ConflictProvider for InventoryConflictProvider {
 mod tests {
     use super::*;
     use std::fs;
+
+    fn find_conflicts(
+        paths: &AppPaths,
+        names: &[String],
+    ) -> Result<HashMap<String, ConflictInfo>, AppError> {
+        let layout = ScopeLayout::global(paths, Vec::new());
+        super::find_conflicts(paths, &layout, names)
+    }
 
     fn write_skill(home: &std::path::Path, name: &str) {
         let dir = home.join(".agents/skills").join(name);

@@ -1,10 +1,11 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { pickProjectFolder } from "./lib/folder-picker";
 import { createQueryClient } from "./lib/query-client";
 import type {
+  InventoryAgent,
   ProjectEntry,
   ProjectList,
   ScopeId,
@@ -429,7 +430,106 @@ describe("scope switcher", () => {
     renderApp();
     expect(await screen.findByText("项目暂无 skill")).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("project-empty-install"));
-    expect(await screen.findByTestId("install-wizard")).toBeInTheDocument();
+    const wizard = await screen.findByTestId("install-wizard");
+    expect(within(wizard).getByTestId("install-target-scope")).toHaveTextContent(
+      "skills-proj",
+    );
+    expect(within(wizard).getByTestId("install-target-scope")).toHaveTextContent(
+      PROJECT_CANONICAL,
+    );
+  });
+
+  it("runs the project wizard in scope, lists project targets and defaults agents to none", async () => {
+    const claudeTarget: InventoryAgent = {
+      id: "claude-code",
+      displayName: "Claude Code",
+      universal: false,
+      shared: false,
+      globalSkillsDir: `${PROJECT_ROOT}/.claude/skills`,
+      origin: "catalog",
+      detected: true,
+    };
+    const acmeTarget: InventoryAgent = {
+      id: "acme",
+      displayName: "Acme",
+      universal: false,
+      shared: false,
+      globalSkillsDir: `${PROJECT_ROOT}/.acme/skills`,
+      origin: "user",
+      detected: true,
+    };
+    const backend = createFakeBackend({
+      data: {
+        projects: projectList([project()], PROJECT_SCOPE),
+        snapshots: {
+          [PROJECT_SCOPE]: makeSnapshot({
+            installTargets: [claudeTarget, acmeTarget],
+          }),
+        },
+      },
+    }).install();
+
+    renderApp();
+    expect(await screen.findByText("项目暂无 skill")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("project-empty-install"));
+    const wizard = await screen.findByTestId("install-wizard");
+
+    fireEvent.change(within(wizard).getByLabelText("仓库来源"), {
+      target: { value: "acme/skills" },
+    });
+    fireEvent.click(within(wizard).getByRole("button", { name: "预览仓库" }));
+    await waitFor(() => {
+      expect(backend.callsOf("start_preview")).toHaveLength(1);
+    });
+    expect(backend.callsOf("start_preview")[0]?.payload.scope).toBe(
+      PROJECT_SCOPE,
+    );
+
+    const previewTask = backend.tasks.find(
+      (task) => task.command === "start_preview",
+    )!;
+    act(() => {
+      previewTask.emit({
+        taskId: previewTask.taskId,
+        phase: "completed",
+        message: "预览完成",
+        completed: 1,
+        total: 1,
+        result: {
+          action: "preview",
+          overall: "success",
+          skills: [],
+          warnings: [],
+          startedAt: 0,
+          finishedAtEpochMs: 1,
+          preview: {
+            source: "acme/skills",
+            skills: [{ name: "alpha", description: "Alpha" }],
+            parseFailed: false,
+            noSkills: false,
+          },
+        },
+      });
+    });
+
+    const claude = await within(wizard).findByLabelText("选择 Claude Code");
+    expect(claude).not.toBeChecked();
+    expect(within(wizard).getByLabelText("选择 Acme")).not.toBeChecked();
+    expect(
+      within(wizard).getByText(`${PROJECT_ROOT}/.acme/skills`),
+    ).toBeInTheDocument();
+
+    fireEvent.click(within(wizard).getByRole("button", { name: "下一步" }));
+    expect(within(wizard).getByTestId("install-confirm")).toHaveTextContent(
+      PROJECT_CANONICAL,
+    );
+    fireEvent.click(within(wizard).getByRole("button", { name: "开始安装" }));
+    await waitFor(() => {
+      expect(backend.callsOf("start_install")).toHaveLength(1);
+    });
+    const install = backend.callsOf("start_install")[0]!.payload;
+    expect(install.scope).toBe(PROJECT_SCOPE);
+    expect(install.request.agents).toEqual([]);
   });
 
   it("shows relocate and forget actions for an unavailable active project", async () => {

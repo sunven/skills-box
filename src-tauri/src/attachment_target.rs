@@ -12,8 +12,52 @@ use crate::error::AppError;
 use crate::inventory::{
     self, AgentDir, AttachmentLocation, AttachmentMode, LocatedSkill, ManagementState,
 };
-use crate::paths::AppPaths;
 use crate::security::normalize_absolute;
+
+/// Path context for one scope's attachment targets. Project scope passes its
+/// canonicalized root so every target is proven to stay inside it; global
+/// scope has no project root.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TargetContext<'a> {
+    pub project_root: Option<&'a Path>,
+}
+
+impl<'a> TargetContext<'a> {
+    pub fn global() -> Self {
+        Self {
+            project_root: None,
+        }
+    }
+
+    pub fn project(root: &'a Path) -> Self {
+        Self {
+            project_root: Some(root),
+        }
+    }
+
+    pub fn for_layout(layout: &'a crate::scope_layout::ScopeLayout) -> Self {
+        Self {
+            project_root: layout.project_root(),
+        }
+    }
+
+    fn ensure_inside(&self, path: &Path) -> Result<(), AppError> {
+        let Some(root) = self.project_root else {
+            return Ok(());
+        };
+        let root = normalize_absolute(root)
+            .ok_or_else(|| AppError::path_invalid("项目根路径无法规范化。"))?;
+        let target = normalize_absolute(path)
+            .ok_or_else(|| AppError::path_invalid(format!("路径无效：{}", path.display())))?;
+        if !target.starts_with(&root) {
+            return Err(AppError::path_outside_allowed_root(format!(
+                "{} 位于项目根之外",
+                target.display()
+            )));
+        }
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TargetState {
@@ -63,10 +107,11 @@ pub fn find_agent<'a>(agents: &'a [AgentDir], agent_id: &str) -> Result<&'a Agen
 /// Resolve a native attach target. The caller has already validated the skill
 /// id/name, read the lock and located the skill.
 pub fn resolve_attach(
-    paths: &AppPaths,
+    canonical_dir: &Path,
     located: &LocatedSkill,
     agents: &[AgentDir],
     agent_id: &str,
+    context: TargetContext<'_>,
 ) -> Result<ResolvedAttachment, AppError> {
     let skill_id = located.name.as_str();
     let canonical = managed_canonical(located, skill_id)?;
@@ -78,7 +123,8 @@ pub fn resolve_attach(
     }
 
     let agent = find_agent(agents, agent_id)?;
-    ensure_not_universal(agent, paths)?;
+    ensure_not_universal(agent, canonical_dir)?;
+    context.ensure_inside(&agent.skills_dir)?;
     if let Some(existing) = located
         .attachments
         .iter()
@@ -94,6 +140,7 @@ pub fn resolve_attach(
     }
 
     let target = strict_target(&agent.skills_dir, skill_id, canonical, false)?;
+    context.ensure_inside(&target)?;
     let directory_state = match inspect_agent_dir(&agent.skills_dir) {
         AgentDirectoryState::Symlink => {
             return Err(AppError::path_invalid(format!(
@@ -130,15 +177,17 @@ pub fn resolve_attach(
 /// Resolve a detach target. The caller has already validated the skill
 /// id/name, read the lock and located the skill.
 pub fn resolve_detach(
-    paths: &AppPaths,
+    canonical_dir: &Path,
     located: &LocatedSkill,
     agents: &[AgentDir],
     agent_id: &str,
+    context: TargetContext<'_>,
 ) -> Result<ResolvedAttachment, AppError> {
     let skill_id = located.name.as_str();
     let canonical = managed_canonical(located, skill_id)?;
     let agent = find_agent(agents, agent_id)?;
-    ensure_not_universal(agent, paths)?;
+    ensure_not_universal(agent, canonical_dir)?;
+    context.ensure_inside(&agent.skills_dir)?;
     let existing = located
         .attachments
         .iter()
@@ -176,6 +225,7 @@ pub fn resolve_detach(
         AgentDirectoryState::Ready => AgentDirectoryState::Ready,
     };
     let target = strict_target(&agent.skills_dir, skill_id, canonical, true)?;
+    context.ensure_inside(&target)?;
     let target_state = detach_target_state(&target, canonical);
 
     Ok(ResolvedAttachment {
@@ -195,8 +245,9 @@ pub fn resolve_install_link(
     canonical: &Path,
     agent: &AgentDir,
     name: &str,
+    context: TargetContext<'_>,
 ) -> Result<ResolvedAttachment, AppError> {
-    let directory_state = match inspect_agent_dir(&agent.skills_dir) {
+    context.ensure_inside(&agent.skills_dir)?;    let directory_state = match inspect_agent_dir(&agent.skills_dir) {
         AgentDirectoryState::Symlink => {
             return Err(AppError::agent_attach_failed(format!(
                 "额外 agent 的 skills 目录本身是符号链接：{}",
@@ -218,6 +269,7 @@ pub fn resolve_install_link(
         state @ (AgentDirectoryState::Ready | AgentDirectoryState::Missing(_)) => state,
     };
     let target = agent.skills_dir.join(name);
+    context.ensure_inside(&target)?;
     let target_state = install_target_state(&target, canonical)?;
 
     Ok(ResolvedAttachment {
@@ -267,8 +319,8 @@ fn managed_canonical<'a>(located: &'a LocatedSkill, skill_id: &str) -> Result<&'
         .ok_or_else(|| AppError::skill_copy_only(skill_id))
 }
 
-fn ensure_not_universal(agent: &AgentDir, paths: &AppPaths) -> Result<(), AppError> {
-    if agent.universal || inventory::same_dir(&agent.skills_dir, &paths.canonical_skills_dir()) {
+fn ensure_not_universal(agent: &AgentDir, canonical_dir: &Path) -> Result<(), AppError> {
+    if agent.universal || inventory::same_dir(&agent.skills_dir, canonical_dir) {
         return Err(AppError::agent_native(&agent.display_name));
     }
     Ok(())
@@ -377,7 +429,47 @@ fn install_target_state(target: &Path, canonical: &Path) -> Result<TargetState, 
 mod tests {
     use super::*;
     use crate::error::ErrorCode;
+    use crate::paths::AppPaths;
     use std::os::unix::fs::symlink;
+
+    // Test shims keep the pre-scope call shape where the context is global.
+    fn resolve_attach(
+        paths: &AppPaths,
+        located: &LocatedSkill,
+        agents: &[AgentDir],
+        agent_id: &str,
+    ) -> Result<ResolvedAttachment, AppError> {
+        super::resolve_attach(
+            &paths.canonical_skills_dir(),
+            located,
+            agents,
+            agent_id,
+            TargetContext::global(),
+        )
+    }
+
+    fn resolve_detach(
+        paths: &AppPaths,
+        located: &LocatedSkill,
+        agents: &[AgentDir],
+        agent_id: &str,
+    ) -> Result<ResolvedAttachment, AppError> {
+        super::resolve_detach(
+            &paths.canonical_skills_dir(),
+            located,
+            agents,
+            agent_id,
+            TargetContext::global(),
+        )
+    }
+
+    fn resolve_install_link(
+        canonical: &Path,
+        agent: &AgentDir,
+        name: &str,
+    ) -> Result<ResolvedAttachment, AppError> {
+        super::resolve_install_link(canonical, agent, name, TargetContext::global())
+    }
 
     struct Fixture {
         _tmp: tempfile::TempDir,
@@ -795,6 +887,22 @@ mod tests {
 mod canonical_target_tests {
     use super::*;
     use crate::error::ErrorCode;
+    use crate::paths::AppPaths;
+
+    fn resolve_detach(
+        paths: &AppPaths,
+        located: &LocatedSkill,
+        agents: &[AgentDir],
+        agent_id: &str,
+    ) -> Result<ResolvedAttachment, AppError> {
+        super::resolve_detach(
+            &paths.canonical_skills_dir(),
+            located,
+            agents,
+            agent_id,
+            TargetContext::global(),
+        )
+    }
 
     #[test]
     fn detach_rejects_a_canonical_target_path() {

@@ -17,9 +17,11 @@ use std::path::{Path, PathBuf};
 
 use crate::agents::catalog;
 use crate::agents::extras::{self, ExtraAgents};
-use crate::inventory::AgentDir;
+use crate::error::AppError;
+use crate::inventory::{self, AgentDir, LocatedSkill};
 use crate::paths::AppPaths;
-use crate::projects::Project;
+use crate::project_lock::ProjectLockFile;
+use crate::projects::{Project, ProjectRegistry};
 use crate::scope::ScopeId;
 use crate::security::{AllowedRoot, normalize_absolute};
 
@@ -78,6 +80,153 @@ impl ScopeLayout {
         }
     }
 
+    /// Resolve one scope through the app registry. A project that is missing
+    /// from the registry is `project.not_found`; an unavailable root is a
+    /// scope state that blocks every mutation before work starts.
+    pub fn resolve(
+        paths: &AppPaths,
+        projects: &ProjectRegistry,
+        scope: &ScopeId,
+    ) -> Result<Self, AppError> {
+        match scope {
+            ScopeId::Global => Ok(Self::global(
+                paths,
+                inventory::detected_agent_dirs(paths),
+            )),
+            ScopeId::Project(id) => {
+                let entry = projects.lookup(*id)?;
+                if !entry.available {
+                    return Err(AppError::project_root_unavailable(
+                        &entry.project.display_name,
+                        entry
+                            .unavailable_reason
+                            .unwrap_or_else(|| "目录不可用".to_string()),
+                    ));
+                }
+                Ok(Self::project(paths, entry.project))
+            }
+        }
+    }
+
+    pub fn is_global(&self) -> bool {
+        self.project.is_none()
+    }
+
+    pub fn project_root(&self) -> Option<&Path> {
+        self.project.as_ref().map(|_| self.root.as_path())
+    }
+
+    /// Project mutations use the project root as cwd; global mutations keep
+    /// the isolated CLI working directory so no project scope can appear.
+    pub fn cli_cwd(&self, paths: &AppPaths) -> PathBuf {
+        match self.project {
+            Some(_) => self.root.clone(),
+            None => paths.cli_cwd(),
+        }
+    }
+
+    /// A project lock that cannot be parsed or uses an unsupported version is
+    /// a scope error: every mutation and preview for that scope is rejected
+    /// before a task is registered. Global behavior is unchanged.
+    pub fn ensure_mutation_ready(&self) -> Result<(), AppError> {
+        if self.project.is_some() {
+            ProjectLockFile::read(&self.lock_path)?;
+        }
+        Ok(())
+    }
+
+    /// Strict scope catalog. Project scope uses the project lock and canonical
+    /// store; escapes stay reported, never followed.
+    pub(crate) fn catalog(&self, paths: &AppPaths) -> Result<inventory::Catalog, AppError> {
+        match self.project {
+            None => inventory::build_catalog(paths, &self.agents),
+            Some(_) => inventory::build_project_catalog(
+                &self.root,
+                &self.canonical_dir,
+                &self.lock_path,
+                &self.agents,
+            ),
+        }
+    }
+
+    pub(crate) fn locate(
+        &self,
+        paths: &AppPaths,
+        name: &str,
+    ) -> Result<Option<LocatedSkill>, AppError> {
+        Ok(inventory::locate_in_catalog(&self.catalog(paths)?, name))
+    }
+
+    /// Agent targets for the install wizard and attach dialog (spec §3.5).
+    ///
+    /// Global scope keeps the detected agents exactly as before. Project scope
+    /// is globally detected catalog agents mapped to their project directory
+    /// plus every configured extra with a valid `projectSkillsDir`; neither
+    /// directory has to exist yet.
+    pub fn install_targets(&self, detected: &[AgentDir]) -> Vec<AgentDir> {
+        if self.project.is_none() {
+            return self.agents.clone();
+        }
+        let Some(root_normalized) = normalize_absolute(&self.root) else {
+            return Vec::new();
+        };
+        let canonical_normalized = normalize_absolute(&self.canonical_dir);
+        let mut seen_dirs = BTreeSet::new();
+        let mut targets = Vec::new();
+
+        for definition in &catalog().agents {
+            if definition.universal || definition.id == "universal" {
+                // Universal agents read canonical directly; there is no
+                // separate project target for them.
+                continue;
+            }
+            if !detected.iter().any(|agent| agent.id == definition.id) {
+                continue;
+            }
+            let Some(dir) = project_target_dir(
+                &definition.skills_dir,
+                &self.root,
+                &root_normalized,
+                canonical_normalized.as_deref(),
+            ) else {
+                continue;
+            };
+            if !seen_dirs.insert(dir.clone()) {
+                continue;
+            }
+            targets.push(AgentDir {
+                id: definition.id.clone(),
+                display_name: definition.display_name.clone(),
+                universal: false,
+                skills_dir: dir,
+            });
+        }
+
+        for extra in &self.extras.agents {
+            let Some(raw) = extra.project_skills_dir.as_deref() else {
+                continue;
+            };
+            let Some(dir) = project_target_dir(
+                raw,
+                &self.root,
+                &root_normalized,
+                canonical_normalized.as_deref(),
+            ) else {
+                continue;
+            };
+            if !seen_dirs.insert(dir.clone()) {
+                continue;
+            }
+            targets.push(AgentDir {
+                id: extra.id.clone(),
+                display_name: extra.display_name.clone(),
+                universal: false,
+                skills_dir: dir,
+            });
+        }
+        targets
+    }
+
     /// Read roots for this scope. Global keeps canonical plus every detected
     /// agent directory; project scope allows only the registered project root.
     pub fn allowed_roots(&self) -> Vec<AllowedRoot> {
@@ -102,12 +251,34 @@ impl ScopeLayout {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum ProjectDirState {
-    Missing,
+enum ProjectDirState {    Missing,
     Directory,
     Escape(PathBuf),
     NotDirectory,
     Unreadable(String),
+}
+
+/// Resolve a project-relative agent skills directory. Invalid values (empty,
+/// absolute, escaping the root, or pointing at canonical) are not targets.
+fn project_target_dir(
+    raw: &str,
+    root: &Path,
+    root_normalized: &Path,
+    canonical_normalized: Option<&Path>,
+) -> Option<PathBuf> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || Path::new(trimmed).is_absolute() {
+        return None;
+    }
+    let dir = root.join(trimmed);
+    let normalized = normalize_absolute(&dir)?;
+    if !normalized.starts_with(root_normalized) {
+        return None;
+    }
+    if canonical_normalized == Some(normalized.as_path()) {
+        return None;
+    }
+    Some(dir)
 }
 
 fn classify_project_dir(dir: &Path, root: &Path) -> ProjectDirState {
@@ -401,6 +572,49 @@ mod tests {
         assert!(ids.contains(&"acme".to_string()), "{ids:?}");
         assert!(!ids.contains(&"ghost".to_string()), "missing dir: {ids:?}");
         assert!(!ids.contains(&"plain".to_string()), "unconfigured: {ids:?}");
+    }
+
+    #[test]
+    fn install_targets_include_detected_catalog_and_configured_extras_even_when_missing() {
+        let fixture = Fixture::new();
+        fixture.write_extra(
+            r#"{
+                "version": 1,
+                "agents": [
+                    {"id": "acme", "displayName": "Acme", "skillsDir": "~/.acme/skills", "projectSkillsDir": ".acme/skills"},
+                    {"id": "plain", "displayName": "Plain", "skillsDir": "~/.plain/skills"}
+                ]
+            }"#,
+        );
+        let detected = vec![
+            AgentDir {
+                id: "claude-code".to_string(),
+                display_name: "Claude Code".to_string(),
+                universal: false,
+                skills_dir: fixture.paths.home().join(".claude/skills"),
+            },
+            AgentDir {
+                id: "codex".to_string(),
+                display_name: "Codex".to_string(),
+                universal: true,
+                skills_dir: fixture.paths.canonical_skills_dir(),
+            },
+        ];
+        let layout = fixture.layout();
+        let targets = layout.install_targets(&detected);
+        let ids: Vec<&str> = targets.iter().map(|agent| agent.id.as_str()).collect();
+
+        assert!(ids.contains(&"claude-code"), "{ids:?}");
+        assert!(ids.contains(&"acme"), "{ids:?}");
+        assert!(!ids.contains(&"codex"), "universal reads canonical: {ids:?}");
+        assert!(!ids.contains(&"plain"), "unconfigured extra: {ids:?}");
+        // Both target directories are absent and are still offered.
+        let claude = targets.iter().find(|agent| agent.id == "claude-code").unwrap();
+        let acme = targets.iter().find(|agent| agent.id == "acme").unwrap();
+        assert_eq!(claude.skills_dir, fixture.root.join(".claude/skills"));
+        assert_eq!(acme.skills_dir, fixture.root.join(".acme/skills"));
+        assert!(!claude.skills_dir.exists());
+        assert!(!acme.skills_dir.exists());
     }
 
     #[test]

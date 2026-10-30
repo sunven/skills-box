@@ -119,6 +119,7 @@ export function makeSnapshot(
   return {
     skills: [],
     agents: defaultAgents,
+    installTargets: overrides.agents ?? defaultAgents,
     anomalies: makeAnomalies(),
     warnings: [],
     generatedAtEpochMs: 1793163988000,

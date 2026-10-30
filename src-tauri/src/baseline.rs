@@ -84,6 +84,16 @@ impl BaselineStore {
         }
     }
 
+    /// Per-scope store. Global keeps the historical flat directory; a project
+    /// gets its own directory keyed by the stable project id so same-name
+    /// skills never share a baseline.
+    pub fn for_scope(paths: &AppPaths, scope: &crate::scope::ScopeId) -> Self {
+        match scope.project_id() {
+            None => Self::new(paths),
+            Some(id) => Self::from_dir(paths.baselines_dir().join(format!("project-{id}"))),
+        }
+    }
+
     pub fn from_dir(dir: impl Into<PathBuf>) -> Self {
         Self { dir: dir.into() }
     }

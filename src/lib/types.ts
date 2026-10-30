@@ -327,6 +327,12 @@ export interface AnomalySummary {
 export interface InventorySnapshot {
   skills: InventorySkill[];
   agents: InventoryAgent[];
+  /**
+   * Scope install/attach target set (spec §3.5). Project scope includes
+   * globally detected catalog agents and configured extras whose project
+   * directory does not exist yet.
+   */
+  installTargets: InventoryAgent[];
   anomalies: AnomalySummary;
   warnings: string[];
   generatedAtEpochMs: number;
