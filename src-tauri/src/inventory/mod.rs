@@ -32,7 +32,7 @@ use crate::env::child_env::{ChildEnvParams, build_child_env};
 use crate::error::AppError;
 use crate::lock::{LockEntry, ScopedLock};
 use crate::paths::AppPaths;
-use crate::security::normalize_absolute;
+use crate::project_path::{self, PathError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -507,13 +507,6 @@ struct ScannedEntry {
     mode: AttachmentMode,
 }
 
-/// True when `path` exists and its physical target is inside `root`.
-fn resolves_inside(path: &Path, root: &Path) -> bool {
-    fs::canonicalize(path)
-        .map(|resolved| resolved.starts_with(root))
-        .unwrap_or(false)
-}
-
 fn scan_canonical(
     canonical_dir: &Path,
     project_root: Option<&Path>,
@@ -522,52 +515,38 @@ fn scan_canonical(
 ) -> BTreeMap<String, PathBuf> {
     let mut canonical = BTreeMap::new();
     if let Some(root) = project_root {
-        let lexically_inside = normalize_absolute(canonical_dir)
-            .map(|path| path.starts_with(root))
-            .unwrap_or(false);
-        if !lexically_inside {
-            warnings.push(format!(
-                "canonical store 不在项目根内，已跳过：{}",
-                canonical_dir.display()
-            ));
-            escapes.push("canonical store".to_string());
-            return canonical;
-        }
-        match fs::symlink_metadata(canonical_dir) {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return canonical,
-            Err(error) => {
+        match project_path::existing(root, canonical_dir) {
+            Err(PathError::InvalidRoot | PathError::InvalidPath | PathError::LexicalEscape(_)) => {
+                warnings.push(format!(
+                    "canonical store 不在项目根内，已跳过：{}",
+                    canonical_dir.display()
+                ));
+                escapes.push("canonical store".to_string());
+                return canonical;
+            }
+            Err(PathError::Missing(_)) => return canonical,
+            Err(PathError::PhysicalEscape(target)) => {
+                warnings.push(format!(
+                    "canonical store 符号链接逃逸项目根：{} -> {}",
+                    canonical_dir.display(),
+                    target.display()
+                ));
+                escapes.push("canonical store".to_string());
+                return canonical;
+            }
+            Err(PathError::Resolve { error, .. }) => {
+                warnings.push(format!(
+                    "canonical store 符号链接不可解析：{}（{error}）",
+                    canonical_dir.display()
+                ));
+                return canonical;
+            }
+            Err(PathError::Inspect { error, .. }) => {
                 warnings.push(format!("无法检查 canonical store：{error}"));
                 return canonical;
             }
-            Ok(metadata) if metadata.file_type().is_symlink() => {
-                match fs::canonicalize(canonical_dir) {
-                    Ok(target) if !target.starts_with(root) => {
-                        warnings.push(format!(
-                            "canonical store 符号链接逃逸项目根：{} -> {}",
-                            canonical_dir.display(),
-                            target.display()
-                        ));
-                        escapes.push("canonical store".to_string());
-                        return canonical;
-                    }
-                    Ok(target) if !target.is_dir() => {
-                        warnings.push(format!(
-                            "canonical store 不是目录：{}",
-                            canonical_dir.display()
-                        ));
-                        return canonical;
-                    }
-                    Err(error) => {
-                        warnings.push(format!(
-                            "canonical store 符号链接不可解析：{}（{error}）",
-                            canonical_dir.display()
-                        ));
-                        return canonical;
-                    }
-                    Ok(_) => {}
-                }
-            }
-            Ok(metadata) if !metadata.is_dir() => {
+            Err(PathError::NoAncestor) => return canonical,
+            Ok(facts) if !facts.is_dir() => {
                 warnings.push(format!(
                     "canonical store 不是目录：{}",
                     canonical_dir.display()
@@ -594,7 +573,7 @@ fn scan_canonical(
             .unwrap_or(false)
         {
             if let Some(root) = project_root
-                && !resolves_inside(&path, root)
+                && project_path::existing(root, &path).is_err()
             {
                 warnings.push(format!(
                     "skill「{name}」的 canonical 路径解析到项目根之外：{}",
@@ -630,107 +609,71 @@ fn scan_agents<'a>(
             }
             let mut entries = Vec::new();
             if let Some(root) = project_root {
-                let lexically_inside = normalize_absolute(&agent.skills_dir)
-                    .map(|path| path.starts_with(root))
-                    .unwrap_or(false);
-                if !lexically_inside {
-                    warnings.push(format!(
-                        "{} 的项目目录不在项目根内，已跳过：{}",
-                        agent.display_name,
-                        agent.skills_dir.display()
-                    ));
-                    escapes.push(format!(
-                        "{} · {}",
-                        agent.display_name,
-                        agent.skills_dir.display()
-                    ));
-                    return ScannedAgent {
-                        agent,
-                        shared,
-                        entries,
-                    };
-                }
-                // The layout already filters escaping dirs, but re-check here
-                // so a fixture that injects agent dirs directly can never make
-                // the catalog read outside the project root.
-                match fs::symlink_metadata(&agent.skills_dir) {
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                        return ScannedAgent {
-                            agent,
-                            shared,
-                            entries,
-                        };
+                // Re-check injected dirs independently of ScopeLayout. Whole
+                // directories that escape through any parent are never scanned.
+                let readable = match project_path::existing(root, &agent.skills_dir) {
+                    Err(
+                        PathError::InvalidRoot
+                        | PathError::InvalidPath
+                        | PathError::LexicalEscape(_),
+                    ) => {
+                        warnings.push(format!(
+                            "{} 的项目目录不在项目根内，已跳过：{}",
+                            agent.display_name,
+                            agent.skills_dir.display()
+                        ));
+                        escapes.push(format!(
+                            "{} · {}",
+                            agent.display_name,
+                            agent.skills_dir.display()
+                        ));
+                        false
                     }
-                    Err(error) => {
+                    Err(PathError::Missing(_) | PathError::NoAncestor) => false,
+                    Err(PathError::Inspect { error, .. }) => {
                         warnings.push(format!(
                             "无法检查 {} 的项目目录：{error}",
                             agent.display_name
                         ));
-                        return ScannedAgent {
-                            agent,
-                            shared,
-                            entries,
-                        };
+                        false
                     }
-                    Ok(metadata) if metadata.file_type().is_symlink() => {
-                        match fs::canonicalize(&agent.skills_dir) {
-                            Ok(target) if !target.starts_with(root) => {
-                                warnings.push(format!(
-                                    "{} 的项目目录逃逸项目根：{} -> {}",
-                                    agent.display_name,
-                                    agent.skills_dir.display(),
-                                    target.display()
-                                ));
-                                escapes.push(format!(
-                                    "{} · {}",
-                                    agent.display_name,
-                                    agent.skills_dir.display()
-                                ));
-                                return ScannedAgent {
-                                    agent,
-                                    shared,
-                                    entries,
-                                };
-                            }
-                            Ok(target) if !target.is_dir() => {
-                                warnings.push(format!(
-                                    "{} 的项目目录不是目录：{}",
-                                    agent.display_name,
-                                    agent.skills_dir.display()
-                                ));
-                                return ScannedAgent {
-                                    agent,
-                                    shared,
-                                    entries,
-                                };
-                            }
-                            Err(error) => {
-                                warnings.push(format!(
-                                    "{} 的项目目录符号链接不可解析：{error}",
-                                    agent.display_name
-                                ));
-                                return ScannedAgent {
-                                    agent,
-                                    shared,
-                                    entries,
-                                };
-                            }
-                            Ok(_) => {}
-                        }
+                    Err(PathError::Resolve { error, .. }) => {
+                        warnings.push(format!(
+                            "{} 的项目目录符号链接不可解析：{error}",
+                            agent.display_name
+                        ));
+                        false
                     }
-                    Ok(metadata) if !metadata.is_dir() => {
+                    Err(PathError::PhysicalEscape(target)) => {
+                        warnings.push(format!(
+                            "{} 的项目目录逃逸项目根：{} -> {}",
+                            agent.display_name,
+                            agent.skills_dir.display(),
+                            target.display()
+                        ));
+                        escapes.push(format!(
+                            "{} · {}",
+                            agent.display_name,
+                            agent.skills_dir.display()
+                        ));
+                        false
+                    }
+                    Ok(facts) if !facts.is_dir() => {
                         warnings.push(format!(
                             "{} 的项目目录不是目录：{}",
                             agent.display_name,
                             agent.skills_dir.display()
                         ));
-                        return ScannedAgent {
-                            agent,
-                            shared,
-                            entries,
-                        };
+                        false
                     }
-                    Ok(_) => {}
+                    Ok(_) => true,
+                };
+                if !readable {
+                    return ScannedAgent {
+                        agent,
+                        shared,
+                        entries,
+                    };
                 }
             }
             match read_entries(&agent.skills_dir) {
@@ -756,8 +699,8 @@ fn scan_agents<'a>(
                             continue;
                         };
                         if let Some(root) = project_root
-                            && let Ok(resolved) = fs::canonicalize(&path)
-                            && !resolved.starts_with(root)
+                            && let Err(PathError::PhysicalEscape(_) | PathError::LexicalEscape(_)) =
+                                project_path::existing(root, &path)
                         {
                             warnings.push(format!(
                                 "skill「{name}」在 {} 上的链接解析到项目根之外：{}",
@@ -978,30 +921,38 @@ mod tests {
             r#"{"version":1,"skills":{"alpha":{"source":"acme/alpha","sourceType":"github","computedHash":"abc"}}}"#,
         )
         .unwrap();
-        let outside = tmp.path().join("outside");
+        let outside_parent = tmp.path().join("outside");
+        let outside = outside_parent.join("skills");
         fs::create_dir_all(outside.join("evil")).unwrap();
         fs::write(outside.join("evil/SKILL.md"), "---\nname: evil\n---\n").unwrap();
-        let agents = vec![AgentDir {
-            id: "evil-agent".to_string(),
-            display_name: "Evil Agent".to_string(),
-            universal: false,
-            skills_dir: outside,
-        }];
-
-        let catalog =
-            build_project_catalog(&root, &canonical, &root.join("skills-lock.json"), &agents)
-                .unwrap();
-
-        assert!(!catalog.aggregates.contains_key("evil"));
-        assert!(
-            catalog
-                .warnings
-                .iter()
-                .any(|warning| warning.contains("不在项目根内")),
-            "{:?}",
-            catalog.warnings
-        );
-        assert!(!catalog.escapes.is_empty());
+        symlink(&outside_parent, root.join("linked-agent")).unwrap();
+        // The second injected path is lexically inside but has an escaping
+        // parent and an ordinary final directory. Layout filtering cannot be
+        // relied on by the catalog interface.
+        for (skills_dir, expected_warning) in [
+            (outside, "不在项目根内"),
+            (root.join("linked-agent/skills"), "逃逸项目根"),
+        ] {
+            let agents = vec![AgentDir {
+                id: "evil-agent".to_string(),
+                display_name: "Evil Agent".to_string(),
+                universal: false,
+                skills_dir,
+            }];
+            let catalog =
+                build_project_catalog(&root, &canonical, &root.join("skills-lock.json"), &agents)
+                    .unwrap();
+            assert!(!catalog.aggregates.contains_key("evil"));
+            assert!(
+                catalog
+                    .warnings
+                    .iter()
+                    .any(|warning| warning.contains(expected_warning)),
+                "{:?}",
+                catalog.warnings
+            );
+            assert!(!catalog.escapes.is_empty());
+        }
     }
 
     #[test]

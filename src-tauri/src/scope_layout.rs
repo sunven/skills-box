@@ -21,6 +21,7 @@ use crate::error::AppError;
 use crate::inventory::{self, AgentDir, LocatedSkill};
 use crate::lock::ScopedLock;
 use crate::paths::AppPaths;
+use crate::project_path::{self, Existence, PathError};
 use crate::projects::{Project, ProjectRegistry};
 use crate::scope::ScopeId;
 use crate::security::{AllowedRoot, normalize_absolute};
@@ -273,54 +274,28 @@ fn project_target_dir(
         return None;
     }
     let dir = root.join(trimmed);
-    let normalized = normalize_absolute(&dir)?;
-    if !normalized.starts_with(root_normalized) {
-        return None;
-    }
+    let normalized = project_path::lexical(root_normalized, &dir).ok()?;
     if canonical_normalized == Some(normalized.as_path()) {
         return None;
     }
-    if !resolves_inside_root(&dir, root) {
-        return None;
-    }
+    // Unlike attachment targets, Install target selection requires the root
+    // itself to resolve and silently excludes any failed path.
+    let physical_root = fs::canonicalize(root).ok()?;
+    project_path::resolve(&dir, &physical_root, Existence::AllowMissing).ok()?;
     Some(dir)
 }
 
-/// Physical containment for a target that may not exist yet: the nearest
-/// existing ancestor must resolve inside the canonicalized project root. This
-/// stops a symlinked parent from turning `create_dir_all` into an escape.
-fn resolves_inside_root(dir: &Path, root: &Path) -> bool {
-    let mut ancestor = dir;
-    loop {
-        match fs::symlink_metadata(ancestor) {
-            Ok(_) => break,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                let Some(parent) = ancestor.parent() else {
-                    return false;
-                };
-                ancestor = parent;
-            }
-            Err(_) => return false,
-        }
-    }
-    match (fs::canonicalize(ancestor), fs::canonicalize(root)) {
-        (Ok(resolved), Ok(root)) => resolved.starts_with(root),
-        _ => false,
-    }
-}
-
 fn classify_project_dir(dir: &Path, root: &Path) -> ProjectDirState {
-    match fs::symlink_metadata(dir) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => ProjectDirState::Missing,
-        Err(error) => ProjectDirState::Unreadable(error.to_string()),
-        Ok(metadata) if metadata.file_type().is_symlink() => match fs::canonicalize(dir) {
-            Ok(target) if !target.starts_with(root) => ProjectDirState::Escape(target),
-            Ok(target) if target.is_dir() => ProjectDirState::Directory,
-            Ok(_) => ProjectDirState::NotDirectory,
-            Err(error) => ProjectDirState::Unreadable(error.to_string()),
-        },
-        Ok(metadata) if metadata.is_dir() => ProjectDirState::Directory,
+    match project_path::existing(root, dir) {
+        Ok(facts) if facts.is_dir() => ProjectDirState::Directory,
         Ok(_) => ProjectDirState::NotDirectory,
+        Err(PathError::Missing(_)) => ProjectDirState::Missing,
+        Err(PathError::PhysicalEscape(target)) => ProjectDirState::Escape(target),
+        Err(PathError::LexicalEscape(target)) => ProjectDirState::Escape(target),
+        Err(PathError::Inspect { error, .. } | PathError::Resolve { error, .. }) => {
+            ProjectDirState::Unreadable(error.to_string())
+        }
+        Err(_) => ProjectDirState::Unreadable("路径无法规范化".to_string()),
     }
 }
 
@@ -358,21 +333,24 @@ fn project_agent_dirs(
             continue;
         }
         let dir = root.join(relative);
-        let Some(normalized) = normalize_absolute(&dir) else {
-            warnings.push(format!(
-                "忽略 agent「{}」的项目目录：无法规范化（{raw}）。",
-                definition.display_name
-            ));
-            continue;
+        let normalized = match project_path::lexical(&root_normalized, &dir) {
+            Ok(normalized) => normalized,
+            Err(PathError::LexicalEscape(_)) => {
+                warnings.push(format!(
+                    "忽略 agent「{}」的项目目录：解析后位于项目根之外（{raw}）。",
+                    definition.display_name
+                ));
+                escapes.push(format!("{} · {raw}", definition.display_name));
+                continue;
+            }
+            Err(_) => {
+                warnings.push(format!(
+                    "忽略 agent「{}」的项目目录：无法规范化（{raw}）。",
+                    definition.display_name
+                ));
+                continue;
+            }
         };
-        if !normalized.starts_with(&root_normalized) {
-            warnings.push(format!(
-                "忽略 agent「{}」的项目目录：解析后位于项目根之外（{raw}）。",
-                definition.display_name
-            ));
-            escapes.push(format!("{} · {raw}", definition.display_name));
-            continue;
-        }
         if canonical_normalized.as_ref() == Some(&normalized) {
             continue;
         }
@@ -423,21 +401,24 @@ fn project_agent_dirs(
             continue;
         }
         let dir = root.join(trimmed);
-        let Some(normalized) = normalize_absolute(&dir) else {
-            warnings.push(format!(
-                "忽略额外 agent「{}」的项目目录：无法规范化（{trimmed}）。",
-                extra.display_name
-            ));
-            continue;
+        let normalized = match project_path::lexical(&root_normalized, &dir) {
+            Ok(normalized) => normalized,
+            Err(PathError::LexicalEscape(_)) => {
+                warnings.push(format!(
+                    "忽略额外 agent「{}」的项目目录：解析后位于项目根之外（{trimmed}）。",
+                    extra.display_name
+                ));
+                escapes.push(format!("{} · {trimmed}", extra.display_name));
+                continue;
+            }
+            Err(_) => {
+                warnings.push(format!(
+                    "忽略额外 agent「{}」的项目目录：无法规范化（{trimmed}）。",
+                    extra.display_name
+                ));
+                continue;
+            }
         };
-        if !normalized.starts_with(&root_normalized) {
-            warnings.push(format!(
-                "忽略额外 agent「{}」的项目目录：解析后位于项目根之外（{trimmed}）。",
-                extra.display_name
-            ));
-            escapes.push(format!("{} · {trimmed}", extra.display_name));
-            continue;
-        }
         if canonical_normalized.as_ref() == Some(&normalized) {
             warnings.push(format!(
                 "忽略额外 agent「{}」的项目目录：不能使用 canonical store（{trimmed}）。",

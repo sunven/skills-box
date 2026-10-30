@@ -20,6 +20,7 @@ pub mod logs;
 pub mod paths;
 pub mod process;
 pub mod project_lock;
+mod project_path;
 pub mod projects;
 pub mod read_model;
 pub mod scope;

@@ -11,13 +11,18 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde_json::json;
+use skills_box_lib::attachment_target::{self, AgentDirectoryState, TargetContext};
+use skills_box_lib::baseline::{BaselineStore, LocalModification};
 use skills_box_lib::content;
 use skills_box_lib::error::ErrorCode;
-use skills_box_lib::inventory::{AttachmentMode, ManagementState};
+use skills_box_lib::inventory::{
+    AgentDir, AttachmentLocation, AttachmentMode, LocatedSkill, ManagementState,
+};
 use skills_box_lib::paths::AppPaths;
 use skills_box_lib::projects::ProjectRegistry;
 use skills_box_lib::read_model::ReadModel;
 use skills_box_lib::scope::ScopeId;
+use skills_box_lib::scope_layout::ScopeLayout;
 
 struct Fixture {
     tmp: tempfile::TempDir,
@@ -488,6 +493,320 @@ fn escaping_canonical_and_agent_paths_are_anomalies_and_content_refuses_them() {
         .resolve_root(&fixture.scope, &fixture.id("alpha"))
         .unwrap_err();
     assert_eq!(error.code, ErrorCode::PathOutsideAllowedRoot);
+}
+
+#[test]
+fn project_directory_facts_preserve_attachment_install_and_scan_policies() {
+    for case in [
+        "missing",
+        "inside-parent",
+        "inside-parent-missing",
+        "outside-parent",
+        "outside-parent-missing",
+        "broken-parent",
+        "file-parent",
+        "inside-leaf",
+        "outside-leaf",
+        "broken-leaf",
+    ] {
+        let fixture = Fixture::new();
+        let canonical = fixture.canonical_skill(&fixture.root, "alpha", "inside");
+        fixture.write_lock(&fixture.root, &["alpha", "beta"]);
+        let outside = fixture.tmp.path().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        let inside = fixture.root.join("linked-parent");
+        fs::create_dir_all(&inside).unwrap();
+        let parent = fixture.root.join(".claude");
+        let dir = parent.join("skills");
+        match case {
+            "missing" => {}
+            "inside-parent" | "inside-parent-missing" => {
+                if case == "inside-parent" {
+                    fixture.agent_copy(&inside, "skills", "beta", "inside link");
+                }
+                symlink(&inside, &parent).unwrap();
+            }
+            "outside-parent" | "outside-parent-missing" => {
+                if case == "outside-parent" {
+                    fixture.agent_copy(&outside, "skills", "beta", "outside");
+                }
+                symlink(&outside, &parent).unwrap();
+            }
+            "broken-parent" => symlink(outside.join("missing"), &parent).unwrap(),
+            "file-parent" => fs::write(&parent, "file").unwrap(),
+            "inside-leaf" | "outside-leaf" | "broken-leaf" => {
+                fs::create_dir_all(&parent).unwrap();
+                let target = match case {
+                    "inside-leaf" => fixture
+                        .agent_copy(&inside, "skills", "beta", "inside link")
+                        .parent()
+                        .unwrap()
+                        .to_path_buf(),
+                    "outside-leaf" => fixture
+                        .agent_copy(&outside, "skills", "beta", "outside")
+                        .parent()
+                        .unwrap()
+                        .to_path_buf(),
+                    _ => outside.join("missing"),
+                };
+                symlink(target, &dir).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let agent = AgentDir {
+            id: "claude-code".into(),
+            display_name: "Claude Code".into(),
+            universal: false,
+            skills_dir: dir,
+        };
+        let located = LocatedSkill {
+            name: "alpha".into(),
+            management: ManagementState::Managed,
+            canonical_path: Some(canonical.clone()),
+            primary_path: Some(canonical.clone()),
+            attachments: vec![],
+            lock_entry: None,
+        };
+        let context = TargetContext::project(&fixture.root);
+        let attach = attachment_target::resolve_attach(
+            &fixture.root.join(".agents/skills"),
+            &located,
+            std::slice::from_ref(&agent),
+            &agent.id,
+            context,
+        );
+        let install = attachment_target::resolve_install_link(&canonical, &agent, "alpha", context);
+        let (offered, scanned, attach_error, install_error) = match case {
+            "missing" | "inside-parent-missing" => (true, false, None, None),
+            "inside-parent" => (true, true, None, None),
+            "inside-leaf" => (
+                true,
+                true,
+                Some(ErrorCode::PathInvalid),
+                Some(ErrorCode::AgentAttachFailed),
+            ),
+            "outside-parent" | "outside-parent-missing" | "outside-leaf" => (
+                false,
+                false,
+                Some(ErrorCode::PathOutsideAllowedRoot),
+                Some(ErrorCode::PathOutsideAllowedRoot),
+            ),
+            _ => (
+                false,
+                false,
+                Some(ErrorCode::PathInvalid),
+                Some(ErrorCode::PathInvalid),
+            ),
+        };
+        assert_eq!(
+            attach.as_ref().err().map(|error| error.code),
+            attach_error,
+            "attach {case}"
+        );
+        assert_eq!(
+            install.as_ref().err().map(|error| error.code),
+            install_error,
+            "install {case}"
+        );
+        if case == "missing" || case == "inside-parent-missing" {
+            assert!(matches!(
+                attach.unwrap().directory_state,
+                AgentDirectoryState::Missing(_)
+            ));
+            assert!(matches!(
+                install.unwrap().directory_state,
+                AgentDirectoryState::Missing(_)
+            ));
+        }
+        let mut attached = located.clone();
+        attached.attachments.push(AttachmentLocation {
+            agent_id: agent.id.clone(),
+            agent_name: agent.display_name.clone(),
+            path: agent.skills_dir.join("alpha"),
+            mode: AttachmentMode::Link,
+        });
+        let detach = attachment_target::resolve_detach(
+            &fixture.root.join(".agents/skills"),
+            &attached,
+            std::slice::from_ref(&agent),
+            &agent.id,
+            context,
+        );
+        let detach_error = if case == "missing" || case == "inside-parent-missing" {
+            Some(ErrorCode::PathInvalid)
+        } else {
+            attach_error
+        };
+        assert_eq!(
+            detach.err().map(|error| error.code),
+            detach_error,
+            "detach {case}"
+        );
+
+        let project = fixture
+            .registry
+            .lookup_available(fixture.scope.project_id().unwrap())
+            .unwrap()
+            .project;
+        let layout = ScopeLayout::project(&fixture.paths, project);
+        assert_eq!(
+            layout
+                .install_targets(&[agent])
+                .iter()
+                .any(|agent| agent.id == "claude-code"),
+            offered,
+            "targets {case}"
+        );
+        assert_eq!(
+            layout.agents.iter().any(|agent| agent.id == "claude-code"),
+            scanned,
+            "layout {case}"
+        );
+        let snapshot = fixture.snapshot();
+        assert_eq!(
+            snapshot.skills.iter().any(|skill| skill.name == "beta"),
+            scanned,
+            "scan {case}"
+        );
+        let store = BaselineStore::for_scope(&fixture.paths, &fixture.scope);
+        assert_eq!(store.load("beta").is_some(), scanned, "baseline {case}");
+        if scanned {
+            assert_eq!(
+                fixture.detail("beta").description.as_deref(),
+                Some("inside link")
+            );
+            let root = fixture
+                .model
+                .resolve_root(&fixture.scope, &fixture.id("beta"))
+                .unwrap();
+            assert!(root.starts_with(&fixture.root));
+        } else if case == "outside-parent" || case == "outside-leaf" {
+            assert!(snapshot.anomalies.escape.count > 0, "escape {case}");
+        }
+    }
+}
+
+#[test]
+fn canonical_store_parent_symlink_outside_is_not_scanned_or_fingerprinted() {
+    let fixture = Fixture::new();
+    let outside = fixture.tmp.path().join("outside");
+    fixture.agent_copy(&outside, "skills", "alpha", "outside");
+    symlink(&outside, fixture.root.join(".agents")).unwrap();
+    fixture.write_lock(&fixture.root, &["alpha"]);
+    let snapshot = fixture.snapshot();
+    assert!(snapshot.skills.is_empty());
+    assert!(
+        snapshot
+            .anomalies
+            .escape
+            .examples
+            .iter()
+            .any(|label| label == "canonical store")
+    );
+    assert!(
+        snapshot
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("canonical store 符号链接逃逸"))
+    );
+    assert!(
+        BaselineStore::for_scope(&fixture.paths, &fixture.scope)
+            .load("alpha")
+            .is_none()
+    );
+}
+
+#[test]
+fn escaping_skill_leaves_keep_anomalies_without_creating_or_replacing_baselines() {
+    for agent_leaf in [false, true] {
+        for seeded in [false, true] {
+            let fixture = Fixture::new();
+            let inside = fixture.canonical_skill(&fixture.root, "beta", "valid control");
+            let outside = fixture.tmp.path().join("outside/alpha");
+            fs::create_dir_all(&outside).unwrap();
+            fs::write(
+                outside.join("SKILL.md"),
+                "---\nname: alpha\ndescription: outside\n---\n",
+            )
+            .unwrap();
+            fs::write(outside.join("secret.txt"), "external contents").unwrap();
+            let dir = fixture.root.join(if agent_leaf {
+                ".claude/skills"
+            } else {
+                ".agents/skills"
+            });
+            fixture.link(&dir, "alpha", &outside);
+            fixture.write_lock(&fixture.root, &["alpha", "beta"]);
+            let store = BaselineStore::for_scope(&fixture.paths, &fixture.scope);
+            let old_baseline = if seeded {
+                store.record_from_dir("alpha", &inside, true).unwrap();
+                Some(fs::read(store.baseline_path("alpha")).unwrap())
+            } else {
+                None
+            };
+
+            // Same-name records in Global and another Project stay independent.
+            let (other_scope, other_root) = fixture.second_project("other");
+            let other_skill = fixture.canonical_skill(&other_root, "alpha", "other");
+            let other_store = BaselineStore::for_scope(&fixture.paths, &other_scope);
+            other_store
+                .record_from_dir("alpha", &other_skill, true)
+                .unwrap();
+            let other_baseline = fs::read(other_store.baseline_path("alpha")).unwrap();
+            let global_store = BaselineStore::new(&fixture.paths);
+            let global_skill = fixture.canonical_skill(fixture.paths.home(), "alpha", "global");
+            global_store
+                .record_from_dir("alpha", &global_skill, true)
+                .unwrap();
+            let global_baseline = fs::read(global_store.baseline_path("alpha")).unwrap();
+
+            let snapshot = fixture.snapshot();
+            let alpha = skill(&snapshot, "alpha");
+            assert_eq!(
+                alpha.management,
+                if agent_leaf {
+                    ManagementState::CopyOnly
+                } else {
+                    ManagementState::Managed
+                }
+            );
+            assert_eq!(alpha.local_modification, LocalModification::Unknown);
+            assert!(alpha.description.is_none());
+            assert!(
+                alpha
+                    .warnings
+                    .iter()
+                    .any(|warning| warning.contains("项目根之外"))
+            );
+            assert!(snapshot.anomalies.escape.count > 0);
+            assert!(fixture.detail("alpha").description.is_none());
+            assert_eq!(
+                fixture
+                    .model
+                    .resolve_root(&fixture.scope, &fixture.id("alpha"))
+                    .unwrap_err()
+                    .code,
+                ErrorCode::PathOutsideAllowedRoot
+            );
+            assert_eq!(
+                fs::read(store.baseline_path("alpha")).ok(),
+                old_baseline,
+                "agent_leaf={agent_leaf}, seeded={seeded}"
+            );
+            assert!(
+                store.load("beta").is_some(),
+                "valid paths still initialize baselines"
+            );
+            assert_eq!(
+                fs::read(other_store.baseline_path("alpha")).unwrap(),
+                other_baseline
+            );
+            assert_eq!(
+                fs::read(global_store.baseline_path("alpha")).unwrap(),
+                global_baseline
+            );
+        }
+    }
 }
 
 #[test]

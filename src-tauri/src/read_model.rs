@@ -22,6 +22,7 @@ use crate::inventory::{
     InventorySkill, InventorySnapshot, ManagementState, frontmatter,
 };
 use crate::paths::AppPaths;
+use crate::project_path::{self, PathError};
 use crate::projects::ProjectRegistry;
 use crate::scope::ScopeId;
 use crate::scope_layout::ScopeLayout;
@@ -403,13 +404,22 @@ fn build_view(
     let primary_path = located.primary_path.clone();
     let primary = primary_path.as_deref();
     let project_root = layout.project.as_ref().map(|_| layout.root.as_path());
-    let (description, warnings) = read_description(primary, project_root);
+    // Validate the primary once before either content reader. An escaping or
+    // unresolvable Skill remains an anomaly row, but cannot seed a baseline.
+    let readable_primary = readable_primary(primary, project_root);
+    let primary_for_reads = readable_primary.as_ref().ok().copied().flatten();
+    let (description, warnings) = match &readable_primary {
+        Ok(primary) => read_description(*primary),
+        Err(warning) => (None, vec![warning.clone()]),
+    };
     let (local_modification, local_modification_detail) =
         if located.management == ManagementState::Unmanaged {
             (
                 LocalModification::Unknown,
                 Some("未受管：没有 lock 条目，无法判断本地改动。".to_string()),
             )
+        } else if let Err(warning) = &readable_primary {
+            (LocalModification::Unknown, Some(warning.clone()))
         } else {
             // Baselines are per scope: a project skill is never compared with
             // a global baseline of the same name. Project locks carry a
@@ -417,7 +427,7 @@ fn build_view(
             // clean vs modified; an externally installed skill stays unknown.
             let assessment = BaselineStore::for_scope(paths, &layout.scope).assess(
                 name,
-                primary,
+                primary_for_reads,
                 lock_entry
                     .as_ref()
                     .map(|entry| entry.skill_folder_hash.as_str()),
@@ -450,7 +460,7 @@ fn build_view(
         .filter(|attachment| attachment.mode == AttachmentMode::Broken)
         .map(|attachment| format!("断链：{}", attachment.agent_name))
         .collect();
-    let directory_mtime = primary.and_then(directory_mtime_epoch_ms);
+    let directory_mtime = primary_for_reads.and_then(directory_mtime_epoch_ms);
 
     Some(SkillView {
         id: id.to_string(),
@@ -486,27 +496,28 @@ fn build_view(
     })
 }
 
-fn read_description(
-    primary: Option<&Path>,
+fn readable_primary<'a>(
+    primary: Option<&'a Path>,
     project_root: Option<&Path>,
-) -> (Option<String>, Vec<String>) {
+) -> Result<Option<&'a Path>, String> {
+    if let (Some(primary), Some(root)) = (primary, project_root) {
+        project_path::existing(root, primary).map_err(|error| match error {
+            PathError::PhysicalEscape(_) | PathError::LexicalEscape(_) => {
+                "skill 路径解析到项目根之外，已拒绝读取。".to_string()
+            }
+            PathError::Missing(error)
+            | PathError::Inspect { error, .. }
+            | PathError::Resolve { error, .. } => format!("无法解析 skill 目录：{error}"),
+            _ => "无法解析 skill 目录：路径无法规范化".to_string(),
+        })?;
+    }
+    Ok(primary)
+}
+
+fn read_description(primary: Option<&Path>) -> (Option<String>, Vec<String>) {
     let Some(primary) = primary else {
         return (None, vec!["未找到 SKILL.md".to_string()]);
     };
-    if let Some(root) = project_root {
-        match fs::canonicalize(primary) {
-            Ok(resolved) if !resolved.starts_with(root) => {
-                return (
-                    None,
-                    vec!["skill 路径解析到项目根之外，已拒绝读取。".to_string()],
-                );
-            }
-            Ok(_) => {}
-            Err(error) => {
-                return (None, vec![format!("无法解析 skill 目录：{error}")]);
-            }
-        }
-    }
     let skill_md = read_skill_md(primary);
     match skill_md.status {
         SkillMdStatus::Ok => match frontmatter::parse(skill_md.content.as_deref().unwrap_or("")) {

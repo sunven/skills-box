@@ -12,6 +12,7 @@ use crate::error::AppError;
 use crate::inventory::{
     self, AgentDir, AttachmentLocation, AttachmentMode, LocatedSkill, ManagementState,
 };
+use crate::project_path::{self, Existence, PathError};
 use crate::security::normalize_absolute;
 
 /// Path context for one scope's attachment targets. Project scope passes its
@@ -43,53 +44,36 @@ impl<'a> TargetContext<'a> {
         let Some(root) = self.project_root else {
             return Ok(());
         };
-        let root = normalize_absolute(root)
-            .ok_or_else(|| AppError::path_invalid("项目根路径无法规范化。"))?;
-        let target = normalize_absolute(path)
-            .ok_or_else(|| AppError::path_invalid(format!("路径无效：{}", path.display())))?;
-        if !target.starts_with(&root) {
-            return Err(AppError::path_outside_allowed_root(format!(
-                "{} 位于项目根之外",
-                target.display()
-            )));
-        }
-        // Missing target directories are created by attach, so a lexical check
-        // is not enough: the nearest existing ancestor must resolve inside the
-        // project root. A symlinked parent that points elsewhere would
-        // otherwise let `create_dir_all` escape the project.
-        let root_real = fs::canonicalize(&root).unwrap_or(root);
-        let mut ancestor = target.as_path();
-        loop {
-            match fs::symlink_metadata(ancestor) {
-                Ok(_) => break,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    ancestor = ancestor.parent().ok_or_else(|| {
-                        AppError::path_invalid(format!(
-                            "无法检查目标路径的父目录：{}",
-                            target.display()
-                        ))
-                    })?;
-                }
-                Err(error) => {
-                    return Err(AppError::path_invalid(format!(
-                        "无法检查目标路径 {}：{error}",
-                        ancestor.display()
-                    )));
-                }
+        let target = project_path::lexical(root, path).map_err(|error| match error {
+            PathError::InvalidRoot => AppError::path_invalid("项目根路径无法规范化。"),
+            PathError::LexicalEscape(target) => {
+                AppError::path_outside_allowed_root(format!("{} 位于项目根之外", target.display()))
             }
-        }
-        let resolved = fs::canonicalize(ancestor).map_err(|error| {
-            AppError::path_invalid(format!(
-                "无法解析目标路径的父目录 {}：{error}",
-                ancestor.display()
-            ))
+            _ => AppError::path_invalid(format!("路径无效：{}", path.display())),
         })?;
-        if !resolved.starts_with(&root_real) {
-            return Err(AppError::path_outside_allowed_root(format!(
-                "{} 的符号链接解析后位于项目根之外",
-                target.display()
-            )));
-        }
+        // Preserve attachment's historical root-resolution fallback. Missing
+        // targets still require their nearest existing ancestor to stay inside.
+        let root = normalize_absolute(root).expect("root checked by lexical containment");
+        let root_real = fs::canonicalize(&root).unwrap_or(root);
+        project_path::resolve(&target, &root_real, Existence::AllowMissing).map_err(|error| {
+            match error {
+                PathError::Inspect { path, error } => {
+                    AppError::path_invalid(format!("无法检查目标路径 {}：{error}", path.display()))
+                }
+                PathError::Resolve { path, error } => AppError::path_invalid(format!(
+                    "无法解析目标路径的父目录 {}：{error}",
+                    path.display()
+                )),
+                PathError::PhysicalEscape(_) => AppError::path_outside_allowed_root(format!(
+                    "{} 的符号链接解析后位于项目根之外",
+                    target.display()
+                )),
+                _ => AppError::path_invalid(format!(
+                    "无法检查目标路径的父目录：{}",
+                    target.display()
+                )),
+            }
+        })?;
         Ok(())
     }
 }
