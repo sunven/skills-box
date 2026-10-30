@@ -1,6 +1,6 @@
 # Skills Box — 项目作用域规格
 
-Status: Draft for review
+Status: Implemented (2026-10-30)
 Date: 2026-10-30
 
 > 本规格由一轮 grilling 会话的决策合成。实现者应把本文件当入口，细节以这里为准；术语以词汇表为准。

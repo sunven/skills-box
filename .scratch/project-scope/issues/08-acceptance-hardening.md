@@ -6,15 +6,19 @@
 
 **Blocked by:** 03, 04, 05, 06, 07
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Rust fixtures 覆盖项目锁、清单、extra 项目目录与 scope 错误隔离
-- [ ] 前端 App 套件覆盖全部项目作用域流程与守卫
-- [ ] ignored 沙箱测试在临时 HOME/项目上通过真实 CLI 的 add/remove
-- [ ] 指纹 golden vectors 与 pinned CLI 一致
-- [ ] `ErrorCode::ALL` 注册表测试包含全部新项目错误码；前端统一 `AppError` 消费
-- [ ] `API_COMMANDS` 覆盖测试包含全部新增 scope 命令，preview 与 App 测试共用 fake backend
-- [ ] 安全审计断言项目白名单、路径归属、capabilities 与 CSP
-- [ ] 性能检查覆盖有界目录探测、归档缓存与大小/超时上限
-- [ ] spec §10.3 验收矩阵全部勾选并记录证据
-- [ ] 全局回归套件全部通过，无行为降级
+- [x] Rust fixtures 覆盖项目锁、清单、extra 项目目录与 scope 错误隔离
+- [x] 前端 App 套件覆盖全部项目作用域流程与守卫
+- [x] ignored 沙箱测试在临时 HOME/项目上通过真实 CLI 的 add/remove
+- [x] 指纹 golden vectors 与 pinned CLI 一致
+- [x] `ErrorCode::ALL` 注册表测试包含全部新项目错误码；前端统一 `AppError` 消费
+- [x] `API_COMMANDS` 覆盖测试包含全部新增 scope 命令，preview 与 App 测试共用 fake backend
+- [x] 安全审计断言项目白名单、路径归属、capabilities 与 CSP
+- [x] 性能检查覆盖有界目录探测、归档缓存与大小/超时上限
+- [x] spec §10.3 验收矩阵全部勾选并记录证据
+- [x] 全局回归套件全部通过，无行为降级
+
+## Comments
+
+- 2026-10-30: Resolved on `feat/project-scope` via merge `3f6af3a` (ticket commits `241a4a7`, `61e9f3f`). Added the ignored real-CLI project add/remove sandbox (temp HOME/root, canonical, agent link, v1 lock, hash agreement, project/global isolation), a project security audit, and a 100-skill project performance fixture; spec §10.3 is fully ticked with evidence. Post-review fixes (`be2b25b`..`78b42e3`) merged in `bbac48c`; deferred architectural refactors are tracked in issue 09. Final gate: `cargo test` 483 passed / 3 ignored, `pnpm test` 203 passed, `pnpm build` and `cargo fmt --check` clean.

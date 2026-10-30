@@ -6,14 +6,18 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] 项目锁 v1 解析有单测：缺失、合法、损坏、版本不支持、字段缺失
-- [ ] 项目清单覆盖 canonical、catalog 项目目录、extra 项目目录（仅存在时）与三类管理状态
-- [ ] 项目详情、目录列表、文件读取、打开文件夹均限定在对应项目根内
-- [ ] 复合 skill ID 稳定；全局 ID 与既有持久化不回归
-- [ ] per-scope ReadModel 缓存按指纹失效，`get_inventory` 刷新目录拓扑
-- [ ] 一个 scope 的锁损坏/权限错误只产生该 scope 错误状态，其他 scope 正常
-- [ ] 路径不可用的项目返回独立状态而不是错误清单
-- [ ] 符号链接逃逸项目根被识别为异常且内容命令拒绝读取
-- [ ] 安全白名单与路径归属检查有单元/集成测试
+- [x] 项目锁 v1 解析有单测：缺失、合法、损坏、版本不支持、字段缺失
+- [x] 项目清单覆盖 canonical、catalog 项目目录、extra 项目目录（仅存在时）与三类管理状态
+- [x] 项目详情、目录列表、文件读取、打开文件夹均限定在对应项目根内
+- [x] 复合 skill ID 稳定；全局 ID 与既有持久化不回归
+- [x] per-scope ReadModel 缓存按指纹失效，`get_inventory` 刷新目录拓扑
+- [x] 一个 scope 的锁损坏/权限错误只产生该 scope 错误状态，其他 scope 正常
+- [x] 路径不可用的项目返回独立状态而不是错误清单
+- [x] 符号链接逃逸项目根被识别为异常且内容命令拒绝读取
+- [x] 安全白名单与路径归属检查有单元/集成测试
+
+## Comments
+
+- 2026-10-30: Resolved on `feat/project-scope` via merge `5768230` (ticket commit `44abd68`). `src-tauri/tests/project_read_model.rs` covers project lock v1 parsing, canonical/catalog/extra scans, composite ids, cache fingerprinting, scope error isolation, unavailable roots and symlink escapes; security allowlist tests cover project root confinement. Final gate: `cargo test` 483 passed / 3 ignored, `pnpm test` 203 passed.

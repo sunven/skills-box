@@ -8,13 +8,17 @@
 
 **Notes:** 复用统一 mutation surface（ADR 0008）与 `attachment_target` 门控（ADR 0005）；刷新键与备份/日志/中断记录都携带 scope。
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] 项目更新重建 `add` 时 cwd/无 `-g`/挂载集合/universal 正确
-- [ ] 更新后校验 canonical、lock key、catalog 链接与 extra 链接
-- [ ] 本地改动与 Copy-only 的处理与全局语义一致
-- [ ] 项目卸载只删除当前 scope 的 canonical、lock key 与挂载
-- [ ] 卸载前备份覆盖项目锁、canonical、复制挂载与清单
-- [ ] extra 链接在更新与卸载后被正确重建/清理
-- [ ] 中断恢复、任务结果与日志携带 scope，且只影响对应 scope
-- [ ] 沙箱集成测试覆盖项目更新与卸载的真实 CLI 路径
+- [x] 项目更新重建 `add` 时 cwd/无 `-g`/挂载集合/universal 正确
+- [x] 更新后校验 canonical、lock key、catalog 链接与 extra 链接
+- [x] 本地改动与 Copy-only 的处理与全局语义一致
+- [x] 项目卸载只删除当前 scope 的 canonical、lock key 与挂载
+- [x] 卸载前备份覆盖项目锁、canonical、复制挂载与清单
+- [x] extra 链接在更新与卸载后被正确重建/清理
+- [x] 中断恢复、任务结果与日志携带 scope，且只影响对应 scope
+- [x] 沙箱集成测试覆盖项目更新与卸载的真实 CLI 路径
+
+## Comments
+
+- 2026-10-30: Resolved on `feat/project-scope` via merge `d8d376d` (ticket commit `2234c8a`). Backend tests cover project update command building and attachment preservation, scoped uninstall with extra-link cleanup, backup snapshots, interrupted/session scope and per-scope isolation; the fake backend applies update/uninstall to the selected scope. The real-CLI project sandbox is covered by ticket 08. Code-review fixes (relocate persistence/guard, scoped backup) landed in `bbac48c`. Final gate: `cargo test` 483 passed / 3 ignored, `pnpm test` 203 passed.

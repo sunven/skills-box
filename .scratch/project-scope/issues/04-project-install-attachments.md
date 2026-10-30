@@ -8,12 +8,16 @@
 
 **Notes:** 挂载/断链/安装链接复用 `attachment_target` 门控（ADR 0005），项目根与 extra 项目目录作为目标路径上下文传入；刷新走统一 mutation surface（ADR 0008）并按 scope 失效。
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] 项目安装预览与安装使用项目根 cwd、无 `-g`、始终含 `universal`
-- [ ] 默认不勾选 agent；目标集合符合 spec §3.5；extra 目录不存在时可挂载并创建
-- [ ] 安装后校验 canonical、lock key、catalog 链接与 extra 链接
-- [ ] 冲突判断只看当前 scope；全局与项目同名互不影响
-- [ ] 项目断链只影响当前 scope；canonical 与 lock 不变
-- [ ] 项目基线指纹写入应用数据，按 scope 隔离
-- [ ] 前端 fake backend 与 Rust 测试覆盖项目安装、挂载、断链
+- [x] 项目安装预览与安装使用项目根 cwd、无 `-g`、始终含 `universal`
+- [x] 默认不勾选 agent；目标集合符合 spec §3.5；extra 目录不存在时可挂载并创建
+- [x] 安装后校验 canonical、lock key、catalog 链接与 extra 链接
+- [x] 冲突判断只看当前 scope；全局与项目同名互不影响
+- [x] 项目断链只影响当前 scope；canonical 与 lock 不变
+- [x] 项目基线指纹写入应用数据，按 scope 隔离
+- [x] 前端 fake backend 与 Rust 测试覆盖项目安装、挂载、断链
+
+## Comments
+
+- 2026-10-30: Resolved on `feat/project-scope` via merge `1f3b26c` (ticket commit `953a826`). Backend tests cover project preview/install command building (project cwd, no `-g`, universal), the project target set, extra link creation/verification and scoped attach/detach; App install/agents suites cover the wizard scope display, canonical-only default and scoped dialogs. Code-review fixes (scope-qualified uninstall id, wizard scope selector, scoped install backup) landed in `bbac48c`. Final gate: `cargo test` 483 passed / 3 ignored, `pnpm test` 203 passed.

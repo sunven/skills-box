@@ -8,12 +8,16 @@
 
 **Notes:** extra 的项目目录作为 `attachment_target` 门控的新目标路径来源（ADR 0005），不另写一套资格判定。
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] `agents.json` 可选字段向后兼容；既有文件无需迁移
-- [ ] 校验覆盖绝对路径、`..` 逃逸、空值、等于 canonical、重复目录
-- [ ] 管理对话框可设置/显示项目目录并展示校验错误
-- [ ] 已配置 extra 出现在项目安装/挂载目标；目录存在时参与清单
-- [ ] 删除守卫：存在不可用项目时阻止并列出；否则清理全局与所有项目挂载后删除
-- [ ] 修改/清空目录守卫：存在挂载或不可用项目时阻止并说明原因
-- [ ] 单元测试覆盖校验、目标集合、清单参与与两类守卫
+- [x] `agents.json` 可选字段向后兼容；既有文件无需迁移
+- [x] 校验覆盖绝对路径、`..` 逃逸、空值、等于 canonical、重复目录
+- [x] 管理对话框可设置/显示项目目录并展示校验错误
+- [x] 已配置 extra 出现在项目安装/挂载目标；目录存在时参与清单
+- [x] 删除守卫：存在不可用项目时阻止并列出；否则清理全局与所有项目挂载后删除
+- [x] 修改/清空目录守卫：存在挂载或不可用项目时阻止并说明原因
+- [x] 单元测试覆盖校验、目标集合、清单参与与两类守卫
+
+## Comments
+
+- 2026-10-30: Resolved on `feat/project-scope` via merge `a6f1513` (ticket commits `ec9bed4`, `587f9e7`). `extra_agent_guard.rs` and `agents/extras.rs` tests cover project-directory validation/uniqueness, target-set inclusion with missing dirs, inventory participation, removal/edit guards including unavailable projects, and physical containment; `App.agents.test.tsx` covers the dialog field and guard errors. Final gate: `cargo test` 483 passed / 3 ignored, `pnpm test` 203 passed.

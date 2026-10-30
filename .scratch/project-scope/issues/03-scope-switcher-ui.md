@@ -8,12 +8,16 @@
 
 **Notes:** 派生状态继续集中在 `buildWorkspaceView`（ADR 0007），不要把 scope 逻辑散回 App memo；mutation 刷新键复用统一 mutation surface（ADR 0008）并携带 scope；fake backend 必须遵守 `API_COMMANDS`/`FakeHandlers` 契约与覆盖测试（ADR 0010）。
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] 侧栏展示全局与项目列表、徽章、不可用/错误状态和添加入口
-- [ ] 文件夹选择、添加、重新定位、遗忘流程可用；遗忘确认文案明确不删文件
-- [ ] 项目视图头部与三种空状态完整
-- [ ] 切换 scope 重置选择/筛选/搜索，查询键按 scope 隔离
-- [ ] 启动恢复上次 scope；不可用回退全局
-- [ ] fake backend 覆盖项目注册表、按 scope 快照与切换场景
-- [ ] App 测试覆盖切换、徽章、不可用/错误、添加与遗忘
+- [x] 侧栏展示全局与项目列表、徽章、不可用/错误状态和添加入口
+- [x] 文件夹选择、添加、重新定位、遗忘流程可用；遗忘确认文案明确不删文件
+- [x] 项目视图头部与三种空状态完整
+- [x] 切换 scope 重置选择/筛选/搜索，查询键按 scope 隔离
+- [x] 启动恢复上次 scope；不可用回退全局
+- [x] fake backend 覆盖项目注册表、按 scope 快照与切换场景
+- [x] App 测试覆盖切换、徽章、不可用/错误、添加与遗忘
+
+## Comments
+
+- 2026-10-30: Resolved on `feat/project-scope` via merge `e88f7ed` (ticket commit `9623ac9`). `src/App.scope.test.tsx` covers last-scope restore/fallback, switching with selection/filter reset, per-scope badges, unavailable/error states, add/relocate/forget through the native picker, and empty states; the fake backend owns the in-memory registry. Final gate: `cargo test` 483 passed / 3 ignored, `pnpm test` 203 passed.

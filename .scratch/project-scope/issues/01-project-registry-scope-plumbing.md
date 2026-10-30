@@ -8,13 +8,17 @@
 
 **Notes:** 新错误码必须进入 `ErrorCode` 注册表与 `ErrorCode::ALL` 测试（ADR 0006），沿用统一 `AppError` 构造器；不得新增裸字符串错误码。
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] `projects.json` 有版本号、原子写入、可注入路径（测试用临时 AppPaths）
-- [ ] 添加/重新定位校验覆盖：不存在、非目录、不可读、`/`、home、全局 canonical 内部、重复规范化路径；嵌套与重叠允许
-- [ ] `displayName` 始终来自根目录名；按 `lastOpenedAt` 倒序返回
-- [ ] `ScopeId` 贯穿现有命令签名；全局路径与行为不变
-- [ ] 启动时恢复 `lastActiveScope`；项目被遗忘或不可用时回退 global
-- [ ] 遗忘只移除注册条目与该 scope 的检查状态，不删除任何磁盘文件
-- [ ] 注册表 JSON 损坏时应用不崩溃、不静默覆盖原文件，全局作用域仍可用并显示警告
-- [ ] Rust 单测覆盖校验、排序、持久化、损坏恢复与 lastActive 回退
+- [x] `projects.json` 有版本号、原子写入、可注入路径（测试用临时 AppPaths）
+- [x] 添加/重新定位校验覆盖：不存在、非目录、不可读、`/`、home、全局 canonical 内部、重复规范化路径；嵌套与重叠允许
+- [x] `displayName` 始终来自根目录名；按 `lastOpenedAt` 倒序返回
+- [x] `ScopeId` 贯穿现有命令签名；全局路径与行为不变
+- [x] 启动时恢复 `lastActiveScope`；项目被遗忘或不可用时回退 global
+- [x] 遗忘只移除注册条目与该 scope 的检查状态，不删除任何磁盘文件
+- [x] 注册表 JSON 损坏时应用不崩溃、不静默覆盖原文件，全局作用域仍可用并显示警告
+- [x] Rust 单测覆盖校验、排序、持久化、损坏恢复与 lastActive 回退
+
+## Comments
+
+- 2026-10-30: Resolved on `feat/project-scope` via merge `2436eb8` (ticket commit `0ac6929`). Registry validation, atomic persistence, corrupt-registry recovery, scope ids and last-active fallback are covered by `src-tauri/src/projects.rs` tests plus the App scope suites. Final gate: `cargo test` 483 passed / 3 ignored, `pnpm test` 203 passed, `pnpm build` and `cargo fmt --check` clean.
