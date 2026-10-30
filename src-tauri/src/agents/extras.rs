@@ -26,8 +26,8 @@ pub struct UserExtraAgent {
     pub id: String,
     pub display_name: String,
     pub skills_dir: String,
-    /// Project-relative skills directory. Only read by the project inventory in
-    /// this ticket; validation, UI and guards arrive with ticket 07.
+    /// Project-relative skills directory; validated when set and guarded while
+    /// registered projects may still hold mounts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_skills_dir: Option<String>,
 }

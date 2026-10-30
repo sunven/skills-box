@@ -421,6 +421,19 @@ impl TaskManager {
         self.active_mutation().is_some()
     }
 
+    /// Project registry changes (relocate/forget) invalidate roots that a
+    /// running mutation may already be writing, so they wait for it to end.
+    pub fn ensure_project_registry_idle(&self) -> Result<(), AppError> {
+        match self.active_mutation() {
+            Some(active) => Err(AppError::task_busy().detail(format!(
+                "项目变更被拒绝：{} 正在执行（{}）。",
+                active.kind.label(),
+                active.skills.join("、")
+            ))),
+            None => Ok(()),
+        }
+    }
+
     /// Write the interruption marker before the first disk write. Failures are
     /// non-fatal: the operation still runs, only crash forensics degrade.
     fn begin_marker(&self, task_id: &str) {
@@ -1759,7 +1772,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Install execution (ticket 05)
+    // Install execution
     // ------------------------------------------------------------------
 
     const INSTALL_SUCCESS: &str = include_str!("../../tests/fixtures/cli/install-success.txt");
@@ -2507,6 +2520,53 @@ mod tests {
             .await
             .expect("first install should finish");
         assert_eq!(final_event.phase, TaskPhase::Completed);
+    }
+
+    #[tokio::test]
+    async fn project_registry_changes_are_refused_while_a_mutation_runs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(home.join(".qoder")).unwrap();
+        let paths = AppPaths::new(&home, tmp.path().join("app-data"));
+        paths.ensure_dirs().unwrap();
+        let executor = Arc::new(InstallExecutor::new(
+            InstallResponse::success(
+                INSTALL_SUCCESS,
+                post_state(
+                    home.clone(),
+                    vec![PostSkill::installed("find-skills", ".qoder/skills")],
+                ),
+            )
+            .delayed(Duration::from_millis(150)),
+        ));
+        let manager = TaskManager::new(
+            Arc::new(FakeRuntime::ok()),
+            executor,
+            Arc::new(FakeConflicts::default()),
+            paths,
+            TaskManagerConfig::default(),
+        );
+
+        assert!(manager.ensure_project_registry_idle().is_ok());
+        let (event_sink, mut receiver) = sink();
+        manager
+            .start_install(
+                crate::scope::ScopeId::global(),
+                install_request(&["find-skills"], &["qoder"]),
+                event_sink,
+            )
+            .await
+            .unwrap();
+        let error = manager.ensure_project_registry_idle().unwrap_err();
+        assert_eq!(error.code, ErrorCode::TaskBusy);
+        assert!(error.detail.unwrap().contains("安装"));
+
+        let final_event = tokio::time::timeout(Duration::from_secs(2), final_event(&mut receiver))
+            .await
+            .expect("install should finish");
+        assert_eq!(final_event.phase, TaskPhase::Completed);
+        assert!(manager.ensure_project_registry_idle().is_ok());
     }
 
     #[tokio::test]

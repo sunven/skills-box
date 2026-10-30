@@ -16,6 +16,7 @@ use serde::Deserialize;
 
 use crate::agents::{DetectionContext, catalog, resolve_global_skills_dir};
 use crate::attachment_target::{self, AgentDirectoryState, TargetState};
+use crate::backup::BackupStore;
 use crate::baseline::{BaselineStore, write_warning};
 use crate::cli::CliRuntime;
 use crate::env::capture_process_env;
@@ -313,9 +314,6 @@ fn validate_project_agents(
                     }
                     Some(_) => AppError::agent_not_detected(&display_name),
                     None => match extra {
-                        Some(extra) if extra.project_skills_dir.is_some() => {
-                            AppError::agent_not_detected(&display_name)
-                        }
                         Some(_) => AppError::agent_not_detected(&display_name),
                         None => AppError::agent_invalid(format!("未知 agent：{id}")),
                     },
@@ -625,14 +623,16 @@ pub fn parse_install_output(raw: &str) -> InstallOutput {
 }
 
 /// Copy `~/.agents/.skill-lock.json` into `backups/<ms>-install-<task>/`
-/// before the CLI runs. A missing lock is a normal fresh-machine state and is
-/// recorded as absent.
+/// before the CLI runs. Project snapshots use the same scope-isolated root as
+/// update/uninstall (`backups/project-<id>/`). A missing lock is a normal
+/// fresh-machine state and is recorded as absent.
 pub fn snapshot_lock(
     paths: &AppPaths,
     layout: &crate::scope_layout::ScopeLayout,
     task_id: &str,
 ) -> Result<PathBuf, AppError> {
-    let directory = paths.backups_dir().join(format!(
+    let backups = BackupStore::for_layout(paths, layout);
+    let directory = backups.root().join(format!(
         "{}-install-{}",
         now_ms(),
         security::safe_component(task_id)
@@ -1685,6 +1685,46 @@ mod tests {
         );
         assert_eq!(spec.cwd, layout.root);
         assert!(!spec.args.iter().any(|arg| arg == "-g"));
+    }
+
+    #[test]
+    fn install_lock_snapshots_are_scope_isolated() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+        let root = tmp.path().join("projects/app");
+        fs::create_dir_all(root.join(".agents/skills")).unwrap();
+        fs::write(
+            root.join("skills-lock.json"),
+            r#"{"version":1,"skills":{}}"#,
+        )
+        .unwrap();
+        let paths = AppPaths::new(&home, tmp.path().join("app-data"));
+        paths.ensure_dirs().unwrap();
+        fs::create_dir_all(paths.agents_root()).unwrap();
+        fs::write(paths.lock_path(), r#"{"version":3,"skills":{}}"#).unwrap();
+
+        let global = crate::scope_layout::ScopeLayout::global(&paths, Vec::new());
+        let global_snapshot = super::snapshot_lock(&paths, &global, "task-global").unwrap();
+        assert_eq!(global_snapshot.parent().unwrap(), paths.backups_dir());
+        assert!(global_snapshot.join("skill-lock.json").is_file());
+        assert!(!global_snapshot.to_string_lossy().contains("project-"));
+
+        let project = crate::projects::Project {
+            id: uuid::Uuid::new_v4(),
+            root: root.clone(),
+            display_name: "app".to_string(),
+            added_at: 1,
+            last_opened_at: 1,
+        };
+        let layout = crate::scope_layout::ScopeLayout::project(&paths, project);
+        let project_snapshot = super::snapshot_lock(&paths, &layout, "task-project").unwrap();
+        let project_root = paths
+            .backups_dir()
+            .join(format!("project-{}", layout.scope.project_id().unwrap()));
+        assert_eq!(project_snapshot.parent().unwrap(), project_root);
+        assert!(project_snapshot.join("skills-lock.json").is_file());
+        assert!(!project_snapshot.join("skill-lock.json").exists());
     }
 
     #[test]

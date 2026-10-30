@@ -2,7 +2,7 @@
 //!
 //! The CLI would overwrite a same-named skill (lock key or canonical folder)
 //! without asking, so the app must reject conflicts before spawning. Both the
-//! installer (ticket 05) and the preview reuse [`find_conflicts`].
+//! installer and the preview reuse [`find_conflicts`].
 
 use std::collections::HashMap;
 
