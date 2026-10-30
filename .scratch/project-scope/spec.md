@@ -364,17 +364,17 @@ Date: 2026-10-30
 
 ### 10.3 验收矩阵（P0）
 
-- [ ] 添加/去重/拒绝非法根（`/`、home、全局 canonical 及其内部）；嵌套项目允许。
-- [ ] 项目内安装默认只写 canonical；可选挂载 catalog agent；extra 配置后可作为目标并在挂载时创建目录。
-- [ ] 项目内断链/卸载只影响该项目；全局与其他项目不变。
-- [ ] 应用外创建的项目 skill/挂载/异常能被清单发现。
-- [ ] 项目锁缺失=空；损坏=scope 错误且不影响全局。
-- [ ] 项目更新检查按内容指纹判定候选；非 GitHub 显示不支持；失败按来源隔离。
-- [ ] 启动恢复上次 scope；不可用回退全局；切换按 6 小时阈值检查。
-- [ ] 遗忘不删文件；重新定位保留身份并重置检查状态。
-- [ ] extra 删除/目录修改守卫在不可用项目存在时生效。
-- [ ] 内容读取不能越出已注册项目根；逃逸链接被拒绝。
-- [ ] 全局作用域行为与既有一致，全局 lock 与挂载未被改写。
+- [x] 添加/去重/拒绝非法根（`/`、home、全局 canonical 及其内部）；嵌套项目允许。证据：`projects.rs::rejects_missing_non_directory_relative_and_reserved_roots`、`dedupes_canonical_paths_and_allows_nested_and_overlapping_roots`。
+- [x] 项目内安装默认只写 canonical；可选挂载 catalog agent；extra 配置后可作为目标并在挂载时创建目录。证据：`install.rs::project_install_runs_in_the_root_without_global_and_keeps_universal`、`project_extra_link_is_created_inside_the_project_and_verified`、`scope_layout.rs::install_targets_include_detected_catalog_and_configured_extras_even_when_missing`；`App.scope.test.tsx` 项目向导。
+- [x] 项目内断链/卸载只影响该项目；全局与其他项目不变。证据：`uninstall.rs::project_uninstall_only_removes_the_project_scope_and_backs_it_up`、`a_failed_project_uninstall_never_touches_the_global_scope`、`detach.rs::project_detach_unlinks_only_the_project_attachment`；`sandbox_real_cli.rs::real_cli_project_scope_add_and_remove_stay_inside_the_project`。
+- [x] 应用外创建的项目 skill/挂载/异常能被清单发现。证据：`project_read_model.rs::project_inventory_covers_canonical_catalog_and_extra_dirs_with_all_management_states`、`unreadable_skill_md_degrades_only_that_row`。
+- [x] 项目锁缺失=空；损坏=scope 错误且不影响全局。证据：`project_read_model.rs::scope_errors_are_isolated_and_unavailable_or_forgotten_roots_revoke_reads`、`unreadable_lock_and_unreadable_root_are_scope_states`、`inventory/mod.rs::missing_lock_reads_unmanaged_skills_without_errors`；`App.scope.test.tsx` 项目锁错误隔离。
+- [x] 项目更新检查按内容指纹判定候选；非 GitHub 显示不支持；失败按来源隔离。证据：`update/project.rs::groups_by_source_and_ref_and_downloads_each_commit_once`、`source_failures_are_isolated_and_do_not_persist_over_other_scopes`、`a_cached_archive_skips_the_download_and_is_marked_cached`。
+- [x] 启动恢复上次 scope；不可用回退全局；切换按 6 小时阈值检查。证据：`App.scope.test.tsx` 恢复/回退/切换，`use-auto-update-check.test.ts` 六小时锚点。
+- [x] 遗忘不删文件；重新定位保留身份并重置检查状态。证据：`projects.rs::forgetting_removes_only_the_entry_and_its_check_state`、`relocate_preserves_identity_and_clears_scope_state`；`App.scope.test.tsx` 重新定位/遗忘。
+- [x] extra 删除/目录修改守卫在不可用项目存在时生效。证据：`extra_agent_guard.rs::unavailable_project_blocks_removal_and_lists_the_project`、`unavailable_project_blocks_project_dir_changes_even_without_a_known_mount`；`App.agents.test.tsx` 守卫对话框。
+- [x] 内容读取不能越出已注册项目根；逃逸链接被拒绝。证据：`project_read_model.rs::escaping_canonical_and_agent_paths_are_anomalies_and_content_refuses_them`、`canonical_store_symlink_outside_the_project_is_an_escape`；`security_audit.rs::project_scope_grants_only_the_registered_root_and_rejects_escapes`。
+- [x] 全局作用域行为与既有一致，全局 lock 与挂载未被改写。证据：`sandbox_real_cli.rs::real_cli_project_scope_add_and_remove_stay_inside_the_project` 断言项目操作未创建全局 lock，`real_cli_sandbox_install_update_detach_uninstall_and_regression` 全局回归；`project_read_model.rs::project_cache_follows_lock_and_canonical_changes_without_global_refresh`。
 
 ### 10.4 性能目标
 

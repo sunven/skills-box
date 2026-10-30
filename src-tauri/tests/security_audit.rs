@@ -3,7 +3,15 @@
 //! environment hooks. Runtime behavior is covered by the module tests.
 
 use std::fs;
+use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use skills_box_lib::error::ErrorCode;
+use skills_box_lib::paths::AppPaths;
+use skills_box_lib::projects::ProjectRegistry;
+use skills_box_lib::scope_layout::ScopeLayout;
+use skills_box_lib::security::{RootKind, ensure_allowed};
 
 fn manifest_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -221,6 +229,81 @@ fn macos_release_bundle_is_ad_hoc_signed_and_not_notarized() {
     // environment; the acceptance script asserts they are unset before
     // `pnpm tauri build --bundles app`.
     assert!(config["app"]["security"]["csp"].is_string());
+}
+
+#[test]
+fn project_scope_grants_only_the_registered_root_and_rejects_escapes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let paths = AppPaths::new(&home, tmp.path().join("app-data"));
+    paths.ensure_dirs().unwrap();
+    let registry = ProjectRegistry::with_clock(paths.clone(), Arc::new(|| 1_000));
+    let root = tmp.path().join("project");
+    fs::create_dir_all(root.join(".agents/skills/alpha")).unwrap();
+    let entry = registry.add(root.to_str().unwrap()).unwrap();
+
+    // The project root must come from the registry. Resolving the scope is the
+    // only way commands obtain project read roots.
+    let layout =
+        ScopeLayout::resolve(&paths, &registry, &entry.project.scope()).expect("registered scope");
+    let roots = layout.allowed_roots();
+    assert_eq!(
+        roots.len(),
+        1,
+        "project scope adds exactly one root: {roots:?}"
+    );
+    assert_eq!(roots[0].kind, RootKind::Project);
+    assert_eq!(
+        roots[0].path,
+        fs::canonicalize(&root).unwrap(),
+        "the allowed root is the registered project root"
+    );
+    // No global canonical/agent root leaks into a project scope.
+    assert!(
+        roots
+            .iter()
+            .all(|root| root.kind == RootKind::Project && root.path.starts_with(&layout.root)),
+        "{roots:?}"
+    );
+
+    let skill = layout.root.join(".agents/skills/alpha");
+    assert_eq!(
+        ensure_allowed(&skill, &roots).unwrap().kind,
+        RootKind::Project
+    );
+
+    // A sibling directory, a traversal and a symlink leaf that escapes the
+    // registered root are all rejected.
+    let sibling = tmp.path().join("sibling/.agents/skills/beta");
+    fs::create_dir_all(&sibling).unwrap();
+    let error = ensure_allowed(&sibling, &roots).unwrap_err();
+    assert_eq!(error.code, ErrorCode::PathOutsideAllowedRoot);
+
+    let traversal = layout.root.join("../escape");
+    let error = ensure_allowed(&traversal, &roots).unwrap_err();
+    assert_eq!(error.code, ErrorCode::PathOutsideAllowedRoot);
+
+    let outside = tmp.path().join("outside/secret");
+    fs::create_dir_all(&outside).unwrap();
+    symlink(&outside, layout.root.join(".agents/skills/escaped")).unwrap();
+    let error = ensure_allowed(&layout.root.join(".agents/skills/escaped"), &roots).unwrap_err();
+    assert_eq!(error.code, ErrorCode::PathOutsideAllowedRoot);
+
+    // Static guard: the project branch is the only place that adds a Project
+    // root, and scope resolution goes through the registry lookup.
+    let scope_layout = read(manifest_dir().join("src/scope_layout.rs"));
+    let product = scope_layout
+        .split("#[cfg(test)]")
+        .next()
+        .expect("scope layout has product code");
+    assert!(product.contains("projects.lookup(*id)?"));
+    assert!(product.contains("AllowedRoot::project(self.root.clone())"));
+    let project_branch = product
+        .split("pub fn allowed_roots")
+        .nth(1)
+        .expect("allowed_roots exists");
+    assert!(project_branch.contains("vec![AllowedRoot::project(self.root.clone())]"));
 }
 
 #[test]
