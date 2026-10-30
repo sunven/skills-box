@@ -50,6 +50,7 @@ pub enum ErrorCode {
     ProjectRootUnavailable,
     ProjectDuplicate,
     ProjectRegistryCorrupt,
+    ProjectLockUnsupported,
     OpenFailed,
     SourceMissing,
     SourceInvalid,
@@ -140,6 +141,7 @@ impl ErrorCode {
         Self::ProjectRootUnavailable,
         Self::ProjectDuplicate,
         Self::ProjectRegistryCorrupt,
+        Self::ProjectLockUnsupported,
         Self::OpenFailed,
         Self::SourceMissing,
         Self::SourceInvalid,
@@ -230,6 +232,7 @@ impl ErrorCode {
             Self::ProjectRootUnavailable => "project.root_unavailable",
             Self::ProjectDuplicate => "project.duplicate",
             Self::ProjectRegistryCorrupt => "project.registry_corrupt",
+            Self::ProjectLockUnsupported => "project.lock_unsupported",
             Self::OpenFailed => "open.failed",
             Self::SourceMissing => "source.missing",
             Self::SourceInvalid => "source.invalid",
@@ -305,7 +308,7 @@ mod tests {
 
     #[test]
     fn all_codes_are_unique_and_stable() {
-        assert_eq!(ErrorCode::ALL.len(), 86);
+        assert_eq!(ErrorCode::ALL.len(), 87);
         let values: Vec<&str> = ErrorCode::ALL.iter().map(|code| code.as_str()).collect();
         let unique: HashSet<&str> = values.iter().copied().collect();
         assert_eq!(unique.len(), values.len());
@@ -357,6 +360,7 @@ mod tests {
                 "project.root_unavailable",
                 "project.duplicate",
                 "project.registry_corrupt",
+                "project.lock_unsupported",
                 "open.failed",
                 "source.missing",
                 "source.invalid",

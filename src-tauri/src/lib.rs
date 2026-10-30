@@ -17,9 +17,11 @@ pub mod lock;
 pub mod logs;
 pub mod paths;
 pub mod process;
+pub mod project_lock;
 pub mod projects;
 pub mod read_model;
 pub mod scope;
+pub mod scope_layout;
 pub mod security;
 pub mod tasks;
 pub mod timeouts;
@@ -44,7 +46,7 @@ pub struct AppState {
     pub paths: AppPaths,
     pub environment: Arc<EnvironmentService>,
     pub read_model: Arc<ReadModel>,
-    pub projects: ProjectRegistry,
+    pub projects: Arc<ProjectRegistry>,
     pub tasks: TaskManager,
     pub updates: UpdateService,
     /// Set by `quit_app` so window/exit events stop preventing the exit.
@@ -62,9 +64,13 @@ impl AppState {
             paths.clone(),
             TaskManagerConfig::default(),
         );
+        let projects = Arc::new(ProjectRegistry::new(paths.clone()));
         Self {
-            read_model: Arc::new(ReadModel::new(paths.clone())),
-            projects: ProjectRegistry::new(paths.clone()),
+            read_model: Arc::new(ReadModel::with_projects(
+                paths.clone(),
+                Arc::clone(&projects),
+            )),
+            projects,
             updates: UpdateService::new(paths.clone()),
             paths,
             environment,

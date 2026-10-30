@@ -165,6 +165,7 @@ fn user_defined_extras_join_detection_and_inventory_after_add() {
             id: "acme".to_string(),
             display_name: "Acme Agent".to_string(),
             skills_dir: "~/.acme/skills".to_string(),
+            project_skills_dir: None,
         },
     )
     .unwrap();

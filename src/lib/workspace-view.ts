@@ -38,6 +38,7 @@ const EMPTY_ANOMALIES: AnomalySummary = {
   unmanaged: { count: 0, examples: [] },
   broken: { count: 0, examples: [] },
   modified: { count: 0, examples: [] },
+  escape: { count: 0, examples: [] },
 };
 
 export interface WorkspaceViewInput {

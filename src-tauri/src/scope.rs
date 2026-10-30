@@ -7,6 +7,9 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
 
+use crate::error::AppError;
+use crate::security::validate_skill_id;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ScopeId {
     Global,
@@ -39,6 +42,33 @@ impl ScopeId {
             Self::Global => "global".to_string(),
             Self::Project(id) => format!("project:{id}"),
         }
+    }
+
+    /// Scope-composite skill identity. Global ids stay the plain directory
+    /// name; project ids are the scope string plus `/` plus the name. The
+    /// project UUID is stable, so the id is stable across reads and reloads.
+    pub fn skill_id(&self, name: &str) -> String {
+        match self {
+            Self::Global => name.to_string(),
+            Self::Project(id) => format!("project:{id}/{name}"),
+        }
+    }
+
+    /// Extract the directory name from a composite skill id and reject ids
+    /// that belong to another scope. The name is validated with the same rules
+    /// as the global inventory.
+    pub fn parse_skill_id<'a>(&self, raw: &'a str) -> Result<&'a str, AppError> {
+        let name = match self {
+            Self::Global => raw,
+            Self::Project(id) => {
+                let prefix = format!("project:{id}/");
+                raw.strip_prefix(&prefix).ok_or_else(|| {
+                    AppError::path_invalid(format!("skill id 不属于当前项目 scope：{raw}"))
+                })?
+            }
+        };
+        validate_skill_id(name)?;
+        Ok(name)
     }
 }
 
@@ -157,5 +187,41 @@ mod tests {
     #[test]
     fn default_scope_is_global() {
         assert_eq!(ScopeId::default(), ScopeId::global());
+    }
+
+    #[test]
+    fn composite_skill_ids_prefix_projects_and_keep_global_names() {
+        let global = ScopeId::global();
+        assert_eq!(global.skill_id("alpha"), "alpha");
+        assert_eq!(global.parse_skill_id("alpha").unwrap(), "alpha");
+
+        let project = ScopeId::project(project_id());
+        let id = project.skill_id("alpha");
+        assert_eq!(id, format!("project:{PROJECT_ID}/alpha"));
+        assert_eq!(project.parse_skill_id(&id).unwrap(), "alpha");
+        // Stable across repeated calls.
+        assert_eq!(project.skill_id("alpha"), id);
+    }
+
+    #[test]
+    fn parsing_a_composite_id_rejects_foreign_scopes_and_invalid_names() {
+        let project = ScopeId::project(project_id());
+        let other = ScopeId::project(Uuid::new_v4());
+        for raw in [
+            "alpha".to_string(),
+            other.skill_id("alpha"),
+            format!("project:{PROJECT_ID}/"),
+            format!("project:{PROJECT_ID}/../alpha"),
+            format!("project:{PROJECT_ID}/a/b"),
+            format!("project:{PROJECT_ID}/.hidden"),
+        ] {
+            let error = project.parse_skill_id(&raw).unwrap_err();
+            assert_eq!(error.code, crate::error::ErrorCode::PathInvalid, "{raw}");
+        }
+
+        for raw in ["../alpha", "a/b", ".hidden", ""] {
+            let error = ScopeId::global().parse_skill_id(raw).unwrap_err();
+            assert_eq!(error.code, crate::error::ErrorCode::PathInvalid, "{raw}");
+        }
     }
 }

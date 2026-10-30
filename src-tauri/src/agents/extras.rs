@@ -26,6 +26,10 @@ pub struct UserExtraAgent {
     pub id: String,
     pub display_name: String,
     pub skills_dir: String,
+    /// Project-relative skills directory. Only read by the project inventory in
+    /// this ticket; validation, UI and guards arrive with ticket 07.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_skills_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -34,6 +38,8 @@ pub struct ExtraAgent {
     pub id: String,
     pub display_name: String,
     pub skills_dir: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_skills_dir: Option<String>,
     pub builtin: bool,
 }
 
@@ -89,6 +95,7 @@ pub fn builtin_extras() -> Vec<ExtraAgent> {
         id: "workbuddy".to_string(),
         display_name: "WorkBuddy".to_string(),
         skills_dir: "~/.workbuddy/skills".to_string(),
+        project_skills_dir: None,
         builtin: true,
     }]
 }
@@ -170,6 +177,7 @@ pub fn add_user_agent(paths: &AppPaths, entry: &UserExtraAgent) -> Result<ExtraA
         id: agent.id.clone(),
         display_name: agent.display_name.clone(),
         skills_dir: agent.skills_dir.clone(),
+        project_skills_dir: agent.project_skills_dir.clone(),
     });
     save_user_entries(paths, &entries)?;
     Ok(agent)
@@ -286,6 +294,7 @@ fn validate(paths: &AppPaths, entry: &UserExtraAgent) -> Result<ExtraAgent, Stri
         id: id.to_string(),
         display_name: display_name.to_string(),
         skills_dir,
+        project_skills_dir: entry.project_skills_dir.clone(),
         builtin: false,
     })
 }
@@ -356,7 +365,65 @@ mod tests {
             id: id.to_string(),
             display_name: id.to_uppercase(),
             skills_dir: skills_dir.to_string(),
+            project_skills_dir: None,
         }
+    }
+
+    #[test]
+    fn project_skills_dir_is_read_from_hand_written_entries_and_preserved_on_add() {
+        let (_tmp, paths) = paths();
+        fs::create_dir_all(paths.app_data()).unwrap();
+        fs::write(
+            paths.agents_config_path(),
+            r#"{
+                "version": 1,
+                "agents": [
+                    {"id": "acme", "displayName": "Acme", "skillsDir": "~/.acme/skills", "projectSkillsDir": ".acme/skills"}
+                ]
+            }"#,
+        )
+        .unwrap();
+        let loaded = load(&paths);
+        let acme = loaded
+            .agents
+            .iter()
+            .find(|agent| agent.id == "acme")
+            .unwrap();
+        assert_eq!(acme.project_skills_dir.as_deref(), Some(".acme/skills"));
+
+        let added = add_user_agent(
+            &paths,
+            &UserExtraAgent {
+                id: "other".to_string(),
+                display_name: "Other".to_string(),
+                skills_dir: "~/.other/skills".to_string(),
+                project_skills_dir: Some(".other/skills".to_string()),
+            },
+        )
+        .unwrap();
+        assert_eq!(added.project_skills_dir.as_deref(), Some(".other/skills"));
+        let reloaded = load(&paths);
+        assert_eq!(
+            reloaded
+                .agents
+                .iter()
+                .find(|agent| agent.id == "other")
+                .unwrap()
+                .project_skills_dir
+                .as_deref(),
+            Some(".other/skills")
+        );
+        // The hand-written entry round-trips untouched, including its field.
+        assert_eq!(
+            reloaded
+                .agents
+                .iter()
+                .find(|agent| agent.id == "acme")
+                .unwrap()
+                .project_skills_dir
+                .as_deref(),
+            Some(".acme/skills")
+        );
     }
 
     #[test]

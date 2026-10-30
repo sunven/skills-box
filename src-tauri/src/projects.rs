@@ -113,6 +113,22 @@ impl ProjectRegistry {
         self.list_unlocked()
     }
 
+    /// Resolve one registry entry with its current disk availability. Used by
+    /// scope-aware reads; a forgotten project is `project.not_found` and an
+    /// absent/unreadable root is `project.root_unavailable`.
+    pub fn lookup(&self, id: Uuid) -> Result<ProjectEntry, AppError> {
+        match self.load() {
+            Loaded::Ready(file) => file
+                .projects
+                .into_iter()
+                .find(|project| project.id == id)
+                .map(|project| self.entry(project))
+                .ok_or_else(|| AppError::project_not_found(&id.to_string())),
+            Loaded::Missing => Err(AppError::project_not_found(&id.to_string())),
+            Loaded::Unusable(detail) => Err(AppError::project_registry_corrupt(detail)),
+        }
+    }
+
     pub fn add(&self, root: &str) -> Result<ProjectEntry, AppError> {
         let _guard = self
             .lock
