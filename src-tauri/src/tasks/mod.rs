@@ -13,8 +13,8 @@ pub mod update;
 pub use conflicts::{ConflictInfo, ConflictProvider, InventoryConflictProvider, find_conflicts};
 pub use install::{
     CliSkillResult, CliSkillStatus, INSTALL_TIMEOUT, InstallOutput, InstallPlan, InstallRequest,
-    InstallTarget, InstallVerification, UNIVERSAL_AGENT_ID, install_command, parse_install_output,
-    snapshot_lock, validate_request, validate_skill_name, validate_skill_names, verify_install,
+    InstallTarget, InstallVerification, UNIVERSAL_AGENT_ID, parse_install_output, snapshot_lock,
+    validate_request, validate_skill_name, validate_skill_names, verify_install,
 };
 pub use manager::{
     ActiveMutationInfo, CancelAck, EventSink, MutationPermit, PREVIEW_TIMEOUT, PreviewSkill,
@@ -24,9 +24,7 @@ pub use manager::{
 };
 pub use parser::{ParsedSkill, PreviewParseOutcome, parse_preview_output};
 pub use source::{SourceSpec, validate_source};
-pub use uninstall::{
-    UNINSTALL_TIMEOUT, UninstallPlan, plan_uninstall, uninstall_command, verify_uninstall,
-};
+pub use uninstall::{UNINSTALL_TIMEOUT, UninstallPlan, plan_uninstall, verify_uninstall};
 pub use update::{
     UpdateItem, UpdatePlan, UpdateSkip, UpdateVerification, plan_updates, verify_update,
 };

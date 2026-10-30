@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use crate::backup::{BackupAction, BackupAttachment, BackupStore};
 use crate::baseline::BaselineStore;
-use crate::cli::CliRuntime;
+use crate::cli::{CliRuntime, ScopedCli};
 use crate::error::AppError;
 use crate::error::cli::{self, CliAction};
 #[cfg(test)]
@@ -47,8 +47,6 @@ pub const UNINSTALL_TIMEOUT: Duration = INSTALL_TIMEOUT;
 #[derive(Debug, Clone)]
 pub struct UninstallPlan {
     pub name: String,
-    /// Scope this uninstall deletes from; keys the backup and baseline stores.
-    pub scope: crate::scope::ScopeId,
     pub management: ManagementState,
     /// Shared canonical folder; `None` for copy-only skills.
     pub canonical: Option<PathBuf>,
@@ -77,8 +75,8 @@ impl UninstallPlan {
 /// a task is registered so unmanaged skills and dependency conflicts reject
 /// synchronously without spawning anything.
 ///
-/// The CLI command itself is built by [`uninstall_command`]:
-/// `npx -y skills@1.7.4 remove -g -s <name> -y`.
+/// The CLI command itself is built by [`ScopedCli::uninstall`]:
+/// `npx -y skills@1.7.4 remove [-g] -s <name> -y`.
 pub fn plan_uninstall(
     paths: &AppPaths,
     layout: &crate::scope_layout::ScopeLayout,
@@ -141,44 +139,11 @@ pub fn plan_uninstall(
 
     Ok(UninstallPlan {
         name: located.name,
-        scope: layout.scope.clone(),
         management: located.management,
         canonical,
         attachments,
         agent_ids: agent_ids.into_iter().collect(),
     })
-}
-
-/// `npx -y skills@1.7.4 remove -g -s <name> -y`.
-///
-/// No `-a` (per-agent remove may delete the canonical store and lock) and no
-/// `--all`. `remove` has no JSON output; the result is verified on disk.
-/// `cwd = Some(project_root)` runs a project uninstall: no `-g`, project root
-/// as cwd. `None` keeps the historical global form.
-pub fn uninstall_command(
-    runtime: &CliRuntime,
-    name: &str,
-    cwd: Option<&std::path::Path>,
-    timeout: Duration,
-) -> CommandSpec {
-    let mut args = vec![
-        "-y".to_string(),
-        format!("skills@{}", runtime.pinned_version),
-        "remove".to_string(),
-    ];
-    if cwd.is_none() {
-        args.push("-g".to_string());
-    }
-    args.push("-s".to_string());
-    args.push(name.to_string());
-    args.push("-y".to_string());
-    CommandSpec::new(
-        &runtime.npx_path,
-        args,
-        cwd.unwrap_or(&runtime.cwd),
-        runtime.env.clone(),
-        timeout,
-    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -412,12 +377,7 @@ impl MutationAction for UninstallAction {
             format!("正在执行 skills remove（{}）…", plan.name),
             Some(plan.name.as_str()),
         );
-        uninstall_command(
-            runtime,
-            &plan.name,
-            (!self.layout.is_global()).then(|| self.layout.root.as_path()),
-            self.timeout,
-        )
+        ScopedCli::new(runtime, &self.layout).uninstall(&plan.name, self.timeout)
     }
 
     fn complete(
@@ -447,7 +407,7 @@ impl MutationAction for UninstallAction {
         let error = outcome.err();
         if status == TaskSkillStatus::Removed
             && let Err(clear_error) =
-                BaselineStore::for_scope(&self.paths, &plan.scope).clear(&plan.name)
+                BaselineStore::for_scope(&self.paths, &self.layout.scope).clear(&plan.name)
         {
             warnings.push(AppError::baseline_clear_failed(clear_error));
         }
@@ -539,10 +499,6 @@ mod tests {
     fn verify_uninstall(paths: &AppPaths, plan: &UninstallPlan) -> UninstallVerification {
         let layout = crate::scope_layout::ScopeLayout::global(paths, Vec::new());
         super::verify_uninstall(&layout, plan)
-    }
-
-    fn uninstall_command(runtime: &CliRuntime, name: &str, timeout: Duration) -> CommandSpec {
-        super::uninstall_command(runtime, name, None, timeout)
     }
 
     struct Fixture {
@@ -702,7 +658,10 @@ mod tests {
 
     #[test]
     fn uninstall_command_is_names_only_and_never_uses_forbidden_flags() {
-        let spec = uninstall_command(&runtime(), "alpha", Duration::from_secs(900));
+        let fixture = Fixture::new();
+        let layout =
+            crate::scope_layout::ScopeLayout::global(&fixture.paths, fixture.agents.clone());
+        let spec = ScopedCli::new(&runtime(), &layout).uninstall("alpha", Duration::from_secs(900));
         assert_eq!(spec.program, PathBuf::from("/node/bin/npx"));
         assert_eq!(
             spec.args,
@@ -1823,7 +1782,6 @@ mod project_uninstall_tests {
         let layout = fixture.layout();
         let plan = super::plan_uninstall(&fixture.paths, &layout, &layout.scope.skill_id("alpha"))
             .unwrap();
-        assert_eq!(plan.scope, layout.scope);
         assert_eq!(
             plan.canonical.as_deref(),
             Some(fs::canonicalize(&fixture.canonical).unwrap().as_path())
@@ -1851,12 +1809,8 @@ mod project_uninstall_tests {
             env: std::collections::BTreeMap::new(),
             pinned_version: PINNED_CLI_VERSION.to_string(),
         };
-        let spec = super::uninstall_command(
-            &runtime,
-            "alpha",
-            Some(fixture.root.as_path()),
-            Duration::from_secs(5),
-        );
+        let spec =
+            ScopedCli::new(&runtime, &fixture.layout()).uninstall("alpha", Duration::from_secs(5));
         assert_eq!(spec.cwd, fixture.root);
         assert_eq!(
             spec.args,

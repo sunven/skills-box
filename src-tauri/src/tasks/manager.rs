@@ -10,7 +10,7 @@ use std::time::Duration;
 use serde::Serialize;
 use tokio::sync::{Notify, Semaphore};
 
-use crate::cli::{CliRuntimeProvider, preview_command};
+use crate::cli::{CliRuntimeProvider, ScopedCli};
 use crate::error::cli::{self, CliAction};
 use crate::error::{AppError, ErrorCode};
 use crate::interrupted::{InterruptedMutation, MarkerStore, MutationKind};
@@ -1019,12 +1019,10 @@ impl TaskManager {
                 1,
             ),
         );
-        let spec = preview_command(
-            &runtime,
+        let spec = ScopedCli::new(&runtime, &layout).preview(
+            &self.inner.paths,
             &source.normalized,
             self.inner.config.preview_timeout,
-            layout.cli_cwd(&self.inner.paths),
-            layout.is_global(),
         );
         let output = match self.inner.executor.run(spec, cancel.clone()).await {
             Ok(output) => output,
@@ -1299,6 +1297,8 @@ impl Clone for TaskManager {
 
 #[cfg(test)]
 mod tests {
+    mod scoped_cli;
+
     use super::*;
     use crate::baseline::BaselineStore;
     use crate::cli::CliRuntime;

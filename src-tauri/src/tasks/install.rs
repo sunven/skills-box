@@ -20,7 +20,7 @@ use crate::agents::{DetectionContext, resolve_global_skills_dir};
 use crate::attachment_target::{self, AgentDirectoryState, TargetState};
 use crate::backup::{BackupAction, BackupStore};
 use crate::baseline::{BaselineStore, write_warning};
-use crate::cli::CliRuntime;
+use crate::cli::{CliRuntime, ScopedCli};
 #[cfg(test)]
 use crate::env::capture_process_env;
 #[cfg(test)]
@@ -75,12 +75,6 @@ pub struct InstallPlan {
     pub targets: Vec<InstallTarget>,
     /// True only for an explicit retry request (see [`InstallRequest::retry`]).
     pub retry: bool,
-    /// Scope this install writes to; also keys the baseline store.
-    pub scope: crate::scope::ScopeId,
-    /// Project root for project scope; `None` keeps the CLI runtime cwd.
-    pub cwd: Option<PathBuf>,
-    /// Global installs keep `-g`; project installs never pass it.
-    pub global: bool,
 }
 
 impl InstallPlan {
@@ -110,13 +104,6 @@ pub fn validate_request(
         agent_ids,
         targets,
         retry: request.retry,
-        scope: layout.scope.clone(),
-        cwd: if layout.is_global() {
-            None
-        } else {
-            Some(layout.cli_cwd(paths))
-        },
-        global: layout.is_global(),
     })
 }
 
@@ -474,39 +461,6 @@ pub fn conflicts_for(
         }
     }
     Ok(None)
-}
-
-/// `npx -y skills@1.7.4 add <source> [-g] -s <names> -a <ids> -a universal -y --json`
-///
-/// Global installs keep `-g` and the isolated cwd. Project installs run in the
-/// project root and never pass `-g`.
-pub fn install_command(runtime: &CliRuntime, plan: &InstallPlan, timeout: Duration) -> CommandSpec {
-    let mut args = vec![
-        "-y".to_string(),
-        format!("skills@{}", runtime.pinned_version),
-        "add".to_string(),
-        plan.source.clone(),
-    ];
-    if plan.global {
-        args.push("-g".to_string());
-    }
-    for name in &plan.skills {
-        args.push("-s".to_string());
-        args.push(name.clone());
-    }
-    for id in &plan.agent_ids {
-        args.push("-a".to_string());
-        args.push(id.clone());
-    }
-    args.push("-y".to_string());
-    args.push("--json".to_string());
-    CommandSpec::new(
-        &runtime.npx_path,
-        args,
-        plan.cwd.as_deref().unwrap_or(&runtime.cwd),
-        runtime.env.clone(),
-        timeout,
-    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -886,7 +840,12 @@ impl MutationAction for InstallAction {
 
     fn command(&self, plan: &Self::Unit, runtime: &CliRuntime, reporter: &Reporter) -> CommandSpec {
         reporter.progress(TaskPhase::RunningCli, "正在执行 skills add…", None);
-        install_command(runtime, plan, self.timeout)
+        ScopedCli::new(runtime, &self.layout).install(
+            &plan.source,
+            &plan.skills,
+            &plan.agent_ids,
+            self.timeout,
+        )
     }
 
     fn complete(
@@ -926,7 +885,7 @@ impl MutationAction for InstallAction {
         }
 
         let mut warnings = verification.warnings;
-        let baselines = BaselineStore::for_scope(&self.paths, &plan.scope);
+        let baselines = BaselineStore::for_scope(&self.paths, &self.layout.scope);
         for result in &verification.results {
             if result.status != TaskSkillStatus::Installed {
                 continue;
@@ -1060,9 +1019,6 @@ mod tests {
                 skills_dir: PathBuf::from("/Users/tester/.qoder/skills"),
             }],
             retry: false,
-            scope: crate::scope::ScopeId::Global,
-            cwd: None,
-            global: true,
         }
     }
 
@@ -1127,16 +1083,20 @@ mod tests {
                 .collect(),
             targets,
             retry: false,
-            scope: crate::scope::ScopeId::Global,
-            cwd: None,
-            global: true,
         }
     }
 
     #[test]
     fn install_command_is_exact_and_never_uses_forbidden_flags() {
+        let (_tmp, paths) = fixture();
+        let layout = crate::scope_layout::ScopeLayout::global(&paths, Vec::new());
         let plan = plan(&["find-skills", "to-spec"], &["claude-code"]);
-        let spec = install_command(&runtime(), &plan, Duration::from_secs(900));
+        let spec = ScopedCli::new(&runtime(), &layout).install(
+            &plan.source,
+            &plan.skills,
+            &plan.agent_ids,
+            Duration::from_secs(900),
+        );
         assert_eq!(spec.program, PathBuf::from("/node/bin/npx"));
         assert_eq!(
             spec.args,
@@ -1483,8 +1443,14 @@ mod tests {
         assert_eq!(plan.targets.len(), 1);
         assert_eq!(plan.targets[0].id, "workbuddy");
         assert_eq!(plan.targets[0].skills_dir, workbook.join("skills"));
+        let layout = crate::scope_layout::ScopeLayout::global(&paths, Vec::new());
 
-        let spec = install_command(&runtime(), &plan, Duration::from_secs(900));
+        let spec = ScopedCli::new(&runtime(), &layout).install(
+            &plan.source,
+            &plan.skills,
+            &plan.agent_ids,
+            Duration::from_secs(900),
+        );
         assert!(
             !spec.args.iter().any(|arg| arg == "workbuddy"),
             "extra agents must never reach the CLI"
@@ -1516,9 +1482,6 @@ mod tests {
                 skills_dir: workbook.clone(),
             }],
             retry: false,
-            scope: crate::scope::ScopeId::Global,
-            cwd: None,
-            global: true,
         };
 
         let errors = ensure_extra_attachments(&paths, &plan, &["find-skills".to_string()]);
@@ -1553,9 +1516,6 @@ mod tests {
                 skills_dir: workbook.clone(),
             }],
             retry: false,
-            scope: crate::scope::ScopeId::Global,
-            cwd: None,
-            global: true,
         };
         let errors = ensure_extra_attachments(&paths, &other_plan, &["other".to_string()]);
         assert_eq!(errors.len(), 1);
@@ -1590,12 +1550,6 @@ mod tests {
             &request("acme/skills", &["alpha"], &["claude-code"]),
         )
         .unwrap();
-        assert!(!plan.global);
-        assert_eq!(plan.cwd.as_deref(), Some(layout.root.as_path()));
-        assert_eq!(
-            plan.scope,
-            crate::scope::ScopeId::project(layout.project.as_ref().unwrap().id)
-        );
         assert_eq!(
             plan.agent_ids,
             vec!["claude-code".to_string(), UNIVERSAL_AGENT_ID.to_string()]
@@ -1605,7 +1559,12 @@ mod tests {
             layout.root.join(".claude/skills")
         );
 
-        let spec = install_command(&runtime(), &plan, Duration::from_secs(900));
+        let spec = ScopedCli::new(&runtime(), &layout).install(
+            &plan.source,
+            &plan.skills,
+            &plan.agent_ids,
+            Duration::from_secs(900),
+        );
         assert_eq!(
             spec.args,
             vec![
@@ -1752,9 +1711,6 @@ mod tests {
                 skills_dir: extra_dir.clone(),
             }],
             retry: false,
-            scope: layout.scope.clone(),
-            cwd: Some(layout.root.clone()),
-            global: false,
         };
 
         let errors = super::ensure_extra_attachments(&layout, &plan, &["find-skills".to_string()]);

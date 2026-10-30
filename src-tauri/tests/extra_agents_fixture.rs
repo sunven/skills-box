@@ -78,7 +78,7 @@ fn extra_agent_lifecycle_from_install_to_uninstall() {
     assert_eq!(plan.agent_ids, vec!["universal".to_string()]);
     assert_eq!(plan.targets.len(), 1);
     assert_eq!(plan.targets[0].id, "workbuddy");
-    let spec = install::install_command(
+    let spec = skills_box_lib::cli::ScopedCli::new(
         &skills_box_lib::cli::CliRuntime {
             npx_path: "/node/bin/npx".into(),
             node_dir: "/node/bin".into(),
@@ -88,7 +88,12 @@ fn extra_agent_lifecycle_from_install_to_uninstall() {
             env: Default::default(),
             pinned_version: skills_box_lib::cli::PINNED_CLI_VERSION.to_string(),
         },
-        &plan,
+        &layout,
+    )
+    .install(
+        &plan.source,
+        &plan.skills,
+        &plan.agent_ids,
         std::time::Duration::from_secs(900),
     );
     assert!(!spec.args.iter().any(|arg| arg == "workbuddy"));

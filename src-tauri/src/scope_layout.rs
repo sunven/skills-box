@@ -120,15 +120,6 @@ impl ScopeLayout {
         self.project.as_ref().map(|_| self.root.as_path())
     }
 
-    /// Project mutations use the project root as cwd; global mutations keep
-    /// the isolated CLI working directory so no project scope can appear.
-    pub fn cli_cwd(&self, paths: &AppPaths) -> PathBuf {
-        match self.project {
-            Some(_) => self.root.clone(),
-            None => paths.cli_cwd(),
-        }
-    }
-
     /// Read this scope's Lock entry through one interface, regardless of the
     /// global v3 or project v1 schema.
     pub(crate) fn lock(&self) -> Result<ScopedLock, AppError> {

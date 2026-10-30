@@ -14,6 +14,7 @@ v1 managed global skills only, and deliberately ran the CLI in an isolated empty
 ## Consequences
 
 - ADR 0001's isolated-cwd rule becomes scope-conditional: global mutations keep the isolated cwd; project mutations use the project root.
+- Command construction now derives Scope from the same layout as local verification and bookkeeping, rather than copied plan fields (see [ADR 0017](0017-cli-scope-from-layout.md)).
 - The registry needs a lifecycle: an unavailable root is kept and marked, with relocate (same project identity) and forget (never deletes files).
 - New project failures extend the typed error taxonomy (ADR 0006); no ad-hoc code strings.
 - The security allowlist extends to registered project roots; forgetting a project revokes its read access.

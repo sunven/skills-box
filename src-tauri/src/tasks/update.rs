@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use crate::backup::{BackupAction, BackupAttachment, BackupStore};
 use crate::baseline::{BaselineStore, LocalModification, write_warning};
-use crate::cli::CliRuntime;
+use crate::cli::{CliRuntime, ScopedCli};
 use crate::error::cli::CliAction;
 use crate::error::{AppError, ErrorCode};
 use crate::inventory::{AgentDir, AttachmentMode, ManagementState};
@@ -27,8 +27,7 @@ use crate::paths::AppPaths;
 use crate::process::{CommandSpec, ExecOutput};
 
 use super::install::{
-    InstallPlan, InstallTarget, UNIVERSAL_AGENT_ID, ensure_extra_attachments, install_command,
-    verify_install,
+    InstallPlan, InstallTarget, UNIVERSAL_AGENT_ID, ensure_extra_attachments, verify_install,
 };
 use super::manager::{TaskAction, TaskPhase, TaskSkillResult, TaskSkillStatus};
 use super::session::{
@@ -53,12 +52,6 @@ pub struct UpdateItem {
     pub attachments: Vec<BackupAttachment>,
     /// Display names of copy attachments that will become symlinks.
     pub copy_agents: Vec<String>,
-    /// Scope this update writes to; also keys the baseline store.
-    pub scope: crate::scope::ScopeId,
-    /// Project root as CLI cwd for project scope; `None` uses the runtime cwd.
-    pub cwd: Option<PathBuf>,
-    /// Global updates keep `-g`; project updates never pass it.
-    pub global: bool,
 }
 
 impl UpdateItem {
@@ -69,14 +62,7 @@ impl UpdateItem {
             agent_ids: self.agent_ids.clone(),
             targets: self.targets.clone(),
             retry: false,
-            scope: self.scope.clone(),
-            cwd: self.cwd.clone(),
-            global: self.global,
         }
-    }
-
-    pub fn command(&self, runtime: &crate::cli::CliRuntime, timeout: Duration) -> CommandSpec {
-        install_command(runtime, &self.install_plan(), timeout)
     }
 }
 
@@ -221,13 +207,6 @@ pub fn plan_updates(
                 .into_iter()
                 .map(|(_, display_name)| display_name)
                 .collect(),
-            scope: layout.scope.clone(),
-            cwd: if layout.is_global() {
-                None
-            } else {
-                Some(layout.cli_cwd(paths))
-            },
-            global: layout.is_global(),
         });
     }
     Ok(plan)
@@ -472,7 +451,12 @@ impl MutationAction for UpdateAction {
             format!("正在更新 {}（skills add）…", item.name),
             Some(item.name.as_str()),
         );
-        item.command(runtime, self.timeout)
+        ScopedCli::new(runtime, &self.layout).install(
+            &item.source,
+            std::slice::from_ref(&item.name),
+            &item.agent_ids,
+            self.timeout,
+        )
     }
 
     fn complete(
@@ -746,7 +730,13 @@ mod tests {
         assert!(!fixture.windsurf.join("alpha").exists());
         assert!(fixture.gemini.join("alpha").is_symlink());
 
-        let spec = item.command(&runtime(), Duration::from_secs(5));
+        let spec = ScopedCli::new(&runtime(), &global_layout(&fixture.paths, &fixture.agents))
+            .install(
+                &item.source,
+                std::slice::from_ref(&item.name),
+                &item.agent_ids,
+                Duration::from_secs(5),
+            );
         assert_eq!(
             spec.args,
             vec![
@@ -827,7 +817,13 @@ mod tests {
         assert_eq!(item.agent_ids, vec!["universal".to_string()]);
         assert!(item.targets.is_empty());
         assert!(item.copy_agents.is_empty());
-        let spec = item.command(&runtime(), Duration::from_secs(5));
+        let spec = ScopedCli::new(&runtime(), &global_layout(&fixture.paths, &fixture.agents))
+            .install(
+                &item.source,
+                std::slice::from_ref(&item.name),
+                &item.agent_ids,
+                Duration::from_secs(5),
+            );
         assert_eq!(
             spec.args,
             vec![
@@ -1618,7 +1614,6 @@ mod project_update_tests {
     use crate::cli::{CliRuntime, CliRuntimeProvider, PINNED_CLI_VERSION};
     use crate::process::{CancelToken, ExecError, ProcessExecutor};
     use crate::projects::{Project, ProjectRegistry};
-    use crate::scope::ScopeId;
     use crate::tasks::conflicts::{ConflictInfo, ConflictProvider};
     use crate::tasks::manager::{
         EventSink, TaskEvent, TaskManager, TaskManagerConfig, TaskOverall, TaskPhase,
@@ -1715,10 +1710,6 @@ mod project_update_tests {
             }
         }
 
-        fn scope(&self) -> ScopeId {
-            self.project.scope()
-        }
-
         fn layout(&self) -> crate::scope_layout::ScopeLayout {
             crate::scope_layout::ScopeLayout::project(&self.paths, self.project.clone())
         }
@@ -1731,9 +1722,6 @@ mod project_update_tests {
         let plan = plan_updates(&fixture.paths, &layout, &["alpha".to_string()]).unwrap();
         assert!(plan.skipped.is_empty(), "{:?}", plan.skipped);
         let item = &plan.items[0];
-        assert_eq!(item.scope, fixture.scope());
-        assert_eq!(item.cwd, Some(fixture.root.clone()));
-        assert!(!item.global);
         assert_eq!(
             item.agent_ids,
             vec![
@@ -1761,7 +1749,12 @@ mod project_update_tests {
             ]),
             pinned_version: PINNED_CLI_VERSION.to_string(),
         };
-        let spec = item.command(&runtime, Duration::from_secs(5));
+        let spec = ScopedCli::new(&runtime, &layout).install(
+            &item.source,
+            std::slice::from_ref(&item.name),
+            &item.agent_ids,
+            Duration::from_secs(5),
+        );
         assert_eq!(spec.cwd, fixture.root);
         assert!(!spec.args.iter().any(|arg| arg == "-g"), "{:?}", spec.args);
         assert_eq!(
