@@ -39,6 +39,9 @@ pub enum UpdateCheckOutcome {
 pub struct UpdateCheckState {
     /// The per-scope entry version, not the file version.
     pub version: u32,
+    /// Absent only for Global or legacy Project summaries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_revision: Option<String>,
     pub last_attempt_at: u64,
     pub last_success_at: Option<u64>,
     pub last_outcome: UpdateCheckOutcome,
@@ -77,6 +80,7 @@ impl UpdateCheckState {
         };
         Self {
             version: UPDATE_CHECK_STATE_ENTRY_VERSION,
+            check_revision: None,
             last_attempt_at: report.checked_at_epoch_ms,
             last_success_at: report.last_success_at_epoch_ms,
             last_outcome,
@@ -303,6 +307,7 @@ mod tests {
     fn state(last_attempt_at: u64) -> UpdateCheckState {
         UpdateCheckState {
             version: UPDATE_CHECK_STATE_ENTRY_VERSION,
+            check_revision: None,
             last_attempt_at,
             last_success_at: None,
             last_outcome: UpdateCheckOutcome::Ok,

@@ -310,6 +310,7 @@ mod tests {
             display_name: "app".to_string(),
             added_at: 1,
             last_opened_at: 1,
+            check_revision: "initial".into(),
         };
         let layout = ScopeLayout::project(&paths, project);
         let skill_id = layout.scope.skill_id("alpha");

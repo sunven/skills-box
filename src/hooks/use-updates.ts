@@ -1,20 +1,24 @@
-import { useCallback, useRef } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { checkUpdates, getUpdateCheckState } from "../lib/api";
+import { useCallback } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { getUpdateCheckState } from "../lib/api";
 import type { ScopeId, UpdateCheckReport } from "../lib/types";
 import { GLOBAL_SCOPE } from "../lib/types";
+import { updateReportQueryKey } from "../lib/update-view";
 import {
-  mergeUpdateReports,
-  updateReportQueryKey,
-} from "../lib/update-view";
-
-export const updateCheckStateQueryKey = (scope: ScopeId) =>
-  ["updateCheckState", scope] as const;
-export const updateCheckStatesQueryKey = ["updateCheckStates"] as const;
-export const lastFullCheckQueryKey = (scope: ScopeId) =>
-  ["lastFullCheck", scope] as const;
-export const lastFullAttemptQueryKey = (scope: ScopeId) =>
-  ["lastFullAttempt", scope] as const;
+  checkRunQueryKey,
+  IDLE_CHECK,
+  updateCheckLifecycle,
+  type CheckRunState,
+  updateCheckStateQueryKey,
+  lastFullCheckQueryKey,
+  lastFullAttemptQueryKey,
+} from "../lib/update-check-lifecycle";
+export {
+  updateCheckStateQueryKey,
+  updateCheckStatesQueryKey,
+  lastFullCheckQueryKey,
+  lastFullAttemptQueryKey,
+} from "../lib/update-check-lifecycle";
 
 /**
  * Report slot shared by automatic and manual checks. `enabled: false` keeps
@@ -24,7 +28,7 @@ export const lastFullAttemptQueryKey = (scope: ScopeId) =>
 export function useUpdateReportQuery(scope: ScopeId = GLOBAL_SCOPE) {
   return useQuery({
     queryKey: updateReportQueryKey(scope),
-    queryFn: async () => (await checkUpdates(undefined, scope)).report,
+    queryFn: () => Promise.resolve<UpdateCheckReport | null>(null),
     enabled: false,
   });
 }
@@ -56,57 +60,22 @@ export function useLastFullAttemptQuery(scope: ScopeId = GLOBAL_SCOPE) {
   });
 }
 
-export function useCheckUpdates(scope: ScopeId = GLOBAL_SCOPE) {
+export function useCheckUpdates(
+  scope: ScopeId = GLOBAL_SCOPE,
+  checkRevision?: string,
+) {
   const queryClient = useQueryClient();
-  const inFlight = useRef(false);
-  const mutation = useMutation({
-    mutationFn: (skillIds?: string[]) => checkUpdates(skillIds, scope),
-    onSuccess: (response, skillIds) => {
-      const report = response.report;
-      const full = skillIds === undefined;
-      queryClient.setQueryData<UpdateCheckReport>(
-        updateReportQueryKey(scope),
-        (previous) => (full ? report : mergeUpdateReports(previous, report)),
-      );
-      if (full) {
-        queryClient.setQueryData(lastFullCheckQueryKey(scope), report);
-        queryClient.setQueryData(
-          lastFullAttemptQueryKey(scope),
-          report.checkedAtEpochMs,
-        );
-        if (response.state) {
-          queryClient.setQueryData(
-            updateCheckStateQueryKey(scope),
-            response.state,
-          );
-        } else {
-          void queryClient.invalidateQueries({
-            queryKey: updateCheckStateQueryKey(scope),
-          });
-        }
-        void queryClient.invalidateQueries({
-          queryKey: updateCheckStatesQueryKey,
-        });
-      }
-    },
-    onError: (_error, skillIds) => {
-      if (skillIds === undefined) {
-        queryClient.setQueryData(lastFullAttemptQueryKey(scope), Date.now());
-      }
-    },
-    onSettled: () => {
-      inFlight.current = false;
-    },
+  const revision =
+    scope === GLOBAL_SCOPE ? undefined : (checkRevision ?? "initial");
+  const run = useQuery<CheckRunState>({
+    queryKey: checkRunQueryKey(scope, revision),
+    queryFn: () => Promise.resolve(IDLE_CHECK),
+    enabled: false,
   });
-  // Keep `mutate` stable so callers can memoize their own handlers; the
-  // in-flight guard already prevents duplicate checks, so it does not need to
-  // depend on the ever-changing mutation result object.
-  const mutateRef = useRef(mutation.mutate);
-  mutateRef.current = mutation.mutate;
-  const mutate = useCallback((skillIds?: string[]) => {
-    if (inFlight.current) return;
-    inFlight.current = true;
-    mutateRef.current(skillIds);
-  }, []);
-  return { ...mutation, mutate };
+  const mutate = useCallback(
+    (skillIds?: string[]) =>
+      updateCheckLifecycle(queryClient).start(scope, revision, skillIds),
+    [queryClient, scope, revision],
+  );
+  return { ...(run.data ?? IDLE_CHECK), mutate };
 }

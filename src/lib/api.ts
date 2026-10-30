@@ -11,6 +11,8 @@ import type {
   InstallRequest,
   InventorySnapshot,
   ProjectEntry,
+  RelocateProjectResult,
+  ForgetProjectResult,
   ProjectList,
   RemoveExtraAgentResult,
   ScopeId,
@@ -79,13 +81,13 @@ export function addProject(root: string): Promise<ProjectEntry> {
 }
 
 /** Point an existing project at a new root, keeping its id. */
-export function relocateProject(id: string, root: string): Promise<ProjectEntry> {
-  return invoke<ProjectEntry>(API_COMMANDS.relocateProject, { id, root });
+export function relocateProject(id: string, root: string): Promise<RelocateProjectResult> {
+  return invoke<RelocateProjectResult>(API_COMMANDS.relocateProject, { id, root });
 }
 
 /** Remove the registry entry and its check state; never deletes files. */
-export function forgetProject(id: string): Promise<void> {
-  return invoke<void>(API_COMMANDS.forgetProject, { id });
+export function forgetProject(id: string): Promise<ForgetProjectResult> {
+  return invoke<ForgetProjectResult>(API_COMMANDS.forgetProject, { id });
 }
 
 /** Persist the active scope (and refresh the project's lastOpenedAt). */
@@ -229,10 +231,12 @@ export function startInstall(
 export function checkUpdates(
   skillIds?: string[],
   scope: ScopeId = GLOBAL_SCOPE,
+  checkRevision?: string,
 ): Promise<UpdateCheckResponse> {
   return invoke<UpdateCheckResponse>(API_COMMANDS.checkUpdates, {
     skillIds: skillIds ?? null,
     scope,
+    ...(checkRevision === undefined ? {} : { checkRevision }),
   });
 }
 

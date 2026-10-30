@@ -26,6 +26,7 @@ use crate::scope::ScopeId;
 use crate::tasks::{ActiveMutationInfo, CancelAck, EventSink, InstallRequest, TaskEvent, TaskId};
 use crate::timeouts::READ_TIMEOUT;
 use crate::update::UpdateCheckResponse;
+use crate::update::project_checks::{ForgetProjectResult, RelocateProjectResult};
 use crate::update::state::UpdateCheckState;
 
 /// Forward task events to the renderer. A closed window must not fail a
@@ -84,19 +85,18 @@ pub fn relocate_project(
     state: State<'_, AppState>,
     id: String,
     root: String,
-) -> Result<ProjectEntry, AppError> {
+) -> Result<RelocateProjectResult, AppError> {
     let _change = state.tasks.begin_registry_change()?;
-    let entry = state.projects.relocate(&id, &root)?;
-    let _ = state.check_states.forget_scope(&entry.project.scope());
-    Ok(entry)
+    state.project_updates.relocate(&id, &root)
 }
 
 #[tauri::command]
-pub fn forget_project(state: State<'_, AppState>, id: String) -> Result<(), AppError> {
+pub fn forget_project(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<ForgetProjectResult, AppError> {
     let _change = state.tasks.begin_registry_change()?;
-    let scope = state.projects.forget(&id)?;
-    let _ = state.check_states.forget_scope(&scope);
-    Ok(())
+    state.project_updates.forget(&id)
 }
 
 #[tauri::command]
@@ -280,31 +280,33 @@ pub async fn check_updates(
     state: State<'_, AppState>,
     scope: ScopeId,
     skill_ids: Option<Vec<String>>,
+    check_revision: Option<String>,
 ) -> Result<UpdateCheckResponse, AppError> {
-    let full_check = skill_ids.is_none();
-    let report = match &scope {
-        ScopeId::Global => state.updates.check(skill_ids).await?,
-        ScopeId::Project(_) => {
-            let layout = crate::scope_layout::ScopeLayout::resolve(
-                &state.paths,
-                &state.projects,
-                &scope,
-                &[],
-            )?;
-            state.project_updates.check(&layout, skill_ids).await?
+    match &scope {
+        ScopeId::Global => {
+            let full_check = skill_ids.is_none();
+            let report = state.updates.check(skill_ids).await?;
+            Ok(UpdateCheckResponse::Applied {
+                scope,
+                check_revision: None,
+                state: full_check.then(|| UpdateCheckState::from_report(&report)),
+                report,
+            })
         }
-    };
-    Ok(UpdateCheckResponse {
-        state: full_check.then(|| UpdateCheckState::from_report(&report)),
-        report,
-    })
+        ScopeId::Project(_) => {
+            state
+                .project_updates
+                .check(scope, skill_ids, check_revision)
+                .await
+        }
+    }
 }
 
 /// Persisted check summary for every scope, for the scope switcher. One file
 /// read instead of one request per project.
 #[tauri::command]
 pub fn get_update_check_states(state: State<'_, AppState>) -> BTreeMap<String, UpdateCheckState> {
-    state.check_states.load_all()
+    state.project_updates.read_states()
 }
 
 /// Last persisted full-check summary for one scope, if any. Read-only; no
@@ -314,7 +316,7 @@ pub fn get_update_check_state(
     state: State<'_, AppState>,
     scope: ScopeId,
 ) -> Option<UpdateCheckState> {
-    state.check_states.load(&scope)
+    state.project_updates.read_state(&scope)
 }
 
 #[tauri::command]

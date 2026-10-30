@@ -9,7 +9,7 @@ Mutations resolved their `ScopeLayout` before acquiring the single-writer permit
 - **A registry-level root pin held by `ScopeLayout`**: rejected because layouts are cloned into blocking tasks, so it would need owned guards or generation checks, and every read path would pay for a guarantee only writers need.
 - **Registering native actions in the task map**: rejected because it conflates task events with native actions and still leaves the pre-permit layout window.
 - **Guarding Add and active-scope switching**: rejected because Add's duplicate check and insert already run atomically under the registry mutex, and switching the active scope changes no root; both would queue behind long mutations for no safety gain.
-- **Holding the slot across project update checks**: rejected because a GitHub-bound check would block every mutation for its duration. A check can still store a state row after a Relocate; a future state-owner change must revalidate the Scope before storing.
+- **Holding the slot across project update checks**: rejected because a GitHub-bound check would block every mutation for its duration. Checks revalidate the Project check revision before publishing through the lifecycle module described in [ADR 0015](0015-project-update-check-lifecycle.md).
 
 ## Consequences
 

@@ -93,6 +93,7 @@ pub enum ErrorCode {
     VerifyLockPresent,
     UpdateLocalModified,
     UpdateCopyToSymlink,
+    UpdateStateCleanupFailed,
 }
 
 impl ErrorCode {
@@ -185,6 +186,7 @@ impl ErrorCode {
         Self::VerifyLockPresent,
         Self::UpdateLocalModified,
         Self::UpdateCopyToSymlink,
+        Self::UpdateStateCleanupFailed,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -277,6 +279,7 @@ impl ErrorCode {
             Self::VerifyLockPresent => "verify.lock_present",
             Self::UpdateLocalModified => "update.local_modified",
             Self::UpdateCopyToSymlink => "update.copy_to_symlink",
+            Self::UpdateStateCleanupFailed => "update.state_cleanup_failed",
         }
     }
 
@@ -311,7 +314,7 @@ mod tests {
 
     #[test]
     fn all_codes_are_unique_and_stable() {
-        assert_eq!(ErrorCode::ALL.len(), 88);
+        assert_eq!(ErrorCode::ALL.len(), 89);
         let values: Vec<&str> = ErrorCode::ALL.iter().map(|code| code.as_str()).collect();
         let unique: HashSet<&str> = values.iter().copied().collect();
         assert_eq!(unique.len(), values.len());
@@ -406,6 +409,7 @@ mod tests {
                 "verify.lock_present",
                 "update.local_modified",
                 "update.copy_to_symlink",
+                "update.state_cleanup_failed",
             ]
         );
     }

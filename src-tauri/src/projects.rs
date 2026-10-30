@@ -28,6 +28,13 @@ pub struct Project {
     pub display_name: String,
     pub added_at: u64,
     pub last_opened_at: u64,
+    /// Opaque lifetime of this Project's update-check results.
+    #[serde(default = "initial_check_revision")]
+    pub check_revision: String,
+}
+
+fn initial_check_revision() -> String {
+    "initial".to_string()
 }
 
 impl Project {
@@ -169,6 +176,7 @@ impl ProjectRegistry {
             id: Uuid::new_v4(),
             root: canonical.clone(),
             display_name: display_name(&canonical),
+            check_revision: Uuid::new_v4().to_string(),
             added_at: now,
             last_opened_at: now,
         };
@@ -190,6 +198,7 @@ impl ProjectRegistry {
         let now = (self.clock)();
         {
             let project = &mut file.projects[index];
+            project.check_revision = Uuid::new_v4().to_string();
             project.root = canonical;
             project.display_name = display_name(&project.root);
             project.last_opened_at = now;

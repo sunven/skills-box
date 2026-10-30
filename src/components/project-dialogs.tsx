@@ -26,8 +26,8 @@ interface ProjectDialogsProps {
   state: ProjectDialogState;
   onClose: () => void;
   onAdded: (entry: ProjectEntry) => void;
-  onRelocated: (entry: ProjectEntry) => void;
-  onForgotten: (projectId: string) => void;
+  onRelocated: (entry: ProjectEntry, warnings: AppError[]) => void;
+  onForgotten: (projectId: string, warnings: AppError[]) => void;
 }
 
 /**
@@ -141,16 +141,17 @@ export function ProjectDialogs({
           message: "正在遗忘项目…",
           indeterminate: true,
           run: async () => {
-            await forgetProject(forgottenId);
+            const changed = await forgetProject(forgottenId);
             return {
               rows: [],
+              warnings: changed.warnings,
               message: "已遗忘项目",
               scope: projectScope(forgottenId),
             };
           },
         }),
       );
-      if (result) onForgotten(forgottenId);
+      if (result) onForgotten(forgottenId, result.warnings);
       return;
     }
     if (!path) {
@@ -167,13 +168,15 @@ export function ProjectDialogs({
         message: relocate ? "正在重新定位项目…" : "正在添加项目…",
         indeterminate: true,
         run: async () => {
-          const entry =
-            relocate && projectId
-              ? await relocateProject(projectId, path)
-              : await addProject(path);
+          const changed = relocate && projectId
+            ? await relocateProject(projectId, path)
+            : null;
+          const entry = changed ? changed.project : await addProject(path);
           entryRef.current = entry;
           return {
             rows: [],
+            warnings: changed?.warnings ?? [],
+            checkRevision: changed?.project.checkRevision,
             message: relocate ? "已重新定位项目" : "已添加项目",
             scope: projectScope(entry.id),
           };
@@ -181,7 +184,7 @@ export function ProjectDialogs({
       }),
     );
     if (result && entryRef.current) {
-      if (relocate) onRelocated(entryRef.current);
+      if (relocate) onRelocated(entryRef.current, result.warnings);
       else onAdded(entryRef.current);
     }
   };

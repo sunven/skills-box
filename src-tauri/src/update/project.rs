@@ -7,8 +7,8 @@
 //! and hashed per skill folder with the CLI-identical algorithm.
 //!
 //! Non-GitHub entries, unsafe refs and non-64-hex fingerprints are reported as
-//! unsupported rows; source failures stay inside their source and every result
-//! is persisted per scope.
+//! unsupported rows; source failures stay inside their source. Publication and
+//! persisted summaries belong to the Project Update check lifecycle.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -21,7 +21,6 @@ use super::archive::{
 };
 use super::cache::is_fresh;
 use super::content_hash::{self, FolderHashError};
-use super::state::{UpdateCheckState, UpdateCheckStateStore};
 use super::{
     Clock, SystemClock, UPDATE_CHECK_CACHE_TTL_MS, UPDATE_CHECK_CONCURRENCY,
     UPDATE_CHECK_DEADLINE_MS, UPDATE_CHECK_MAX_SOURCES, UpdateCheckReport, UpdateSkillResult,
@@ -32,6 +31,7 @@ use crate::inventory::UpdateState;
 use crate::lock::LockEntry;
 use crate::paths::AppPaths;
 use crate::project_lock::ProjectLockFile;
+#[cfg(test)]
 use crate::scope::ScopeId;
 use crate::scope_layout::ScopeLayout;
 use crate::update_target::UpdateTarget;
@@ -58,7 +58,6 @@ impl Default for ProjectCheckConfig {
 }
 
 pub struct ProjectUpdateService {
-    state: Arc<UpdateCheckStateStore>,
     client: Arc<dyn ArchiveClient>,
     cache: CommitArchiveCache,
     clock: Arc<dyn Clock>,
@@ -67,16 +66,8 @@ pub struct ProjectUpdateService {
 
 impl ProjectUpdateService {
     pub fn new(paths: AppPaths) -> Self {
-        let state = Arc::new(UpdateCheckStateStore::new(&paths));
-        Self::new_with_store(paths, state)
-    }
-
-    /// Production wiring: the app owns one store shared with the global
-    /// service and the registry cleanup path.
-    pub fn new_with_store(paths: AppPaths, state: Arc<UpdateCheckStateStore>) -> Self {
-        Self::with_dependencies_and_store(
+        Self::with_dependencies(
             paths,
-            state,
             Arc::new(super::archive::ReqwestArchiveClient::new()),
             Arc::new(SystemClock),
             ProjectCheckConfig::default(),
@@ -89,28 +80,12 @@ impl ProjectUpdateService {
         clock: Arc<dyn Clock>,
         config: ProjectCheckConfig,
     ) -> Self {
-        let state = Arc::new(UpdateCheckStateStore::new(&paths));
-        Self::with_dependencies_and_store(paths, state, client, clock, config)
-    }
-
-    pub fn with_dependencies_and_store(
-        paths: AppPaths,
-        state: Arc<UpdateCheckStateStore>,
-        client: Arc<dyn ArchiveClient>,
-        clock: Arc<dyn Clock>,
-        config: ProjectCheckConfig,
-    ) -> Self {
         Self {
-            state,
             cache: CommitArchiveCache::new(&paths),
             client,
             clock,
             config,
         }
-    }
-
-    pub fn read_state(&self, scope: &ScopeId) -> Option<UpdateCheckState> {
-        self.state.load(scope)
     }
 
     /// Read-only check of one Project scope. A missing lock is an empty report
@@ -121,7 +96,6 @@ impl ProjectUpdateService {
         skill_ids: Option<Vec<String>>,
     ) -> Result<UpdateCheckReport, AppError> {
         let lock = ProjectLockFile::read(&layout.lock_path)?;
-        let full_check = skill_ids.is_none();
         let now = self.clock.now_epoch_ms();
         let selected = skill_ids
             .map(|ids| {
@@ -213,7 +187,7 @@ impl ProjectUpdateService {
             .max();
         warnings.dedup();
 
-        let mut report = UpdateCheckReport {
+        let report = UpdateCheckReport {
             skills: skill_results,
             sources: source_results,
             checked_at_epoch_ms: now,
@@ -222,14 +196,6 @@ impl ProjectUpdateService {
             cached_source_count,
             warnings,
         };
-        if full_check {
-            let state = UpdateCheckState::from_report(&report);
-            if let Err(error) = self.state.store(&layout.scope, &state) {
-                report
-                    .warnings
-                    .push(format!("无法写入更新检查状态：{error}"));
-            }
-        }
         Ok(report)
     }
 
@@ -835,6 +801,7 @@ mod tests {
                 display_name: "project".to_string(),
                 added_at: 0,
                 last_opened_at: 0,
+                check_revision: "initial".into(),
             },
         )
     }
@@ -883,10 +850,6 @@ mod tests {
         assert_eq!(report.sources.len(), 1);
         assert_eq!(report.sources[0].skill_count, 3);
         assert_eq!(report.sources[0].status, UpdateSourceStatus::Ok);
-
-        let state = service.read_state(&scope()).unwrap();
-        assert_eq!(state.candidate_count, 1);
-        assert_eq!(state.last_attempt_at, 1_000);
     }
 
     #[tokio::test]
@@ -1021,7 +984,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn source_failures_are_isolated_and_do_not_persist_over_other_scopes() {
+    async fn source_failures_are_isolated() {
         let root = project_root();
         write_lock(
             root.path(),
@@ -1050,12 +1013,6 @@ mod tests {
             crate::error::ErrorCode::NetworkOffline
         );
         assert_eq!(report.sources.len(), 2);
-        let state = service.read_state(&scope()).unwrap();
-        use crate::update::state::UpdateCheckOutcome;
-        assert_eq!(state.last_outcome, UpdateCheckOutcome::Partial);
-        assert_eq!(state.failed_source_count, 1);
-        // Another scope is untouched.
-        assert!(service.read_state(&ScopeId::Global).is_none());
     }
 
     #[tokio::test]
@@ -1094,7 +1051,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn scoped_checks_do_not_advance_the_persisted_state() {
+    async fn scoped_checks_return_only_the_selected_skill() {
         let root = project_root();
         write_lock(
             root.path(),
@@ -1111,11 +1068,6 @@ mod tests {
         );
         let clock = Arc::new(TestClock::new(1_000));
         let (service, _tmp) = service(client, clock, ProjectCheckConfig::default());
-
-        let full = service.check(&layout(root.path()), None).await.unwrap();
-        let state = service.read_state(&scope()).unwrap();
-        assert_eq!(state.candidate_count, full.candidate_count());
-
         let scoped = service
             .check(
                 &layout(root.path()),
@@ -1124,7 +1076,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(scoped.skills.len(), 1);
-        assert_eq!(service.read_state(&scope()), Some(state));
     }
 
     #[tokio::test]
@@ -1232,6 +1183,5 @@ mod tests {
 
         let error = service.check(&layout(root.path()), None).await.unwrap_err();
         assert_eq!(error.code, crate::error::ErrorCode::LockCorrupt);
-        assert!(service.read_state(&scope()).is_none());
     }
 }

@@ -112,6 +112,10 @@ _Avoid_: update, sync, refresh
 One run of an update check, whether automatic or manual. A run that only uses cached source data is still a check attempt.
 _Avoid_: scan, poll
 
+**Invalidated check**:
+A check attempt whose results no longer apply because its project was successfully relocated or forgotten after it began. Returning to an earlier project root does not make those results applicable again.
+_Avoid_: failed check, cancelled check
+
 **Last check**:
 The recorded time of the most recent check attempt for one scope. A check scoped to one skill does not advance it.
 _Avoid_: last sync, last refresh

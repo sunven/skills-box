@@ -379,6 +379,7 @@ describe("fake backend", () => {
     };
     const backend = createFakeBackend({
       data: {
+        projects: { projects: [{ id: projectScope.slice("project:".length), root: "/tmp/project", displayName: "project", addedAt: 0, lastOpenedAt: 0, available: true, checkRevision: "initial" }], lastActiveScope: GLOBAL_SCOPE, warnings: [] },
         updateReports: {
           [projectScope]: emptyUpdateReport({
             skills: [candidate],

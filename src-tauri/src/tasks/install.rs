@@ -1580,6 +1580,7 @@ mod tests {
             display_name: "app".to_string(),
             added_at: 1,
             last_opened_at: 1,
+            check_revision: "initial".into(),
         };
         let layout = crate::scope_layout::ScopeLayout::project(&paths, project);
 
@@ -1660,6 +1661,7 @@ mod tests {
             display_name: "app".to_string(),
             added_at: 1,
             last_opened_at: 1,
+            check_revision: "initial".into(),
         };
         let layout = crate::scope_layout::ScopeLayout::project(&paths, project);
         let project_snapshot = super::snapshot_lock(&paths, &layout, "task-project").unwrap();
@@ -1713,6 +1715,7 @@ mod tests {
             display_name: "app".to_string(),
             added_at: 1,
             last_opened_at: 1,
+            check_revision: "initial".into(),
         };
         let layout = crate::scope_layout::ScopeLayout::project(&paths, project);
         let canonical = layout.canonical_dir.join("find-skills");

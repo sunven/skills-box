@@ -1700,6 +1700,7 @@ mod project_update_tests {
                 display_name: "app".to_string(),
                 added_at: 1,
                 last_opened_at: 1,
+                check_revision: "initial".into(),
             };
             Self {
                 tmp,

@@ -55,6 +55,7 @@ import { buildWorkspaceView } from "./lib/workspace-view";
 import { GLOBAL_SCOPE } from "./lib/types";
 import type {
   ActiveMutationInfo,
+  AppError,
   DetectedAgent,
   EnvReport,
   InventoryAgent,
@@ -76,6 +77,7 @@ function App() {
   const [activeScope, setActiveScope] = useState<ScopeId | null>(null);
   const [projectDialog, setProjectDialog] = useState<ProjectDialogState>(null);
   const [scopeNotice, setScopeNotice] = useState<string | null>(null);
+  const [projectWarnings, setProjectWarnings] = useState<AppError[]>([]);
   const projects = projectsQuery.data;
   const scope = activeScope ?? GLOBAL_SCOPE;
   const scopeReady = activeScope !== null;
@@ -104,7 +106,7 @@ function App() {
   const updateCheckStateQuery = useUpdateCheckStateQuery(scope);
   const lastFullCheckQuery = useLastFullCheckQuery(scope);
   const lastFullAttemptQuery = useLastFullAttemptQuery(scope);
-  const checkUpdates = useCheckUpdates(scope);
+  const checkUpdates = useCheckUpdates(scope, activeProject?.checkRevision);
   const report = environment.data;
   const snapshot = inventoryQuery.data;
   const updateData = updateReportQuery.data ?? null;
@@ -252,21 +254,20 @@ function App() {
 
   const mutateCheckUpdates = checkUpdates.mutate;
   const runAutoCheck = useCallback(async () => {
-    
     try {
       const active = await getActiveMutation();
       if (active) return false;
     } catch {
       return false;
     }
-    mutateCheckUpdates();
-    return true;
+    return mutateCheckUpdates();
   }, [mutateCheckUpdates]);
 
   useAutoUpdateCheck({
     scope,
+    checkRevision: activeProject?.checkRevision,
     enabled:
-      inventoryQuery.isSuccess &&
+      inventoryQuery.isSuccess && !inventoryQuery.isFetching &&
       updateCheckStateQuery.isSuccess &&
       !scopeBlocked &&
       view.hasManagedSkills,
@@ -364,18 +365,19 @@ function App() {
   );
 
   const handleProjectRelocated = useCallback(
-    (entry: ProjectEntry) => {
+    (entry: ProjectEntry, warnings: AppError[]) => {
       resetWorkspaceState();
       setProjectDialog(null);
-      setScopeNotice(null);
+      setProjectWarnings(warnings);
       setActiveScope(projectScope(entry.id));
     },
     [resetWorkspaceState],
   );
 
   const handleProjectForgotten = useCallback(
-    (projectId: string) => {
+    (projectId: string, warnings: AppError[]) => {
       setProjectDialog(null);
+      setProjectWarnings(warnings);
       if (scope === projectScope(projectId)) {
         resetWorkspaceState();
         setActiveScope(GLOBAL_SCOPE);
@@ -438,6 +440,27 @@ function App() {
         filtersOpen={filtersOpen}
         onToggleFilters={() => setFiltersOpen((open) => !open)}
       />
+      {projectWarnings.length > 0 ? (
+        <div
+          className="notice mx-4 my-2 flex items-center justify-between gap-3"
+          data-tone="warning"
+          role="status"
+          data-testid="project-change-warning"
+        >
+          <div>
+            {projectWarnings.map((warning, index) => (
+              <p key={index}>{warning.message} {warning.hint}</p>
+            ))}
+          </div>
+          <button
+            type="button"
+            aria-label="关闭项目变更提示"
+            onClick={() => setProjectWarnings([])}
+          >
+            关闭
+          </button>
+        </div>
+      ) : null}
       <InterruptedBanner
         report={report?.interrupted ?? null}
         scope={scope}

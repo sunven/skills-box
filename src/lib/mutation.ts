@@ -35,6 +35,7 @@ import type {
   TaskSkillStatus,
   UpdateCheckReport,
 } from "./types";
+import { updateCheckLifecycle } from "./update-check-lifecycle";
 import { markSkillsCurrent, updateReportQueryKey } from "./update-view";
 
 export const MUTATION_KIND_LABELS: Record<MutationKind, string> = {
@@ -80,6 +81,7 @@ export interface MutationResultView {
   logPath?: string;
   /** Scope the mutation affected; refresh policy prefers it over options. */
   scope?: ScopeId;
+  checkRevision?: string;
 }
 
 const HEADING_LABELS: Record<
@@ -197,6 +199,7 @@ export interface PromiseMutationResult {
   logPath?: string;
   /** Scope the native action affected; refresh policy prefers it. */
   scope?: ScopeId;
+  checkRevision?: string;
   /** Optional terminal message; the progress message is kept otherwise. */
   message?: string;
 }
@@ -213,6 +216,7 @@ export function normalizePromiseResult(
     backupPath: value.backupPath,
     logPath: value.logPath,
     scope: value.scope,
+    checkRevision: value.checkRevision,
   };
 }
 
@@ -476,6 +480,12 @@ export function refreshMutationQueries(
   result: MutationResultView | null,
 ): void {
   const scope = result?.scope ?? options.scope;
+  if (result && options.action === "project_relocate" && result.checkRevision) {
+    updateCheckLifecycle(queryClient).invalidate(scope, result.checkRevision);
+  }
+  if (result && options.action === "project_forget") {
+    updateCheckLifecycle(queryClient).invalidate(scope, null);
+  }
   if (options.action === "update" && result) {
     const updatedNames = result.rows
       .filter(

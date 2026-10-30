@@ -18,6 +18,8 @@ import type {
   InventorySnapshot,
   PreviewSummary,
   ProjectEntry,
+  RelocateProjectResult,
+  ForgetProjectResult,
   ProjectList,
   RemoveExtraAgentResult,
   ScopeId,
@@ -42,8 +44,11 @@ export interface FakeCommandContract {
   get_environment: { args: { refresh?: boolean }; result: EnvReport };
   list_projects: { args: Record<string, never>; result: ProjectList };
   add_project: { args: { root: string }; result: ProjectEntry };
-  relocate_project: { args: { id: string; root: string }; result: ProjectEntry };
-  forget_project: { args: { id: string }; result: void };
+  relocate_project: {
+    args: { id: string; root: string };
+    result: RelocateProjectResult;
+  };
+  forget_project: { args: { id: string }; result: ForgetProjectResult };
   set_active_scope: { args: { scope: ScopeId }; result: void };
   get_inventory: {
     args: { scope: ScopeId };
@@ -87,7 +92,7 @@ export interface FakeCommandContract {
     result: string;
   };
   check_updates: {
-    args: { skillIds: string[] | null; scope: ScopeId };
+    args: { skillIds: string[] | null; scope: ScopeId; checkRevision?: string };
     result: UpdateCheckResponse;
   };
   get_update_check_state: {
@@ -741,6 +746,7 @@ export function createFakeBackend(
   };
 
   let projectCounter = 0;
+  let revisionCounter = 0;
   const fakeProject = (root: string, id?: string): ProjectEntry => {
     const now = Date.now();
     return {
@@ -749,6 +755,7 @@ export function createFakeBackend(
       displayName: root.replace(/\/+$/, "").split("/").pop() || root,
       addedAt: now,
       lastOpenedAt: now,
+      checkRevision: `revision-${++revisionCounter}`,
       available: true,
     };
   };
@@ -798,7 +805,7 @@ export function createFakeBackend(
     return entry;
   };
 
-  const relocateProject = (id: string, root: string): ProjectEntry => {
+  const relocateProject = (id: string, root: string): RelocateProjectResult => {
     const existing = projectList.projects.find((entry) => entry.id === id);
     if (!existing) {
       throw {
@@ -821,6 +828,7 @@ export function createFakeBackend(
     }
     const relocated: ProjectEntry = {
       ...existing,
+      checkRevision: `revision-${++revisionCounter}`,
       root: trimmed,
       displayName: trimmed.split("/").pop() || trimmed,
       lastOpenedAt: Date.now(),
@@ -833,10 +841,11 @@ export function createFakeBackend(
       ),
       lastActiveScope: projectScope(id),
     });
-    return relocated;
+    checkedStates.delete(projectScope(id));
+    return { project: relocated, warnings: [] };
   };
 
-  const forgetProject = (id: string): void => {
+  const forgetProject = (id: string): ForgetProjectResult => {
     const scope = projectScope(id);
     if (!projectList.projects.some((entry) => entry.id === id)) {
       throw {
@@ -852,6 +861,8 @@ export function createFakeBackend(
           ? GLOBAL_SCOPE
           : projectList.lastActiveScope,
     });
+    checkedStates.delete(scope);
+    return { scope, warnings: [] };
   };
 
   const setActiveScope = (scope: ScopeId): void => {
@@ -887,28 +898,37 @@ export function createFakeBackend(
     return emptyUpdateReport({ checkedAtEpochMs: Date.now() });
   };
 
+  const revisionFor = (scope: ScopeId) =>
+    projectList.projects.find((project) => projectScope(project.id) === scope)
+      ?.checkRevision ?? "initial";
   const checkStateFor = (scope: ScopeId): UpdateCheckState | null => {
+    if (
+      scope !== GLOBAL_SCOPE &&
+      !projectList.projects.some((project) => projectScope(project.id) === scope)
+    ) {
+      return null;
+    }
     const checked = checkedStates.get(scope);
-    if (checked) return checked;
     const scoped = data.updateCheckStates?.[scope];
-    if (scoped !== undefined) return factoryValue(scoped);
-    if (scope === GLOBAL_SCOPE) return factoryValue(data.updateCheckState);
-    return null;
+    const state = checked ?? (
+      scoped !== undefined
+        ? factoryValue(scoped)
+        : scope === GLOBAL_SCOPE ? factoryValue(data.updateCheckState) : null
+    );
+    if (scope !== GLOBAL_SCOPE && state?.checkRevision !== revisionFor(scope)) {
+      return null;
+    }
+    return state;
   };
 
   const allCheckStates = (): Record<string, UpdateCheckState> => {
     const states: Record<string, UpdateCheckState> = {};
-    const global = factoryValue(data.updateCheckState);
-    if (global) states[GLOBAL_SCOPE] = global;
-    for (const [scope, factory] of Object.entries(
-      data.updateCheckStates ?? {},
-    )) {
-      if (!factory) continue;
-      const state = factoryValue(factory);
+    for (const scope of [
+      GLOBAL_SCOPE,
+      ...projectList.projects.map((project) => projectScope(project.id)),
+    ]) {
+      const state = checkStateFor(scope);
       if (state) states[scope] = state;
-    }
-    for (const [scope, state] of checkedStates) {
-      states[scope] = state;
     }
     return states;
   };
@@ -976,11 +996,34 @@ export function createFakeBackend(
       scheduleAutoTask(task, "install", request.skills, scope);
       return task.taskId;
     },
-    check_updates: ({ scope }) => {
+    check_updates: ({ scope, skillIds, checkRevision }) => {
+      const revision = scope === GLOBAL_SCOPE ? undefined : revisionFor(scope);
+      if (
+        scope !== GLOBAL_SCOPE &&
+        (!projectList.projects.some((project) => projectScope(project.id) === scope) ||
+          (checkRevision !== undefined && checkRevision !== revision))
+      ) {
+        return {
+          invalidated: true,
+          scope,
+          checkRevision: checkRevision ?? "initial",
+        };
+      }
       const report = reportFor(scope);
-      const state = stateFromReport(report);
+      if (skillIds !== null) {
+        return {
+          report: {
+            ...report,
+            skills: report.skills.filter((skill) =>
+              skillIds.includes(skill.name) || skillIds.includes(`${scope}/${skill.name}`)),
+          },
+          scope,
+          checkRevision: revision,
+        };
+      }
+      const state = { ...stateFromReport(report), checkRevision: revision };
       checkedStates.set(scope, state);
-      return { report, state };
+      return { report, state, scope, checkRevision: revision };
     },
     get_update_check_state: ({ scope }) => checkStateFor(scope),
     get_update_check_states: () => allCheckStates(),
@@ -1071,6 +1114,8 @@ export function createFakeBackend(
       tasks.length = 0;
       taskCounter = 0;
       projectCounter = 0;
+      revisionCounter = 0;
+      checkedStates.clear();
       channelIndexes.clear();
       data = { ...initialData };
       projectList = initialProjects;

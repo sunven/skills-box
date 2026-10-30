@@ -7,6 +7,7 @@ export const AUTO_UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 interface AutoUpdateCheckOptions {
   /** The scope whose freshness and check this hook owns. */
   scope: ScopeId;
+  checkRevision?: string;
   enabled: boolean;
   checking: boolean;
   /** Persisted last full attempt for this scope, or `null` when never checked. */
@@ -23,18 +24,22 @@ interface AutoUpdateCheckOptions {
  * only schedules the remainder of its interval. Manual full checks advance that
  * scope's anchor and never reset another scope's timer. Changing `scope` starts
  * a fresh evaluation without touching the previous scope.
+ * A new Project check revision bypasses the earlier root's six-hour anchor.
  */
 export function useAutoUpdateCheck({
   scope = GLOBAL_SCOPE,
+  checkRevision,
   enabled,
   checking,
   lastFullAttemptAt,
   onCheck,
 }: AutoUpdateCheckOptions) {
   const onCheckRef = useRef(onCheck);
-  const startedForScope = useRef<ScopeId | null>(null);
+  const checkIdentity = JSON.stringify([scope, checkRevision ?? null]);
+  const startedForScope = useRef<string | null>(null);
+  const evaluatedRevisions = useRef(new Map<ScopeId, string | undefined>());
   const evaluatedOnce = useRef(false);
-  const [anchor, setAnchor] = useState<{ scope: ScopeId; at: number } | null>(
+  const [anchor, setAnchor] = useState<{ identity: string; at: number } | null>(
     null,
   );
 
@@ -43,29 +48,34 @@ export function useAutoUpdateCheck({
   }, [onCheck]);
 
   useEffect(() => {
-    if (!enabled || startedForScope.current === scope) return;
-    startedForScope.current = scope;
+    if (!enabled || startedForScope.current === checkIdentity) return;
+    startedForScope.current = checkIdentity;
     const now = Date.now();
     const firstEvaluation = !evaluatedOnce.current;
+    const revisionChanged =
+      evaluatedRevisions.current.has(scope) &&
+      evaluatedRevisions.current.get(scope) !== checkRevision;
+    evaluatedRevisions.current.set(scope, checkRevision);
     evaluatedOnce.current = true;
     if (
       !firstEvaluation &&
+      !revisionChanged &&
       lastFullAttemptAt != null &&
       now - lastFullAttemptAt < AUTO_UPDATE_CHECK_INTERVAL_MS
     ) {
       // This scope was checked recently; only schedule the remainder.
-      setAnchor({ scope, at: lastFullAttemptAt });
+      setAnchor({ identity: checkIdentity, at: lastFullAttemptAt });
       return;
     }
-    setAnchor({ scope, at: now });
+    setAnchor({ identity: checkIdentity, at: now });
     void Promise.resolve(onCheckRef.current()).catch(() => {});
-  }, [enabled, scope, lastFullAttemptAt]);
+  }, [enabled, scope, checkRevision, checkIdentity, lastFullAttemptAt]);
 
   useEffect(() => {
     if (!enabled || checking) return;
     // Wait until this scope's initial evaluation recorded an anchor; until
     // then a stale persisted attempt would schedule an immediate duplicate.
-    if (!anchor || anchor.scope !== scope) return;
+    if (!anchor || anchor.identity !== checkIdentity) return;
     const latest = Math.max(
       lastFullAttemptAt ?? Number.NEGATIVE_INFINITY,
       anchor.at,
@@ -78,10 +88,21 @@ export function useAutoUpdateCheck({
     const timer = setTimeout(() => {
       Promise.resolve(onCheckRef.current())
         .then((started) => {
-          if (started === false) setAnchor({ scope, at: Date.now() });
+          if (started === false)
+            setAnchor((previous) =>
+              previous?.identity === checkIdentity
+                ? { identity: checkIdentity, at: Date.now() }
+                : previous,
+            );
         })
-        .catch(() => setAnchor({ scope, at: Date.now() }));
+        .catch(() =>
+          setAnchor((previous) =>
+            previous?.identity === checkIdentity
+              ? { identity: checkIdentity, at: Date.now() }
+              : previous,
+          ),
+        );
     }, delay);
     return () => clearTimeout(timer);
-  }, [enabled, checking, scope, lastFullAttemptAt, anchor]);
+  }, [enabled, checking, scope, checkIdentity, lastFullAttemptAt, anchor]);
 }

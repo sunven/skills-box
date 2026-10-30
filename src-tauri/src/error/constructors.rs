@@ -4,6 +4,15 @@
 use super::{AppError, ErrorCode};
 
 impl AppError {
+    pub fn update_state_cleanup_failed(detail: impl Into<String>) -> Self {
+        Self::new(
+            ErrorCode::UpdateStateCleanupFailed,
+            "项目变更已保存，但旧更新检查状态未能清理。",
+        )
+        .detail(detail)
+        .hint("旧状态已失效，不会显示；可稍后重试更新检查。")
+    }
+
     pub fn env_node_missing(detail: impl Into<String>) -> Self {
         Self::new(
             ErrorCode::EnvNodeMissing,

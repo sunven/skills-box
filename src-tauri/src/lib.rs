@@ -44,7 +44,7 @@ use projects::ProjectRegistry;
 use read_model::ReadModel;
 use tasks::{InventoryConflictProvider, TaskManager, TaskManagerConfig};
 use update::UpdateService;
-use update::project::ProjectUpdateService;
+use update::project_checks::ProjectUpdateChecks;
 use update::state::UpdateCheckStateStore;
 
 pub struct AppState {
@@ -54,9 +54,7 @@ pub struct AppState {
     pub projects: Arc<ProjectRegistry>,
     pub tasks: TaskManager,
     pub updates: UpdateService,
-    pub project_updates: ProjectUpdateService,
-    /// One persisted check-state owner shared by both update services.
-    pub check_states: Arc<UpdateCheckStateStore>,
+    pub project_updates: ProjectUpdateChecks,
     /// Set by `quit_app` so window/exit events stop preventing the exit.
     pub exiting: AtomicBool,
 }
@@ -80,13 +78,13 @@ impl AppState {
                 paths.clone(),
                 Arc::clone(&projects),
             )),
-            projects,
+            projects: Arc::clone(&projects),
             updates: UpdateService::new_with_store(paths.clone(), Arc::clone(&check_states)),
-            project_updates: ProjectUpdateService::new_with_store(
+            project_updates: ProjectUpdateChecks::new(
                 paths.clone(),
-                Arc::clone(&check_states),
+                Arc::clone(&projects),
+                check_states,
             ),
-            check_states,
             paths,
             environment,
             tasks,

@@ -22,6 +22,8 @@ export interface ProjectEntry {
   displayName: string;
   addedAt: number;
   lastOpenedAt: number;
+  /** Opaque persisted lifetime of Project update-check results. */
+  checkRevision?: string;
   /** False when the root is missing, not a directory or unreadable. */
   available: boolean;
   unavailableReason?: string;
@@ -402,9 +404,27 @@ export interface UpdateCheckReport {
 }
 
 /** One check_updates response; full checks also return the persisted summary. */
-export interface UpdateCheckResponse {
-  report: UpdateCheckReport;
-  state?: UpdateCheckState | null;
+export type UpdateCheckResponse =
+  | {
+      invalidated?: false;
+      scope?: ScopeId;
+      checkRevision?: string;
+      report: UpdateCheckReport;
+      state?: UpdateCheckState | null;
+    }
+  | {
+      invalidated: true;
+      scope: ScopeId;
+      checkRevision: string;
+    };
+
+export interface RelocateProjectResult {
+  project: ProjectEntry;
+  warnings: AppError[];
+}
+export interface ForgetProjectResult {
+  scope: ScopeId;
+  warnings: AppError[];
 }
 
 export type UpdateCheckOutcome = "ok" | "partial" | "failed";
@@ -412,6 +432,7 @@ export type UpdateCheckOutcome = "ok" | "partial" | "failed";
 /** Persisted summary of the last full check; scoped checks never write it. */
 export interface UpdateCheckState {
   version: number;
+  checkRevision?: string;
   lastAttemptAt: number;
   lastSuccessAt: number | null;
   lastOutcome: UpdateCheckOutcome;

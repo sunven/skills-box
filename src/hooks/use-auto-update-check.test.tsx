@@ -16,6 +16,7 @@ const PROJECT_SCOPE: ScopeId =
 
 interface Props {
   scope: ScopeId;
+  checkRevision?: string;
   enabled: boolean;
   checking: boolean;
   lastFullAttemptAt: number | null;
@@ -29,6 +30,19 @@ describe("useAutoUpdateCheck", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("checks a new Project revision immediately despite a fresh old attempt", () => {
+    const onCheck = vi.fn();
+    const props: Props = { scope: PROJECT_SCOPE, checkRevision: "initial", enabled: true, checking: true, lastFullAttemptAt: NOW };
+    const hook = renderHook((options: Props) => useAutoUpdateCheck({ ...options, onCheck }), { initialProps: props });
+    expect(onCheck).toHaveBeenCalledTimes(1);
+    hook.rerender({ ...props, checkRevision: "relocated", enabled: false });
+    expect(onCheck).toHaveBeenCalledTimes(1);
+    hook.rerender({ ...props, checkRevision: "relocated", checking: false });
+    expect(onCheck).toHaveBeenCalledTimes(2);
+    hook.rerender({ ...props, checkRevision: "relocated", checking: true });
+    expect(onCheck).toHaveBeenCalledTimes(2);
   });
 
   it("checks a never-checked scope once and schedules the next after six hours", () => {

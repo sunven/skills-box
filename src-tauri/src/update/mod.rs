@@ -11,6 +11,7 @@ pub mod cache;
 pub mod content_hash;
 pub mod github;
 pub mod project;
+pub mod project_checks;
 pub mod state;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -140,15 +141,24 @@ impl UpdateCheckReport {
     }
 }
 
-/// One `check_updates` response. A full check also returns the normalized
-/// summary it persisted, so the UI never re-derives the outcome from a report.
+/// An invalidated check ends normally without publishing a report.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UpdateCheckResponse {
-    pub report: UpdateCheckReport,
-    /// Absent for scoped per-skill checks, which never advance last-check state.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub state: Option<UpdateCheckState>,
+#[serde(untagged)]
+pub enum UpdateCheckResponse {
+    Applied {
+        scope: crate::scope::ScopeId,
+        #[serde(rename = "checkRevision", skip_serializing_if = "Option::is_none")]
+        check_revision: Option<String>,
+        report: UpdateCheckReport,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        state: Option<UpdateCheckState>,
+    },
+    Invalidated {
+        invalidated: bool,
+        scope: crate::scope::ScopeId,
+        #[serde(rename = "checkRevision")]
+        check_revision: String,
+    },
 }
 
 pub struct UpdateService {
@@ -166,8 +176,7 @@ impl UpdateService {
         Self::new_with_store(paths, state)
     }
 
-    /// Production wiring: the app owns one store shared with the project
-    /// service and the registry cleanup path.
+    /// Production wiring: one store shared with the Project check lifecycle.
     pub fn new_with_store(paths: AppPaths, state: Arc<UpdateCheckStateStore>) -> Self {
         Self {
             cache: UpdateCache::new(&paths),

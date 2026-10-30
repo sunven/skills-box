@@ -61,6 +61,7 @@ function checkState(
 ): UpdateCheckState {
   return {
     version: 1,
+    checkRevision: "initial",
     lastAttemptAt: 1793163988000,
     lastSuccessAt: 1793163988000,
     lastOutcome: "ok",
