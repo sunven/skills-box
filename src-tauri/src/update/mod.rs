@@ -10,6 +10,7 @@ pub mod archive;
 pub mod cache;
 pub mod content_hash;
 pub mod github;
+pub mod project;
 pub mod state;
 
 use std::collections::{BTreeMap, BTreeSet};

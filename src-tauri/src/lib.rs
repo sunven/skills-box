@@ -41,6 +41,7 @@ use projects::ProjectRegistry;
 use read_model::ReadModel;
 use tasks::{InventoryConflictProvider, TaskManager, TaskManagerConfig};
 use update::UpdateService;
+use update::project::ProjectUpdateService;
 
 pub struct AppState {
     pub paths: AppPaths,
@@ -49,6 +50,7 @@ pub struct AppState {
     pub projects: Arc<ProjectRegistry>,
     pub tasks: TaskManager,
     pub updates: UpdateService,
+    pub project_updates: ProjectUpdateService,
     /// Set by `quit_app` so window/exit events stop preventing the exit.
     pub exiting: AtomicBool,
 }
@@ -72,6 +74,7 @@ impl AppState {
             )),
             projects,
             updates: UpdateService::new(paths.clone()),
+            project_updates: ProjectUpdateService::new(paths.clone()),
             paths,
             environment,
             tasks,

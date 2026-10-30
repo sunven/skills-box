@@ -259,27 +259,43 @@ pub async fn start_preview(
     state.tasks.start_preview(&source, sink).await
 }
 
-/// Read-only update check. Rust reads lock v3 and GitHub trees directly; no
-/// `skills check` / `skills update` process is ever spawned.
+/// Read-only update check, scoped. Global reads lock v3 and GitHub trees;
+/// project scope parses `skills-lock.json` and compares CLI content hashes
+/// against per-commit archives. No `skills check` / `skills update` process is
+/// ever spawned for checking.
 #[tauri::command]
 pub async fn check_updates(
     state: State<'_, AppState>,
     scope: ScopeId,
     skill_ids: Option<Vec<String>>,
 ) -> Result<UpdateCheckReport, AppError> {
-    // Per-scope update state arrives with ticket 05.
-    let _ = scope;
-    state.updates.check(skill_ids).await
+    match &scope {
+        ScopeId::Global => state.updates.check(skill_ids).await,
+        ScopeId::Project(id) => {
+            let entry = state.projects.lookup(*id)?;
+            if !entry.available {
+                return Err(AppError::project_root_unavailable(
+                    &entry.project.display_name,
+                    entry
+                        .unavailable_reason
+                        .unwrap_or_else(|| "目录不可用".to_string()),
+                ));
+            }
+            state
+                .project_updates
+                .check(&scope, &entry.project.root, skill_ids)
+                .await
+        }
+    }
 }
 
-/// Last persisted full-check summary, if any. Read-only; no network or CLI.
+/// Last persisted full-check summary for one scope, if any. Read-only; no
+/// network or CLI. Version-1 state files are read as the global scope.
 #[tauri::command]
 pub fn get_update_check_state(
     state: State<'_, AppState>,
     scope: ScopeId,
 ) -> Option<UpdateCheckState> {
-    // Per-scope update state arrives with ticket 05.
-    let _ = scope;
     state.updates.read_state(&scope)
 }
 

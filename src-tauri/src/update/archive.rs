@@ -18,7 +18,6 @@ use serde::{Deserialize, Serialize};
 use super::cache::is_fresh;
 use super::github::{GITHUB_API_BASE, GitHubFetchError};
 use crate::paths::AppPaths;
-use crate::update_target::UpdateTarget;
 
 /// Hard caps from spec §9/§10.4: one archive download per source per commit,
 /// with bounded memory and a bounded wait.
@@ -145,6 +144,15 @@ impl SourceArchive {
     /// Files below `folder` with the folder prefix removed, ready for
     /// `content_hash::hash_entries`.
     pub fn files_under(&self, folder: &str) -> Vec<(String, Vec<u8>)> {
+        if folder.is_empty() {
+            // `skillPath` at the repository root: the skill folder is the
+            // repository root, so every file is relative to it.
+            return self
+                .files
+                .iter()
+                .map(|(path, content)| (path.clone(), content.clone()))
+                .collect();
+        }
         let prefix = format!("{folder}/");
         self.files
             .iter()
