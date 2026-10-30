@@ -48,6 +48,7 @@ function ProjectRow({
         <span className="scope-project-badges">
           {entry.updateCount > 0 ? (
             <Badge
+              className="scope-badge"
               data-testid="scope-update-badge"
               aria-label={`${entry.updateCount} 个更新`}
             >
@@ -55,12 +56,20 @@ function ProjectRow({
             </Badge>
           ) : null}
           {unavailable ? (
-            <Badge variant="warning" data-testid="scope-unavailable-badge">
+            <Badge
+              className="scope-badge"
+              variant="warning"
+              data-testid="scope-unavailable-badge"
+            >
               不可用
             </Badge>
           ) : null}
           {failed ? (
-            <Badge variant="destructive" data-testid="scope-error-badge">
+            <Badge
+              className="scope-badge"
+              variant="destructive"
+              data-testid="scope-error-badge"
+            >
               错误
             </Badge>
           ) : null}
@@ -142,7 +151,7 @@ export function ScopeSwitcher({
         className="scope-add-button"
       >
         <Plus className="size-3.5" aria-hidden="true" />
-        + 添加项目
+        添加项目
       </button>
       {notice ? (
         <p role="alert" className="filter-note text-destructive">
