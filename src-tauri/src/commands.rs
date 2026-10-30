@@ -278,12 +278,14 @@ pub async fn check_updates(
 ) -> Result<UpdateCheckReport, AppError> {
     match &scope {
         ScopeId::Global => state.updates.check(skill_ids).await,
-        ScopeId::Project(id) => {
-            let entry = state.projects.lookup_available(*id)?;
-            state
-                .project_updates
-                .check(&scope, &entry.project.root, skill_ids)
-                .await
+        ScopeId::Project(_) => {
+            let layout = crate::scope_layout::ScopeLayout::resolve(
+                &state.paths,
+                &state.projects,
+                &scope,
+                &[],
+            )?;
+            state.project_updates.check(&layout, skill_ids).await
         }
     }
 }

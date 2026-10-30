@@ -11,7 +11,6 @@
 //! is persisted per scope.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
 use std::sync::Arc;
 
 use futures::StreamExt;
@@ -34,6 +33,7 @@ use crate::lock::LockEntry;
 use crate::paths::AppPaths;
 use crate::project_lock::ProjectLockFile;
 use crate::scope::ScopeId;
+use crate::scope_layout::ScopeLayout;
 use crate::update_target::UpdateTarget;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,22 +94,23 @@ impl ProjectUpdateService {
         self.state.load(scope)
     }
 
-    /// Read-only check of one project root. A missing lock is an empty report
+    /// Read-only check of one Project scope. A missing lock is an empty report
     /// (like an empty global lock); a corrupt lock is the scope's error.
     pub async fn check(
         &self,
-        scope: &ScopeId,
-        root: &Path,
+        layout: &ScopeLayout,
         skill_ids: Option<Vec<String>>,
     ) -> Result<UpdateCheckReport, AppError> {
-        let lock = ProjectLockFile::read(&root.join("skills-lock.json"))?;
+        let lock = ProjectLockFile::read(&layout.lock_path)?;
         let full_check = skill_ids.is_none();
         let now = self.clock.now_epoch_ms();
-        let selected = skill_ids.map(|ids| {
-            ids.into_iter()
-                .map(|id| scope.parse_skill_id(&id).map(str::to_string).unwrap_or(id))
-                .collect::<BTreeSet<_>>()
-        });
+        let selected = skill_ids
+            .map(|ids| {
+                ids.into_iter()
+                    .map(|id| layout.scope.parse_skill_id(&id).map(str::to_string))
+                    .collect::<Result<BTreeSet<_>, AppError>>()
+            })
+            .transpose()?;
         if selected.as_ref().is_some_and(BTreeSet::is_empty) {
             return Ok(UpdateCheckReport {
                 skills: Vec::new(),
@@ -204,7 +205,7 @@ impl ProjectUpdateService {
         };
         if full_check {
             let state = UpdateCheckState::from_report(&report);
-            if let Err(error) = self.state.store(scope, &state) {
+            if let Err(error) = self.state.store(&layout.scope, &state) {
                 report
                     .warnings
                     .push(format!("无法写入更新检查状态：{error}"));
@@ -623,9 +624,11 @@ fn pending_result(target: &ProjectTarget, state: UpdateState, note: String) -> U
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::projects::Project;
     use crate::update::github::GitHubFetchError;
     use std::collections::HashMap;
     use std::fs;
+    use std::path::Path;
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
     const COMMIT_A: &str = "1aee802d9139d4df84d017de44fb1b37a7b614e9";
@@ -786,8 +789,27 @@ mod tests {
         ])
     }
 
+    fn scope_uuid() -> uuid::Uuid {
+        uuid::Uuid::parse_str("5a7b6c1d-2e3f-4a5b-8c9d-0e1f2a3b4c5d").unwrap()
+    }
+
     fn scope() -> ScopeId {
-        ScopeId::project(uuid::Uuid::parse_str("5a7b6c1d-2e3f-4a5b-8c9d-0e1f2a3b4c5d").unwrap())
+        ScopeId::project(scope_uuid())
+    }
+
+    fn layout(root: &Path) -> ScopeLayout {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(tmp.path().join("home"), tmp.path().join("app-data"));
+        ScopeLayout::project(
+            &paths,
+            Project {
+                id: scope_uuid(),
+                root: root.to_path_buf(),
+                display_name: "project".to_string(),
+                added_at: 0,
+                last_opened_at: 0,
+            },
+        )
     }
 
     #[tokio::test]
@@ -813,7 +835,7 @@ mod tests {
         let clock = Arc::new(TestClock::new(1_000));
         let (service, _tmp) = service(client, Arc::clone(&clock), ProjectCheckConfig::default());
 
-        let report = service.check(&scope(), root.path(), None).await.unwrap();
+        let report = service.check(&layout(root.path()), None).await.unwrap();
 
         assert_eq!(commit_calls.load(Ordering::SeqCst), 1);
         assert_eq!(download_calls.load(Ordering::SeqCst), 1);
@@ -859,7 +881,7 @@ mod tests {
         let clock = Arc::new(TestClock::new(1_000));
         let (service, _tmp) = service(client, clock, ProjectCheckConfig::default());
 
-        let report = service.check(&scope(), root.path(), None).await.unwrap();
+        let report = service.check(&layout(root.path()), None).await.unwrap();
         assert_eq!(download_calls.load(Ordering::SeqCst), 1);
         assert_eq!(report.sources.len(), 2);
         // The second group reports the shared commit as cached, but there is
@@ -898,7 +920,7 @@ mod tests {
             .store(COMMIT_A, &scoped_archive(), 900)
             .unwrap();
 
-        let report = service.check(&scope(), root.path(), None).await.unwrap();
+        let report = service.check(&layout(root.path()), None).await.unwrap();
         assert_eq!(report.sources[0].status, UpdateSourceStatus::Cached);
         assert_eq!(report.cached_source_count, 1);
         assert!(report.skills[0].cached);
@@ -939,7 +961,7 @@ mod tests {
             .unwrap();
         clock.set(200);
         let report = fresh_service
-            .check(&scope(), root.path(), None)
+            .check(&layout(root.path()), None)
             .await
             .unwrap();
         assert_eq!(downloads.load(Ordering::SeqCst), 1);
@@ -960,7 +982,7 @@ mod tests {
             .store(COMMIT_A, &scoped_archive(), 0)
             .unwrap();
         let report = failing_service
-            .check(&scope(), root.path(), None)
+            .check(&layout(root.path()), None)
             .await
             .unwrap();
         assert_eq!(report.sources[0].status, UpdateSourceStatus::Error);
@@ -991,7 +1013,7 @@ mod tests {
         let clock = Arc::new(TestClock::new(1_000));
         let (service, _tmp) = service(client, clock, ProjectCheckConfig::default());
 
-        let report = service.check(&scope(), root.path(), None).await.unwrap();
+        let report = service.check(&layout(root.path()), None).await.unwrap();
         let alpha = report.skills.iter().find(|s| s.name == "alpha").unwrap();
         assert_eq!(alpha.state, UpdateState::Current);
         let beta = report.skills.iter().find(|s| s.name == "beta").unwrap();
@@ -1034,7 +1056,7 @@ mod tests {
         };
         let (service, _tmp) = service(client, clock, config);
 
-        let report = service.check(&scope(), root.path(), None).await.unwrap();
+        let report = service.check(&layout(root.path()), None).await.unwrap();
         assert_eq!(report.sources[0].status, UpdateSourceStatus::Error);
         assert_eq!(report.skills[0].state, UpdateState::Error);
         assert!(report.skills[0].note.is_none());
@@ -1063,20 +1085,45 @@ mod tests {
         let clock = Arc::new(TestClock::new(1_000));
         let (service, _tmp) = service(client, clock, ProjectCheckConfig::default());
 
-        let full = service.check(&scope(), root.path(), None).await.unwrap();
+        let full = service.check(&layout(root.path()), None).await.unwrap();
         let state = service.read_state(&scope()).unwrap();
         assert_eq!(state.candidate_count, full.candidate_count());
 
         let scoped = service
             .check(
-                &scope(),
-                root.path(),
+                &layout(root.path()),
                 Some(vec![format!("{}/alpha", scope().as_string())]),
             )
             .await
             .unwrap();
         assert_eq!(scoped.skills.len(), 1);
         assert_eq!(service.read_state(&scope()), Some(state));
+    }
+
+    #[tokio::test]
+    async fn skill_ids_from_another_scope_are_rejected_instead_of_ignored() {
+        let root = project_root();
+        write_lock(
+            root.path(),
+            serde_json::json!({
+                "alpha": entry("acme/skills", "github", "alpha/SKILL.md", ALPHA_HASH),
+            }),
+        );
+        let (service, _tmp) = service(
+            FakeArchiveClient::default(),
+            Arc::new(TestClock::new(1_000)),
+            ProjectCheckConfig::default(),
+        );
+        let foreign = format!(
+            "project:{}/alpha",
+            uuid::Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap()
+        );
+
+        let error = service
+            .check(&layout(root.path()), Some(vec![foreign]))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, crate::error::ErrorCode::PathInvalid);
     }
 
     #[tokio::test]
@@ -1098,7 +1145,7 @@ mod tests {
         };
         let (service, _tmp) = service(client, clock, config);
 
-        let report = service.check(&scope(), root.path(), None).await.unwrap();
+        let report = service.check(&layout(root.path()), None).await.unwrap();
         assert_eq!(report.sources[0].status, UpdateSourceStatus::Error);
         assert_eq!(report.skills[0].state, UpdateState::Error);
         assert_eq!(
@@ -1125,10 +1172,7 @@ mod tests {
         let clock = Arc::new(TestClock::new(1_000));
         let (service, _tmp) = service(client, clock, ProjectCheckConfig::default());
 
-        let error = service
-            .check(&scope(), root.path(), None)
-            .await
-            .unwrap_err();
+        let error = service.check(&layout(root.path()), None).await.unwrap_err();
         assert_eq!(error.code, crate::error::ErrorCode::LockCorrupt);
         assert!(service.read_state(&scope()).is_none());
     }
