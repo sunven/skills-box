@@ -136,13 +136,19 @@ pub struct UpdateService {
     client: Arc<dyn GitHubTreeClient>,
     clock: Arc<dyn Clock>,
     cache: UpdateCache,
-    state: UpdateCheckStateStore,
+    state: Arc<UpdateCheckStateStore>,
     config: UpdateCheckConfig,
 }
 
 impl UpdateService {
     pub fn new(paths: AppPaths) -> Self {
-        let state = UpdateCheckStateStore::new(&paths);
+        let state = Arc::new(UpdateCheckStateStore::new(&paths));
+        Self::new_with_store(paths, state)
+    }
+
+    /// Production wiring: the app owns one store shared with the project
+    /// service and the registry cleanup path.
+    pub fn new_with_store(paths: AppPaths, state: Arc<UpdateCheckStateStore>) -> Self {
         Self {
             cache: UpdateCache::new(&paths),
             state,
@@ -159,7 +165,17 @@ impl UpdateService {
         clock: Arc<dyn Clock>,
         config: UpdateCheckConfig,
     ) -> Self {
-        let state = UpdateCheckStateStore::new(&paths);
+        let state = Arc::new(UpdateCheckStateStore::new(&paths));
+        Self::with_dependencies_and_store(paths, state, client, clock, config)
+    }
+
+    pub fn with_dependencies_and_store(
+        paths: AppPaths,
+        state: Arc<UpdateCheckStateStore>,
+        client: Arc<dyn GitHubTreeClient>,
+        clock: Arc<dyn Clock>,
+        config: UpdateCheckConfig,
+    ) -> Self {
         Self {
             cache: UpdateCache::new(&paths),
             state,

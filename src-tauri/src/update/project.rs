@@ -58,7 +58,7 @@ impl Default for ProjectCheckConfig {
 }
 
 pub struct ProjectUpdateService {
-    state: UpdateCheckStateStore,
+    state: Arc<UpdateCheckStateStore>,
     client: Arc<dyn ArchiveClient>,
     cache: CommitArchiveCache,
     clock: Arc<dyn Clock>,
@@ -67,8 +67,16 @@ pub struct ProjectUpdateService {
 
 impl ProjectUpdateService {
     pub fn new(paths: AppPaths) -> Self {
-        Self::with_dependencies(
+        let state = Arc::new(UpdateCheckStateStore::new(&paths));
+        Self::new_with_store(paths, state)
+    }
+
+    /// Production wiring: the app owns one store shared with the global
+    /// service and the registry cleanup path.
+    pub fn new_with_store(paths: AppPaths, state: Arc<UpdateCheckStateStore>) -> Self {
+        Self::with_dependencies_and_store(
             paths,
+            state,
             Arc::new(super::archive::ReqwestArchiveClient::new()),
             Arc::new(SystemClock),
             ProjectCheckConfig::default(),
@@ -81,8 +89,19 @@ impl ProjectUpdateService {
         clock: Arc<dyn Clock>,
         config: ProjectCheckConfig,
     ) -> Self {
+        let state = Arc::new(UpdateCheckStateStore::new(&paths));
+        Self::with_dependencies_and_store(paths, state, client, clock, config)
+    }
+
+    pub fn with_dependencies_and_store(
+        paths: AppPaths,
+        state: Arc<UpdateCheckStateStore>,
+        client: Arc<dyn ArchiveClient>,
+        clock: Arc<dyn Clock>,
+        config: ProjectCheckConfig,
+    ) -> Self {
         Self {
-            state: UpdateCheckStateStore::new(&paths),
+            state,
             cache: CommitArchiveCache::new(&paths),
             client,
             clock,

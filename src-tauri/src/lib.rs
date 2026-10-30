@@ -44,6 +44,7 @@ use read_model::ReadModel;
 use tasks::{InventoryConflictProvider, TaskManager, TaskManagerConfig};
 use update::UpdateService;
 use update::project::ProjectUpdateService;
+use update::state::UpdateCheckStateStore;
 
 pub struct AppState {
     pub paths: AppPaths,
@@ -53,6 +54,8 @@ pub struct AppState {
     pub tasks: TaskManager,
     pub updates: UpdateService,
     pub project_updates: ProjectUpdateService,
+    /// One persisted check-state owner shared by both update services.
+    pub check_states: Arc<UpdateCheckStateStore>,
     /// Set by `quit_app` so window/exit events stop preventing the exit.
     pub exiting: AtomicBool,
 }
@@ -62,6 +65,7 @@ impl AppState {
         let environment = Arc::new(EnvironmentService::from_process(paths.clone()));
         let runtime: Arc<dyn CliRuntimeProvider> = environment.clone();
         let projects = Arc::new(ProjectRegistry::new(paths.clone()));
+        let check_states = Arc::new(UpdateCheckStateStore::new(&paths));
         let tasks = TaskManager::with_projects(
             runtime,
             Arc::new(TokioExecutor),
@@ -76,8 +80,12 @@ impl AppState {
                 Arc::clone(&projects),
             )),
             projects,
-            updates: UpdateService::new(paths.clone()),
-            project_updates: ProjectUpdateService::new(paths.clone()),
+            updates: UpdateService::new_with_store(paths.clone(), Arc::clone(&check_states)),
+            project_updates: ProjectUpdateService::new_with_store(
+                paths.clone(),
+                Arc::clone(&check_states),
+            ),
+            check_states,
             paths,
             environment,
             tasks,

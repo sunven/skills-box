@@ -16,7 +16,6 @@ use uuid::Uuid;
 use crate::error::AppError;
 use crate::paths::AppPaths;
 use crate::scope::ScopeId;
-use crate::update::state::UpdateCheckStateStore;
 
 pub const PROJECTS_VERSION: u32 = 1;
 
@@ -197,11 +196,12 @@ impl ProjectRegistry {
         let project = file.projects[index].clone();
         file.last_active_scope = project.scope();
         self.save(&file)?;
-        self.forget_check_state(&project.scope());
         Ok(self.entry(project))
     }
 
-    pub fn forget(&self, id: &str) -> Result<(), AppError> {
+    /// Remove one project from the registry and return the scope whose update
+    /// state the caller must drop. No files on disk are touched.
+    pub fn forget(&self, id: &str) -> Result<ScopeId, AppError> {
         let _guard = self
             .lock
             .lock()
@@ -215,8 +215,7 @@ impl ProjectRegistry {
             file.last_active_scope = ScopeId::global();
         }
         self.save(&file)?;
-        self.forget_check_state(&scope);
-        Ok(())
+        Ok(scope)
     }
 
     pub fn set_active_scope(&self, scope: &ScopeId) -> Result<(), AppError> {
@@ -412,11 +411,6 @@ impl ProjectRegistry {
         }
         Ok(canonical)
     }
-
-    fn forget_check_state(&self, scope: &ScopeId) {
-        let store = UpdateCheckStateStore::new(&self.paths);
-        let _ = store.forget_scope(scope);
-    }
 }
 
 fn resolve_active_scope(entries: &[ProjectEntry], stored: ScopeId) -> ScopeId {
@@ -517,6 +511,7 @@ pub fn registry_warning(paths: &AppPaths) -> Option<String> {
 mod tests {
     use super::*;
     use crate::error::ErrorCode;
+    use crate::update::state::UpdateCheckStateStore;
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::fs::symlink;
 
@@ -870,7 +865,7 @@ mod tests {
     }
 
     #[test]
-    fn forgetting_removes_only_the_entry_and_its_check_state() {
+    fn forgetting_removes_only_the_entry_and_the_command_drops_its_check_state() {
         let fixture = Fixture::new();
         let alpha_root = fixture.root("alpha");
         fs::write(alpha_root.join("keep.md"), "keep").unwrap();
@@ -891,9 +886,13 @@ mod tests {
         });
         fs::write(&check_path, check_state.to_string()).unwrap();
 
-        fixture
+        let scope = fixture
             .registry
             .forget(&alpha.project.id.to_string())
+            .unwrap();
+        // The command, not the registry, owns the state drop.
+        UpdateCheckStateStore::new(&fixture.paths)
+            .forget_scope(&scope)
             .unwrap();
 
         let list = fixture.registry.list();
@@ -960,6 +959,10 @@ mod tests {
         let relocated = fixture
             .registry
             .relocate(&entry.project.id.to_string(), new_root.to_str().unwrap())
+            .unwrap();
+        // The command, not the registry, owns the state drop.
+        UpdateCheckStateStore::new(&fixture.paths)
+            .forget_scope(&relocated.project.scope())
             .unwrap();
 
         assert_eq!(relocated.project.id, entry.project.id);

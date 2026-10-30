@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
@@ -94,20 +95,27 @@ struct UpdateCheckStateFile {
     scopes: BTreeMap<String, UpdateCheckState>,
 }
 
-#[derive(Debug, Clone)]
+/// One file, one writer. The lock serializes read-modify-write so concurrent
+/// checks for different scopes cannot lose each other's state.
+#[derive(Debug)]
 pub struct UpdateCheckStateStore {
     path: PathBuf,
+    lock: Mutex<()>,
 }
 
 impl UpdateCheckStateStore {
     pub fn new(paths: &AppPaths) -> Self {
         Self {
             path: paths.update_check_state_path(),
+            lock: Mutex::new(()),
         }
     }
 
     pub fn from_path(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
+        Self {
+            path: path.into(),
+            lock: Mutex::new(()),
+        }
     }
 
     pub fn path(&self) -> &Path {
@@ -126,9 +134,22 @@ impl UpdateCheckStateStore {
             .cloned()
     }
 
+    /// Every persisted scope's state, for the scope switcher. Corrupt files,
+    /// unknown entry versions and read errors are misses.
+    pub fn load_all(&self) -> BTreeMap<String, UpdateCheckState> {
+        self.read_migratable_scopes()
+            .into_iter()
+            .filter(|(_, state)| state.version == UPDATE_CHECK_STATE_ENTRY_VERSION)
+            .collect()
+    }
+
     /// Persist one scope. Reading a version-1 file migrates its global state
     /// into the version-2 map, so no other scope's history is lost.
     pub fn store(&self, scope: &ScopeId, state: &UpdateCheckState) -> io::Result<()> {
+        let _guard = self
+            .lock
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         let mut scopes = self.read_migratable_scopes();
         scopes.insert(scope.as_string(), state.clone());
         let file = UpdateCheckStateFile {
@@ -144,6 +165,10 @@ impl UpdateCheckStateStore {
     /// check, so forgetting a project leaves it untouched; version 2 removes
     /// the scope key. A missing or corrupt file is left as-is.
     pub fn forget_scope(&self, scope: &ScopeId) -> io::Result<()> {
+        let _guard = self
+            .lock
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         let raw = match fs::read_to_string(&self.path) {
             Ok(raw) => raw,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
@@ -404,6 +429,19 @@ mod tests {
         assert_eq!(value["scopes"]["global"]["lastAttemptAt"], 1_000);
         assert_eq!(value["scopes"][project().as_string()]["lastAttemptAt"], 2);
         assert_eq!(store.load(&ScopeId::Global), Some(loaded));
+    }
+
+    #[test]
+    fn load_all_returns_every_valid_scope() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = UpdateCheckStateStore::from_path(tmp.path().join("update-check.json"));
+        store.store(&ScopeId::Global, &state(1)).unwrap();
+        store.store(&project(), &state(2)).unwrap();
+
+        let all = store.load_all();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[&ScopeId::Global.as_string()].last_attempt_at, 1);
+        assert_eq!(all[&project().as_string()].last_attempt_at, 2);
     }
 
     #[test]

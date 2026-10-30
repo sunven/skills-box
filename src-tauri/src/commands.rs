@@ -85,13 +85,17 @@ pub fn relocate_project(
     root: String,
 ) -> Result<ProjectEntry, AppError> {
     let _change = state.tasks.begin_registry_change()?;
-    state.projects.relocate(&id, &root)
+    let entry = state.projects.relocate(&id, &root)?;
+    let _ = state.check_states.forget_scope(&entry.project.scope());
+    Ok(entry)
 }
 
 #[tauri::command]
 pub fn forget_project(state: State<'_, AppState>, id: String) -> Result<(), AppError> {
     let _change = state.tasks.begin_registry_change()?;
-    state.projects.forget(&id)
+    let scope = state.projects.forget(&id)?;
+    let _ = state.check_states.forget_scope(&scope);
+    Ok(())
 }
 
 #[tauri::command]
@@ -297,7 +301,7 @@ pub fn get_update_check_state(
     state: State<'_, AppState>,
     scope: ScopeId,
 ) -> Option<UpdateCheckState> {
-    state.updates.read_state(&scope)
+    state.check_states.load(&scope)
 }
 
 #[tauri::command]
