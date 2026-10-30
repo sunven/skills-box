@@ -16,4 +16,4 @@ Mutations resolved their `ScopeLayout` before acquiring the single-writer permit
 - A Project root cannot move while any mutation holds a layout pinned to it, including native attach/detach and the install planning window.
 - An invalid install request submitted during another mutation now reports `task.busy` before its own validation error.
 - Reads and previews may still observe a root disappearing; they fail as a Scope error on the next request.
-- The rule "layout after permit" has no observable regression test; it is held by comments on `try_acquire_mutation` and `scope_layout` plus review.
+- The scoped-mutation module enforces "layout after permit" for the five Skill write paths (see [ADR 0016](0016-scope-mutation-worker-ownership.md)). A regression test submits each path against a missing Project while a registry guard is held and observes `task.busy` before Scope resolution.

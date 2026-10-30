@@ -26,6 +26,8 @@ use super::source::{SourceSpec, validate_source};
 use super::uninstall as uninstall_task;
 use super::update as update_task;
 
+mod scoped_mutation;
+
 pub type TaskId = String;
 pub type EventSink = Arc<dyn Fn(TaskEvent) + Send + Sync>;
 
@@ -415,12 +417,10 @@ impl TaskManager {
         }
     }
 
-    /// Resolve one mutation scope before any work starts. Mutation callers hold
-    /// the write slot first: the layout pins the Project root for the mutation,
-    /// and a registry change can only move a root while the slot is free. Lock
-    /// order is permit, then the registry mutex. Preview resolves without the
-    /// slot because it is read-only; a concurrent Relocate makes it fail as a
-    /// Scope error.
+    /// Resolve a ready Scope. The scoped-mutation module acquires the write
+    /// slot before calling this and owns it until work actually finishes.
+    /// Preview resolves without the slot because it is read-only; a concurrent
+    /// Relocate can make it fail as a Scope error.
     fn scope_layout(
         &self,
         scope: &crate::scope::ScopeId,
@@ -643,7 +643,7 @@ impl TaskManager {
         skills: Vec<String>,
         scope: crate::scope::ScopeId,
         lock_path: String,
-    ) -> RegisteredMutation {
+    ) -> Result<RegisteredMutation, AppError> {
         let task_id = format!("task-{}", self.inner.next_id.fetch_add(1, Ordering::SeqCst));
         let cancel = CancelToken::new();
         let started_at_epoch_ms = now_ms();
@@ -654,6 +654,9 @@ impl TaskManager {
         };
         {
             let mut tasks = self.lock_tasks();
+            // Check while holding the task-map lock: shutdown either observes
+            // this registration or prevents it, including after planning.
+            self.ensure_not_shutting_down()?;
             tasks.insert(
                 task_id.clone(),
                 TaskEntry {
@@ -675,11 +678,11 @@ impl TaskManager {
             );
         }
         self.begin_marker(&task_id);
-        RegisteredMutation {
+        Ok(RegisteredMutation {
             task_id,
             cancel,
             envelope,
-        }
+        })
     }
 
     /// Validate a mutation request synchronously, acquire the single-writer
@@ -691,50 +694,27 @@ impl TaskManager {
         request: InstallRequest,
         on_event: EventSink,
     ) -> Result<TaskId, AppError> {
-        self.ensure_not_shutting_down()?;
-        // The layout is resolved under the write slot: a pinned Project root
-        // must never move between resolution and execution.
-        let permit = self.try_acquire_mutation()?;
-        let paths = self.inner.paths.clone();
-        let layout = self.scope_layout(&scope)?;
-        let planning_layout = layout.clone();
-        let plan = tokio::task::spawn_blocking(move || {
-            let plan = validate_request(&paths, &planning_layout, &request)?;
-            let retry_source = plan.retry.then_some(plan.source.as_str());
-            if let Some(conflict) =
-                install::conflicts_for(&paths, &planning_layout, &plan.skills, retry_source)?
-            {
-                return Err(conflict);
-            }
-            Ok::<InstallPlan, AppError>(plan)
+        let planned = self
+            .plan_scoped_mutation(scope, MutationKind::Install, move |paths, layout| {
+                let plan = validate_request(paths, layout, &request)?;
+                let retry_source = plan.retry.then_some(plan.source.as_str());
+                if let Some(conflict) =
+                    install::conflicts_for(paths, layout, &plan.skills, retry_source)?
+                {
+                    return Err(conflict);
+                }
+                Ok::<InstallPlan, AppError>(plan)
+            })
+            .await?;
+        let skills = planned.plan().skills.clone();
+        planned.start(skills, on_event, |layout, task_id| {
+            install::InstallAction::new(
+                self.inner.paths.clone(),
+                layout,
+                self.inner.config.install_timeout,
+                task_id,
+            )
         })
-        .await
-        .map_err(|error| AppError::task_internal("安装", error))??;
-
-        let registered = self.register_mutation(
-            TaskAction::Install,
-            MutationKind::Install,
-            plan.skills.clone(),
-            scope,
-            layout.lock_path.to_string_lossy().into_owned(),
-        );
-
-        let action = install::InstallAction::new(
-            self.inner.paths.clone(),
-            layout,
-            self.inner.config.install_timeout,
-            registered.task_id.clone(),
-        );
-        let finish_sink = on_event.clone();
-        let ctx = self.session_context(&registered, on_event);
-        let manager = self.clone();
-        let spawned_id = registered.task_id.clone();
-        tokio::spawn(async move {
-            let _permit = permit;
-            let outcome = session::run(ctx, action, plan).await;
-            manager.finish(&spawned_id, &finish_sink, outcome);
-        });
-        Ok(registered.task_id)
     }
 
     pub fn cancel_task(&self, task_id: &str) -> Result<CancelAck, AppError> {
@@ -763,17 +743,12 @@ impl TaskManager {
         skill_id: String,
         agent_id: String,
     ) -> Result<crate::detach::DetachResult, AppError> {
-        self.ensure_not_shutting_down()?;
-        let permit = self.try_acquire_mutation()?;
-        let layout = self.scope_layout(&scope)?;
-        let paths = self.inner.paths.clone();
-        tokio::task::spawn_blocking(move || {
-            // Keep the write slot for the whole scan + unlink/delete.
-            let _permit = permit;
-            crate::detach::detach_agent(&paths, &layout, &skill_id, &agent_id)
-        })
+        self.run_scoped_native(
+            scope,
+            move |paths, layout| crate::detach::detach_agent(paths, layout, &skill_id, &agent_id),
+            |error| AppError::agent_detach_failed(format!("断链任务失败：{error}")),
+        )
         .await
-        .map_err(|error| AppError::agent_detach_failed(format!("断链任务失败：{error}")))?
     }
 
     /// Serialized native attach (the inverse of detach). Takes the same
@@ -785,16 +760,12 @@ impl TaskManager {
         skill_id: String,
         agent_id: String,
     ) -> Result<crate::attach::AttachResult, AppError> {
-        self.ensure_not_shutting_down()?;
-        let permit = self.try_acquire_mutation()?;
-        let layout = self.scope_layout(&scope)?;
-        let paths = self.inner.paths.clone();
-        tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            crate::attach::attach_agent(&paths, &layout, &skill_id, &agent_id)
-        })
+        self.run_scoped_native(
+            scope,
+            move |paths, layout| crate::attach::attach_agent(paths, layout, &skill_id, &agent_id),
+            |error| AppError::agent_attach_failed(format!("挂载任务失败：{error}")),
+        )
         .await
-        .map_err(|error| AppError::agent_attach_failed(format!("挂载任务失败：{error}")))?
     }
 
     /// Persist a user-defined extra agent. Serialized so an install never sees
@@ -884,47 +855,24 @@ impl TaskManager {
     ) -> Result<TaskId, AppError> {
         self.ensure_not_shutting_down()?;
         let names = install::validate_skill_names(&skill_ids)?;
-        // Hold the write slot from layout resolution through execution so the
-        // root cannot move and the lock snapshot stays stable under planning.
-        let permit = self.try_acquire_mutation()?;
-        let layout = self.scope_layout(&scope)?;
-        let planning_layout = layout.clone();
-        let paths = self.inner.paths.clone();
-        let plan = match tokio::task::spawn_blocking(move || {
-            update_task::plan_updates(&paths, &planning_layout, &names)
+        let planned = self
+            .plan_scoped_mutation(scope, MutationKind::Update, move |paths, layout| {
+                update_task::plan_updates(paths, layout, &names)
+            })
+            .await?;
+        let skills = planned
+            .plan()
+            .items
+            .iter()
+            .map(|item| item.name.clone())
+            .collect();
+        planned.start(skills, on_event, |layout, _| {
+            update_task::UpdateAction::new(
+                self.inner.paths.clone(),
+                layout,
+                self.inner.config.install_timeout,
+            )
         })
-        .await
-        {
-            Ok(Ok(plan)) => plan,
-            Ok(Err(error)) => return Err(error),
-            Err(error) => {
-                return Err(AppError::task_internal("更新", error));
-            }
-        };
-
-        let registered = self.register_mutation(
-            TaskAction::Update,
-            MutationKind::Update,
-            plan.items.iter().map(|item| item.name.clone()).collect(),
-            scope,
-            layout.lock_path.to_string_lossy().into_owned(),
-        );
-
-        let action = update_task::UpdateAction::new(
-            self.inner.paths.clone(),
-            layout,
-            self.inner.config.install_timeout,
-        );
-        let finish_sink = on_event.clone();
-        let ctx = self.session_context(&registered, on_event);
-        let manager = self.clone();
-        let spawned_id = registered.task_id.clone();
-        tokio::spawn(async move {
-            let _permit = permit;
-            let outcome = session::run(ctx, action, plan).await;
-            manager.finish(&spawned_id, &finish_sink, outcome);
-        });
-        Ok(registered.task_id)
     }
 
     /// Validate an uninstall target synchronously, acquire the single-writer
@@ -937,48 +885,19 @@ impl TaskManager {
         skill_id: String,
         on_event: EventSink,
     ) -> Result<TaskId, AppError> {
-        self.ensure_not_shutting_down()?;
-        // Hold the write slot from layout resolution through execution so the
-        // root cannot move and the lock snapshot stays stable under planning.
-        let permit = self.try_acquire_mutation()?;
-        let layout = self.scope_layout(&scope)?;
-        let planning_layout = layout.clone();
-        let paths = self.inner.paths.clone();
-        let plan = match tokio::task::spawn_blocking(move || {
-            uninstall_task::plan_uninstall(&paths, &planning_layout, &skill_id)
+        let planned = self
+            .plan_scoped_mutation(scope, MutationKind::Uninstall, move |paths, layout| {
+                uninstall_task::plan_uninstall(paths, layout, &skill_id)
+            })
+            .await?;
+        let skills = vec![planned.plan().name.clone()];
+        planned.start(skills, on_event, |layout, _| {
+            uninstall_task::UninstallAction::new(
+                self.inner.paths.clone(),
+                layout,
+                self.inner.config.install_timeout,
+            )
         })
-        .await
-        {
-            Ok(Ok(plan)) => plan,
-            Ok(Err(error)) => return Err(error),
-            Err(error) => {
-                return Err(AppError::task_internal("卸载", error));
-            }
-        };
-
-        let registered = self.register_mutation(
-            TaskAction::Uninstall,
-            MutationKind::Uninstall,
-            vec![plan.name.clone()],
-            scope,
-            layout.lock_path.to_string_lossy().into_owned(),
-        );
-
-        let action = uninstall_task::UninstallAction::new(
-            self.inner.paths.clone(),
-            layout,
-            self.inner.config.install_timeout,
-        );
-        let finish_sink = on_event.clone();
-        let ctx = self.session_context(&registered, on_event);
-        let manager = self.clone();
-        let spawned_id = registered.task_id.clone();
-        tokio::spawn(async move {
-            let _permit = permit;
-            let outcome = session::run(ctx, action, plan).await;
-            manager.finish(&spawned_id, &finish_sink, outcome);
-        });
-        Ok(registered.task_id)
     }
 
     /// Toggle cancellation acceptance for update tasks. Updates accept a
@@ -2885,13 +2804,15 @@ mod tests {
         let (_tmp, _home, _paths, _executor, manager) = hanging_install_fixture();
         let scope = crate::scope::ScopeId::project(uuid::Uuid::new_v4());
         let lock_path = "/tmp/project/skills-lock.json".to_string();
-        let _registered = manager.register_mutation(
-            TaskAction::Update,
-            MutationKind::Update,
-            vec!["alpha".to_string()],
-            scope.clone(),
-            lock_path.clone(),
-        );
+        let _registered = manager
+            .register_mutation(
+                TaskAction::Update,
+                MutationKind::Update,
+                vec!["alpha".to_string()],
+                scope.clone(),
+                lock_path.clone(),
+            )
+            .unwrap();
         assert_eq!(manager.active_mutation().unwrap().scope, scope);
         let record = MarkerStore::new(&manager.inner.paths).read();
         let crate::interrupted::MarkerRead::Present(record) = record else {
