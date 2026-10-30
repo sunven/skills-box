@@ -76,7 +76,7 @@ pub fn detach_agent(
         .as_ref()
         .expect("resolve_detach always returns an attachment");
 
-    let log = OperationLog::new(paths);
+    let log = OperationLog::for_scope(paths, &layout.scope);
     let log_path = paths.display(log.path());
     let remaining_agents: Vec<String> = located
         .attachments
@@ -181,7 +181,7 @@ pub fn detach_agent(
                 path: target.clone(),
                 mode: AttachmentMode::Copy,
             };
-            let backup = match BackupStore::new(paths).create(
+            let backup = match BackupStore::for_layout(paths, layout).create(
                 BackupAction::Detach,
                 skill_id,
                 None,

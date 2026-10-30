@@ -141,7 +141,7 @@ fn extra_agent_lifecycle_from_install_to_uninstall() {
     detach::detach_agent(&paths, &layout, "alpha", "qoder").unwrap();
     assert!(fs::symlink_metadata(home.join(".qoder/skills/alpha")).is_err());
 
-    let uninstall_plan = uninstall::plan_uninstall(&paths, &agents, "alpha").unwrap();
+    let uninstall_plan = uninstall::plan_uninstall(&paths, &layout, "alpha").unwrap();
     assert!(
         uninstall_plan
             .attachments

@@ -98,7 +98,7 @@ pub fn attach_agent(
         )));
     }
 
-    let log = OperationLog::new(paths);
+    let log = OperationLog::for_scope(paths, &layout.scope);
     let log_path = paths.display(log.path());
     let _ = log.append(&OperationEntry::new(
         ATTACH_ACTION,

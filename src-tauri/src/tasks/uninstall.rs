@@ -26,12 +26,14 @@ use crate::baseline::BaselineStore;
 use crate::cli::CliRuntime;
 use crate::error::AppError;
 use crate::error::cli::{self, CliAction};
-use crate::inventory::{self, AgentDir, AttachmentLocation, AttachmentMode, ManagementState};
+use crate::inventory::{AttachmentLocation, AttachmentMode, ManagementState};
+#[cfg(test)]
+use crate::inventory::AgentDir;
+#[cfg(test)]
 use crate::lock::LockFile;
 use crate::logs::{OperationEntry, OperationLog};
 use crate::paths::AppPaths;
 use crate::process::{CommandSpec, ExecOutput};
-use crate::security;
 
 use super::install::{INSTALL_TIMEOUT, UNIVERSAL_AGENT_ID};
 use super::manager::{TaskAction, TaskPhase, TaskSkillResult, TaskSkillStatus};
@@ -45,6 +47,8 @@ pub const UNINSTALL_TIMEOUT: Duration = INSTALL_TIMEOUT;
 #[derive(Debug, Clone)]
 pub struct UninstallPlan {
     pub name: String,
+    /// Scope this uninstall deletes from; keys the backup and baseline stores.
+    pub scope: crate::scope::ScopeId,
     pub management: ManagementState,
     /// Shared canonical folder; `None` for copy-only skills.
     pub canonical: Option<PathBuf>,
@@ -82,14 +86,15 @@ impl UninstallPlan {
 /// `npx -y skills@1.7.4 remove -g -s <name> -y`.
 pub fn plan_uninstall(
     paths: &AppPaths,
-    agents: &[AgentDir],
+    layout: &crate::scope_layout::ScopeLayout,
     skill_id: &str,
 ) -> Result<UninstallPlan, AppError> {
-    security::validate_skill_id(skill_id)?;
+    let name = layout.scope.parse_skill_id(skill_id)?;
     // Same metacharacter rule as install/update; the CLI is never run through
     // a shell, but a name from a malicious on-disk folder must not reach argv.
-    super::install::validate_skill_name(skill_id)?;
-    let Some(located) = inventory::locate_with_agents(paths, agents, skill_id)? else {
+    super::install::validate_skill_name(name)?;
+    layout.ensure_mutation_ready()?;
+    let Some(located) = layout.locate(paths, name)? else {
         return Err(AppError::skill_not_found(skill_id));
     };
     if located.management == ManagementState::Unmanaged {
@@ -109,8 +114,8 @@ pub fn plan_uninstall(
         .filter(|attachment| attachment.mode == AttachmentMode::Copy)
     {
         let dependents = match crate::detach::find_copy_dependents(
-            agents,
-            &paths.canonical_skills_dir(),
+            &layout.agents,
+            &layout.canonical_dir,
             &copy.path,
         ) {
             Ok(dependents) => dependents,
@@ -141,6 +146,7 @@ pub fn plan_uninstall(
 
     Ok(UninstallPlan {
         name: located.name,
+        scope: layout.scope.clone(),
         management: located.management,
         canonical,
         attachments,
@@ -152,19 +158,29 @@ pub fn plan_uninstall(
 ///
 /// No `-a` (per-agent remove may delete the canonical store and lock) and no
 /// `--all`. `remove` has no JSON output; the result is verified on disk.
-pub fn uninstall_command(runtime: &CliRuntime, name: &str, timeout: Duration) -> CommandSpec {
+/// `cwd = Some(project_root)` runs a project uninstall: no `-g`, project root
+/// as cwd. `None` keeps the historical global form.
+pub fn uninstall_command(
+    runtime: &CliRuntime,
+    name: &str,
+    cwd: Option<&std::path::Path>,
+    timeout: Duration,
+) -> CommandSpec {
+    let mut args = vec![
+        "-y".to_string(),
+        format!("skills@{}", runtime.pinned_version),
+        "remove".to_string(),
+    ];
+    if cwd.is_none() {
+        args.push("-g".to_string());
+    }
+    args.push("-s".to_string());
+    args.push(name.to_string());
+    args.push("-y".to_string());
     CommandSpec::new(
         &runtime.npx_path,
-        vec![
-            "-y".to_string(),
-            format!("skills@{}", runtime.pinned_version),
-            "remove".to_string(),
-            "-g".to_string(),
-            "-s".to_string(),
-            name.to_string(),
-            "-y".to_string(),
-        ],
-        &runtime.cwd,
+        args,
+        cwd.unwrap_or(&runtime.cwd),
         runtime.env.clone(),
         timeout,
     )
@@ -223,7 +239,10 @@ pub fn remove_extra_attachments(plan: &UninstallPlan, warnings: &mut Vec<AppErro
 /// Verify the filesystem and lock after `skills remove` exits. The CLI has no
 /// JSON output and exits 0 on partial or empty removals, so this is the only
 /// proof of success.
-pub fn verify_uninstall(paths: &AppPaths, plan: &UninstallPlan) -> UninstallVerification {
+pub fn verify_uninstall(
+    layout: &crate::scope_layout::ScopeLayout,
+    plan: &UninstallPlan,
+) -> UninstallVerification {
     let mut leftovers: Vec<String> = Vec::new();
     let mut canonical_present = None;
     if let Some(canonical) = &plan.canonical
@@ -249,8 +268,8 @@ pub fn verify_uninstall(paths: &AppPaths, plan: &UninstallPlan) -> UninstallVeri
         }
     }
 
-    let lock = match LockFile::read(&paths.lock_path()) {
-        Ok(lock) => lock,
+    let lock_present = match super::install::ScopeLock::read(layout) {
+        Ok(lock) => lock.contains(&plan.name),
         Err(error) => {
             return UninstallVerification {
                 result: Err(AppError::verify_failed(format!(
@@ -262,7 +281,6 @@ pub fn verify_uninstall(paths: &AppPaths, plan: &UninstallPlan) -> UninstallVeri
             };
         }
     };
-    let lock_present = lock.contains(&plan.name);
     if lock_present {
         leftovers.push(format!("lock key：{}", plan.name));
     }
@@ -319,12 +337,21 @@ pub fn evaluate_output(
 /// then disk verification, baseline clearing and the operation log.
 pub(crate) struct UninstallAction {
     paths: AppPaths,
+    layout: crate::scope_layout::ScopeLayout,
     timeout: Duration,
 }
 
 impl UninstallAction {
-    pub(crate) fn new(paths: AppPaths, timeout: Duration) -> Self {
-        Self { paths, timeout }
+    pub(crate) fn new(
+        paths: AppPaths,
+        layout: crate::scope_layout::ScopeLayout,
+        timeout: Duration,
+    ) -> Self {
+        Self {
+            paths,
+            layout,
+            timeout,
+        }
     }
 }
 
@@ -343,7 +370,7 @@ impl MutationAction for UninstallAction {
     }
 
     fn begin(&self, plan: &Self::Plan) -> Result<StartOutcome<Self::Unit>, AppError> {
-        let log = OperationLog::new(&self.paths);
+        let log = OperationLog::for_scope(&self.paths, &self.layout.scope);
         Ok(StartOutcome {
             units: vec![plan.clone()],
             initial_rows: Vec::new(),
@@ -357,7 +384,7 @@ impl MutationAction for UninstallAction {
             format!("正在备份 {}…", plan.name),
             Some(plan.name.as_str()),
         );
-        let backups = BackupStore::new(&self.paths);
+        let backups = BackupStore::for_layout(&self.paths, &self.layout);
         let backup = backups
             .create(
                 BackupAction::Uninstall,
@@ -367,7 +394,7 @@ impl MutationAction for UninstallAction {
                 &plan.agent_ids,
             )
             .inspect_err(|error| {
-                let log = OperationLog::new(&self.paths);
+                let log = OperationLog::for_scope(&self.paths, &self.layout.scope);
                 let _ = log.append(&OperationEntry::new(
                     "uninstall",
                     &plan.name,
@@ -390,7 +417,12 @@ impl MutationAction for UninstallAction {
             format!("正在执行 skills remove（{}）…", plan.name),
             Some(plan.name.as_str()),
         );
-        uninstall_command(runtime, &plan.name, self.timeout)
+        uninstall_command(
+            runtime,
+            &plan.name,
+            (!self.layout.is_global()).then(|| self.layout.root.as_path()),
+            self.timeout,
+        )
     }
 
     fn complete(
@@ -409,7 +441,7 @@ impl MutationAction for UninstallAction {
         if output.success() {
             remove_extra_attachments(plan, &mut warnings);
         }
-        let mut verification = verify_uninstall(&self.paths, plan);
+        let mut verification = verify_uninstall(&self.layout, plan);
         warnings.append(&mut verification.warnings);
         let outcome = evaluate_output(&output, verification.result);
         let status = if outcome.is_ok() {
@@ -419,13 +451,13 @@ impl MutationAction for UninstallAction {
         };
         let error = outcome.err();
         if status == TaskSkillStatus::Removed
-            && let Err(clear_error) = BaselineStore::new(&self.paths).clear(&plan.name)
+            && let Err(clear_error) = BaselineStore::for_scope(&self.paths, &plan.scope).clear(&plan.name)
         {
             warnings.push(AppError::baseline_clear_failed(clear_error));
         }
 
         let backup_display = self.paths.display(&preflight.snapshot);
-        let log = OperationLog::new(&self.paths);
+        let log = OperationLog::for_scope(&self.paths, &self.layout.scope);
         let log_result = if status == TaskSkillStatus::Removed {
             "removed"
         } else {
@@ -459,7 +491,7 @@ impl MutationAction for UninstallAction {
         preflight: Option<&Preflight>,
         _reporter: &Reporter,
     ) -> FailureDisposition {
-        let log = OperationLog::new(&self.paths);
+        let log = OperationLog::for_scope(&self.paths, &self.layout.scope);
         let Some(preflight) = preflight else {
             let _ = log.append(&OperationEntry::new(
                 "uninstall",
@@ -494,7 +526,7 @@ impl MutationAction for UninstallAction {
     }
 
     fn on_cancelled(&self, plan: &Self::Unit, preflight: &Preflight, error: Option<AppError>) {
-        let log = OperationLog::new(&self.paths);
+        let log = OperationLog::for_scope(&self.paths, &self.layout.scope);
         let _ = log.append(&OperationEntry::new(
             "uninstall",
             &plan.name,
@@ -516,6 +548,24 @@ mod tests {
     use crate::error::ErrorCode;
     use std::os::unix::fs::symlink;
     use std::path::Path;
+
+    fn plan_uninstall(
+        paths: &AppPaths,
+        agents: &[AgentDir],
+        name: &str,
+    ) -> Result<UninstallPlan, AppError> {
+        let layout = crate::scope_layout::ScopeLayout::global(paths, agents.to_vec());
+        super::plan_uninstall(paths, &layout, name)
+    }
+
+    fn verify_uninstall(paths: &AppPaths, plan: &UninstallPlan) -> UninstallVerification {
+        let layout = crate::scope_layout::ScopeLayout::global(paths, Vec::new());
+        super::verify_uninstall(&layout, plan)
+    }
+
+    fn uninstall_command(runtime: &CliRuntime, name: &str, timeout: Duration) -> CommandSpec {
+        super::uninstall_command(runtime, name, None, timeout)
+    }
 
     struct Fixture {
         _tmp: tempfile::TempDir,
@@ -1222,7 +1272,7 @@ mod execution_tests {
     async fn run_task(manager: &TaskManager, name: &str) -> (Vec<TaskPhase>, TaskEvent) {
         let (sink, mut receiver) = sink();
         manager
-            .start_uninstall(name.to_string(), sink)
+            .start_uninstall(crate::scope::ScopeId::Global, name.to_string(), sink)
             .await
             .unwrap();
         let mut phases = Vec::new();
@@ -1539,7 +1589,7 @@ mod execution_tests {
         let (sink, mut receiver) = sink();
         let error = fixture
             .manager
-            .start_uninstall("unmanaged".to_string(), sink)
+            .start_uninstall(crate::scope::ScopeId::Global, "unmanaged".to_string(), sink)
             .await
             .unwrap_err();
         assert_eq!(error.code, ErrorCode::SkillUnmanaged);
@@ -1557,7 +1607,7 @@ mod execution_tests {
         let (sink, mut receiver) = sink();
         let error = fixture
             .manager
-            .start_uninstall("alpha".to_string(), sink)
+            .start_uninstall(crate::scope::ScopeId::Global, "alpha".to_string(), sink)
             .await
             .unwrap_err();
         assert_eq!(error.code, ErrorCode::AgentDependencyConflict);
@@ -1575,7 +1625,7 @@ mod execution_tests {
         let (sink, mut receiver) = sink();
         let task_id = fixture
             .manager
-            .start_uninstall("alpha".to_string(), sink)
+            .start_uninstall(crate::scope::ScopeId::Global, "alpha".to_string(), sink)
             .await
             .unwrap();
         let event = receiver.recv().await.unwrap();
@@ -1624,7 +1674,7 @@ mod execution_tests {
         let (sink, mut receiver) = sink();
         let task_id = fixture
             .manager
-            .start_uninstall("alpha".to_string(), sink)
+            .start_uninstall(crate::scope::ScopeId::Global, "alpha".to_string(), sink)
             .await
             .unwrap();
         loop {
@@ -1651,5 +1701,424 @@ mod execution_tests {
             final_event.result.unwrap().skills[0].status,
             TaskSkillStatus::Removed
         );
+    }
+}
+
+#[cfg(test)]
+mod project_uninstall_tests {
+    use super::*;
+    use crate::baseline::BaselineStore;
+    use crate::error::ErrorCode;
+    use crate::cli::{CliRuntime, CliRuntimeProvider, PINNED_CLI_VERSION};
+    use crate::process::{CancelToken, ExecError, ProcessExecutor};
+    use crate::projects::{Project, ProjectRegistry};
+    use crate::scope::ScopeId;
+    use crate::tasks::conflicts::{ConflictInfo, ConflictProvider};
+    use crate::tasks::manager::{
+        EventSink, TaskEvent, TaskManager, TaskManagerConfig, TaskOverall, TaskPhase,
+        TaskSkillStatus,
+    };
+    use std::os::unix::fs::symlink;
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
+
+    struct ProjectFixture {
+        _tmp: tempfile::TempDir,
+        paths: AppPaths,
+        root: PathBuf,
+        canonical: PathBuf,
+        claude: PathBuf,
+        acme: PathBuf,
+        global_canonical: PathBuf,
+        global_qoder_link: PathBuf,
+        project: Project,
+    }
+
+    impl ProjectFixture {
+        fn new() -> Self {
+            let tmp = tempfile::tempdir().unwrap();
+            let home = tmp.path().join("home");
+            let paths = AppPaths::new(&home, tmp.path().join("app-data"));
+            paths.ensure_dirs().unwrap();
+            // Global skill with the same name must stay untouched.
+            let global_canonical = paths.canonical_skills_dir().join("alpha");
+            fs::create_dir_all(&global_canonical).unwrap();
+            fs::write(global_canonical.join("SKILL.md"), "# global alpha\n").unwrap();
+            let global_qoder = home.join(".qoder/skills");
+            fs::create_dir_all(&global_qoder).unwrap();
+            let global_qoder_link = global_qoder.join("alpha");
+            symlink(&global_canonical, &global_qoder_link).unwrap();
+            fs::create_dir_all(paths.agents_root()).unwrap();
+            fs::write(
+                paths.lock_path(),
+                serde_json::json!({
+                    "version": 3,
+                    "skills": {
+                        "alpha": {
+                            "source": "acme/skills",
+                            "sourceType": "github",
+                            "sourceUrl": "https://github.com/acme/skills.git",
+                            "skillPath": "skills/alpha/SKILL.md",
+                            "skillFolderHash": "0123456789abcdef0123456789abcdef01234567",
+                            "installedAt": "2026-01-01T00:00:00.000Z",
+                            "updatedAt": "2026-01-01T00:00:00.000Z"
+                        }
+                    }
+                })
+                .to_string(),
+            )
+            .unwrap();
+            BaselineStore::new(&paths)
+                .record_from_dir("alpha", &global_canonical, true)
+                .unwrap();
+
+            let root = tmp.path().join("projects/app");
+            let canonical = root.join(".agents/skills/alpha");
+            fs::create_dir_all(&canonical).unwrap();
+            fs::write(canonical.join("SKILL.md"), "# project alpha\n").unwrap();
+            let claude = root.join(".claude/skills");
+            fs::create_dir_all(claude.join("alpha")).unwrap();
+            fs::write(claude.join("alpha/SKILL.md"), "# project copy\n").unwrap();
+            fs::create_dir_all(root.join(".qoder/skills")).unwrap();
+            symlink(&canonical, root.join(".qoder/skills/alpha")).unwrap();
+            let acme = root.join(".acme/skills");
+            fs::create_dir_all(&acme).unwrap();
+            symlink(&canonical, acme.join("alpha")).unwrap();
+            fs::create_dir_all(paths.app_data()).unwrap();
+            fs::write(
+                paths.agents_config_path(),
+                r#"{
+                    "version": 1,
+                    "agents": [
+                        {"id": "acme", "displayName": "Acme", "skillsDir": "~/.acme/skills", "projectSkillsDir": ".acme/skills"}
+                    ]
+                }"#,
+            )
+            .unwrap();
+            fs::write(
+                root.join("skills-lock.json"),
+                serde_json::json!({
+                    "version": 1,
+                    "skills": {
+                        "alpha": {
+                            "source": "acme/skills",
+                            "sourceType": "github",
+                            "sourceUrl": "https://github.com/acme/skills.git",
+                            "skillPath": "skills/alpha/SKILL.md",
+                            "computedHash": "a".repeat(64)
+                        }
+                    }
+                })
+                .to_string(),
+            )
+            .unwrap();
+            let root = fs::canonicalize(root).unwrap();
+            let project = Project {
+                id: uuid::Uuid::new_v4(),
+                root,
+                display_name: "app".to_string(),
+                added_at: 1,
+                last_opened_at: 1,
+            };
+            Self {
+                _tmp: tmp,
+                paths,
+                root: project.root.clone(),
+                canonical,
+                claude,
+                acme,
+                global_canonical,
+                global_qoder_link,
+                project,
+            }
+        }
+
+        fn layout(&self) -> crate::scope_layout::ScopeLayout {
+            crate::scope_layout::ScopeLayout::project(&self.paths, self.project.clone())
+        }
+    }
+
+    #[test]
+    fn project_uninstall_plan_is_scoped_and_includes_extra_attachments() {
+        let fixture = ProjectFixture::new();
+        let layout = fixture.layout();
+        let plan = super::plan_uninstall(
+            &fixture.paths,
+            &layout,
+            &layout.scope.skill_id("alpha"),
+        )
+        .unwrap();
+        assert_eq!(plan.scope, layout.scope);
+        assert_eq!(
+            plan.canonical.as_deref(),
+            Some(fs::canonicalize(&fixture.canonical).unwrap().as_path())
+        );
+        assert!(
+            plan.attachments
+                .iter()
+                .any(|attachment| attachment.agent_id == "acme"),
+            "extra project link joins the backup/verification set: {:?}",
+            plan.attachments
+        );
+        assert!(plan.canonical.as_ref().unwrap().starts_with(&fixture.root));
+        assert!(fixture.global_canonical.is_dir());
+    }
+
+    #[test]
+    fn project_uninstall_command_omits_global_flag_and_uses_the_project_root_as_cwd() {
+        let fixture = ProjectFixture::new();
+        let runtime = CliRuntime {
+            npx_path: PathBuf::from("/node/bin/npx"),
+            node_dir: PathBuf::from("/node/bin"),
+            git_dir: Some(PathBuf::from("/usr/bin")),
+            cwd: PathBuf::from("/app-data/cli-cwd"),
+            home: fixture.paths.home().to_path_buf(),
+            env: std::collections::BTreeMap::new(),
+            pinned_version: PINNED_CLI_VERSION.to_string(),
+        };
+        let spec = super::uninstall_command(
+            &runtime,
+            "alpha",
+            Some(fixture.root.as_path()),
+            Duration::from_secs(5),
+        );
+        assert_eq!(spec.cwd, fixture.root);
+        assert_eq!(
+            spec.args,
+            vec!["-y", "skills@1.7.4", "remove", "-s", "alpha", "-y"]
+        );
+        for forbidden in ["-g", "-a", "--all", "--copy", "*", "update", "check"] {
+            assert!(
+                !spec.args.iter().any(|arg| arg == forbidden),
+                "{forbidden} must never appear in a project uninstall"
+            );
+        }
+    }
+
+    struct FakeRuntime;
+
+    #[async_trait::async_trait]
+    impl CliRuntimeProvider for FakeRuntime {
+        async fn cli_runtime(&self) -> Result<CliRuntime, AppError> {
+            Ok(CliRuntime {
+                npx_path: PathBuf::from("/node/bin/npx"),
+                node_dir: PathBuf::from("/node/bin"),
+                git_dir: Some(PathBuf::from("/usr/bin")),
+                cwd: PathBuf::from("/app-data/cli-cwd"),
+                home: PathBuf::from("/tmp/skills-box-home"),
+                env: std::collections::BTreeMap::new(),
+                pinned_version: PINNED_CLI_VERSION.to_string(),
+            })
+        }
+    }
+
+    #[derive(Default)]
+    struct NoConflicts;
+
+    impl ConflictProvider for NoConflicts {
+        fn lookup(
+            &self,
+            _layout: &crate::scope_layout::ScopeLayout,
+            _names: &[String],
+        ) -> std::collections::HashMap<String, ConflictInfo> {
+            std::collections::HashMap::new()
+        }
+    }
+
+    struct Executor {
+        calls: Mutex<Vec<CommandSpec>>,
+        post: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ProcessExecutor for Executor {
+        async fn run(
+            &self,
+            spec: CommandSpec,
+            _cancel: CancelToken,
+        ) -> Result<ExecOutput, ExecError> {
+            self.calls.lock().unwrap().push(spec);
+            if let Some(post) = self.post.lock().unwrap().take() {
+                post();
+            }
+            Ok(ExecOutput {
+                code: Some(0),
+                signal: None,
+                stdout: include_str!("../../tests/fixtures/cli/remove-success.txt").to_string(),
+                stderr: String::new(),
+                duration: Duration::ZERO,
+            })
+        }
+    }
+
+    fn sink() -> (EventSink, UnboundedReceiver<TaskEvent>) {
+        let (sender, receiver) = unbounded_channel();
+        let sink: EventSink = Arc::new(move |event| {
+            let _ = sender.send(event);
+        });
+        (sink, receiver)
+    }
+
+    fn remove_tree(path: &std::path::Path) {
+        match fs::symlink_metadata(path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                fs::remove_file(path).unwrap();
+            }
+            Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(path).unwrap(),
+            Ok(_) => fs::remove_file(path).unwrap(),
+            Err(_) => {}
+        }
+    }
+
+    async fn run_project_uninstall(
+        fixture: &ProjectFixture,
+        leave_canonical: bool,
+    ) -> (TaskManager, Arc<Executor>, ScopeId, TaskEvent) {
+        let root = fixture.root.clone();
+        let canonical = fixture.canonical.clone();
+        let post = move || {
+            for relative in [
+                ".qoder/skills/alpha",
+                ".claude/skills/alpha",
+                ".acme/skills/alpha",
+            ] {
+                remove_tree(&root.join(relative));
+            }
+            if !leave_canonical {
+                remove_tree(&canonical);
+            }
+            let lock_path = root.join("skills-lock.json");
+            let mut lock: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&lock_path).unwrap()).unwrap();
+            lock["skills"].as_object_mut().unwrap().remove("alpha");
+            fs::write(&lock_path, lock.to_string()).unwrap();
+        };
+        let executor = Arc::new(Executor {
+            calls: Mutex::new(Vec::new()),
+            post: Mutex::new(Some(Box::new(post))),
+        });
+        let projects = Arc::new(ProjectRegistry::new(fixture.paths.clone()));
+        let entry = projects.add(fixture.root.to_str().unwrap()).unwrap();
+        let scope = entry.project.scope();
+        let manager = TaskManager::with_projects(
+            Arc::new(FakeRuntime),
+            executor.clone(),
+            Arc::new(NoConflicts),
+            fixture.paths.clone(),
+            projects,
+            TaskManagerConfig {
+                preview_timeout: Duration::from_secs(60),
+                install_timeout: Duration::from_secs(5),
+            },
+        );
+        let (sink, mut receiver) = sink();
+        manager
+            .start_uninstall(scope.clone(), scope.skill_id("alpha"), sink)
+            .await
+            .unwrap();
+        let final_event = loop {
+            let event = receiver.recv().await.unwrap();
+            if event.phase.is_final() {
+                break event;
+            }
+        };
+        (manager, executor, scope, final_event)
+    }
+
+    #[tokio::test]
+    async fn project_uninstall_only_removes_the_project_scope_and_backs_it_up() {
+        let fixture = ProjectFixture::new();
+        let (_manager, executor, scope, final_event) =
+            run_project_uninstall(&fixture, false).await;
+        assert_eq!(final_event.phase, TaskPhase::Completed);
+        let result = final_event.result.unwrap();
+        assert_eq!(result.scope, scope);
+        assert_eq!(result.overall, TaskOverall::Success);
+        assert_eq!(result.skills[0].status, TaskSkillStatus::Removed);
+
+        let calls = executor.calls.lock().unwrap().clone();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].cwd, fixture.root);
+        assert_eq!(
+            calls[0].args,
+            vec!["-y", "skills@1.7.4", "remove", "-s", "alpha", "-y"]
+        );
+
+        // Project scope is fully gone, including the extra link.
+        assert!(!fixture.canonical.exists());
+        assert!(!fixture.root.join(".qoder/skills/alpha").exists());
+        assert!(!fixture.claude.join("alpha").exists());
+        assert!(!fixture.acme.join("alpha").exists());
+        let lock: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(fixture.root.join("skills-lock.json")).unwrap())
+                .unwrap();
+        assert!(lock["skills"].get("alpha").is_none());
+
+        // Global scope with the same skill name is untouched.
+        assert!(fixture.global_canonical.is_dir());
+        assert!(fixture.global_qoder_link.is_symlink());
+        assert!(
+            crate::lock::LockFile::read(&fixture.paths.lock_path())
+                .unwrap()
+                .contains("alpha")
+        );
+        assert!(
+            BaselineStore::new(&fixture.paths).load("alpha").is_some(),
+            "global baseline is untouched"
+        );
+
+        // Scope-isolated backup with the project lock and copy attachment.
+        let backup = PathBuf::from(result.backup_path.unwrap());
+        assert_eq!(
+            backup.parent().unwrap(),
+            fixture
+                .paths
+                .backups_dir()
+                .join(format!("project-{}", scope.project_id().unwrap()))
+        );
+        assert!(backup.join("skills-lock.json").is_file());
+        assert!(!backup.join("skill-lock.json").exists());
+        assert_eq!(
+            fs::read_to_string(backup.join("canonical/SKILL.md")).unwrap(),
+            "# project alpha\n"
+        );
+        assert_eq!(
+            fs::read_to_string(backup.join("attachments/claude-code/SKILL.md")).unwrap(),
+            "# project copy\n"
+        );
+        let manifest: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(backup.join("attachment-manifest.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(manifest["scope"], serde_json::json!(scope.as_string()));
+        assert_eq!(manifest["action"], "uninstall");
+
+        let log = fs::read_to_string(fixture.paths.logs_dir().join("operations.jsonl")).unwrap();
+        let line: serde_json::Value = serde_json::from_str(log.lines().next().unwrap()).unwrap();
+        assert_eq!(line["scope"], scope.as_string());
+        assert!(!fixture.paths.interrupted_marker_path().exists());
+    }
+
+    #[tokio::test]
+    async fn a_failed_project_uninstall_never_touches_the_global_scope() {
+        let fixture = ProjectFixture::new();
+        let (_manager, _executor, scope, final_event) =
+            run_project_uninstall(&fixture, true).await;
+        let result = final_event.result.unwrap();
+        assert_eq!(result.scope, scope);
+        assert_eq!(result.overall, TaskOverall::Failed);
+        assert_eq!(
+            result.skills[0].error.as_ref().unwrap().code,
+            ErrorCode::VerifyCanonicalPresent
+        );
+        assert!(fixture.canonical.exists(), "failed removal leaves the project canonical");
+        assert!(fixture.global_canonical.is_dir());
+        assert!(fixture.global_qoder_link.is_symlink());
+        assert!(
+            crate::lock::LockFile::read(&fixture.paths.lock_path())
+                .unwrap()
+                .contains("alpha")
+        );
+        assert!(BaselineStore::new(&fixture.paths).load("alpha").is_some());
     }
 }

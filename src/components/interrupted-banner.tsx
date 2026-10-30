@@ -1,6 +1,7 @@
 import { AlertTriangle, ArchiveRestore } from "lucide-react";
 import { Button } from "./ui/button";
-import type { InterruptedReport, LockHealth, MutationKind } from "../lib/types";
+import type { InterruptedReport, LockHealth, MutationKind, ScopeId } from "../lib/types";
+import { GLOBAL_SCOPE } from "../lib/types";
 
 const KIND_LABELS: Record<MutationKind, string> = {
   install: "安装",
@@ -18,6 +19,8 @@ const LOCK_LABELS: Record<LockHealth["status"], string> = {
 
 interface InterruptedBannerProps {
   report: InterruptedReport | null | undefined;
+  /** Only the scope that owns the interrupted mutation sees the warning. */
+  scope: ScopeId;
   onDismiss: () => void;
   onRevealBackups: () => void;
 }
@@ -29,10 +32,13 @@ interface InterruptedBannerProps {
  */
 export function InterruptedBanner({
   report,
+  scope,
   onDismiss,
   onRevealBackups,
 }: InterruptedBannerProps) {
   if (!report) return null;
+  // Markers written before scopes existed belong to the global scope.
+  if ((report.scope ?? GLOBAL_SCOPE) !== scope) return null;
 
   const kind = report.kind ? KIND_LABELS[report.kind] : "变更";
   const missing = report.snapshotsMissing.length;

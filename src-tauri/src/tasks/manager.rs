@@ -95,6 +95,8 @@ pub struct TaskSkillResult {
 pub struct TaskResult {
     /// Which mutation produced this result (`preview` for read-only tasks).
     pub action: TaskAction,
+    /// Scope that owns this result; results never cross scopes.
+    pub scope: crate::scope::ScopeId,
     pub overall: TaskOverall,
     pub skills: Vec<TaskSkillResult>,
     pub warnings: Vec<AppError>,
@@ -207,6 +209,7 @@ pub struct CancelAck {
 #[serde(rename_all = "camelCase")]
 pub struct ActiveMutationInfo {
     pub task_id: String,
+    pub scope: crate::scope::ScopeId,
     pub kind: MutationKind,
     pub skills: Vec<String>,
     pub started_at_epoch_ms: u64,
@@ -266,6 +269,7 @@ enum TaskState {
 
 #[derive(Debug, Clone)]
 struct MutationState {
+    scope: crate::scope::ScopeId,
     kind: MutationKind,
     skills: Vec<String>,
     started_at_epoch_ms: u64,
@@ -274,6 +278,7 @@ struct MutationState {
 
 struct TaskEntry {
     state: TaskState,
+    scope: crate::scope::ScopeId,
     cancel: CancelToken,
     /// Install tasks become non-cancellable immediately before the CLI spawns.
     cancellable: bool,
@@ -403,6 +408,7 @@ impl TaskManager {
             }
             entry.mutation.as_ref().map(|mutation| ActiveMutationInfo {
                 task_id: task_id.clone(),
+                scope: mutation.scope.clone(),
                 kind: mutation.kind,
                 skills: mutation.skills.clone(),
                 started_at_epoch_ms: mutation.started_at_epoch_ms,
@@ -427,6 +433,7 @@ impl TaskManager {
             InterruptedMutation {
                 task_id: task_id.to_string(),
                 kind: mutation.kind,
+                scope: mutation.scope.clone(),
                 skills: mutation.skills.clone(),
                 started_at_epoch_ms: mutation.started_at_epoch_ms,
                 snapshot_paths: mutation.snapshot_paths.clone(),
@@ -453,6 +460,7 @@ impl TaskManager {
             InterruptedMutation {
                 task_id: task_id.to_string(),
                 kind: mutation.kind,
+                scope: mutation.scope.clone(),
                 skills: mutation.skills.clone(),
                 started_at_epoch_ms: mutation.started_at_epoch_ms,
                 snapshot_paths: mutation.snapshot_paths.clone(),
@@ -544,6 +552,7 @@ impl TaskManager {
                 task_id.clone(),
                 TaskEntry {
                     state: TaskState::Running,
+                    scope: scope.clone(),
                     cancel: cancel.clone(),
                     cancellable: true,
                     mutation: None,
@@ -570,6 +579,7 @@ impl TaskManager {
         action: TaskAction,
         kind: MutationKind,
         skills: Vec<String>,
+        scope: crate::scope::ScopeId,
     ) -> (TaskId, CancelToken) {
         let task_id = format!("task-{}", self.inner.next_id.fetch_add(1, Ordering::SeqCst));
         let cancel = CancelToken::new();
@@ -580,9 +590,11 @@ impl TaskManager {
                 task_id.clone(),
                 TaskEntry {
                     state: TaskState::Running,
+                    scope: scope.clone(),
                     cancel: cancel.clone(),
                     cancellable: true,
                     mutation: Some(MutationState {
+                        scope,
                         kind,
                         skills,
                         started_at_epoch_ms,
@@ -630,6 +642,7 @@ impl TaskManager {
             TaskAction::Install,
             MutationKind::Install,
             plan.skills.clone(),
+            scope,
         );
 
         let action = install::InstallAction::new(
@@ -775,18 +788,20 @@ impl TaskManager {
     /// `skills check` are never spawned: every skill is rebuilt as `add`.
     pub async fn start_update(
         &self,
+        scope: crate::scope::ScopeId,
         skill_ids: Vec<String>,
         on_event: EventSink,
     ) -> Result<TaskId, AppError> {
         self.ensure_not_shutting_down()?;
         let names = install::validate_skill_names(&skill_ids)?;
+        let layout = self.scope_layout(&scope)?;
+        let planning_layout = layout.clone();
         // Hold the write slot while planning so the lock/inventory snapshot
         // cannot be read in the middle of another mutation.
         let permit = self.try_acquire_mutation()?;
         let paths = self.inner.paths.clone();
         let plan = match tokio::task::spawn_blocking(move || {
-            let agents = crate::inventory::detected_agent_dirs(&paths);
-            update_task::plan_updates(&paths, &agents, &names)
+            update_task::plan_updates(&paths, &planning_layout, &names)
         })
         .await
         {
@@ -801,10 +816,12 @@ impl TaskManager {
             TaskAction::Update,
             MutationKind::Update,
             plan.items.iter().map(|item| item.name.clone()).collect(),
+            scope,
         );
 
         let action = update_task::UpdateAction::new(
             self.inner.paths.clone(),
+            layout,
             self.inner.config.install_timeout,
         );
         let finish_sink = on_event.clone();
@@ -825,17 +842,19 @@ impl TaskManager {
     /// agent's symlink are rejected before a task exists.
     pub async fn start_uninstall(
         &self,
+        scope: crate::scope::ScopeId,
         skill_id: String,
         on_event: EventSink,
     ) -> Result<TaskId, AppError> {
         self.ensure_not_shutting_down()?;
+        let layout = self.scope_layout(&scope)?;
+        let planning_layout = layout.clone();
         // Hold the write slot while planning so the lock/inventory snapshot
         // cannot be read in the middle of another mutation.
         let permit = self.try_acquire_mutation()?;
         let paths = self.inner.paths.clone();
         let plan = match tokio::task::spawn_blocking(move || {
-            let agents = crate::inventory::detected_agent_dirs(&paths);
-            uninstall_task::plan_uninstall(&paths, &agents, &skill_id)
+            uninstall_task::plan_uninstall(&paths, &planning_layout, &skill_id)
         })
         .await
         {
@@ -850,10 +869,12 @@ impl TaskManager {
             TaskAction::Uninstall,
             MutationKind::Uninstall,
             vec![plan.name.clone()],
+            scope,
         );
 
         let action = uninstall_task::UninstallAction::new(
             self.inner.paths.clone(),
+            layout,
             self.inner.config.install_timeout,
         );
         let finish_sink = on_event.clone();
@@ -1005,6 +1026,7 @@ impl TaskManager {
                 let count = preview_skills.len() as u32;
                 let result = TaskResult {
                     action: TaskAction::Preview,
+                    scope: crate::scope::ScopeId::Global,
                     overall: TaskOverall::Success,
                     skills: Vec::new(),
                     warnings: Vec::new(),
@@ -1033,6 +1055,7 @@ impl TaskManager {
                 );
                 let result = TaskResult {
                     action: TaskAction::Preview,
+                    scope: crate::scope::ScopeId::Global,
                     overall: TaskOverall::Success,
                     skills: Vec::new(),
                     warnings: Vec::new(),
@@ -1074,6 +1097,7 @@ impl TaskManager {
                     );
                     let result = TaskResult {
                         action: TaskAction::Preview,
+                        scope: crate::scope::ScopeId::Global,
                         overall: TaskOverall::Success,
                         skills: Vec::new(),
                         warnings: vec![warning],
@@ -1128,7 +1152,7 @@ impl TaskManager {
     }
 
     fn finish(&self, task_id: &str, sink: &EventSink, outcome: FinishOutcome) {
-        let (cancel_requested, clear_marker, action, started_at) = {
+        let (cancel_requested, clear_marker, action, scope, started_at) = {
             let mut tasks = self.lock_tasks();
             let Some(entry) = tasks.get_mut(task_id) else {
                 return;
@@ -1143,6 +1167,7 @@ impl TaskManager {
                 // launch can warn and point at the retained snapshots.
                 entry.mutation.is_some() && !self.inner.shutting_down.load(Ordering::SeqCst),
                 entry.action,
+                entry.scope.clone(),
                 entry.started_at_epoch_ms,
             )
         };
@@ -1166,6 +1191,7 @@ impl TaskManager {
         let event = match outcome {
             FinishOutcome::Completed(mut result, message) => {
                 result.action = action;
+                result.scope = scope;
                 result.started_at = started_at;
                 let phase = if result.overall == TaskOverall::Cancelled {
                     TaskPhase::Cancelled
@@ -1190,6 +1216,7 @@ impl TaskManager {
                 1,
                 TaskResult {
                     action,
+                    scope: scope.clone(),
                     overall: TaskOverall::Failed,
                     skills: Vec::new(),
                     warnings: Vec::new(),
@@ -1209,6 +1236,7 @@ impl TaskManager {
                 1,
                 TaskResult {
                     action,
+                    scope,
                     overall: TaskOverall::Cancelled,
                     skills: Vec::new(),
                     warnings: Vec::new(),
@@ -2554,6 +2582,7 @@ mod tests {
 
         let active = manager.active_mutation().expect("mutation is running");
         assert_eq!(active.task_id, task_id);
+        assert_eq!(active.scope, crate::scope::ScopeId::Global);
         assert_eq!(active.kind, MutationKind::Install);
         assert_eq!(active.skills, vec!["find-skills"]);
         assert_eq!(active.snapshot_paths.len(), 1);
@@ -2568,6 +2597,24 @@ mod tests {
         assert_eq!(final_event.phase, TaskPhase::Cancelled);
         assert!(!manager.has_running_mutation());
         assert!(!paths.interrupted_marker_path().exists());
+    }
+
+    #[test]
+    fn mutation_task_result_and_marker_records_carry_the_scope() {
+        let (_tmp, _home, _paths, _executor, manager) = hanging_install_fixture();
+        let scope = crate::scope::ScopeId::project(uuid::Uuid::new_v4());
+        let (_task_id, _cancel) = manager.register_mutation(
+            TaskAction::Update,
+            MutationKind::Update,
+            vec!["alpha".to_string()],
+            scope.clone(),
+        );
+        assert_eq!(manager.active_mutation().unwrap().scope, scope);
+        let record = MarkerStore::new(&manager.inner.paths).read();
+        let crate::interrupted::MarkerRead::Present(record) = record else {
+            panic!("mutation marker should exist");
+        };
+        assert_eq!(record.scope, scope);
     }
 
     #[tokio::test]
@@ -2622,6 +2669,7 @@ mod tests {
     fn task_result_serializes_action_and_started_at_for_the_frontend() {
         let result = TaskResult {
             action: TaskAction::Uninstall,
+            scope: crate::scope::ScopeId::Global,
             overall: TaskOverall::Success,
             skills: Vec::new(),
             warnings: Vec::new(),
@@ -2633,6 +2681,7 @@ mod tests {
         };
         let json = serde_json::to_value(&result).unwrap();
         assert_eq!(json["action"], "uninstall");
+        assert_eq!(json["scope"], "global");
         assert_eq!(json["startedAt"], 1_793_163_988_000u64);
         assert_eq!(json["finishedAtEpochMs"], 1_793_163_989_000u64);
     }

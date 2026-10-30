@@ -42,6 +42,10 @@ impl MutationKind {
 pub struct InterruptedMutation {
     pub task_id: String,
     pub kind: MutationKind,
+    /// Scope the mutation was started in. Legacy markers without a scope are
+    /// read as global so the next launch still warns.
+    #[serde(default)]
+    pub scope: crate::scope::ScopeId,
     pub skills: Vec<String>,
     pub started_at_epoch_ms: u64,
     #[serde(default)]
@@ -60,6 +64,9 @@ pub struct InterruptedReport {
     pub marker_error: Option<String>,
     pub task_id: Option<String>,
     pub kind: Option<MutationKind>,
+    /// Scope that owns the interrupted record. `None` only for a corrupt
+    /// marker; a legacy marker without a scope reports global.
+    pub scope: Option<crate::scope::ScopeId>,
     pub skills: Vec<String>,
     pub started_at_epoch_ms: Option<u64>,
     pub snapshot_paths: Vec<String>,
@@ -173,6 +180,7 @@ impl MarkerStore {
             marker_error: corrupt_detail,
             task_id: mutation.as_ref().map(|mutation| mutation.task_id.clone()),
             kind: mutation.as_ref().map(|mutation| mutation.kind),
+            scope: mutation.as_ref().map(|mutation| mutation.scope.clone()),
             skills: mutation
                 .as_ref()
                 .map(|mutation| mutation.skills.clone())
@@ -238,6 +246,7 @@ mod tests {
         InterruptedMutation {
             task_id: "task-7".to_string(),
             kind: MutationKind::Update,
+            scope: crate::scope::ScopeId::Global,
             skills: skills.iter().map(|skill| skill.to_string()).collect(),
             started_at_epoch_ms: 1_700_000_000_000,
             snapshot_paths: Vec::new(),
@@ -323,6 +332,29 @@ mod tests {
         assert_eq!(report.lock.status, crate::env::LockStatus::Corrupt);
         assert!(!report.lock_is_healthy());
         assert!(report.snapshots_are_intact(), "no snapshots were recorded");
+    }
+
+    #[test]
+    fn marker_and_report_carry_the_scope_that_started_the_mutation() {
+        let (_tmp, _paths, store) = fixture();
+        let mut record = mutation(&["alpha"]);
+        record.scope = crate::scope::ScopeId::project(uuid::Uuid::new_v4());
+        store.begin(&record).unwrap();
+
+        let report = store.inspect().unwrap();
+        assert_eq!(report.scope, Some(record.scope.clone()));
+
+        // A legacy marker without a `scope` field still parses as global.
+        let legacy = r#"{
+            "taskId": "task-legacy",
+            "kind": "update",
+            "skills": ["alpha"],
+            "startedAtEpochMs": 1,
+            "snapshotPaths": []
+        }"#;
+        fs::write(store.path(), legacy).unwrap();
+        let report = store.inspect().unwrap();
+        assert_eq!(report.scope, Some(crate::scope::ScopeId::Global));
     }
 
     #[test]

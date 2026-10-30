@@ -145,6 +145,44 @@ describe("interrupted mutation warning", () => {
     expect(backend.count(API_COMMANDS.getEnvironment)).toBe(1);
   });
 
+  it("keeps a project-scope interruption warning out of the global scope", async () => {
+    mockCommands(
+      healthyReport({
+        interrupted: { ...interrupted, scope: "project:p1" },
+      }),
+    );
+    renderApp();
+    expect(await screen.findByText("环境正常")).toBeInTheDocument();
+    expect(screen.queryByTestId("interrupted-banner")).toBeNull();
+  });
+
+  it("shows the warning when the owning project scope is active", async () => {
+    createFakeBackend({
+      data: {
+        environment: healthyReport({
+          interrupted: { ...interrupted, scope: "project:p1" },
+        }),
+        projects: {
+          projects: [
+            {
+              id: "p1",
+              root: "/tmp/proj",
+              displayName: "proj",
+              addedAt: 1,
+              lastOpenedAt: 1,
+              available: true,
+            },
+          ],
+          lastActiveScope: "project:p1",
+          warnings: [],
+        },
+      },
+    }).install();
+    renderApp();
+    const banner = await screen.findByTestId("interrupted-banner");
+    expect(banner).toHaveTextContent("检测到上次变更被中断");
+  });
+
   it("warns about a corrupt marker and missing snapshots", async () => {
     mockCommands(
       healthyReport({

@@ -104,6 +104,8 @@ export type MutationKind = "install" | "update" | "uninstall";
 /** Startup verification for a mutation whose process ended before finishing. */
 export interface InterruptedReport {
   markerPath: string;
+  /** Scope that owns the interrupted mutation; legacy markers are global. */
+  scope?: ScopeId;
   markerCorrupt: boolean;
   markerError?: string;
   taskId?: string;
@@ -119,6 +121,7 @@ export interface InterruptedReport {
 
 export interface ActiveMutationInfo {
   taskId: string;
+  scope?: ScopeId;
   kind: MutationKind;
   skills: string[];
   startedAtEpochMs: number;
@@ -186,6 +189,8 @@ export interface PreviewSummary {
 
 export interface TaskResult {
   action: TaskAction;
+  /** Scope that owns this result; results never cross scopes. */
+  scope?: ScopeId;
   overall: TaskOverall;
   skills: TaskSkillResult[];
   warnings: AppError[];

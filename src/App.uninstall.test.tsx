@@ -293,6 +293,9 @@ describe("uninstall", () => {
       expect(uninstallCallsOf(state)).toEqual([{ skillId: "alpha" }]),
     );
     expect(uninstallCallsOf(state)[0]).toEqual({ skillId: "alpha" });
+    expect(
+      state.backend.callsOf(API_COMMANDS.startUninstall)[0]?.payload.scope,
+    ).toBe("global");
 
     emitOn(
       state,

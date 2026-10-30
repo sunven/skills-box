@@ -187,6 +187,86 @@ describe("fake backend", () => {
     }
   });
 
+  it("applies update and uninstall to the selected scope snapshot only", () => {
+    vi.useFakeTimers();
+    try {
+      const scope = "project:p1";
+      const projectSnapshot = makeSnapshot({
+        skills: [
+          makeSkill({ id: `${scope}/alpha`, name: "alpha" }),
+          makeSkill({ id: `${scope}/beta`, name: "beta" }),
+        ],
+      });
+      const globalSnapshot = makeSnapshot({
+        skills: [
+          makeSkill({ id: "alpha", name: "alpha" }),
+          makeSkill({ id: "beta", name: "beta" }),
+        ],
+      });
+      const backend = createFakeBackend({
+        data: {
+          snapshot: globalSnapshot,
+          snapshots: { [scope]: projectSnapshot },
+        },
+        autoTasks: { delayMs: 10 },
+      }).install();
+
+      const updateEvents: TaskEvent[] = [];
+      const updateChannel = new Channel<TaskEvent>();
+      updateChannel.onmessage = (event) => updateEvents.push(event);
+      backend.dispatch(API_COMMANDS.startUpdate, {
+        skillIds: ["alpha"],
+        scope,
+        onEvent: updateChannel,
+      });
+      vi.advanceTimersByTime(50);
+      expect(updateEvents[updateEvents.length - 1]?.result).toMatchObject({
+        action: "update",
+        scope,
+      });
+
+      let project = backend.dispatch(API_COMMANDS.getInventory, {
+        scope,
+      }) as InventorySnapshot;
+      const updated = project.skills.find((skill) => skill.name === "alpha")!;
+      expect(updated.localModification).toBe("clean");
+      expect(updated.updatedAt).not.toBeNull();
+      const global = backend.dispatch(API_COMMANDS.getInventory, {
+        scope: GLOBAL_SCOPE,
+      }) as InventorySnapshot;
+      expect(
+        global.skills.find((skill) => skill.name === "alpha")!.updatedAt,
+      ).toBeNull();
+
+      const uninstallEvents: TaskEvent[] = [];
+      const uninstallChannel = new Channel<TaskEvent>();
+      uninstallChannel.onmessage = (event) => uninstallEvents.push(event);
+      backend.dispatch(API_COMMANDS.startUninstall, {
+        skillId: `${scope}/beta`,
+        scope,
+        onEvent: uninstallChannel,
+      });
+      vi.advanceTimersByTime(50);
+      expect(uninstallEvents[uninstallEvents.length - 1]?.result).toMatchObject({
+        action: "uninstall",
+        scope,
+      });
+      project = backend.dispatch(API_COMMANDS.getInventory, {
+        scope,
+      }) as InventorySnapshot;
+      expect(project.skills.map((skill) => skill.name)).toEqual(["alpha"]);
+      const globalAfter = backend.dispatch(API_COMMANDS.getInventory, {
+        scope: GLOBAL_SCOPE,
+      }) as InventorySnapshot;
+      expect(globalAfter.skills.map((skill) => skill.name)).toEqual([
+        "alpha",
+        "beta",
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("attaches and detaches in the selected scope only", () => {
     const scope = "project:p1";
     const projectSnapshot = makeSnapshot({
