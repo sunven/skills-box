@@ -21,14 +21,21 @@ import {
   shortHash,
 } from "../lib/inventory-view";
 import { taskEventDriver, useMutation } from "../lib/mutation";
+import type { ScopeId } from "../lib/types";
 
 interface UpdateDialogProps {
   open: boolean;
+  scope: ScopeId;
   view: UpdateDialogView;
   onClose: () => void;
 }
 
-export function UpdateDialog({ open, view, onClose }: UpdateDialogProps) {
+export function UpdateDialog({
+  open,
+  scope,
+  view,
+  onClose,
+}: UpdateDialogProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const onCloseRef = useRef(onClose);
@@ -38,6 +45,7 @@ export function UpdateDialog({ open, view, onClose }: UpdateDialogProps) {
 
   const mutation = useMutation({
     action: "update",
+    scope,
     fallbackFailure: "更新失败，请重试。",
     fallbackStart: "无法开始更新，请稍后重试。",
   });
@@ -79,7 +87,7 @@ export function UpdateDialog({ open, view, onClose }: UpdateDialogProps) {
         taskEventDriver({
           total: names.length,
           message: "正在准备更新…",
-          launch: (onEvent) => startUpdate(names, onEvent),
+          launch: (onEvent) => startUpdate(names, onEvent, scope),
         }),
       );
     },

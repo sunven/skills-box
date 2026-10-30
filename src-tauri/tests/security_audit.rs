@@ -31,7 +31,7 @@ fn rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 #[test]
-fn capabilities_expose_only_core_default() {
+fn capabilities_expose_core_and_only_the_folder_picker() {
     let capabilities = manifest_dir().join("capabilities");
     let mut files = 0;
     for entry in fs::read_dir(&capabilities).unwrap() {
@@ -46,8 +46,11 @@ fn capabilities_expose_only_core_default() {
             let permissions = json["permissions"].as_array().expect("permissions array");
             assert_eq!(
                 permissions,
-                &vec![serde_json::Value::String("core:default".to_string())],
-                "{} must not expose shell/fs/opener permissions",
+                &vec![
+                    serde_json::Value::String("core:default".to_string()),
+                    serde_json::Value::String("dialog:allow-open".to_string()),
+                ],
+                "{} must expose only core:default and dialog:allow-open",
                 path.display()
             );
         }
@@ -56,15 +59,14 @@ fn capabilities_expose_only_core_default() {
 }
 
 #[test]
-fn cargo_manifest_has_no_shell_or_fs_plugins_but_keeps_single_instance() {
+fn cargo_manifest_has_only_the_dialog_plugin_beyond_opener_and_single_instance() {
     let cargo = read(manifest_dir().join("Cargo.toml"));
     assert!(cargo.contains("tauri-plugin-single-instance"));
     assert!(cargo.contains("tauri-plugin-opener"));
-    for forbidden in [
-        "tauri-plugin-shell",
-        "tauri-plugin-fs",
-        "tauri-plugin-dialog",
-    ] {
+    // Project registration needs a native folder picker. Nothing else from
+    // the filesystem/shell plugin family is allowed.
+    assert!(cargo.contains("tauri-plugin-dialog"));
+    for forbidden in ["tauri-plugin-shell", "tauri-plugin-fs"] {
         assert!(
             !cargo.contains(forbidden),
             "{forbidden} must not be a dependency"

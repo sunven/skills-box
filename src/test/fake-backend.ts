@@ -133,13 +133,27 @@ export type FakeCall = {
 
 export interface FakeBackendData {
   environment: Factory<EnvReport>;
+  /** Initial in-memory registry; list/add/relocate/forget mutate their own copy. */
   projects: Factory<ProjectList>;
+  /** Global snapshot, also the fallback for scopes without an entry. */
   snapshot: InventorySnapshot;
-  detail: (skillId: string, snapshot: InventorySnapshot) => SkillDetail;
+  /** Per-scope inventories; projects default to an empty snapshot. */
+  snapshots?: Partial<Record<ScopeId, Factory<InventorySnapshot>>>;
+  detail: (
+    skillId: string,
+    snapshot: InventorySnapshot,
+    scope?: ScopeId,
+  ) => SkillDetail;
   listDir: (skillId: string, path: string) => SkillDirListing;
   readFile: (skillId: string, path: string) => SkillFileContent;
   updateReport: Factory<UpdateCheckReport>;
+  /** Per-scope check reports; projects default to an empty report. */
+  updateReports?: Partial<Record<ScopeId, Factory<UpdateCheckReport>>>;
   updateCheckState: Factory<UpdateCheckState | null>;
+  /** Per-scope persisted check state; projects default to `null`. */
+  updateCheckStates?: Partial<
+    Record<ScopeId, Factory<UpdateCheckState | null>>
+  >;
   activeMutation: Factory<ActiveMutationInfo | null>;
   preview: PreviewSummary;
 }
@@ -265,6 +279,8 @@ export function createFakeBackend(
   };
   const initialData: FakeBackendData = { ...defaultData, ...options.data };
   let data: FakeBackendData = { ...initialData };
+  let projectList: ProjectList = factoryValue(initialData.projects);
+  const initialProjects = projectList;
 
   const calls: FakeCall[] = [];
   const tasks: FakeTask[] = [];
@@ -346,59 +362,98 @@ export function createFakeBackend(
     );
   };
 
-  const setSnapshot = (snapshot: InventorySnapshot) => {
-    data = { ...data, snapshot };
+  const snapshotFor = (scope: ScopeId = GLOBAL_SCOPE): InventorySnapshot => {
+    const scoped = data.snapshots?.[scope];
+    if (scoped) return factoryValue(scoped);
+    if (scope === GLOBAL_SCOPE) return data.snapshot;
+    return emptySnapshot();
   };
 
-  const findSkill = (skillId: string): InventorySkill => {
-    const skill = data.snapshot.skills.find((entry) => entry.name === skillId);
+  const setSnapshot = (
+    snapshot: InventorySnapshot,
+    scope: ScopeId = GLOBAL_SCOPE,
+  ) => {
+    if (scope === GLOBAL_SCOPE) {
+      data = { ...data, snapshot };
+      return;
+    }
+    data = {
+      ...data,
+      snapshots: { ...data.snapshots, [scope]: snapshot },
+    };
+  };
+
+  const findSkill = (
+    skillId: string,
+    scope: ScopeId = GLOBAL_SCOPE,
+  ): InventorySkill => {
+    const snapshot = snapshotFor(scope);
+    const skill = snapshot.skills.find(
+      (entry) => entry.id === skillId || entry.name === skillId,
+    );
     if (!skill) throw notFound("skill", skillId);
     return skill;
   };
 
-  const findAgent = (agentId: string): InventoryAgent | undefined =>
-    data.snapshot.agents.find((agent) => agent.id === agentId);
+  const findAgent = (
+    agentId: string,
+    scope: ScopeId = GLOBAL_SCOPE,
+  ): InventoryAgent | undefined =>
+    snapshotFor(scope).agents.find((agent) => agent.id === agentId);
 
-  const nativeAttach = (skillId: string, agentId: string): AttachResult => {
-    const skill = findSkill(skillId);
-    const agent = findAgent(agentId);
+  const nativeAttach = (
+    skillId: string,
+    agentId: string,
+    scope: ScopeId = GLOBAL_SCOPE,
+  ): AttachResult => {
+    const snapshot = snapshotFor(scope);
+    const skill = findSkill(skillId, scope);
+    const agent = findAgent(agentId, scope);
     const agentName = agent?.displayName ?? agentId;
     const skillsDir = agent?.globalSkillsDir ?? `~/.${agentId}/skills`;
     const attachment: AgentAttachment = {
       agentId,
       agentName,
-      path: `${skillsDir}/${skillId}`,
+      path: `${skillsDir}/${skill.name}`,
       mode: "link",
       detachable: true,
     };
-    setSnapshot({
-      ...data.snapshot,
-      skills: data.snapshot.skills.map((entry) =>
-        entry.name === skillId
-          ? {
-              ...entry,
-              attachments: entry.attachments.some(
-                (current) => current.agentId === agentId,
-              )
-                ? entry.attachments
-                : [...entry.attachments, attachment],
-            }
-          : entry,
-      ),
-    });
+    setSnapshot(
+      {
+        ...snapshot,
+        skills: snapshot.skills.map((entry) =>
+          entry.id === skill.id
+            ? {
+                ...entry,
+                attachments: entry.attachments.some(
+                  (current) => current.agentId === agentId,
+                )
+                  ? entry.attachments
+                  : [...entry.attachments, attachment],
+              }
+            : entry,
+        ),
+      },
+      scope,
+    );
     return {
       skillId,
       agentId,
       agentName,
       attachmentPath: attachment.path,
       canonicalPath:
-        skill.canonicalPath ?? `~/.agents/skills/${skillId}`,
+        skill.canonicalPath ?? `~/.agents/skills/${skill.name}`,
       logPath: FAKE_LOG_PATH,
     };
   };
 
-  const nativeDetach = (skillId: string, agentId: string): DetachResult => {
-    const skill = findSkill(skillId);
+  const nativeDetach = (
+    skillId: string,
+    agentId: string,
+    scope: ScopeId = GLOBAL_SCOPE,
+  ): DetachResult => {
+    const snapshot = snapshotFor(scope);
+    const skill = findSkill(skillId, scope);
     const attachment = skill.attachments.find(
       (entry) => entry.agentId === agentId,
     );
@@ -406,14 +461,15 @@ export function createFakeBackend(
     const remaining = skill.attachments.filter(
       (entry) => entry.agentId !== agentId,
     );
-    setSnapshot({
-      ...data.snapshot,
-      skills: data.snapshot.skills.map((entry) =>
-        entry.name === skillId
-          ? { ...entry, attachments: remaining }
-          : entry,
-      ),
-    });
+    setSnapshot(
+      {
+        ...snapshot,
+        skills: snapshot.skills.map((entry) =>
+          entry.id === skill.id ? { ...entry, attachments: remaining } : entry,
+        ),
+      },
+      scope,
+    );
     return {
       skillId,
       agentId,
@@ -421,10 +477,10 @@ export function createFakeBackend(
       mode: attachment.mode,
       attachmentPath: attachment.path,
       canonicalPath:
-        skill.canonicalPath ?? `~/.agents/skills/${skillId}`,
+        skill.canonicalPath ?? `~/.agents/skills/${skill.name}`,
       backupPath:
         attachment.mode === "copy"
-          ? `${FAKE_BACKUP}/1-detach-${skillId}`
+          ? `${FAKE_BACKUP}/1-detach-${skill.name}`
           : undefined,
       logPath: FAKE_LOG_PATH,
       remainingAgents: remaining.map((entry) => entry.agentName),
@@ -494,15 +550,157 @@ export function createFakeBackend(
     };
   };
 
+  const projectScope = (id: string): ScopeId => `project:${id}`;
+
+  const sortProjects = (projects: ProjectEntry[]): ProjectEntry[] =>
+    [...projects].sort(
+      (left, right) =>
+        right.lastOpenedAt - left.lastOpenedAt ||
+        right.addedAt - left.addedAt ||
+        left.id.localeCompare(right.id),
+    );
+
+  const resolveActive = (scope: ScopeId): ScopeId => {
+    if (scope === GLOBAL_SCOPE) return GLOBAL_SCOPE;
+    const id = scope.slice("project:".length);
+    return projectList.projects.some(
+      (entry) => entry.id === id && entry.available,
+    )
+      ? scope
+      : GLOBAL_SCOPE;
+  };
+
+  const updateProjectList = (next: Partial<ProjectList>) => {
+    projectList = {
+      ...projectList,
+      ...next,
+      projects: sortProjects(next.projects ?? projectList.projects),
+    };
+  };
+
+  const addProject = (root: string): ProjectEntry => {
+    const trimmed = root.replace(/\/+$/, "") || root;
+    if (projectList.projects.some((entry) => entry.root === trimmed)) {
+      throw {
+        code: "project.duplicate",
+        message: `项目目录「${trimmed}」已注册。`,
+        retryable: false,
+      } satisfies AppError;
+    }
+    const entry = fakeProject(trimmed);
+    updateProjectList({
+      projects: [entry, ...projectList.projects],
+      lastActiveScope: projectScope(entry.id),
+    });
+    return entry;
+  };
+
+  const relocateProject = (id: string, root: string): ProjectEntry => {
+    const existing = projectList.projects.find((entry) => entry.id === id);
+    if (!existing) {
+      throw {
+        code: "project.not_found",
+        message: `project「${id}」不存在。`,
+        retryable: false,
+      } satisfies AppError;
+    }
+    const trimmed = root.replace(/\/+$/, "") || root;
+    if (
+      projectList.projects.some(
+        (entry) => entry.root === trimmed && entry.id !== id,
+      )
+    ) {
+      throw {
+        code: "project.duplicate",
+        message: `项目目录「${trimmed}」已注册。`,
+        retryable: false,
+      } satisfies AppError;
+    }
+    const relocated: ProjectEntry = {
+      ...existing,
+      root: trimmed,
+      displayName: trimmed.split("/").pop() || trimmed,
+      lastOpenedAt: Date.now(),
+      available: true,
+      unavailableReason: undefined,
+    };
+    updateProjectList({
+      projects: projectList.projects.map((entry) =>
+        entry.id === id ? relocated : entry,
+      ),
+      lastActiveScope: projectScope(id),
+    });
+    return relocated;
+  };
+
+  const forgetProject = (id: string): void => {
+    const scope = projectScope(id);
+    if (!projectList.projects.some((entry) => entry.id === id)) {
+      throw {
+        code: "project.not_found",
+        message: `project「${id}」不存在。`,
+        retryable: false,
+      } satisfies AppError;
+    }
+    updateProjectList({
+      projects: projectList.projects.filter((entry) => entry.id !== id),
+      lastActiveScope:
+        projectList.lastActiveScope === scope
+          ? GLOBAL_SCOPE
+          : projectList.lastActiveScope,
+    });
+  };
+
+  const setActiveScope = (scope: ScopeId): void => {
+    if (scope !== GLOBAL_SCOPE) {
+      const id = scope.slice("project:".length);
+      const existing = projectList.projects.find((entry) => entry.id === id);
+      if (!existing) {
+        throw {
+          code: "project.not_found",
+          message: `project「${id}」不存在。`,
+          retryable: false,
+        } satisfies AppError;
+      }
+      updateProjectList({
+        projects: projectList.projects.map((entry) =>
+          entry.id === id ? { ...entry, lastOpenedAt: Date.now() } : entry,
+        ),
+        lastActiveScope: scope,
+      });
+      return;
+    }
+    updateProjectList({ lastActiveScope: GLOBAL_SCOPE });
+  };
+
+  const reportFor = (scope: ScopeId): UpdateCheckReport => {
+    const scoped = data.updateReports?.[scope];
+    if (scoped) return factoryValue(scoped);
+    if (scope === GLOBAL_SCOPE) return factoryValue(data.updateReport);
+    return emptyUpdateReport({ checkedAtEpochMs: Date.now() });
+  };
+
+  const checkStateFor = (scope: ScopeId): UpdateCheckState | null => {
+    const scoped = data.updateCheckStates?.[scope];
+    if (scoped !== undefined) return factoryValue(scoped);
+    if (scope === GLOBAL_SCOPE) return factoryValue(data.updateCheckState);
+    return null;
+  };
+
   const defaultHandlers: FakeHandlers = {
     get_environment: () => factoryValue(data.environment),
-    list_projects: () => factoryValue(data.projects),
-    add_project: ({ root }) => fakeProject(root),
-    relocate_project: ({ id, root }) => fakeProject(root, id),
-    forget_project: () => undefined,
-    set_active_scope: () => undefined,
-    get_inventory: () => data.snapshot,
-    get_skill_detail: ({ skillId }) => data.detail(skillId, data.snapshot),
+    list_projects: () => ({
+      ...projectList,
+      projects: sortProjects(projectList.projects),
+      lastActiveScope: resolveActive(projectList.lastActiveScope),
+    }),
+    add_project: ({ root }) => addProject(root),
+    relocate_project: ({ id, root }) => relocateProject(id, root),
+    forget_project: ({ id }) => forgetProject(id),
+    set_active_scope: ({ scope }) => setActiveScope(scope),
+    get_inventory: ({ scope }) => snapshotFor(scope),
+    get_skill_detail: ({ skillId, scope }) =>
+      data.detail(skillId, snapshotFor(scope), scope),
     open_skill_folder: () => undefined,
     list_skill_dir: ({ skillId, path }) => data.listDir(skillId, path ?? ""),
     read_skill_file: ({ skillId, path }) => data.readFile(skillId, path),
@@ -526,15 +724,17 @@ export function createFakeBackend(
       scheduleAutoTask(task, "install", request.skills);
       return task.taskId;
     },
-    check_updates: () => factoryValue(data.updateReport),
-    get_update_check_state: () => factoryValue(data.updateCheckState),
+    check_updates: ({ scope }) => reportFor(scope),
+    get_update_check_state: ({ scope }) => checkStateFor(scope),
     start_update: ({ skillIds, onEvent }) => {
       const task = makeTask("start_update", onEvent);
       scheduleAutoTask(task, "update", skillIds);
       return task.taskId;
     },
-    detach_agent: ({ skillId, agentId }) => nativeDetach(skillId, agentId),
-    attach_agent: ({ skillId, agentId }) => nativeAttach(skillId, agentId),
+    detach_agent: ({ skillId, agentId, scope }) =>
+      nativeDetach(skillId, agentId, scope),
+    attach_agent: ({ skillId, agentId, scope }) =>
+      nativeAttach(skillId, agentId, scope),
     add_extra_agent: ({ agent }) => addExtra(agent),
     remove_extra_agent: ({ agentId }) => removeExtra(agentId),
     start_uninstall: ({ skillId, onEvent }) => {
@@ -567,6 +767,7 @@ export function createFakeBackend(
     },
     update(patch) {
       data = { ...data, ...patch };
+      if (patch.projects) projectList = factoryValue(patch.projects);
     },
     dispatch<K extends ApiCommand>(
       command: K,
@@ -603,6 +804,7 @@ export function createFakeBackend(
       projectCounter = 0;
       channelIndexes.clear();
       data = { ...initialData };
+      projectList = initialProjects;
     },
     supports(command) {
       return Object.prototype.hasOwnProperty.call(defaultHandlers, command);

@@ -44,7 +44,7 @@ describe("app shell", () => {
     expect(screen.getByText("Lock v3 · 61 条")).toBeInTheDocument();
 
     expect(screen.getByRole("heading", { name: "筛选" })).toBeInTheDocument();
-    expect(screen.getByText("暂无 skill")).toBeInTheDocument();
+    expect(await screen.findByText("暂无 skill")).toBeInTheDocument();
     // The detail drawer stays closed until a skill is selected.
     expect(
       screen.queryByRole("complementary", { name: "详情" }),
@@ -103,7 +103,7 @@ describe("app shell", () => {
 
       // The read-only shell must stay usable while the environment is broken.
       expect(screen.getByRole("heading", { name: "筛选" })).toBeInTheDocument();
-      expect(screen.getByText("暂无 skill")).toBeInTheDocument();
+      expect(await screen.findByText("暂无 skill")).toBeInTheDocument();
     });
   }
 

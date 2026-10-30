@@ -6,18 +6,20 @@ import { MutationProgress } from "./mutation/mutation-progress";
 import { MutationResult } from "./mutation/mutation-result";
 import { useModalFocus } from "../hooks/use-modal-focus";
 import { startUninstall } from "../lib/api";
-import type { UpdateViewSkill } from "../lib/types";
+import type { ScopeId, UpdateViewSkill } from "../lib/types";
 import { ATTACHMENT_LABELS } from "../lib/inventory-view";
 import { taskEventDriver, useMutation } from "../lib/mutation";
 
 interface UninstallDialogProps {
   open: boolean;
+  scope: ScopeId;
   skill: UpdateViewSkill | null;
   onClose: () => void;
 }
 
 export function UninstallDialog({
   open,
+  scope,
   skill,
   onClose,
 }: UninstallDialogProps) {
@@ -30,6 +32,7 @@ export function UninstallDialog({
 
   const mutation = useMutation({
     action: "uninstall",
+    scope,
     fallbackFailure: "卸载失败，请重试。",
     fallbackStart: "无法开始卸载，请稍后重试。",
   });
@@ -52,7 +55,7 @@ export function UninstallDialog({
       taskEventDriver({
         total: 1,
         message: "正在准备卸载…",
-        launch: (onEvent) => startUninstall(skill.name, onEvent),
+        launch: (onEvent) => startUninstall(skill.name, onEvent, scope),
       }),
     );
   }, [skill, mutation.start, mutation.stateRef]);

@@ -14,6 +14,7 @@ import { asAppError, cancelTask, fallbackError } from "./api";
 import { TASK_SKILL_STATUS_LABELS } from "./task-runner";
 import type {
   AppError,
+  ScopeId,
   TaskEvent,
   TaskPhase,
   TaskResult,
@@ -327,24 +328,34 @@ export function mutationRunReducer(
  */
 export function mutationRefreshKeys(
   action: MutationAction,
+  scope: ScopeId,
   skillId?: string,
 ): QueryKey[] {
   switch (action) {
     case "install":
-      return [["inventory"], ["skill"]];
+      return [["inventory", scope], ["skill", scope]];
     case "update":
     case "uninstall":
-      return [["inventory"], ["skill"], ["updateReport"]];
+      return [
+        ["inventory", scope],
+        ["skill", scope],
+        ["updateReport", scope],
+      ];
     case "attach":
     case "detach":
       return skillId
         ? [
-            ["inventory"],
-            ["skill", skillId],
-            ["skill-dir", skillId],
-            ["skill-file", skillId],
+            ["inventory", scope],
+            ["skill", scope, skillId],
+            ["skill-dir", scope, skillId],
+            ["skill-file", scope, skillId],
           ]
-        : [["inventory"], ["skill"], ["skill-dir"], ["skill-file"]];
+        : [
+            ["inventory", scope],
+            ["skill", scope],
+            ["skill-dir", scope],
+            ["skill-file", scope],
+          ];
     case "manage_add":
     case "manage_remove":
       return [];
@@ -353,6 +364,8 @@ export function mutationRefreshKeys(
 
 export interface MutationRefreshOptions {
   action: MutationAction;
+  /** Every cache entry is scoped; refresh never crosses scopes. */
+  scope: ScopeId;
   skillId?: string;
   /** Manage actions must re-run the environment check, not just the caches. */
   onEnvironmentRecheck?: () => void;
@@ -373,12 +386,16 @@ export function refreshMutationQueries(
       .map((row) => row.name);
     if (updatedNames.length > 0) {
       queryClient.setQueryData<UpdateCheckReport | undefined>(
-        updateReportQueryKey,
+        updateReportQueryKey(options.scope),
         (previous) => markSkillsCurrent(previous, updatedNames),
       );
     }
   }
-  for (const queryKey of mutationRefreshKeys(options.action, options.skillId)) {
+  for (const queryKey of mutationRefreshKeys(
+    options.action,
+    options.scope,
+    options.skillId,
+  )) {
     void queryClient.invalidateQueries({ queryKey });
   }
   if (options.action === "manage_add" || options.action === "manage_remove") {

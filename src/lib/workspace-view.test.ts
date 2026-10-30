@@ -15,6 +15,7 @@ import type {
   UpdateSkillResult,
   UpdateState,
 } from "./types";
+import { GLOBAL_SCOPE } from "./types";
 
 function result(name: string, state: UpdateState): UpdateSkillResult {
   return {
@@ -51,6 +52,7 @@ function filters(overrides: Partial<InventoryFilters> = {}): InventoryFilters {
 describe("workspace projection", () => {
   it("overlays the report and derives rows, counts, options and last check", () => {
     const view = buildWorkspaceView({
+      activeScope: GLOBAL_SCOPE,
       snapshot: sampleSnapshot(),
       updateReport: report([result("alpha", "update"), result("beta", "current")]),
       lastFullCheck: report([result("alpha", "update")]),
@@ -90,6 +92,7 @@ describe("workspace projection", () => {
 
   it("applies deferred filters, status and sort, and keeps selection exact", () => {
     const base = {
+      activeScope: GLOBAL_SCOPE,
       snapshot: sampleSnapshot(),
       updateReport: report([result("alpha", "update")]),
       lastFullCheck: null,
@@ -135,6 +138,7 @@ describe("workspace projection", () => {
     const snapshot = makeSnapshot({ skills: [modified] });
     const updateReport = report([result("modified", "update")]);
     const base = {
+      activeScope: GLOBAL_SCOPE,
       snapshot,
       updateReport,
       lastFullCheck: null,
@@ -166,6 +170,7 @@ describe("workspace projection", () => {
       skippedSourceCount: 3,
     };
     const view = buildWorkspaceView({
+      activeScope: GLOBAL_SCOPE,
       snapshot: sampleSnapshot(),
       updateCheckState: state,
       filters: filters(),

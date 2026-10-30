@@ -17,6 +17,7 @@ import type {
   InventorySkill,
   PreviewSkill,
   PreviewSummary,
+  ScopeId,
   TaskEvent,
 } from "../lib/types";
 import { useTaskEvents } from "../lib/task-runner";
@@ -24,6 +25,7 @@ import { taskEventDriver, useMutation } from "../lib/mutation";
 
 interface InstallWizardProps {
   open: boolean;
+  scope: ScopeId;
   inventorySkills: InventorySkill[];
   agents: DetectedAgent[];
   onClose: () => void;
@@ -106,6 +108,7 @@ function StepBars({ step }: { step: Step }) {
 
 export function InstallWizard({
   open,
+  scope,
   inventorySkills,
   agents,
   onClose,
@@ -169,6 +172,7 @@ export function InstallWizard({
   });
   const installMutation = useMutation({
     action: "install",
+    scope,
     fallbackFailure: "安装失败，请重试。",
     fallbackStart: "无法开始安装，请稍后重试。",
   });
@@ -305,7 +309,7 @@ export function InstallWizard({
     previewDriver.start({
       total: 1,
       message: "正在准备预览…",
-      launch: (onEvent) => startPreview(source, onEvent),
+      launch: (onEvent) => startPreview(source, onEvent, scope),
     });
   };
 
@@ -331,6 +335,7 @@ export function InstallWizard({
               retry,
             },
             onEvent,
+            scope,
           ),
       }),
     );

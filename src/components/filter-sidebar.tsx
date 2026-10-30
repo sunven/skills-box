@@ -31,6 +31,8 @@ interface FilterSidebarProps {
   onRecheck: () => void;
   onClose?: () => void;
   onManageAgents?: () => void;
+  /** Scope switcher rendered at the top of the rail. */
+  scopeSwitcher?: ReactNode;
 }
 
 interface FilterRowProps {
@@ -110,6 +112,7 @@ export function FilterSidebar({
   onRecheck,
   onClose,
   onManageAgents,
+  scopeSwitcher,
 }: FilterSidebarProps) {
   return (
     <aside aria-label="筛选" className="rail">
@@ -129,6 +132,7 @@ export function FilterSidebar({
       </div>
 
       <div className="rail-scroll">
+        {scopeSwitcher}
         <section aria-label="来源" className="filter-group">
           <SectionTitle>来源</SectionTitle>
           <FilterRow

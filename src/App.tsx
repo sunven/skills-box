@@ -16,12 +16,15 @@ import { InstallWizard } from "./components/install-wizard";
 import { InterruptedBanner } from "./components/interrupted-banner";
 import { LockErrorScreen } from "./components/lock-error-screen";
 import { ManageAgentsDialog } from "./components/manage-agents-dialog";
+import { ProjectDialogs, type ProjectDialogState } from "./components/project-dialogs";
+import { ScopeSwitcher } from "./components/scope-switcher";
 import { SkillListPane } from "./components/skill-list-pane";
 import { UninstallDialog } from "./components/uninstall-dialog";
 import { UpdateDialog } from "./components/update-dialog";
 import { useAutoUpdateCheck } from "./hooks/use-auto-update-check";
 import { environmentQueryKey, useEnvironmentQuery, useRecheckEnvironment } from "./hooks/use-environment";
 import { useInventoryQuery } from "./hooks/use-inventory";
+import { projectsQueryKey, useProjectsQuery, useScopeCheckStates } from "./hooks/use-projects";
 import {
   useCheckUpdates,
   useLastFullAttemptQuery,
@@ -37,15 +40,24 @@ import {
   getActiveMutation,
   quitApp,
   revealAppData,
+  setActiveScope as persistActiveScope,
 } from "./lib/api";
 import { listenForExitRequest } from "./lib/lifecycle";
 import { defaultFilters, type SortKey, type StatusFilter } from "./lib/inventory-view";
+import {
+  projectForScope,
+  projectScope,
+  resolveInitialScope,
+} from "./lib/scope";
 import { buildWorkspaceView } from "./lib/workspace-view";
+import { GLOBAL_SCOPE } from "./lib/types";
 import type {
   ActiveMutationInfo,
   DetectedAgent,
   EnvReport,
   InventoryAgent,
+  ProjectEntry,
+  ScopeId,
   UpdateViewSkill,
 } from "./lib/types";
 
@@ -57,12 +69,39 @@ function App() {
   const queryClient = useQueryClient();
   const environment = useEnvironmentQuery();
   const recheck = useRecheckEnvironment();
-  const inventoryQuery = useInventoryQuery();
-  const updateReportQuery = useUpdateReportQuery();
-  const updateCheckStateQuery = useUpdateCheckStateQuery();
-  const lastFullCheckQuery = useLastFullCheckQuery();
-  const lastFullAttemptQuery = useLastFullAttemptQuery();
-  const checkUpdates = useCheckUpdates();
+  const projectsQuery = useProjectsQuery();
+  const [activeScope, setActiveScope] = useState<ScopeId | null>(null);
+  const [projectDialog, setProjectDialog] = useState<ProjectDialogState>(null);
+  const [scopeNotice, setScopeNotice] = useState<string | null>(null);
+  const projects = projectsQuery.data;
+  const scope = activeScope ?? GLOBAL_SCOPE;
+  const scopeReady = activeScope !== null;
+  const activeProject = projectForScope(projects, scope);
+  const scopeUnavailable = Boolean(activeProject && !activeProject.available);
+
+  useEffect(() => {
+    if (activeScope !== null) return;
+    if (projects) {
+      setActiveScope(resolveInitialScope(projects));
+      return;
+    }
+    if (projectsQuery.isError) setActiveScope(GLOBAL_SCOPE);
+  }, [activeScope, projects, projectsQuery.isError]);
+
+  const scopeIds = useMemo(
+    () => [
+      GLOBAL_SCOPE,
+      ...(projects?.projects.map((entry) => projectScope(entry.id)) ?? []),
+    ],
+    [projects],
+  );
+  const scopeCheckStates = useScopeCheckStates(scopeIds);
+  const inventoryQuery = useInventoryQuery(scope, scopeReady && !scopeUnavailable);
+  const updateReportQuery = useUpdateReportQuery(scope);
+  const updateCheckStateQuery = useUpdateCheckStateQuery(scope);
+  const lastFullCheckQuery = useLastFullCheckQuery(scope);
+  const lastFullAttemptQuery = useLastFullAttemptQuery(scope);
+  const checkUpdates = useCheckUpdates(scope);
   const report = environment.data;
   const snapshot = inventoryQuery.data;
   const updateData = updateReportQuery.data ?? null;
@@ -96,10 +135,16 @@ function App() {
   // Filtering runs on a deferred query so typing stays urgent while the list
   // and the detail drawer re-render at a lower priority.
   const deferredQuery = useDeferredValue(query);
+  const scopeError = asAppError(inventoryQuery.error);
   const view = useMemo(
     () =>
       buildWorkspaceView({
         snapshot,
+        projects,
+        activeScope: scope,
+        scopeError,
+        scopeCheckStates,
+        inventoryLoading: inventoryQuery.isPending && !scopeUnavailable,
         updateReport: updateData,
         lastFullCheck,
         updateCheckState: updateCheckStateQuery.data ?? null,
@@ -111,6 +156,12 @@ function App() {
       }),
     [
       snapshot,
+      projects,
+      scope,
+      scopeError,
+      scopeCheckStates,
+      inventoryQuery.isPending,
+      scopeUnavailable,
       updateData,
       lastFullCheck,
       updateCheckStateQuery.data,
@@ -183,13 +234,17 @@ function App() {
     });
   };
 
-  const inventoryError = asAppError(inventoryQuery.error);
+  const inventoryError = scopeError;
   const updateError = asAppError(checkUpdates.error);
-  const lockError =
-    isLockError(inventoryError)
-      ? inventoryError
-      : null;
-  const mutationsEnabled = (report?.mutationsEnabled ?? false) && !lockError;
+  const scopeLockError =
+    isLockError(inventoryError) ? inventoryError : null;
+  // Lock recovery is a global-scope surface; project lock errors stay inside
+  // the project view and never take over the whole app.
+  const lockError = scope === GLOBAL_SCOPE ? scopeLockError : null;
+  const scopeBlocked =
+    scopeUnavailable || scopeLockError !== null || view.scopeError !== null;
+  const mutationsEnabled =
+    (report?.mutationsEnabled ?? false) && !scopeBlocked;
 
   const mutateCheckUpdates = checkUpdates.mutate;
   const runAutoCheck = useCallback(async () => {
@@ -204,7 +259,8 @@ function App() {
   }, [mutateCheckUpdates]);
 
   useAutoUpdateCheck({
-    enabled: inventoryQuery.isSuccess && !lockError && view.hasManagedSkills,
+    enabled:
+      inventoryQuery.isSuccess && !scopeBlocked && view.hasManagedSkills,
     checking: checkUpdates.isPending,
     lastFullAttemptAt: lastFullAttemptQuery.data,
     onCheck: runAutoCheck,
@@ -212,12 +268,12 @@ function App() {
 
   // A manual environment refresh is also a full read-model refresh: the
   // inventory may have changed under us, and cached detail/update results are
-  // no longer trustworthy.
+  // no longer trustworthy. Invalidation never crosses into other scopes.
   const handleRecheck = () => {
     recheck.mutate();
     void inventoryQuery.refetch();
-    void queryClient.invalidateQueries({ queryKey: ["skill"] });
-    void queryClient.invalidateQueries({ queryKey: ["updateReport"] });
+    void queryClient.invalidateQueries({ queryKey: ["skill", scope] });
+    void queryClient.invalidateQueries({ queryKey: ["updateReport", scope] });
   };
 
   const handleCheckUpdates = useCallback(
@@ -227,7 +283,18 @@ function App() {
     [mutateCheckUpdates],
   );
 
-  const handleRetryInventory = handleRecheck;
+  const handleRetryInventory = () => {
+    if (view.scopeError) {
+      void inventoryQuery.refetch();
+      return;
+    }
+    handleRecheck();
+  };
+
+  const handleRefreshProject = () => {
+    void inventoryQuery.refetch();
+    mutateCheckUpdates();
+  };
 
   const handleClearFilters = useCallback(() => {
     const defaults = defaultFilters();
@@ -236,6 +303,130 @@ function App() {
     setAgent(defaults.agent);
     setStatus(defaults.status);
   }, []);
+
+  const resetWorkspaceState = useCallback(() => {
+    const defaults = defaultFilters();
+    setQuery(defaults.query);
+    setSource(defaults.source);
+    setAgent(defaults.agent);
+    setStatus(defaults.status);
+    setSort("recent");
+    setSelectedName(null);
+    setDetailOpen(false);
+    setFiltersOpen(false);
+    setAnomaliesOpen(false);
+    setUpdateMode(null);
+    setUpdateSkillName(null);
+    setUninstallSkill(null);
+  }, []);
+
+  const handleSelectScope = useCallback(
+    (next: ScopeId) => {
+      if (!scopeReady || next === scope) return;
+      resetWorkspaceState();
+      setScopeNotice(null);
+      setActiveScope(next);
+      void persistActiveScope(next)
+        .then(() =>
+          queryClient.invalidateQueries({ queryKey: projectsQueryKey }),
+        )
+        .catch((error: unknown) => {
+          const typed = asAppError(error) ?? fallbackError("无法保存当前作用域。");
+          setScopeNotice(typed.message);
+        });
+    },
+    [queryClient, resetWorkspaceState, scope, scopeReady],
+  );
+
+  const cacheProjectList = useCallback(
+    (update: (previous: typeof projects) => typeof projects) => {
+      queryClient.setQueryData(projectsQueryKey, update);
+    },
+    [queryClient],
+  );
+
+  const handleProjectAdded = useCallback(
+    (entry: ProjectEntry) => {
+      resetWorkspaceState();
+      setProjectDialog(null);
+      cacheProjectList((previous) => {
+        const list = previous ?? {
+          projects: [],
+          lastActiveScope: GLOBAL_SCOPE,
+          warnings: [],
+        };
+        return {
+          ...list,
+          projects: [
+            entry,
+            ...list.projects.filter((item) => item.id !== entry.id),
+          ],
+          lastActiveScope: projectScope(entry.id),
+        };
+      });
+      setActiveScope(projectScope(entry.id));
+      void queryClient.invalidateQueries({ queryKey: projectsQueryKey });
+    },
+    [cacheProjectList, queryClient, resetWorkspaceState],
+  );
+
+  const handleProjectRelocated = useCallback(
+    (entry: ProjectEntry) => {
+      resetWorkspaceState();
+      setProjectDialog(null);
+      cacheProjectList((previous) => {
+        const list = previous ?? {
+          projects: [],
+          lastActiveScope: GLOBAL_SCOPE,
+          warnings: [],
+        };
+        return {
+          ...list,
+          projects: [
+            entry,
+            ...list.projects.filter((item) => item.id !== entry.id),
+          ],
+          lastActiveScope: projectScope(entry.id),
+        };
+      });
+      setActiveScope(projectScope(entry.id));
+      void queryClient.invalidateQueries({ queryKey: projectsQueryKey });
+    },
+    [cacheProjectList, queryClient, resetWorkspaceState],
+  );
+
+  const handleProjectForgotten = useCallback(
+    (projectId: string) => {
+      setProjectDialog(null);
+      const forgottenScope = projectScope(projectId);
+      const wasActive = scope === forgottenScope;
+      if (wasActive) {
+        resetWorkspaceState();
+        setActiveScope(GLOBAL_SCOPE);
+      }
+      cacheProjectList((previous) =>
+        previous
+          ? {
+              ...previous,
+              projects: previous.projects.filter(
+                (entry) => entry.id !== projectId,
+              ),
+              lastActiveScope: wasActive
+                ? GLOBAL_SCOPE
+                : previous.lastActiveScope,
+            }
+          : previous,
+      );
+      void queryClient.removeQueries({
+        queryKey: ["inventory", forgottenScope],
+      });
+      void queryClient.removeQueries({
+        queryKey: ["skill", forgottenScope],
+      });
+      void queryClient.invalidateQueries({ queryKey: projectsQueryKey });
+    },
+    [cacheProjectList, queryClient, resetWorkspaceState, scope],
+  );
 
   const handleSelectSkill = useCallback((name: string) => {
     setSelectedName(name);
@@ -287,7 +478,7 @@ function App() {
         lastCheck={view.lastCheck}
         updateError={updateError}
         checkingUpdates={checkUpdates.isPending}
-        updatesEnabled={!lockError}
+        updatesEnabled={!scopeBlocked}
         onCheckUpdates={() => handleCheckUpdates()}
         onUpdateAll={() => {
           setUpdateSkillName(null);
@@ -339,6 +530,22 @@ function App() {
                 onRecheck={handleRecheck}
                 onClose={() => setFiltersOpen(false)}
                 onManageAgents={() => setManageAgentsOpen(true)}
+                scopeSwitcher={
+                  <ScopeSwitcher
+                    activeScope={scope}
+                    projects={view.scopeProjects}
+                    warnings={projects?.warnings ?? EMPTY_WARNINGS}
+                    notice={scopeNotice}
+                    onSelect={handleSelectScope}
+                    onAddProject={() => setProjectDialog({ mode: "add" })}
+                    onRelocate={(project) =>
+                      setProjectDialog({ mode: "relocate", project })
+                    }
+                    onForget={(project) =>
+                      setProjectDialog({ mode: "forget", project })
+                    }
+                  />
+                }
               />
             </div>
             <SkillListPane
@@ -352,6 +559,20 @@ function App() {
               selectedName={view.selectedSkill?.name ?? null}
               isLoading={inventoryQuery.isPending}
               error={inventoryQuery.error}
+              scopeError={view.scopeError}
+              projectHeader={view.projectHeader}
+              unavailableProject={
+                view.activeProjectUnavailable ? view.activeProject : null
+              }
+              refreshingProject={checkUpdates.isPending}
+              onRefreshProject={handleRefreshProject}
+              onInstall={() => setInstallOpen(true)}
+              onRelocate={(project) =>
+                setProjectDialog({ mode: "relocate", project })
+              }
+              onForget={(project) =>
+                setProjectDialog({ mode: "forget", project })
+              }
               onQueryChange={setQuery}
               onSortChange={setSort}
               onSelect={handleSelectSkill}
@@ -361,6 +582,7 @@ function App() {
             />
             {detailOpen && view.selectedSkill ? (
               <DetailPane
+                scope={scope}
                 skill={view.selectedSkill}
                 agents={snapshot?.agents ?? EMPTY_INVENTORY_AGENTS}
                 checkingUpdates={checkUpdates.isPending}
@@ -388,8 +610,9 @@ function App() {
       {view.updateDialog ? (
         <UpdateDialog
           open
+          scope={scope}
           view={view.updateDialog}
-            onClose={() => {
+          onClose={() => {
             setUpdateMode(null);
             setUpdateSkillName(null);
           }}
@@ -397,6 +620,7 @@ function App() {
       ) : null}
       <UninstallDialog
         open={uninstallSkill !== null}
+        scope={scope}
         skill={uninstallSkill}
         onClose={() => setUninstallSkill(null)}
       />
@@ -410,9 +634,17 @@ function App() {
       />
       <InstallWizard
         open={installOpen}
+        scope={scope}
         inventorySkills={view.skills}
         agents={report?.agents ?? EMPTY_DETECTED_AGENTS}
         onClose={() => setInstallOpen(false)}
+      />
+      <ProjectDialogs
+        state={projectDialog}
+        onClose={() => setProjectDialog(null)}
+        onAdded={handleProjectAdded}
+        onRelocated={handleProjectRelocated}
+        onForgotten={handleProjectForgotten}
       />
       <ExitDialog
         open={exitRequest !== null}

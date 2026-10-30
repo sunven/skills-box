@@ -30,6 +30,7 @@ import type {
   AgentAttachment,
   DetachResult,
   InventoryAgent,
+  ScopeId,
   SkillDetail,
 } from "../lib/types";
 import {
@@ -57,6 +58,7 @@ const SkillContentTab = lazy(() =>
 const NO_AGENTS: InventoryAgent[] = [];
 
 interface DetailPaneProps {
+  scope: ScopeId;
   skill: UpdateViewSkill;
   agents?: InventoryAgent[];
   checkingUpdates?: boolean;
@@ -252,6 +254,7 @@ function AgentAttachmentRow({
 }
 
 export const DetailPane = memo(function DetailPane({
+  scope,
   skill,
   agents = NO_AGENTS,
   checkingUpdates = false,
@@ -260,8 +263,8 @@ export const DetailPane = memo(function DetailPane({
   onUninstall,
   onClose,
 }: DetailPaneProps) {
-  const skillId = skill.name;
-  const query = useSkillDetailQuery(skillId);
+  const skillId = skill.id;
+  const query = useSkillDetailQuery(scope, skillId);
   const detail = query.data ?? null;
   const [tab, setTab] = useState<DetailTab>("actions");
   const [detachTarget, setDetachTarget] = useState<AgentAttachment | null>(null);
@@ -271,6 +274,7 @@ export const DetailPane = memo(function DetailPane({
   const detailError = asAppError(query.error);
   const detachMutation = useMutation({
     action: "detach",
+    scope,
     skillId,
     fallbackFailure: "断开失败，请刷新后重试。",
     fallbackStart: "断开失败，请刷新后重试。",
@@ -344,7 +348,11 @@ export const DetailPane = memo(function DetailPane({
         message: `正在断开 ${target.agentName}…`,
         indeterminate: true,
         run: async () => {
-          const detached = await detachAgent(skill.name, target.agentId);
+          const detached = await detachAgent(
+            skill.id,
+            target.agentId,
+            scope,
+          );
           setDetachNotice(detached);
           setDetachTarget(null);
           return {
@@ -720,8 +728,9 @@ export const DetailPane = memo(function DetailPane({
               }
             >
               <SkillContentTab
-                key={skill.name}
-                skillId={skill.name}
+                key={skill.id}
+                scope={scope}
+                skillId={skill.id}
                 frontmatterWarning={frontmatterWarning}
               />
             </Suspense>
@@ -888,6 +897,8 @@ export const DetailPane = memo(function DetailPane({
         />
         <AttachDialog
           open={attachOpen}
+          scope={scope}
+          skillId={skill.id}
           skillName={skill.name}
           agents={agents}
           attachments={attachments}
