@@ -12,6 +12,8 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::error::AppError;
+use crate::project_lock::ProjectLockFile;
+use crate::scope::ScopeId;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -148,6 +150,53 @@ fn entry_error(name: &str, detail: impl AsRef<str>) -> AppError {
     AppError::lock_corrupt(format!("skills.{name}: {}", detail.as_ref()))
 }
 
+/// One Scope's Lock entry. Global scopes use the strict v3 lock; Project roots
+/// use the v1 `skills-lock.json`. Both normalize to the shared [`LockEntry`]
+/// shape, so callers never branch on the scope to read entries.
+#[derive(Debug)]
+pub(crate) enum ScopedLock {
+    Global(LockFile),
+    Project(ProjectLockFile),
+}
+
+impl ScopedLock {
+    pub(crate) fn read(scope: &ScopeId, lock_path: &Path) -> Result<Self, AppError> {
+        match scope {
+            ScopeId::Global => Self::global(lock_path),
+            ScopeId::Project(_) => Self::project(lock_path),
+        }
+    }
+
+    pub(crate) fn global(lock_path: &Path) -> Result<Self, AppError> {
+        Ok(Self::Global(LockFile::read(lock_path)?))
+    }
+
+    pub(crate) fn project(lock_path: &Path) -> Result<Self, AppError> {
+        Ok(Self::Project(ProjectLockFile::read(lock_path)?))
+    }
+
+    pub(crate) fn entries(&self) -> &BTreeMap<String, LockEntry> {
+        match self {
+            Self::Global(lock) => lock.entries(),
+            Self::Project(lock) => lock.entries(),
+        }
+    }
+
+    pub(crate) fn contains(&self, name: &str) -> bool {
+        match self {
+            Self::Global(lock) => lock.contains(name),
+            Self::Project(lock) => lock.contains(name),
+        }
+    }
+
+    pub(crate) fn get(&self, name: &str) -> Option<&LockEntry> {
+        match self {
+            Self::Global(lock) => lock.get(name),
+            Self::Project(lock) => lock.get(name),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,5 +312,23 @@ mod tests {
         let raw = serde_json::json!({ "version": 3, "skills": { "alpha": entry } }).to_string();
         let lock = LockFile::parse(&raw).unwrap();
         assert!(lock.get("alpha").unwrap().skill_folder_hash.is_empty());
+    }
+
+    #[test]
+    fn scoped_lock_dispatches_on_the_scope_schema() {
+        let tmp = tempfile::tempdir().unwrap();
+        let global = tmp.path().join("global.json");
+        let project = tmp.path().join("skills-lock.json");
+        std::fs::write(&global, r#"{"version":3,"skills":{}}"#).unwrap();
+        std::fs::write(&project, r#"{"version":1,"skills":{}}"#).unwrap();
+
+        let lock = ScopedLock::read(&ScopeId::Global, &global).unwrap();
+        assert!(lock.entries().is_empty());
+        let lock = ScopedLock::read(&ScopeId::project(uuid::Uuid::new_v4()), &project).unwrap();
+        assert!(lock.entries().is_empty());
+
+        // Crossing the schemas is a typed error, never a silent empty lock.
+        assert!(ScopedLock::read(&ScopeId::Global, &project).is_err());
+        assert!(ScopedLock::read(&ScopeId::project(uuid::Uuid::new_v4()), &global).is_err());
     }
 }

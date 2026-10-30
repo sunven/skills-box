@@ -30,9 +30,8 @@ use crate::baseline::LocalModification;
 use crate::env::capture_process_env;
 use crate::env::child_env::{ChildEnvParams, build_child_env};
 use crate::error::AppError;
-use crate::lock::{LockEntry, LockFile};
+use crate::lock::{LockEntry, ScopedLock};
 use crate::paths::AppPaths;
-use crate::project_lock::ProjectLockFile;
 use crate::security::normalize_absolute;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -377,41 +376,9 @@ pub fn locate_with_agents(
     Ok(locate_in_catalog(&catalog, name))
 }
 
-/// The lock entries for one scope. Both lock versions normalize to the shared
-/// `LockEntry` shape; project entries have no timestamps and carry the SHA-256
-/// content hash in `skill_folder_hash`.
-#[derive(Debug)]
-pub(crate) enum CatalogLock {
-    Global(LockFile),
-    Project(ProjectLockFile),
-}
-
-impl CatalogLock {
-    pub(crate) fn entries(&self) -> &BTreeMap<String, LockEntry> {
-        match self {
-            Self::Global(lock) => lock.entries(),
-            Self::Project(lock) => lock.entries(),
-        }
-    }
-
-    pub(crate) fn contains(&self, name: &str) -> bool {
-        match self {
-            Self::Global(lock) => lock.contains(name),
-            Self::Project(lock) => lock.contains(name),
-        }
-    }
-
-    pub(crate) fn get(&self, name: &str) -> Option<&LockEntry> {
-        match self {
-            Self::Global(lock) => lock.get(name),
-            Self::Project(lock) => lock.get(name),
-        }
-    }
-}
-
 #[derive(Debug)]
 pub(crate) struct Catalog {
-    pub(crate) lock: CatalogLock,
+    pub(crate) lock: ScopedLock,
     pub(crate) canonical_dir: PathBuf,
     pub(crate) canonical: BTreeMap<String, PathBuf>,
     pub(crate) aggregates: BTreeMap<String, Aggregate>,
@@ -425,7 +392,7 @@ pub(crate) struct Catalog {
 pub(crate) fn build_catalog(paths: &AppPaths, agents: &[AgentDir]) -> Result<Catalog, AppError> {
     // Strict lock read happens first: corruption must never degrade into an
     // empty list or partial scan.
-    let lock = CatalogLock::Global(LockFile::read(&paths.lock_path())?);
+    let lock = ScopedLock::global(&paths.lock_path())?;
     Ok(build_catalog_from(
         lock,
         &paths.canonical_skills_dir(),
@@ -443,7 +410,7 @@ pub(crate) fn build_project_catalog(
     lock_path: &Path,
     agents: &[AgentDir],
 ) -> Result<Catalog, AppError> {
-    let lock = CatalogLock::Project(ProjectLockFile::read(lock_path)?);
+    let lock = ScopedLock::project(lock_path)?;
     Ok(build_catalog_from(
         lock,
         canonical_dir,
@@ -453,7 +420,7 @@ pub(crate) fn build_project_catalog(
 }
 
 fn build_catalog_from(
-    lock: CatalogLock,
+    lock: ScopedLock,
     canonical_dir: &Path,
     agents: &[AgentDir],
     project_root: Option<&Path>,
@@ -645,7 +612,7 @@ fn scan_agents<'a>(
     agents: &'a [AgentDir],
     canonical_dir: &Path,
     canonical: &BTreeMap<String, PathBuf>,
-    lock: &CatalogLock,
+    lock: &ScopedLock,
     project_root: Option<&Path>,
     warnings: &mut Vec<String>,
     escapes: &mut Vec<String>,

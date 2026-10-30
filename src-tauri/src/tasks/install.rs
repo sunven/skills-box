@@ -28,7 +28,7 @@ use crate::env::child_env::{ChildEnvParams, build_child_env};
 use crate::error::AppError;
 use crate::error::cli::{self, CliAction};
 use crate::inventory::{AgentDir, ManagementState};
-use crate::lock::LockFile;
+use crate::lock::ScopedLock;
 use crate::paths::AppPaths;
 use crate::process::{CommandSpec, ExecOutput};
 use crate::security;
@@ -662,39 +662,6 @@ pub fn snapshot_lock(
     Ok(directory)
 }
 
-/// One scope's strict lock: v3 for global, v1 for a project. Read-only; the
-/// app never writes either file.
-pub(crate) enum ScopeLock {
-    Global(LockFile),
-    Project(crate::project_lock::ProjectLockFile),
-}
-
-impl ScopeLock {
-    pub(crate) fn read(layout: &crate::scope_layout::ScopeLayout) -> Result<Self, AppError> {
-        if layout.is_global() {
-            Ok(Self::Global(LockFile::read(&layout.lock_path)?))
-        } else {
-            Ok(Self::Project(crate::project_lock::ProjectLockFile::read(
-                &layout.lock_path,
-            )?))
-        }
-    }
-
-    pub(crate) fn get(&self, name: &str) -> Option<&crate::lock::LockEntry> {
-        match self {
-            Self::Global(lock) => lock.get(name),
-            Self::Project(lock) => lock.get(name),
-        }
-    }
-
-    pub(crate) fn contains(&self, name: &str) -> bool {
-        match self {
-            Self::Global(lock) => lock.contains(name),
-            Self::Project(lock) => lock.contains(name),
-        }
-    }
-}
-
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct InstallVerification {
     pub results: Vec<TaskSkillResult>,
@@ -713,7 +680,7 @@ pub fn verify_install(
         .iter()
         .filter_map(|result| result.name.as_deref().map(|name| (name, result)))
         .collect();
-    let lock = ScopeLock::read(layout);
+    let lock = layout.lock();
     let mut verification = InstallVerification::default();
 
     for name in &plan.skills {
@@ -763,7 +730,7 @@ pub fn verify_install(
 fn verify_installed(
     layout: &crate::scope_layout::ScopeLayout,
     plan: &InstallPlan,
-    lock: &Result<ScopeLock, AppError>,
+    lock: &Result<ScopedLock, AppError>,
     name: &str,
     warnings: &mut Vec<AppError>,
 ) -> Result<(), AppError> {
@@ -901,7 +868,7 @@ impl MutationAction for InstallAction {
     fn preflight(&self, plan: &Self::Unit, _reporter: &Reporter) -> Result<Preflight, AppError> {
         // The app never writes the lock, but a corrupt lock for this scope must
         // block the install before the CLI spawns.
-        ScopeLock::read(&self.layout)?;
+        self.layout.lock()?;
         let retry_source = plan.retry.then_some(plan.source.as_str());
         if let Some(conflict) =
             conflicts_for(&self.paths, &self.layout, &plan.skills, retry_source)?

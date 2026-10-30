@@ -268,7 +268,7 @@ pub fn verify_uninstall(
         }
     }
 
-    let lock_present = match super::install::ScopeLock::read(layout) {
+    let lock_present = match layout.lock() {
         Ok(lock) => lock.contains(&plan.name),
         Err(error) => {
             return UninstallVerification {

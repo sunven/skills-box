@@ -19,8 +19,8 @@ use crate::agents::catalog;
 use crate::agents::extras::{self, ExtraAgents};
 use crate::error::AppError;
 use crate::inventory::{self, AgentDir, LocatedSkill};
+use crate::lock::ScopedLock;
 use crate::paths::AppPaths;
-use crate::project_lock::ProjectLockFile;
 use crate::projects::{Project, ProjectRegistry};
 use crate::scope::ScopeId;
 use crate::security::{AllowedRoot, normalize_absolute};
@@ -114,12 +114,18 @@ impl ScopeLayout {
         }
     }
 
+    /// Read this scope's Lock entry through one interface, regardless of the
+    /// global v3 or project v1 schema.
+    pub(crate) fn lock(&self) -> Result<ScopedLock, AppError> {
+        ScopedLock::read(&self.scope, &self.lock_path)
+    }
+
     /// A project lock that cannot be parsed or uses an unsupported version is
     /// a scope error: every mutation and preview for that scope is rejected
     /// before a task is registered. Global behavior is unchanged.
     pub fn ensure_mutation_ready(&self) -> Result<(), AppError> {
         if self.project.is_some() {
-            ProjectLockFile::read(&self.lock_path)?;
+            let _ = self.lock()?;
         }
         Ok(())
     }
