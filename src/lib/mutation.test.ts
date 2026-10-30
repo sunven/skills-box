@@ -11,6 +11,7 @@ import {
 } from "./mutation";
 import type { MutationResultView } from "./mutation";
 import type { TaskResult, UpdateCheckReport } from "./types";
+import { GLOBAL_SCOPE } from "./types";
 import { updateReportQueryKey } from "./update-view";
 
 function taskResult(
@@ -235,24 +236,24 @@ describe("mutation lifecycle", () => {
 });
 
 describe("mutation refresh", () => {
-  it("scopes attach/detach to the mutated skill and keeps update broad", () => {
-    expect(mutationRefreshKeys("attach", "alpha")).toEqual([
-      ["inventory"],
-      ["skill", "alpha"],
-      ["skill-dir", "alpha"],
-      ["skill-file", "alpha"],
+  it("scopes refresh keys to both the scope and the mutated skill", () => {
+    expect(mutationRefreshKeys("attach", GLOBAL_SCOPE, "alpha")).toEqual([
+      ["inventory", GLOBAL_SCOPE],
+      ["skill", GLOBAL_SCOPE, "alpha"],
+      ["skill-dir", GLOBAL_SCOPE, "alpha"],
+      ["skill-file", GLOBAL_SCOPE, "alpha"],
     ]);
-    expect(mutationRefreshKeys("update", "alpha")).toEqual([
-      ["inventory"],
-      ["skill"],
-      ["updateReport"],
+    expect(mutationRefreshKeys("update", GLOBAL_SCOPE, "alpha")).toEqual([
+      ["inventory", GLOBAL_SCOPE],
+      ["skill", GLOBAL_SCOPE],
+      ["updateReport", GLOBAL_SCOPE],
     ]);
-    expect(mutationRefreshKeys("manage_add")).toEqual([]);
+    expect(mutationRefreshKeys("manage_add", GLOBAL_SCOPE)).toEqual([]);
   });
 
   it("patches updated skills to current before invalidating the report", () => {
     const client = new QueryClient();
-    client.setQueryData(updateReportQueryKey, updateReport());
+    client.setQueryData(updateReportQueryKey(GLOBAL_SCOPE), updateReport());
     const invalidate = vi
       .spyOn(client, "invalidateQueries")
       .mockResolvedValue(undefined);
@@ -269,15 +270,25 @@ describe("mutation refresh", () => {
       ],
     };
 
-    refreshMutationQueries(client, { action: "update" }, result);
+    refreshMutationQueries(
+      client,
+      { action: "update", scope: GLOBAL_SCOPE },
+      result,
+    );
 
-    const report = client.getQueryData<UpdateCheckReport>(updateReportQueryKey);
+    const report = client.getQueryData<UpdateCheckReport>(
+      updateReportQueryKey(GLOBAL_SCOPE),
+    );
     expect(report?.skills[0]).toMatchObject({
       state: "current",
       lockHash: "new",
     });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["inventory"] });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["updateReport"] });
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ["inventory", GLOBAL_SCOPE],
+    });
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ["updateReport", GLOBAL_SCOPE],
+    });
   });
 
   it("routes manage actions through the environment recheck", () => {
@@ -289,7 +300,7 @@ describe("mutation refresh", () => {
 
     refreshMutationQueries(
       client,
-      { action: "manage_remove", onEnvironmentRecheck },
+      { action: "manage_remove", scope: GLOBAL_SCOPE, onEnvironmentRecheck },
       null,
     );
 
@@ -299,12 +310,12 @@ describe("mutation refresh", () => {
 
   it("does not patch the update report for non-update actions", () => {
     const client = new QueryClient();
-    client.setQueryData(updateReportQueryKey, updateReport());
+    client.setQueryData(updateReportQueryKey(GLOBAL_SCOPE), updateReport());
     vi.spyOn(client, "invalidateQueries").mockResolvedValue(undefined);
 
     refreshMutationQueries(
       client,
-      { action: "uninstall" },
+      { action: "uninstall", scope: GLOBAL_SCOPE },
       {
         outcome: "success",
         warnings: [],
@@ -319,7 +330,9 @@ describe("mutation refresh", () => {
       },
     );
 
-    const report = client.getQueryData<UpdateCheckReport>(updateReportQueryKey);
+    const report = client.getQueryData<UpdateCheckReport>(
+      updateReportQueryKey(GLOBAL_SCOPE),
+    );
     expect(report?.skills[0]?.state).toBe("update");
   });
 });

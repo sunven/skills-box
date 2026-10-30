@@ -266,7 +266,10 @@ describe("manual update checking", () => {
     ).toHaveTextContent("未知");
 
     expect(checkCalls(calls)).toHaveLength(1);
-    expect(checkCalls(calls)[0]?.payload).toEqual({ skillIds: null });
+    expect(checkCalls(calls)[0]?.payload).toEqual({
+      skillIds: null,
+      scope: "global",
+    });
     expect(screen.getByTestId("last-update-check")).toHaveTextContent(
       `上次检查：${RUN_AT_LABEL}`,
     );
@@ -602,10 +605,16 @@ describe("manual update checking", () => {
 
     const scoped = checkCalls(calls);
     expect(scoped).toHaveLength(4);
-    expect(scoped[0]?.payload).toEqual({ skillIds: null });
-    expect(scoped[1]?.payload).toEqual({ skillIds: null });
-    expect(scoped[2]?.payload).toEqual({ skillIds: ["alpha"] });
-    expect(scoped[3]?.payload).toEqual({ skillIds: ["alpha"] });
+    expect(scoped[0]?.payload).toEqual({ skillIds: null, scope: "global" });
+    expect(scoped[1]?.payload).toEqual({ skillIds: null, scope: "global" });
+    expect(scoped[2]?.payload).toEqual({
+      skillIds: ["alpha"],
+      scope: "global",
+    });
+    expect(scoped[3]?.payload).toEqual({
+      skillIds: ["alpha"],
+      scope: "global",
+    });
   });
 
   it("summarizes update-all candidates and skipped items without mutating", async () => {
@@ -764,7 +773,10 @@ describe("manual update checking", () => {
       expect.stringContaining("1 个来源来自 6 小时缓存"),
     );
     expect(checkCalls(calls)).toHaveLength(2);
-    expect(checkCalls(calls)[1]?.payload).toEqual({ skillIds: null });
+    expect(checkCalls(calls)[1]?.payload).toEqual({
+      skillIds: null,
+      scope: "global",
+    });
   });
 
   it("surfaces a command-level failure and keeps the inventory usable", async () => {

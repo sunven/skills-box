@@ -8,6 +8,7 @@ import {
   resolveSkillRelativePath,
 } from "../lib/skill-content";
 import { useSkillFileQuery } from "../hooks/use-skill-content";
+import type { ScopeId } from "../lib/types";
 
 const sanitizeSchema = {
   ...defaultSchema,
@@ -19,6 +20,7 @@ const sanitizeSchema = {
 };
 
 export interface SkillInternalLinks {
+  scope: ScopeId;
   skillId: string;
   /** Directory of the previewed markdown file, relative to the skill root. */
   baseDir: string;
@@ -171,7 +173,11 @@ function InternalImage({
   internalLinks: SkillInternalLinks;
 }) {
   const path = resolveSkillRelativePath(internalLinks.baseDir, src);
-  const query = useSkillFileQuery(internalLinks.skillId, path);
+  const query = useSkillFileQuery(
+    internalLinks.scope,
+    internalLinks.skillId,
+    path,
+  );
   const label = alt || "未命名图片";
   if (!path) {
     return <ImageNote label={label} note="图片路径不在 skill 内" />;

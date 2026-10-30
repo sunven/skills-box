@@ -399,6 +399,7 @@ fn build_result(
 ) -> TaskResult {
     TaskResult {
         action: profile.action,
+        scope: crate::scope::ScopeId::Global,
         overall,
         skills: rows,
         warnings,

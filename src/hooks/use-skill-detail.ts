@@ -1,14 +1,19 @@
 import { useQuery } from "@tanstack/react-query";
 import { getSkillDetail } from "../lib/api";
+import type { ScopeId } from "../lib/types";
 
-export const skillQueryKey = (skillId: string | null) =>
-  ["skill", skillId] as const;
+export const skillQueryKey = (scope: ScopeId, skillId: string | null) =>
+  ["skill", scope, skillId] as const;
 
-/** Detail is only fetched for the selected row. */
-export function useSkillDetailQuery(skillId: string | null) {
+/** Detail is only fetched for the selected row, always inside its scope. */
+export function useSkillDetailQuery(
+  scope: ScopeId,
+  skillId: string | null,
+  enabled = true,
+) {
   return useQuery({
-    queryKey: skillQueryKey(skillId),
-    queryFn: () => getSkillDetail(skillId as string),
-    enabled: skillId !== null,
+    queryKey: skillQueryKey(scope, skillId),
+    queryFn: () => getSkillDetail(skillId as string, scope),
+    enabled: enabled && skillId !== null,
   });
 }

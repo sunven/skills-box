@@ -7,6 +7,7 @@ use std::fs;
 use skills_box_lib::agents::extras::{self, AgentOrigin, UserExtraAgent};
 use skills_box_lib::inventory::{self, AttachmentMode, ManagementState};
 use skills_box_lib::paths::AppPaths;
+use skills_box_lib::scope_layout::ScopeLayout;
 use skills_box_lib::tasks::install::{self, InstallRequest, validate_request};
 use skills_box_lib::tasks::uninstall;
 use skills_box_lib::{attach, detach};
@@ -62,8 +63,10 @@ fn extra_agent_lifecycle_from_install_to_uninstall() {
     );
     assert!(agents.iter().any(|agent| agent.id == "qoder"));
 
+    let layout = ScopeLayout::global(&paths, agents.clone());
     let plan = validate_request(
         &paths,
+        &layout,
         &InstallRequest {
             source: "acme/skills".to_string(),
             skills: vec!["alpha".to_string()],
@@ -90,7 +93,7 @@ fn extra_agent_lifecycle_from_install_to_uninstall() {
     );
     assert!(!spec.args.iter().any(|arg| arg == "workbuddy"));
 
-    let errors = install::ensure_extra_attachments(&paths, &plan, &["alpha".to_string()]);
+    let errors = install::ensure_extra_attachments(&layout, &plan, &["alpha".to_string()]);
     assert!(errors.is_empty(), "{errors:?}");
     assert!(
         fs::symlink_metadata(home.join(".workbuddy/skills/alpha"))
@@ -121,7 +124,7 @@ fn extra_agent_lifecycle_from_install_to_uninstall() {
     assert_eq!(row.origin, AgentOrigin::Builtin);
     assert!(row.detected);
 
-    attach::attach_agent(&paths, &agents, "alpha", "qoder").unwrap();
+    attach::attach_agent(&paths, &layout, "alpha", "qoder").unwrap();
     assert!(
         fs::symlink_metadata(home.join(".qoder/skills/alpha"))
             .unwrap()
@@ -135,10 +138,10 @@ fn extra_agent_lifecycle_from_install_to_uninstall() {
         .find(|skill| skill.name == "alpha")
         .unwrap();
     assert_eq!(alpha.attachments.len(), 2);
-    detach::detach_agent(&paths, &agents, "alpha", "qoder").unwrap();
+    detach::detach_agent(&paths, &layout, "alpha", "qoder").unwrap();
     assert!(fs::symlink_metadata(home.join(".qoder/skills/alpha")).is_err());
 
-    let uninstall_plan = uninstall::plan_uninstall(&paths, &agents, "alpha").unwrap();
+    let uninstall_plan = uninstall::plan_uninstall(&paths, &layout, "alpha").unwrap();
     assert!(
         uninstall_plan
             .attachments
@@ -165,6 +168,7 @@ fn user_defined_extras_join_detection_and_inventory_after_add() {
             id: "acme".to_string(),
             display_name: "Acme Agent".to_string(),
             skills_dir: "~/.acme/skills".to_string(),
+            project_skills_dir: None,
         },
     )
     .unwrap();

@@ -17,14 +17,13 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::attachment_target;
+use crate::attachment_target::{self, TargetContext};
 use crate::backup::{BackupAction, BackupAttachment, BackupStore};
 use crate::error::AppError;
 use crate::inventory::{self, AgentDir, AttachmentMode};
-use crate::lock::LockFile;
 use crate::logs::{OperationEntry, OperationLog};
 use crate::paths::AppPaths;
-use crate::security;
+use crate::scope_layout::ScopeLayout;
 
 const DETACH_ACTION: &str = "detach";
 
@@ -48,20 +47,27 @@ pub struct DetachResult {
 
 pub fn detach_agent(
     paths: &AppPaths,
-    agents: &[AgentDir],
+    layout: &ScopeLayout,
     skill_id: &str,
     agent_id: &str,
 ) -> Result<DetachResult, AppError> {
-    security::validate_skill_id(skill_id)?;
+    let name = layout.scope.parse_skill_id(skill_id)?.to_string();
     // Same metacharacter rule as install/update; detach never spawns a shell,
     // but a malicious on-disk folder name must not reach the log or argv paths.
-    super::tasks::install::validate_skill_name(skill_id)?;
-    // A corrupt or non-v3 lock blocks every mutation, including detach.
-    LockFile::read(&paths.lock_path())?;
+    super::tasks::install::validate_skill_name(&name)?;
+    // A corrupt lock for this scope blocks every mutation, including detach.
+    layout.ensure_mutation_ready()?;
 
-    let located = inventory::locate_with_agents(paths, agents, skill_id)?
+    let located = layout
+        .locate(paths, &name)?
         .ok_or_else(|| AppError::skill_not_found(skill_id))?;
-    let resolved = attachment_target::resolve_detach(paths, &located, agents, agent_id)?;
+    let resolved = attachment_target::resolve_detach(
+        &layout.canonical_dir,
+        &located,
+        &layout.agents,
+        agent_id,
+        TargetContext::for_layout(layout),
+    )?;
     let agent = &resolved.agent;
     let canonical = &resolved.canonical;
     let target = &resolved.target;
@@ -70,7 +76,7 @@ pub fn detach_agent(
         .as_ref()
         .expect("resolve_detach always returns an attachment");
 
-    let log = OperationLog::new(paths);
+    let log = OperationLog::for_scope(paths, &layout.scope);
     let log_path = paths.display(log.path());
     let remaining_agents: Vec<String> = located
         .attachments
@@ -156,7 +162,7 @@ pub fn detach_agent(
                 return Err(error);
             }
 
-            let dependents = find_copy_dependents(agents, canonical, target)?;
+            let dependents = find_copy_dependents(&layout.agents, canonical, target)?;
             if !dependents.is_empty() {
                 let list = dependents
                     .iter()
@@ -175,7 +181,7 @@ pub fn detach_agent(
                 path: target.clone(),
                 mode: AttachmentMode::Copy,
             };
-            let backup = match BackupStore::new(paths).create(
+            let backup = match BackupStore::for_layout(paths, layout).create(
                 BackupAction::Detach,
                 skill_id,
                 None,
@@ -465,7 +471,8 @@ mod tests {
         }
 
         fn detach(&self, skill: &str, agent: &str) -> Result<DetachResult, AppError> {
-            detach_agent(&self.paths, &self.agents, skill, agent)
+            let layout = ScopeLayout::global(&self.paths, self.agents.clone());
+            super::detach_agent(&self.paths, &layout, skill, agent)
         }
 
         fn log_lines(&self) -> Vec<serde_json::Value> {
@@ -811,5 +818,74 @@ mod tests {
             crate::error::ErrorCode::BackupFailed.as_str()
         );
         assert!(lines[0].get("backupPath").is_none());
+    }
+
+    #[test]
+    fn project_detach_unlinks_only_the_project_attachment() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let root = tmp.path().join("projects/app");
+        fs::create_dir_all(&home).unwrap();
+        let paths = AppPaths::new(&home, tmp.path().join("app-data"));
+        paths.ensure_dirs().unwrap();
+        let canonical = root.join(".agents/skills/alpha");
+        fs::create_dir_all(&canonical).unwrap();
+        fs::write(
+            canonical.join("SKILL.md"),
+            "---\nname: alpha\ndescription: alpha\n---\n",
+        )
+        .unwrap();
+        let lock_path = root.join("skills-lock.json");
+        fs::write(
+            lock_path.clone(),
+            serde_json::json!({
+                "version": 1,
+                "skills": {
+                    "alpha": {
+                        "source": "acme/skills",
+                        "sourceType": "github",
+                        "sourceUrl": "https://github.com/acme/skills.git",
+                        "skillPath": "skills/alpha/SKILL.md",
+                        "computedHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let claude = root.join(".claude/skills");
+        fs::create_dir_all(&claude).unwrap();
+        symlink(&canonical, claude.join("alpha")).unwrap();
+        let project = crate::projects::Project {
+            id: uuid::Uuid::new_v4(),
+            root: root.clone(),
+            display_name: "app".to_string(),
+            added_at: 1,
+            last_opened_at: 1,
+        };
+        let layout = ScopeLayout::project(&paths, project);
+        let lock_before = fs::read(&lock_path).unwrap();
+
+        let result = super::detach_agent(
+            &paths,
+            &layout,
+            &layout.scope.skill_id("alpha"),
+            "claude-code",
+        )
+        .unwrap();
+
+        assert!(!claude.join("alpha").exists());
+        assert!(canonical.join("SKILL.md").is_file());
+        assert_eq!(fs::read(&lock_path).unwrap(), lock_before);
+        assert_eq!(
+            result.canonical_path,
+            fs::canonicalize(&canonical).unwrap().display().to_string()
+        );
+        assert!(result.unattached);
+        assert!(result.remaining_agents.is_empty());
+        assert!(
+            !paths.canonical_skills_dir().exists(),
+            "global canonical store untouched"
+        );
     }
 }

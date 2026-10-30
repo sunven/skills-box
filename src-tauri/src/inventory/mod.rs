@@ -6,8 +6,13 @@
 //! universal agents and is not a mounting source of truth.
 //!
 //! A missing lock is normal and yields an unmanaged inventory. A corrupt or
-//! non-v3 lock aborts the whole read with a `lock.*` error so the UI can show
-//! a full-screen failure instead of an empty (and misleading) list.
+//! unsupported lock (global v3 or project v1) aborts that scope's read with a
+//! `lock.*` / `project.lock_unsupported` error so the UI can show a scope
+//! failure instead of an empty (and misleading) list.
+//!
+//! Project catalogs additionally fence every canonical, agent and extra dir to
+//! the registered project root; escaping paths are reported as anomalies and
+//! never read for content.
 
 pub mod frontmatter;
 
@@ -27,6 +32,8 @@ use crate::env::child_env::{ChildEnvParams, build_child_env};
 use crate::error::AppError;
 use crate::lock::{LockEntry, LockFile};
 use crate::paths::AppPaths;
+use crate::project_lock::ProjectLockFile;
+use crate::security::normalize_absolute;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -71,6 +78,9 @@ pub struct AgentAttachment {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InventorySkill {
+    /// Scope-composite identity. Global ids stay the plain skill name; project
+    /// ids are `project:<uuid>/<name>`.
+    pub id: String,
     pub name: String,
     pub description: Option<String>,
     pub source: Option<String>,
@@ -99,6 +109,10 @@ pub struct InventoryAgent {
     /// are listed so a freshly added definition is visible, but they cannot be
     /// installed to or attached.
     pub detected: bool,
+    /// Configured project-relative skills directory (extras only). The manage
+    /// agents dialog edits this value; project targets and scans derive from it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_skills_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -116,6 +130,8 @@ pub struct AnomalySummary {
     pub unmanaged: AnomalyGroup,
     pub broken: AnomalyGroup,
     pub modified: AnomalyGroup,
+    /// Project paths whose resolved location escapes the registered root.
+    pub escape: AnomalyGroup,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -123,6 +139,10 @@ pub struct AnomalySummary {
 pub struct InventorySnapshot {
     pub skills: Vec<InventorySkill>,
     pub agents: Vec<InventoryAgent>,
+    /// Scope install/attach target set (spec §3.5). Project scope includes
+    /// globally detected catalog agents and configured extras whose project
+    /// directory does not exist yet.
+    pub install_targets: Vec<InventoryAgent>,
     pub anomalies: AnomalySummary,
     pub warnings: Vec<String>,
     pub generated_at_epoch_ms: u64,
@@ -175,7 +195,7 @@ pub fn detected_agent_dirs(paths: &AppPaths) -> Vec<AgentDir> {
 }
 
 pub fn read(paths: &AppPaths) -> Result<InventorySnapshot, AppError> {
-    crate::read_model::ReadModel::new(paths.clone()).snapshot()
+    crate::read_model::ReadModel::new(paths.clone()).snapshot(&crate::scope::ScopeId::global())
 }
 
 /// One-shot injectable entry point for tests and fixtures. Production reads go
@@ -187,13 +207,16 @@ pub fn read_with_agents(
     crate::read_model::snapshot_with_agents(paths, agents)
 }
 
-/// Agent rows and extras warnings shared by the read model.
+/// Agent rows shared by the read model. Global inventories append extra agents
+/// whose global detection path is missing; project inventories only list agent
+/// dirs that exist inside the project root.
 pub(crate) fn agent_rows(
     paths: &AppPaths,
     agents: &[AgentDir],
     canonical_dir: &Path,
-) -> (Vec<InventoryAgent>, Vec<String>) {
-    let extra_agents = extras::load(paths);
+    extra_agents: &extras::ExtraAgents,
+    include_undetected_extras: bool,
+) -> Vec<InventoryAgent> {
     let mut rows: Vec<InventoryAgent> = agents
         .iter()
         .map(|agent| InventoryAgent {
@@ -202,25 +225,61 @@ pub(crate) fn agent_rows(
             universal: agent.universal,
             shared: same_dir(&agent.skills_dir, canonical_dir),
             global_skills_dir: Some(paths.display(&agent.skills_dir)),
-            origin: origin_of(&extra_agents, &agent.id),
+            origin: origin_of(extra_agents, &agent.id),
             detected: true,
+            project_skills_dir: extra_project_dir(extra_agents, &agent.id),
         })
         .collect();
-    for extra in &extra_agents.agents {
-        if agents.iter().any(|agent| agent.id == extra.id) || extra_is_detected(paths, extra) {
-            continue;
+    if include_undetected_extras {
+        for extra in &extra_agents.agents {
+            if agents.iter().any(|agent| agent.id == extra.id) || extra_is_detected(paths, extra) {
+                continue;
+            }
+            rows.push(InventoryAgent {
+                id: extra.id.clone(),
+                display_name: extra.display_name.clone(),
+                universal: false,
+                shared: false,
+                global_skills_dir: Some(extra.skills_dir.clone()),
+                origin: origin_of(extra_agents, &extra.id),
+                detected: false,
+                project_skills_dir: extra.project_skills_dir.clone(),
+            });
         }
-        rows.push(InventoryAgent {
-            id: extra.id.clone(),
-            display_name: extra.display_name.clone(),
-            universal: false,
-            shared: false,
-            global_skills_dir: Some(extra.skills_dir.clone()),
-            origin: origin_of(&extra_agents, &extra.id),
-            detected: false,
-        });
     }
-    (rows, extra_agents.warnings)
+    rows
+}
+
+/// Install/attach target rows for one scope. These are UI-visible agents even
+/// when their target directory does not exist yet; `detected` means "eligible
+/// in this scope", which is what attach eligibility consumes.
+pub(crate) fn install_target_rows(
+    paths: &AppPaths,
+    layout: &crate::scope_layout::ScopeLayout,
+) -> Vec<InventoryAgent> {
+    let detected = detected_agent_dirs(paths);
+    layout
+        .install_targets(&detected)
+        .into_iter()
+        .map(|agent| InventoryAgent {
+            shared: same_dir(&agent.skills_dir, &layout.canonical_dir),
+            id: agent.id.clone(),
+            display_name: agent.display_name.clone(),
+            universal: agent.universal,
+            global_skills_dir: Some(paths.display(&agent.skills_dir)),
+            origin: origin_of(&layout.extras, &agent.id),
+            detected: true,
+            project_skills_dir: extra_project_dir(&layout.extras, &agent.id),
+        })
+        .collect()
+}
+
+fn extra_project_dir(extra_agents: &extras::ExtraAgents, id: &str) -> Option<String> {
+    extra_agents
+        .agents
+        .iter()
+        .find(|agent| agent.id == id)
+        .and_then(|agent| agent.project_skills_dir.clone())
 }
 
 fn origin_of(extra_agents: &extras::ExtraAgents, id: &str) -> AgentOrigin {
@@ -312,24 +371,99 @@ pub fn locate_with_agents(
     Ok(locate_in_catalog(&catalog, name))
 }
 
+/// The lock entries for one scope. Both lock versions normalize to the shared
+/// `LockEntry` shape; project entries have no timestamps and carry the SHA-256
+/// content hash in `skill_folder_hash`.
+#[derive(Debug)]
+pub(crate) enum CatalogLock {
+    Global(LockFile),
+    Project(ProjectLockFile),
+}
+
+impl CatalogLock {
+    pub(crate) fn entries(&self) -> &BTreeMap<String, LockEntry> {
+        match self {
+            Self::Global(lock) => lock.entries(),
+            Self::Project(lock) => lock.entries(),
+        }
+    }
+
+    pub(crate) fn contains(&self, name: &str) -> bool {
+        match self {
+            Self::Global(lock) => lock.contains(name),
+            Self::Project(lock) => lock.contains(name),
+        }
+    }
+
+    pub(crate) fn get(&self, name: &str) -> Option<&LockEntry> {
+        match self {
+            Self::Global(lock) => lock.get(name),
+            Self::Project(lock) => lock.get(name),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct Catalog {
-    pub(crate) lock: LockFile,
+    pub(crate) lock: CatalogLock,
     pub(crate) canonical_dir: PathBuf,
     pub(crate) canonical: BTreeMap<String, PathBuf>,
     pub(crate) aggregates: BTreeMap<String, Aggregate>,
     pub(crate) names: BTreeSet<String>,
     pub(crate) warnings: Vec<String>,
+    /// Skill/dir labels whose resolved location escapes the project root.
+    pub(crate) escapes: Vec<String>,
 }
 
+/// Global catalog: strict v3 lock plus the detected global agent dirs.
 pub(crate) fn build_catalog(paths: &AppPaths, agents: &[AgentDir]) -> Result<Catalog, AppError> {
     // Strict lock read happens first: corruption must never degrade into an
     // empty list or partial scan.
-    let lock = LockFile::read(&paths.lock_path())?;
-    let canonical_dir = paths.canonical_skills_dir();
+    let lock = CatalogLock::Global(LockFile::read(&paths.lock_path())?);
+    Ok(build_catalog_from(
+        lock,
+        &paths.canonical_skills_dir(),
+        agents,
+        None,
+    ))
+}
+
+/// Project catalog: strict v1 lock plus the project agent dirs from the scope
+/// layout. Every scanned path must stay inside `project_root`; escapes are
+/// reported, never followed for content.
+pub(crate) fn build_project_catalog(
+    project_root: &Path,
+    canonical_dir: &Path,
+    lock_path: &Path,
+    agents: &[AgentDir],
+) -> Result<Catalog, AppError> {
+    let lock = CatalogLock::Project(ProjectLockFile::read(lock_path)?);
+    Ok(build_catalog_from(
+        lock,
+        canonical_dir,
+        agents,
+        Some(project_root),
+    ))
+}
+
+fn build_catalog_from(
+    lock: CatalogLock,
+    canonical_dir: &Path,
+    agents: &[AgentDir],
+    project_root: Option<&Path>,
+) -> Catalog {
     let mut warnings = Vec::new();
-    let canonical = scan_canonical(&canonical_dir, &mut warnings);
-    let scanned_agents = scan_agents(agents, &canonical_dir, &canonical, &lock, &mut warnings);
+    let mut escapes = Vec::new();
+    let canonical = scan_canonical(canonical_dir, project_root, &mut warnings, &mut escapes);
+    let scanned_agents = scan_agents(
+        agents,
+        canonical_dir,
+        &canonical,
+        &lock,
+        project_root,
+        &mut warnings,
+        &mut escapes,
+    );
 
     let mut aggregates: BTreeMap<String, Aggregate> = BTreeMap::new();
     for scanned in &scanned_agents {
@@ -368,14 +502,15 @@ pub(crate) fn build_catalog(paths: &AppPaths, agents: &[AgentDir]) -> Result<Cat
     names.extend(aggregates.keys().cloned());
     names.extend(lock.entries().keys().cloned());
 
-    Ok(Catalog {
+    Catalog {
         lock,
-        canonical_dir,
+        canonical_dir: canonical_dir.to_path_buf(),
         canonical,
         aggregates,
         names,
         warnings,
-    })
+        escapes,
+    }
 }
 
 #[derive(Debug, Default)]
@@ -399,8 +534,77 @@ struct ScannedEntry {
     mode: AttachmentMode,
 }
 
-fn scan_canonical(canonical_dir: &Path, warnings: &mut Vec<String>) -> BTreeMap<String, PathBuf> {
+/// True when `path` exists and its physical target is inside `root`.
+fn resolves_inside(path: &Path, root: &Path) -> bool {
+    fs::canonicalize(path)
+        .map(|resolved| resolved.starts_with(root))
+        .unwrap_or(false)
+}
+
+fn scan_canonical(
+    canonical_dir: &Path,
+    project_root: Option<&Path>,
+    warnings: &mut Vec<String>,
+    escapes: &mut Vec<String>,
+) -> BTreeMap<String, PathBuf> {
     let mut canonical = BTreeMap::new();
+    if let Some(root) = project_root {
+        let lexically_inside = normalize_absolute(canonical_dir)
+            .map(|path| path.starts_with(root))
+            .unwrap_or(false);
+        if !lexically_inside {
+            warnings.push(format!(
+                "canonical store 不在项目根内，已跳过：{}",
+                canonical_dir.display()
+            ));
+            escapes.push("canonical store".to_string());
+            return canonical;
+        }
+        match fs::symlink_metadata(canonical_dir) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return canonical,
+            Err(error) => {
+                warnings.push(format!("无法检查 canonical store：{error}"));
+                return canonical;
+            }
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                match fs::canonicalize(canonical_dir) {
+                    Ok(target) if !target.starts_with(root) => {
+                        warnings.push(format!(
+                            "canonical store 符号链接逃逸项目根：{} -> {}",
+                            canonical_dir.display(),
+                            target.display()
+                        ));
+                        escapes.push("canonical store".to_string());
+                        return canonical;
+                    }
+                    Ok(target) if !target.is_dir() => {
+                        warnings.push(format!(
+                            "canonical store 不是目录：{}",
+                            canonical_dir.display()
+                        ));
+                        return canonical;
+                    }
+                    Err(error) => {
+                        warnings.push(format!(
+                            "canonical store 符号链接不可解析：{}（{error}）",
+                            canonical_dir.display()
+                        ));
+                        return canonical;
+                    }
+                    Ok(_) => {}
+                }
+            }
+            Ok(metadata) if !metadata.is_dir() => {
+                warnings.push(format!(
+                    "canonical store 不是目录：{}",
+                    canonical_dir.display()
+                ));
+                return canonical;
+            }
+            Ok(_) => {}
+        }
+    }
+
     let entries = match read_entries(canonical_dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return canonical,
@@ -416,6 +620,15 @@ fn scan_canonical(canonical_dir: &Path, warnings: &mut Vec<String>) -> BTreeMap<
             .map(|metadata| metadata.is_dir())
             .unwrap_or(false)
         {
+            if let Some(root) = project_root
+                && !resolves_inside(&path, root)
+            {
+                warnings.push(format!(
+                    "skill「{name}」的 canonical 路径解析到项目根之外：{}",
+                    path.display()
+                ));
+                escapes.push(name.clone());
+            }
             canonical.insert(name, path);
         }
     }
@@ -426,8 +639,10 @@ fn scan_agents<'a>(
     agents: &'a [AgentDir],
     canonical_dir: &Path,
     canonical: &BTreeMap<String, PathBuf>,
-    lock: &LockFile,
+    lock: &CatalogLock,
+    project_root: Option<&Path>,
     warnings: &mut Vec<String>,
+    escapes: &mut Vec<String>,
 ) -> Vec<ScannedAgent<'a>> {
     agents
         .iter()
@@ -441,6 +656,110 @@ fn scan_agents<'a>(
                 };
             }
             let mut entries = Vec::new();
+            if let Some(root) = project_root {
+                let lexically_inside = normalize_absolute(&agent.skills_dir)
+                    .map(|path| path.starts_with(root))
+                    .unwrap_or(false);
+                if !lexically_inside {
+                    warnings.push(format!(
+                        "{} 的项目目录不在项目根内，已跳过：{}",
+                        agent.display_name,
+                        agent.skills_dir.display()
+                    ));
+                    escapes.push(format!(
+                        "{} · {}",
+                        agent.display_name,
+                        agent.skills_dir.display()
+                    ));
+                    return ScannedAgent {
+                        agent,
+                        shared,
+                        entries,
+                    };
+                }
+                // The layout already filters escaping dirs, but re-check here
+                // so a fixture that injects agent dirs directly can never make
+                // the catalog read outside the project root.
+                match fs::symlink_metadata(&agent.skills_dir) {
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        return ScannedAgent {
+                            agent,
+                            shared,
+                            entries,
+                        };
+                    }
+                    Err(error) => {
+                        warnings.push(format!(
+                            "无法检查 {} 的项目目录：{error}",
+                            agent.display_name
+                        ));
+                        return ScannedAgent {
+                            agent,
+                            shared,
+                            entries,
+                        };
+                    }
+                    Ok(metadata) if metadata.file_type().is_symlink() => {
+                        match fs::canonicalize(&agent.skills_dir) {
+                            Ok(target) if !target.starts_with(root) => {
+                                warnings.push(format!(
+                                    "{} 的项目目录逃逸项目根：{} -> {}",
+                                    agent.display_name,
+                                    agent.skills_dir.display(),
+                                    target.display()
+                                ));
+                                escapes.push(format!(
+                                    "{} · {}",
+                                    agent.display_name,
+                                    agent.skills_dir.display()
+                                ));
+                                return ScannedAgent {
+                                    agent,
+                                    shared,
+                                    entries,
+                                };
+                            }
+                            Ok(target) if !target.is_dir() => {
+                                warnings.push(format!(
+                                    "{} 的项目目录不是目录：{}",
+                                    agent.display_name,
+                                    agent.skills_dir.display()
+                                ));
+                                return ScannedAgent {
+                                    agent,
+                                    shared,
+                                    entries,
+                                };
+                            }
+                            Err(error) => {
+                                warnings.push(format!(
+                                    "{} 的项目目录符号链接不可解析：{error}",
+                                    agent.display_name
+                                ));
+                                return ScannedAgent {
+                                    agent,
+                                    shared,
+                                    entries,
+                                };
+                            }
+                            Ok(_) => {}
+                        }
+                    }
+                    Ok(metadata) if !metadata.is_dir() => {
+                        warnings.push(format!(
+                            "{} 的项目目录不是目录：{}",
+                            agent.display_name,
+                            agent.skills_dir.display()
+                        ));
+                        return ScannedAgent {
+                            agent,
+                            shared,
+                            entries,
+                        };
+                    }
+                    Ok(_) => {}
+                }
+            }
             match read_entries(&agent.skills_dir) {
                 Ok(found) => {
                     for (name, path) in found {
@@ -463,6 +782,17 @@ fn scan_agents<'a>(
                         } else {
                             continue;
                         };
+                        if let Some(root) = project_root
+                            && let Ok(resolved) = fs::canonicalize(&path)
+                            && !resolved.starts_with(root)
+                        {
+                            warnings.push(format!(
+                                "skill「{name}」在 {} 上的链接解析到项目根之外：{}",
+                                agent.display_name,
+                                path.display()
+                            ));
+                            escapes.push(format!("{name} · {}", agent.display_name));
+                        }
                         entries.push(ScannedEntry { name, path, mode });
                     }
                 }
@@ -662,6 +992,43 @@ mod tests {
             .iter()
             .map(|attachment| (attachment.agent_id.clone(), attachment.detachable))
             .collect()
+    }
+
+    #[test]
+    fn project_catalog_rejects_injected_agent_dirs_outside_the_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("project");
+        let canonical = root.join(".agents/skills");
+        fs::create_dir_all(&canonical).unwrap();
+        fs::write(
+            root.join("skills-lock.json"),
+            r#"{"version":1,"skills":{"alpha":{"source":"acme/alpha","sourceType":"github","computedHash":"abc"}}}"#,
+        )
+        .unwrap();
+        let outside = tmp.path().join("outside");
+        fs::create_dir_all(outside.join("evil")).unwrap();
+        fs::write(outside.join("evil/SKILL.md"), "---\nname: evil\n---\n").unwrap();
+        let agents = vec![AgentDir {
+            id: "evil-agent".to_string(),
+            display_name: "Evil Agent".to_string(),
+            universal: false,
+            skills_dir: outside,
+        }];
+
+        let catalog =
+            build_project_catalog(&root, &canonical, &root.join("skills-lock.json"), &agents)
+                .unwrap();
+
+        assert!(!catalog.aggregates.contains_key("evil"));
+        assert!(
+            catalog
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("不在项目根内")),
+            "{:?}",
+            catalog.warnings
+        );
+        assert!(!catalog.escapes.is_empty());
     }
 
     #[test]

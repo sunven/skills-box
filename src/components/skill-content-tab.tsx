@@ -45,6 +45,7 @@ import {
 } from "../hooks/use-skill-content";
 import type {
   AppError,
+  ScopeId,
   SkillDirEntry,
   SkillDirListing,
   SkillFileContent,
@@ -52,6 +53,7 @@ import type {
 import { cn } from "../lib/utils";
 
 interface SkillContentTabProps {
+  scope: ScopeId;
   skillId: string;
   frontmatterWarning: boolean;
 }
@@ -60,6 +62,7 @@ type DetailView = "rendered" | "raw";
 type ContentAction = "folder" | "file";
 
 export const SkillContentTab = memo(function SkillContentTab({
+  scope,
   skillId,
   frontmatterWarning,
 }: SkillContentTabProps) {
@@ -73,7 +76,7 @@ export const SkillContentTab = memo(function SkillContentTab({
     null,
   );
   const actionErrorRef = useRef<HTMLDivElement>(null);
-  const rootQuery = useSkillDirQuery(skillId, "");
+  const rootQuery = useSkillDirQuery(scope, skillId, "");
 
   useEffect(() => {
     if (selectedPath !== null) return;
@@ -115,9 +118,13 @@ export const SkillContentTab = memo(function SkillContentTab({
     setActionError(null);
     try {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["skill", skillId] }),
-        queryClient.invalidateQueries({ queryKey: ["skill-dir", skillId] }),
-        queryClient.invalidateQueries({ queryKey: ["skill-file", skillId] }),
+        queryClient.invalidateQueries({ queryKey: ["skill", scope, skillId] }),
+        queryClient.invalidateQueries({
+          queryKey: ["skill-dir", scope, skillId],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["skill-file", scope, skillId],
+        }),
       ]);
     } finally {
       setRefreshing(false);
@@ -129,8 +136,8 @@ export const SkillContentTab = memo(function SkillContentTab({
     setActionError(null);
     setPendingAction(kind);
     try {
-      if (kind === "folder") await openSkillFolder(skillId);
-      else await openSkillFile(skillId, selectedPath as string);
+      if (kind === "folder") await openSkillFolder(skillId, scope);
+      else await openSkillFile(skillId, selectedPath as string, scope);
     } catch (error) {
       setActionError(asAppError(error) ?? fallbackError("未知错误"));
     } finally {
@@ -211,6 +218,7 @@ export const SkillContentTab = memo(function SkillContentTab({
             </p>
           ) : null}
           <SkillTree
+            scope={scope}
             skillId={skillId}
             rootQuery={rootQuery}
             selectedPath={selectedPath}
@@ -221,6 +229,7 @@ export const SkillContentTab = memo(function SkillContentTab({
         </nav>
         <div className="content-preview">
           <SkillFilePreview
+            scope={scope}
             skillId={skillId}
             path={selectedPath}
             view={view}
@@ -237,6 +246,7 @@ export const SkillContentTab = memo(function SkillContentTab({
 });
 
 function SkillTree({
+  scope,
   skillId,
   rootQuery,
   selectedPath,
@@ -244,6 +254,7 @@ function SkillTree({
   onToggleDir,
   onSelectFile,
 }: {
+  scope: ScopeId;
   skillId: string;
   rootQuery: UseQueryResult<SkillDirListing, Error>;
   selectedPath: string | null;
@@ -275,6 +286,7 @@ function SkillTree({
             key={entry.path}
             entry={entry}
             depth={0}
+            scope={scope}
             skillId={skillId}
             selectedPath={selectedPath}
             expanded={expanded}
@@ -295,6 +307,7 @@ function SkillTree({
 function SkillTreeEntry({
   entry,
   depth,
+  scope,
   skillId,
   selectedPath,
   expanded,
@@ -303,6 +316,7 @@ function SkillTreeEntry({
 }: {
   entry: SkillDirEntry;
   depth: number;
+  scope: ScopeId;
   skillId: string;
   selectedPath: string | null;
   expanded: Set<string>;
@@ -314,6 +328,7 @@ function SkillTreeEntry({
       <SkillTreeDir
         entry={entry}
         depth={depth}
+        scope={scope}
         skillId={skillId}
         selectedPath={selectedPath}
         expanded={expanded}
@@ -369,6 +384,7 @@ function SkillTreeEntry({
 function SkillTreeDir({
   entry,
   depth,
+  scope,
   skillId,
   selectedPath,
   expanded,
@@ -377,6 +393,7 @@ function SkillTreeDir({
 }: {
   entry: SkillDirEntry;
   depth: number;
+  scope: ScopeId;
   skillId: string;
   selectedPath: string | null;
   expanded: Set<string>;
@@ -384,7 +401,7 @@ function SkillTreeDir({
   onSelectFile: (path: string) => void;
 }) {
   const isOpen = expanded.has(entry.path);
-  const listing = useSkillDirQuery(skillId, entry.path, isOpen);
+  const listing = useSkillDirQuery(scope, skillId, entry.path, isOpen);
   const expandable = entry.expandable || isOpen;
   return (
     <li>
@@ -452,6 +469,7 @@ function SkillTreeDir({
                     key={child.path}
                     entry={child}
                     depth={depth + 1}
+                    scope={scope}
                     skillId={skillId}
                     selectedPath={selectedPath}
                     expanded={expanded}
@@ -521,6 +539,7 @@ function TreeState({
 }
 
 function SkillFilePreview({
+  scope,
   skillId,
   path,
   view,
@@ -530,6 +549,7 @@ function SkillFilePreview({
   onOpenFile,
   openingFile,
 }: {
+  scope: ScopeId;
   skillId: string;
   path: string | null;
   view: DetailView;
@@ -539,7 +559,7 @@ function SkillFilePreview({
   onOpenFile: () => void;
   openingFile: boolean;
 }) {
-  const query = useSkillFileQuery(skillId, path);
+  const query = useSkillFileQuery(scope, skillId, path);
   const [copiedPath, setCopiedPath] = useState<string | null>(null);
 
   if (path === null) {
@@ -655,6 +675,7 @@ function SkillFilePreview({
         ) : data ? (
           <FileBody
             data={data}
+            scope={scope}
             skillId={skillId}
             path={path}
             view={view}
@@ -673,6 +694,7 @@ function SkillFilePreview({
 
 function FileBody({
   data,
+  scope,
   skillId,
   path,
   view,
@@ -684,6 +706,7 @@ function FileBody({
   openingFile,
 }: {
   data: SkillFileContent;
+  scope: ScopeId;
   skillId: string;
   path: string;
   view: DetailView;
@@ -695,8 +718,8 @@ function FileBody({
   openingFile: boolean;
 }) {
   const internalLinks = useMemo(
-    () => ({ skillId, baseDir, onNavigate }),
-    [skillId, baseDir, onNavigate],
+    () => ({ scope, skillId, baseDir, onNavigate }),
+    [scope, skillId, baseDir, onNavigate],
   );
 
   if (data.status === "too_large") {

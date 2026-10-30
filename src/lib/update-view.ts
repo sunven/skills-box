@@ -10,6 +10,7 @@ import type {
   AnomalyView,
   InventoryAgent,
   InventorySkill,
+  ScopeId,
   UpdateCheckOutcome,
   UpdateCheckReport,
   UpdateCheckState,
@@ -18,7 +19,8 @@ import type {
 } from "./types";
 import { UPDATE_LABELS } from "./inventory-view";
 
-export const updateReportQueryKey = ["updateReport"] as const;
+export const updateReportQueryKey = (scope: ScopeId) =>
+  ["updateReport", scope] as const;
 
 export type UpdateBadgeVariant = "success" | "warning" | "muted" | "destructive";
 

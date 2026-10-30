@@ -6,18 +6,20 @@ import { MutationProgress } from "./mutation/mutation-progress";
 import { MutationResult } from "./mutation/mutation-result";
 import { useModalFocus } from "../hooks/use-modal-focus";
 import { startUninstall } from "../lib/api";
-import type { UpdateViewSkill } from "../lib/types";
+import type { ScopeId, UpdateViewSkill } from "../lib/types";
 import { ATTACHMENT_LABELS } from "../lib/inventory-view";
 import { taskEventDriver, useMutation } from "../lib/mutation";
 
 interface UninstallDialogProps {
   open: boolean;
+  scope: ScopeId;
   skill: UpdateViewSkill | null;
   onClose: () => void;
 }
 
 export function UninstallDialog({
   open,
+  scope,
   skill,
   onClose,
 }: UninstallDialogProps) {
@@ -30,6 +32,7 @@ export function UninstallDialog({
 
   const mutation = useMutation({
     action: "uninstall",
+    scope,
     fallbackFailure: "卸载失败，请重试。",
     fallbackStart: "无法开始卸载，请稍后重试。",
   });
@@ -52,7 +55,7 @@ export function UninstallDialog({
       taskEventDriver({
         total: 1,
         message: "正在准备卸载…",
-        launch: (onEvent) => startUninstall(skill.name, onEvent),
+        launch: (onEvent) => startUninstall(skill.id, onEvent, scope),
       }),
     );
   }, [skill, mutation.start, mutation.stateRef]);
@@ -83,6 +86,8 @@ export function UninstallDialog({
       : (skill.canonicalPath ?? "canonical 路径未知（可能已缺失）");
   const showInitial = !running && !result;
   const closeDisabled = running;
+  const removeCommand =
+    scope === "global" ? "skills remove -g -s" : "skills remove -s";
 
   return (
     <div
@@ -107,8 +112,8 @@ export function UninstallDialog({
               <Trash2 className="size-4 text-destructive" aria-hidden="true" />
               彻底卸载 · {skill.name}
             </h2>
-            <p className="modal-sub">
-              先备份，再执行 skills remove -g -s；CLI 退出后会逐项校验。
+            <p className="modal-sub" data-testid="uninstall-command">
+              先备份，再执行 {removeCommand}；CLI 退出后会逐项校验。
             </p>
           </div>
           <Button

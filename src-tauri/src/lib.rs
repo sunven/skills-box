@@ -10,6 +10,7 @@ pub mod detach;
 pub mod detail;
 pub mod env;
 pub mod error;
+pub mod extra_agent_guard;
 pub mod git_tree;
 pub mod interrupted;
 pub mod inventory;
@@ -17,7 +18,11 @@ pub mod lock;
 pub mod logs;
 pub mod paths;
 pub mod process;
+pub mod project_lock;
+pub mod projects;
 pub mod read_model;
+pub mod scope;
+pub mod scope_layout;
 pub mod security;
 pub mod tasks;
 pub mod timeouts;
@@ -33,16 +38,20 @@ use cli::CliRuntimeProvider;
 use env::EnvironmentService;
 use paths::AppPaths;
 use process::tokio_executor::TokioExecutor;
+use projects::ProjectRegistry;
 use read_model::ReadModel;
 use tasks::{InventoryConflictProvider, TaskManager, TaskManagerConfig};
 use update::UpdateService;
+use update::project::ProjectUpdateService;
 
 pub struct AppState {
     pub paths: AppPaths,
     pub environment: Arc<EnvironmentService>,
     pub read_model: Arc<ReadModel>,
+    pub projects: Arc<ProjectRegistry>,
     pub tasks: TaskManager,
     pub updates: UpdateService,
+    pub project_updates: ProjectUpdateService,
     /// Set by `quit_app` so window/exit events stop preventing the exit.
     pub exiting: AtomicBool,
 }
@@ -51,16 +60,23 @@ impl AppState {
     pub fn new(paths: AppPaths) -> Self {
         let environment = Arc::new(EnvironmentService::from_process(paths.clone()));
         let runtime: Arc<dyn CliRuntimeProvider> = environment.clone();
-        let tasks = TaskManager::new(
+        let projects = Arc::new(ProjectRegistry::new(paths.clone()));
+        let tasks = TaskManager::with_projects(
             runtime,
             Arc::new(TokioExecutor),
             Arc::new(InventoryConflictProvider::new(paths.clone())),
             paths.clone(),
+            Arc::clone(&projects),
             TaskManagerConfig::default(),
         );
         Self {
-            read_model: Arc::new(ReadModel::new(paths.clone())),
+            read_model: Arc::new(ReadModel::with_projects(
+                paths.clone(),
+                Arc::clone(&projects),
+            )),
+            projects,
             updates: UpdateService::new(paths.clone()),
+            project_updates: ProjectUpdateService::new(paths.clone()),
             paths,
             environment,
             tasks,
@@ -90,6 +106,9 @@ pub fn run() {
             focus_main_window(app);
         }))
         .plugin(tauri_plugin_opener::init())
+        // Folder picker for registering project roots. Only `dialog:allow-open`
+        // is exposed to the renderer; no save/message/ask permissions.
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState::new(paths))
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -108,6 +127,11 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_environment,
+            commands::list_projects,
+            commands::add_project,
+            commands::relocate_project,
+            commands::forget_project,
+            commands::set_active_scope,
             commands::get_inventory,
             commands::get_skill_detail,
             commands::list_skill_dir,
@@ -121,6 +145,7 @@ pub fn run() {
             commands::detach_agent,
             commands::attach_agent,
             commands::add_extra_agent,
+            commands::update_extra_agent,
             commands::remove_extra_agent,
             commands::start_uninstall,
             commands::check_updates,

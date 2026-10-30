@@ -10,7 +10,10 @@ import type {
   ExtraAgentInput,
   InstallRequest,
   InventorySnapshot,
+  ProjectEntry,
+  ProjectList,
   RemoveExtraAgentResult,
+  ScopeId,
   SkillDetail,
   SkillDirListing,
   SkillFileContent,
@@ -19,10 +22,16 @@ import type {
   UpdateCheckState,
   AppError,
 } from "./types";
+import { GLOBAL_SCOPE } from "./types";
 
 /** Every IPC command the frontend may invoke. */
 export const API_COMMANDS = {
   getEnvironment: "get_environment",
+  listProjects: "list_projects",
+  addProject: "add_project",
+  relocateProject: "relocate_project",
+  forgetProject: "forget_project",
+  setActiveScope: "set_active_scope",
   getInventory: "get_inventory",
   getSkillDetail: "get_skill_detail",
   openSkillFolder: "open_skill_folder",
@@ -42,6 +51,7 @@ export const API_COMMANDS = {
   detachAgent: "detach_agent",
   attachAgent: "attach_agent",
   addExtraAgent: "add_extra_agent",
+  updateExtraAgent: "update_extra_agent",
   removeExtraAgent: "remove_extra_agent",
   startUninstall: "start_uninstall",
   revealAppData: "reveal_app_data",
@@ -57,36 +67,76 @@ export function getEnvironment(refresh = false): Promise<EnvReport> {
   return invoke<EnvReport>(API_COMMANDS.getEnvironment, { refresh });
 }
 
-export function getInventory(): Promise<InventorySnapshot> {
-  return invoke<InventorySnapshot>(API_COMMANDS.getInventory);
+/** App-registered projects plus the restored active scope. */
+export function listProjects(): Promise<ProjectList> {
+  return invoke<ProjectList>(API_COMMANDS.listProjects);
+}
+
+/** Register a project root and activate it. Nothing is created on disk. */
+export function addProject(root: string): Promise<ProjectEntry> {
+  return invoke<ProjectEntry>(API_COMMANDS.addProject, { root });
+}
+
+/** Point an existing project at a new root, keeping its id. */
+export function relocateProject(id: string, root: string): Promise<ProjectEntry> {
+  return invoke<ProjectEntry>(API_COMMANDS.relocateProject, { id, root });
+}
+
+/** Remove the registry entry and its check state; never deletes files. */
+export function forgetProject(id: string): Promise<void> {
+  return invoke<void>(API_COMMANDS.forgetProject, { id });
+}
+
+/** Persist the active scope (and refresh the project's lastOpenedAt). */
+export function setActiveScope(scope: ScopeId): Promise<void> {
+  return invoke<void>(API_COMMANDS.setActiveScope, { scope });
+}
+
+export function getInventory(
+  scope: ScopeId = GLOBAL_SCOPE,
+): Promise<InventorySnapshot> {
+  return invoke<InventorySnapshot>(API_COMMANDS.getInventory, { scope });
 }
 
 /** Detail is fetched on demand; the frontend only sends the inventory id. */
-export function getSkillDetail(skillId: string): Promise<SkillDetail> {
-  return invoke<SkillDetail>(API_COMMANDS.getSkillDetail, { skillId });
+export function getSkillDetail(
+  skillId: string,
+  scope: ScopeId = GLOBAL_SCOPE,
+): Promise<SkillDetail> {
+  return invoke<SkillDetail>(API_COMMANDS.getSkillDetail, { skillId, scope });
 }
 
 /** Rust resolves and guards the folder; no path crosses the IPC boundary. */
-export function openSkillFolder(skillId: string): Promise<void> {
-  return invoke<void>(API_COMMANDS.openSkillFolder, { skillId });
+export function openSkillFolder(
+  skillId: string,
+  scope: ScopeId = GLOBAL_SCOPE,
+): Promise<void> {
+  return invoke<void>(API_COMMANDS.openSkillFolder, { skillId, scope });
 }
 
 /** Lazy directory listing; `path` is relative to the server-resolved skill root. */
 export function listSkillDir(
   skillId: string,
   path = "",
+  scope: ScopeId = GLOBAL_SCOPE,
 ): Promise<SkillDirListing> {
-  return invoke<SkillDirListing>(API_COMMANDS.listSkillDir, { skillId, path });
+  return invoke<SkillDirListing>(API_COMMANDS.listSkillDir, {
+    skillId,
+    path,
+    scope,
+  });
 }
 
 /** Read one skill file; oversized and binary files are values, not errors. */
 export function readSkillFile(
   skillId: string,
   path: string,
+  scope: ScopeId = GLOBAL_SCOPE,
 ): Promise<SkillFileContent> {
   return invoke<SkillFileContent>(API_COMMANDS.readSkillFile, {
     skillId,
     path,
+    scope,
   });
 }
 
@@ -94,8 +144,9 @@ export function readSkillFile(
 export function openSkillFile(
   skillId: string,
   path: string,
+  scope: ScopeId = GLOBAL_SCOPE,
 ): Promise<void> {
-  return invoke<void>(API_COMMANDS.openSkillFile, { skillId, path });
+  return invoke<void>(API_COMMANDS.openSkillFile, { skillId, path, scope });
 }
 
 /**
@@ -117,10 +168,15 @@ export function openExternalUrl(url: string): Promise<void> {
 export function startPreview(
   source: string,
   onEvent: (event: TaskEvent) => void,
+  scope: ScopeId = GLOBAL_SCOPE,
 ): Promise<string> {
   const channel = new Channel<TaskEvent>();
   channel.onmessage = onEvent;
-  return invoke<string>(API_COMMANDS.startPreview, { source, onEvent: channel });
+  return invoke<string>(API_COMMANDS.startPreview, {
+    source,
+    scope,
+    onEvent: channel,
+  });
 }
 
 export function cancelTask(taskId: string): Promise<CancelAck> {
@@ -153,10 +209,15 @@ export function quitApp(): Promise<void> {
 export function startInstall(
   request: InstallRequest,
   onEvent: (event: TaskEvent) => void,
+  scope: ScopeId,
 ): Promise<string> {
   const channel = new Channel<TaskEvent>();
   channel.onmessage = onEvent;
-  return invoke<string>(API_COMMANDS.startInstall, { request, onEvent: channel });
+  return invoke<string>(API_COMMANDS.startInstall, {
+    request,
+    scope,
+    onEvent: channel,
+  });
 }
 
 /**
@@ -164,15 +225,23 @@ export function startInstall(
  * skills CLI is never spawned for checking. Runs automatically at launch and
  * every six hours while the app is open, and by explicit user actions.
  */
-export function checkUpdates(skillIds?: string[]): Promise<UpdateCheckReport> {
+export function checkUpdates(
+  skillIds?: string[],
+  scope: ScopeId = GLOBAL_SCOPE,
+): Promise<UpdateCheckReport> {
   return invoke<UpdateCheckReport>(API_COMMANDS.checkUpdates, {
     skillIds: skillIds ?? null,
+    scope,
   });
 }
 
 /** Persisted summary of the last full check, for the pre-check header state. */
-export function getUpdateCheckState(): Promise<UpdateCheckState | null> {
-  return invoke<UpdateCheckState | null>(API_COMMANDS.getUpdateCheckState);
+export function getUpdateCheckState(
+  scope: ScopeId = GLOBAL_SCOPE,
+): Promise<UpdateCheckState | null> {
+  return invoke<UpdateCheckState | null>(API_COMMANDS.getUpdateCheckState, {
+    scope,
+  });
 }
 
 /**
@@ -183,10 +252,15 @@ export function getUpdateCheckState(): Promise<UpdateCheckState | null> {
 export function startUpdate(
   skillIds: string[],
   onEvent: (event: TaskEvent) => void,
+  scope: ScopeId,
 ): Promise<string> {
   const channel = new Channel<TaskEvent>();
   channel.onmessage = onEvent;
-  return invoke<string>(API_COMMANDS.startUpdate, { skillIds, onEvent: channel });
+  return invoke<string>(API_COMMANDS.startUpdate, {
+    skillIds,
+    scope,
+    onEvent: channel,
+  });
 }
 
 /**
@@ -197,8 +271,13 @@ export function startUpdate(
 export function detachAgent(
   skillId: string,
   agentId: string,
+  scope: ScopeId,
 ): Promise<DetachResult> {
-  return invoke<DetachResult>(API_COMMANDS.detachAgent, { skillId, agentId });
+  return invoke<DetachResult>(API_COMMANDS.detachAgent, {
+    skillId,
+    agentId,
+    scope,
+  });
 }
 
 /**
@@ -209,13 +288,32 @@ export function detachAgent(
 export function attachAgent(
   skillId: string,
   agentId: string,
+  scope: ScopeId,
 ): Promise<AttachResult> {
-  return invoke<AttachResult>(API_COMMANDS.attachAgent, { skillId, agentId });
+  return invoke<AttachResult>(API_COMMANDS.attachAgent, {
+    skillId,
+    agentId,
+    scope,
+  });
 }
 
 /** Persist a user-defined extra agent in the app-data `agents.json`. */
 export function addExtraAgent(agent: ExtraAgentInput): Promise<ExtraAgent> {
   return invoke<ExtraAgent>(API_COMMANDS.addExtraAgent, { agent });
+}
+
+/**
+ * Change or clear one extra agent's project skills directory. The backend
+ * rejects the change while registered projects may still hold mounts.
+ */
+export function updateExtraAgent(
+  agentId: string,
+  projectSkillsDir: string | null,
+): Promise<ExtraAgent> {
+  return invoke<ExtraAgent>(API_COMMANDS.updateExtraAgent, {
+    agentId,
+    projectSkillsDir,
+  });
 }
 
 /** Detach its skills first, then remove one user-defined extra agent. */
@@ -236,10 +334,15 @@ export function removeExtraAgent(
 export function startUninstall(
   skillId: string,
   onEvent: (event: TaskEvent) => void,
+  scope: ScopeId,
 ): Promise<string> {
   const channel = new Channel<TaskEvent>();
   channel.onmessage = onEvent;
-  return invoke<string>(API_COMMANDS.startUninstall, { skillId, onEvent: channel });
+  return invoke<string>(API_COMMANDS.startUninstall, {
+    skillId,
+    scope,
+    onEvent: channel,
+  });
 }
 
 /** Open a fixed app-data directory; the frontend never supplies a path. */

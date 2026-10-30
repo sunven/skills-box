@@ -14,22 +14,46 @@ import {
 } from "../lib/api";
 import type {
   DetectedAgent,
+  InventoryAgent,
   InventorySkill,
   PreviewSkill,
   PreviewSummary,
+  ProjectEntry,
+  ScopeId,
   TaskEvent,
 } from "../lib/types";
+import { GLOBAL_SCOPE } from "../lib/types";
+import { projectCanonicalPath } from "../lib/scope";
 import { useTaskEvents } from "../lib/task-runner";
 import { taskEventDriver, useMutation } from "../lib/mutation";
 
 interface InstallWizardProps {
   open: boolean;
+  scope: ScopeId;
+  /** Active project for project scope; null for global. */
+  project?: ProjectEntry | null;
+  /** Registered projects for the compact scope shortcut. */
+  projects?: ProjectEntry[];
   inventorySkills: InventorySkill[];
+  /** Globally detected catalog agents plus extras (global target set). */
   agents: DetectedAgent[];
+  /** Explicit scope target set (project scope); missing dirs stay listed. */
+  installTargets?: InventoryAgent[];
+  /** Switch the app's active scope; the wizard resets to step 1. */
+  onSelectScope?: (scope: ScopeId) => void;
   onClose: () => void;
 }
 
 type Step = 1 | 2 | 3 | 4 | 5;
+
+/** Minimal agent row shared by the global and project target sets. */
+interface WizardAgent {
+  id: string;
+  displayName: string;
+  universal: boolean;
+  shared: boolean;
+  globalSkillsDir: string | null;
+}
 
 interface AgentCount {
   managed: number;
@@ -77,7 +101,7 @@ function countAgentSkills(skills: InventorySkill[]): Map<string, AgentCount> {
 }
 
 function defaultAgentSelection(
-  agents: DetectedAgent[],
+  agents: WizardAgent[],
   skills: InventorySkill[],
 ): Set<string> {
   const withManaged = new Set<string>();
@@ -106,8 +130,13 @@ function StepBars({ step }: { step: Step }) {
 
 export function InstallWizard({
   open,
+  scope,
+  project = null,
+  projects = [],
   inventorySkills,
   agents,
+  installTargets = [],
+  onSelectScope,
   onClose,
 }: InstallWizardProps) {
   const panelRef = useRef<HTMLDivElement>(null);
@@ -169,6 +198,7 @@ export function InstallWizard({
   });
   const installMutation = useMutation({
     action: "install",
+    scope,
     fallbackFailure: "安装失败，请重试。",
     fallbackStart: "无法开始安装，请稍后重试。",
   });
@@ -185,12 +215,47 @@ export function InstallWizard({
   const installCancelled = installPhase === "cancelled";
   const cancelledNotice = previewPhase === "cancelled";
 
+  const projectMode = scope !== GLOBAL_SCOPE;
+  const canonicalPath = projectMode
+    ? project
+      ? projectCanonicalPath(project.root)
+      : "<项目>/.agents/skills"
+    : "~/.agents/skills";
+  // The project target set comes from the scoped snapshot and includes
+  // configured extras whose project directory does not exist yet.
+  const targetAgents = useMemo<WizardAgent[]>(
+    () =>
+      projectMode
+        ? installTargets.map((agent) => ({
+            id: agent.id,
+            displayName: agent.displayName,
+            universal: agent.universal,
+            shared: agent.shared,
+            globalSkillsDir: agent.globalSkillsDir,
+          }))
+        : agents.map((agent) => ({
+            id: agent.id,
+            displayName: agent.displayName,
+            universal: agent.universal,
+            shared: false,
+            globalSkillsDir: agent.globalSkillsDir,
+          })),
+    [agents, installTargets, projectMode],
+  );
+  const targetScopeLabel = projectMode
+    ? `项目「${project?.displayName ?? "未命名项目"}」`
+    : "全局";
+
   // Compute agent defaults when the step is first shown. Recompute if the
   // inventory arrives late, but never overwrite an explicit user choice.
+  // Project installs default to no agent: canonical is always written and
+  // every project mount is an explicit choice.
   useEffect(() => {
     if (!open || step !== 3 || agentsTouchedRef.current) return;
-    setSelectedAgents(defaultAgentSelection(agents, inventorySkills));
-  }, [open, step, agents, inventorySkills]);
+    setSelectedAgents(
+      projectMode ? new Set() : defaultAgentSelection(targetAgents, inventorySkills),
+    );
+  }, [open, step, projectMode, targetAgents, inventorySkills]);
 
   const closeWizard = useCallback(() => {
     const previewTask = previewDriver.stateRef.current;
@@ -231,7 +296,7 @@ export function InstallWizard({
     setSelectedAgents(new Set());
     lastInstallRef.current = null;
     agentsTouchedRef.current = false;
-  }, [open, installMutation.reset, previewDriver.reset]);
+  }, [open, scope, installMutation.reset, previewDriver.reset]);
 
   useModalFocus({
     open,
@@ -267,12 +332,12 @@ export function InstallWizard({
       : selected.size === 0 || normalSkillsAllConflicted);
 
   const editableAgents = useMemo(
-    () => agents.filter((agent) => !agent.universal),
-    [agents],
+    () => targetAgents.filter((agent) => !agent.universal),
+    [targetAgents],
   );
   const sharedAgents = useMemo(
-    () => agents.filter((agent) => agent.universal),
-    [agents],
+    () => targetAgents.filter((agent) => agent.universal),
+    [targetAgents],
   );
   const agentCounts = useMemo(
     () => countAgentSkills(inventorySkills),
@@ -305,7 +370,7 @@ export function InstallWizard({
     previewDriver.start({
       total: 1,
       message: "正在准备预览…",
-      launch: (onEvent) => startPreview(source, onEvent),
+      launch: (onEvent) => startPreview(source, onEvent, scope),
     });
   };
 
@@ -331,6 +396,7 @@ export function InstallWizard({
               retry,
             },
             onEvent,
+            scope,
           ),
       }),
     );
@@ -371,13 +437,19 @@ export function InstallWizard({
   };
 
   const lastInstall = lastInstallRef.current;
+  const universalLabel = projectMode
+    ? "Universal（项目 canonical）"
+    : "Universal（共享 canonical）";
   const agentSummary = [
     ...selectedAgentObjects.map((agent) => agent.displayName),
     ...sharedAgents.map((agent) => agent.displayName),
-    "Universal（共享 canonical）",
+    universalLabel,
   ].join("、");
   const targetPaths = [
-    { label: "共享 canonical", path: "~/.agents/skills" },
+    {
+      label: projectMode ? "项目 canonical" : "共享 canonical",
+      path: canonicalPath,
+    },
     ...selectedAgentObjects.map((agent) => ({
       label: agent.displayName,
       path: agent.globalSkillsDir ?? "—",
@@ -420,6 +492,39 @@ export function InstallWizard({
             <p className="modal-sub">
               v1 只接受公开 GitHub 根仓库，只安装默认分支。
             </p>
+            <p
+              data-testid="install-target-scope"
+              className="mt-1 text-[12px] text-muted-foreground"
+            >
+              目标作用域：{targetScopeLabel} · canonical{" "}
+              <span className="mono">{canonicalPath}</span>
+            </p>
+            <label className="mt-1 flex items-center gap-1.5 text-[12px] text-muted-foreground">
+              切换目标作用域
+              <select
+                aria-label="目标作用域"
+                data-testid="install-scope-select"
+                value={scope}
+                disabled={writingLocked || !onSelectScope}
+                onChange={(event) => {
+                  const next = event.target.value as ScopeId;
+                  if (next !== scope) onSelectScope?.(next);
+                }}
+                className="h-7 rounded-md border border-border-strong bg-card px-1.5 text-[12px] text-foreground"
+              >
+                <option value={GLOBAL_SCOPE}>全局</option>
+                {projects.map((entry) => (
+                  <option
+                    key={entry.id}
+                    value={`project:${entry.id}`}
+                    disabled={!entry.available}
+                  >
+                    {entry.displayName}
+                    {entry.available ? "" : "（不可用）"}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
           <Button
             ref={closeRef}
@@ -649,7 +754,9 @@ export function InstallWizard({
           {step === 3 ? (
             <>
               <p className="text-[12.5px] leading-relaxed text-muted-foreground">
-                只显示本机检测到的 agent。默认勾选已含受管 skill 的 agent；仅有未受管目录的 agent 默认不勾选。
+                {projectMode
+                  ? "项目作用域：只列出全局已检测到的 catalog agent 与已配置项目目录的 extra agent。默认不勾选；目录不存在时会在安装时创建。"
+                  : "只显示本机检测到的 agent。默认勾选已含受管 skill 的 agent；仅有未受管目录的 agent 默认不勾选。"}
               </p>
               <ul className="mt-3 space-y-1.5">
                 {editableAgents.map((agent) => {
@@ -707,9 +814,12 @@ export function InstallWizard({
                 data-testid="shared-agents"
                 className="panel-well mt-3 text-[12.5px]"
               >
-                <p className="font-medium">共享 canonical</p>
+                <p className="font-medium">
+                  {projectMode ? "项目 canonical" : "共享 canonical"}
+                </p>
                 <p className="mt-1 leading-relaxed text-muted-foreground">
-                  Universal · ~/.agents/skills（共享目录）
+                  Universal · {canonicalPath}
+                  {projectMode ? "（项目共享目录）" : "（共享目录）"}
                 </p>
                 {sharedAgents.length > 0 ? (
                   <p className="mt-0.5 leading-relaxed text-muted-foreground">
@@ -719,15 +829,19 @@ export function InstallWizard({
                 ) : null}
               </div>
 
-              {agents.length === 0 ? (
+              {targetAgents.length === 0 ? (
                 <p className="mt-3 text-[12px] text-muted-foreground">
-                  未检测到 agent，安装将只写入共享 canonical。
+                  {projectMode
+                    ? "没有可用的目标 agent，安装将只写入项目 canonical。"
+                    : "未检测到 agent，安装将只写入共享 canonical。"}
                 </p>
               ) : null}
 
               <p className="mt-2 text-[12px] leading-relaxed text-muted-foreground">
                 后台始终追加 <span className="font-mono">-a universal</span>
-                ，确保写入共享 canonical，避免单 agent 默认 copy。
+                {projectMode
+                  ? "，写入项目 canonical；勾选的 catalog agent 由 CLI 挂载，extra agent 由应用创建项目内链接。"
+                  : "，确保写入共享 canonical，避免单 agent 默认 copy。"}
               </p>
             </>
           ) : null}
@@ -735,6 +849,10 @@ export function InstallWizard({
           {step === 4 && preview ? (
             <div data-testid="install-confirm">
               <dl className="panel-well summary-list">
+                <dt>作用域</dt>
+                <dd>
+                  {targetScopeLabel} · <span className="mono">{canonicalPath}</span>
+                </dd>
                 <dt>来源</dt>
                 <dd className="font-mono">{preview.source}</dd>
                 <dt>Skill</dt>
@@ -763,6 +881,11 @@ export function InstallWizard({
                     共享 canonical 的 agent（
                     {sharedAgents.map((agent) => agent.displayName).join("、")}
                     ）直接读取共享目录。
+                  </p>
+                ) : projectMode ? (
+                  <p className="mt-1.5 text-[12px] text-muted-foreground">
+                    未勾选 agent 时只写入项目 canonical；extra agent
+                    的项目链接由应用创建。
                   </p>
                 ) : null}
               </div>

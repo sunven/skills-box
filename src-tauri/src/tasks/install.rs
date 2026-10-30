@@ -16,6 +16,7 @@ use serde::Deserialize;
 
 use crate::agents::{DetectionContext, catalog, resolve_global_skills_dir};
 use crate::attachment_target::{self, AgentDirectoryState, TargetState};
+use crate::backup::BackupStore;
 use crate::baseline::{BaselineStore, write_warning};
 use crate::cli::CliRuntime;
 use crate::env::capture_process_env;
@@ -71,6 +72,12 @@ pub struct InstallPlan {
     pub targets: Vec<InstallTarget>,
     /// True only for an explicit retry request (see [`InstallRequest::retry`]).
     pub retry: bool,
+    /// Scope this install writes to; also keys the baseline store.
+    pub scope: crate::scope::ScopeId,
+    /// Project root for project scope; `None` keeps the CLI runtime cwd.
+    pub cwd: Option<PathBuf>,
+    /// Global installs keep `-g`; project installs never pass it.
+    pub global: bool,
 }
 
 impl InstallPlan {
@@ -84,17 +91,29 @@ impl InstallPlan {
 /// resolved here.
 pub fn validate_request(
     paths: &AppPaths,
+    layout: &crate::scope_layout::ScopeLayout,
     request: &InstallRequest,
 ) -> Result<InstallPlan, AppError> {
     let source = validate_source(&request.source)?;
     let skills = validate_skill_names(&request.skills)?;
-    let (agent_ids, targets) = validate_agents(paths, &request.agents)?;
+    let (agent_ids, targets) = if layout.is_global() {
+        validate_agents(paths, &request.agents)?
+    } else {
+        validate_project_agents(paths, layout, &request.agents)?
+    };
     Ok(InstallPlan {
         source: source.normalized,
         skills,
         agent_ids,
         targets,
         retry: request.retry,
+        scope: layout.scope.clone(),
+        cwd: if layout.is_global() {
+            None
+        } else {
+            Some(layout.cli_cwd(paths))
+        },
+        global: layout.is_global(),
     })
 }
 
@@ -241,6 +260,82 @@ fn validate_agents(
     Ok((agent_ids, targets))
 }
 
+/// Project install targets: globally detected catalog agents plus configured
+/// extras with a valid `projectSkillsDir`, whether or not the directory exists.
+/// Universal agents are not separate targets because they read canonical.
+fn validate_project_agents(
+    paths: &AppPaths,
+    layout: &crate::scope_layout::ScopeLayout,
+    raw: &[String],
+) -> Result<(Vec<String>, Vec<InstallTarget>), AppError> {
+    let mut seen = HashSet::new();
+    let mut order = Vec::new();
+    for value in raw {
+        let id = value.trim();
+        let invalid = id.is_empty()
+            || id.len() > 64
+            || id == "*"
+            || id.starts_with('-')
+            || !id.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+            });
+        if invalid {
+            return Err(AppError::agent_invalid(format!(
+                "无效的 agent 标识：{value:?}"
+            )));
+        }
+        if id == UNIVERSAL_AGENT_ID {
+            continue;
+        }
+        if seen.insert(id.to_string()) {
+            order.push(id.to_string());
+        }
+    }
+
+    let available = layout.install_targets(&crate::inventory::detected_agent_dirs(paths));
+    let mut targets = Vec::new();
+    for id in order {
+        let target = available
+            .iter()
+            .find(|agent| agent.id == id)
+            .ok_or_else(|| {
+                let catalog_definition = catalog()
+                    .agents
+                    .iter()
+                    .find(|definition| definition.id == id);
+                let extra = crate::agents::extras::find(paths, &id);
+                let display_name = catalog_definition
+                    .map(|definition| definition.display_name.clone())
+                    .or_else(|| extra.as_ref().map(|extra| extra.display_name.clone()))
+                    .unwrap_or_else(|| id.clone());
+                match catalog_definition {
+                    Some(definition) if definition.universal => {
+                        AppError::agent_unsupported_global(&display_name)
+                    }
+                    Some(_) => AppError::agent_not_detected(&display_name),
+                    None => match extra {
+                        Some(_) => AppError::agent_not_detected(&display_name),
+                        None => AppError::agent_invalid(format!("未知 agent：{id}")),
+                    },
+                }
+            })?;
+        targets.push(InstallTarget {
+            id: target.id.clone(),
+            display_name: target.display_name.clone(),
+            universal: false,
+            skills_dir: target.skills_dir.clone(),
+        });
+    }
+
+    let agent_ids = targets
+        .iter()
+        .filter(|target| crate::agents::is_catalog_agent(&target.id))
+        .map(|target| target.id.clone())
+        .chain(std::iter::once(UNIVERSAL_AGENT_ID.to_string()))
+        .collect();
+    Ok((agent_ids, targets))
+}
+
 /// Resolve known agent ids to absolute global skills directories without their
 /// config roots existing. Install validation additionally requires detection;
 /// this helper exists for verification fixtures and future callers.
@@ -279,11 +374,11 @@ pub fn resolve_agent_dirs(paths: &AppPaths, ids: &[String]) -> Vec<AgentDir> {
 /// links them itself. Idempotent: an existing symlink to the canonical folder
 /// is left untouched, and nothing is ever overwritten.
 pub fn ensure_extra_attachments(
-    paths: &AppPaths,
+    layout: &crate::scope_layout::ScopeLayout,
     plan: &InstallPlan,
     installed: &[String],
 ) -> HashMap<String, AppError> {
-    let canonical_root = paths.canonical_skills_dir();
+    let canonical_root = &layout.canonical_dir;
     let mut errors = HashMap::new();
     for name in installed {
         let canonical = canonical_root.join(name);
@@ -298,7 +393,7 @@ pub fn ensure_extra_attachments(
             .iter()
             .filter(|target| !target.universal && !crate::agents::is_catalog_agent(&target.id))
         {
-            if let Err(error) = ensure_extra_link(&canonical, target, name) {
+            if let Err(error) = ensure_extra_link(layout, &canonical, target, name) {
                 errors.entry(name.clone()).or_insert(error);
             }
         }
@@ -307,6 +402,7 @@ pub fn ensure_extra_attachments(
 }
 
 fn ensure_extra_link(
+    layout: &crate::scope_layout::ScopeLayout,
     canonical: &std::path::Path,
     target: &InstallTarget,
     name: &str,
@@ -317,7 +413,12 @@ fn ensure_extra_link(
         universal: target.universal,
         skills_dir: target.skills_dir.clone(),
     };
-    let resolved = attachment_target::resolve_install_link(canonical, &agent, name)?;
+    let resolved = attachment_target::resolve_install_link(
+        canonical,
+        &agent,
+        name,
+        attachment_target::TargetContext::for_layout(layout),
+    )?;
     if matches!(resolved.directory_state, AgentDirectoryState::Missing(_)) {
         fs::create_dir_all(&resolved.agent.skills_dir).map_err(|error| {
             AppError::agent_attach_failed(format!(
@@ -354,10 +455,11 @@ fn ensure_extra_link(
 /// earlier attempt partially wrote. Every other duplicate stays rejected.
 pub fn conflicts_for(
     paths: &AppPaths,
+    layout: &crate::scope_layout::ScopeLayout,
     skills: &[String],
     retry_source: Option<&str>,
 ) -> Result<Option<AppError>, AppError> {
-    let conflicts = find_conflicts(paths, skills)?;
+    let conflicts = find_conflicts(paths, layout, skills)?;
     for name in skills {
         if let Some(conflict) = conflicts.get(name) {
             let retryable_managed = retry_source.is_some()
@@ -381,15 +483,20 @@ pub fn conflicts_for(
     Ok(None)
 }
 
-/// `npx -y skills@1.7.4 add <source> -g -s <names> -a <ids> -a universal -y --json`
+/// `npx -y skills@1.7.4 add <source> [-g] -s <names> -a <ids> -a universal -y --json`
+///
+/// Global installs keep `-g` and the isolated cwd. Project installs run in the
+/// project root and never pass `-g`.
 pub fn install_command(runtime: &CliRuntime, plan: &InstallPlan, timeout: Duration) -> CommandSpec {
     let mut args = vec![
         "-y".to_string(),
         format!("skills@{}", runtime.pinned_version),
         "add".to_string(),
         plan.source.clone(),
-        "-g".to_string(),
     ];
+    if plan.global {
+        args.push("-g".to_string());
+    }
     for name in &plan.skills {
         args.push("-s".to_string());
         args.push(name.clone());
@@ -403,7 +510,7 @@ pub fn install_command(runtime: &CliRuntime, plan: &InstallPlan, timeout: Durati
     CommandSpec::new(
         &runtime.npx_path,
         args,
-        &runtime.cwd,
+        plan.cwd.as_deref().unwrap_or(&runtime.cwd),
         runtime.env.clone(),
         timeout,
     )
@@ -516,19 +623,30 @@ pub fn parse_install_output(raw: &str) -> InstallOutput {
 }
 
 /// Copy `~/.agents/.skill-lock.json` into `backups/<ms>-install-<task>/`
-/// before the CLI runs. A missing lock is a normal fresh-machine state and is
-/// recorded as absent.
-pub fn snapshot_lock(paths: &AppPaths, task_id: &str) -> Result<PathBuf, AppError> {
-    let directory = paths.backups_dir().join(format!(
+/// before the CLI runs. Project snapshots use the same scope-isolated root as
+/// update/uninstall (`backups/project-<id>/`). A missing lock is a normal
+/// fresh-machine state and is recorded as absent.
+pub fn snapshot_lock(
+    paths: &AppPaths,
+    layout: &crate::scope_layout::ScopeLayout,
+    task_id: &str,
+) -> Result<PathBuf, AppError> {
+    let backups = BackupStore::for_layout(paths, layout);
+    let directory = backups.root().join(format!(
         "{}-install-{}",
         now_ms(),
         security::safe_component(task_id)
     ));
     fs::create_dir_all(&directory)
         .map_err(|error| AppError::backup_failed(format!("{}：{error}", directory.display())))?;
-    let source = paths.lock_path();
-    let target = directory.join("skill-lock.json");
-    match fs::copy(&source, &target) {
+    let source = &layout.lock_path;
+    let file_name = if layout.is_global() {
+        "skill-lock.json"
+    } else {
+        "skills-lock.json"
+    };
+    let target = directory.join(file_name);
+    match fs::copy(source, &target) {
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             fs::write(
@@ -549,6 +667,39 @@ pub fn snapshot_lock(paths: &AppPaths, task_id: &str) -> Result<PathBuf, AppErro
     Ok(directory)
 }
 
+/// One scope's strict lock: v3 for global, v1 for a project. Read-only; the
+/// app never writes either file.
+pub(crate) enum ScopeLock {
+    Global(LockFile),
+    Project(crate::project_lock::ProjectLockFile),
+}
+
+impl ScopeLock {
+    pub(crate) fn read(layout: &crate::scope_layout::ScopeLayout) -> Result<Self, AppError> {
+        if layout.is_global() {
+            Ok(Self::Global(LockFile::read(&layout.lock_path)?))
+        } else {
+            Ok(Self::Project(crate::project_lock::ProjectLockFile::read(
+                &layout.lock_path,
+            )?))
+        }
+    }
+
+    pub(crate) fn get(&self, name: &str) -> Option<&crate::lock::LockEntry> {
+        match self {
+            Self::Global(lock) => lock.get(name),
+            Self::Project(lock) => lock.get(name),
+        }
+    }
+
+    pub(crate) fn contains(&self, name: &str) -> bool {
+        match self {
+            Self::Global(lock) => lock.contains(name),
+            Self::Project(lock) => lock.contains(name),
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct InstallVerification {
     pub results: Vec<TaskSkillResult>,
@@ -559,7 +710,7 @@ pub struct InstallVerification {
 /// checked on disk; `failed`/`skipped` entries are authoritative for their own
 /// outcome. Filesystem checks are best-effort and never panic.
 pub fn verify_install(
-    paths: &AppPaths,
+    layout: &crate::scope_layout::ScopeLayout,
     plan: &InstallPlan,
     cli_results: &[CliSkillResult],
 ) -> InstallVerification {
@@ -567,7 +718,7 @@ pub fn verify_install(
         .iter()
         .filter_map(|result| result.name.as_deref().map(|name| (name, result)))
         .collect();
-    let lock = LockFile::read(&paths.lock_path());
+    let lock = ScopeLock::read(layout);
     let mut verification = InstallVerification::default();
 
     for name in &plan.skills {
@@ -578,7 +729,7 @@ pub fn verify_install(
             ))),
             Some(result) => match result.status {
                 CliSkillStatus::Installed => {
-                    verify_installed(paths, plan, &lock, name, &mut verification.warnings)
+                    verify_installed(layout, plan, &lock, name, &mut verification.warnings)
                 }
                 CliSkillStatus::Skipped => Err(AppError::skill_not_in_source(
                     name,
@@ -615,13 +766,13 @@ pub fn verify_install(
 }
 
 fn verify_installed(
-    paths: &AppPaths,
+    layout: &crate::scope_layout::ScopeLayout,
     plan: &InstallPlan,
-    lock: &Result<LockFile, AppError>,
+    lock: &Result<ScopeLock, AppError>,
     name: &str,
     warnings: &mut Vec<AppError>,
 ) -> Result<(), AppError> {
-    let canonical = paths.canonical_skills_dir().join(name);
+    let canonical = layout.canonical_dir.join(name);
     match fs::symlink_metadata(&canonical) {
         Ok(metadata) if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() => {}
         _ => return Err(AppError::verify_canonical_missing(name, &canonical)),
@@ -709,14 +860,21 @@ fn verify_installed(
 /// the lock snapshot as the task backup.
 pub(crate) struct InstallAction {
     paths: AppPaths,
+    layout: crate::scope_layout::ScopeLayout,
     timeout: Duration,
     task_id: String,
 }
 
 impl InstallAction {
-    pub(crate) fn new(paths: AppPaths, timeout: Duration, task_id: String) -> Self {
+    pub(crate) fn new(
+        paths: AppPaths,
+        layout: crate::scope_layout::ScopeLayout,
+        timeout: Duration,
+        task_id: String,
+    ) -> Self {
         Self {
             paths,
+            layout,
             timeout,
             task_id,
         }
@@ -746,14 +904,16 @@ impl MutationAction for InstallAction {
     }
 
     fn preflight(&self, plan: &Self::Unit, _reporter: &Reporter) -> Result<Preflight, AppError> {
-        // The app never writes the lock, but a corrupt lock must block the
-        // install before the CLI spawns.
-        LockFile::read(&self.paths.lock_path())?;
+        // The app never writes the lock, but a corrupt lock for this scope must
+        // block the install before the CLI spawns.
+        ScopeLock::read(&self.layout)?;
         let retry_source = plan.retry.then_some(plan.source.as_str());
-        if let Some(conflict) = conflicts_for(&self.paths, &plan.skills, retry_source)? {
+        if let Some(conflict) =
+            conflicts_for(&self.paths, &self.layout, &plan.skills, retry_source)?
+        {
             return Err(conflict);
         }
-        let snapshot = snapshot_lock(&self.paths, &self.task_id)?;
+        let snapshot = snapshot_lock(&self.paths, &self.layout, &self.task_id)?;
         Ok(Preflight {
             snapshot: snapshot.clone(),
             post_message: Some(ProgressMessage {
@@ -802,8 +962,8 @@ impl MutationAction for InstallAction {
             .filter(|result| result.status == CliSkillStatus::Installed)
             .filter_map(|result| result.name.clone())
             .collect();
-        let link_errors = ensure_extra_attachments(&self.paths, plan, &installed_names);
-        let mut verification = verify_install(&self.paths, plan, &cli_results);
+        let link_errors = ensure_extra_attachments(&self.layout, plan, &installed_names);
+        let mut verification = verify_install(&self.layout, plan, &cli_results);
         for result in &mut verification.results {
             if let Some(error) = link_errors.get(&result.name) {
                 result.status = TaskSkillStatus::Failed;
@@ -820,12 +980,12 @@ impl MutationAction for InstallAction {
         }
 
         let mut warnings = verification.warnings;
-        let baselines = BaselineStore::new(&self.paths);
+        let baselines = BaselineStore::for_scope(&self.paths, &plan.scope);
         for result in &verification.results {
             if result.status != TaskSkillStatus::Installed {
                 continue;
             }
-            let canonical = self.paths.canonical_skills_dir().join(&result.name);
+            let canonical = self.layout.canonical_dir.join(&result.name);
             if let Err(error) = baselines.record_from_dir(&result.name, &canonical, true) {
                 warnings.push(write_warning(error));
             }
@@ -865,6 +1025,45 @@ mod tests {
     use crate::error::ErrorCode;
     use std::collections::BTreeMap;
     use std::path::Path;
+
+    /// Global-scope shims for the pre-scope test fixtures.
+    fn validate_request(
+        paths: &AppPaths,
+        request: &InstallRequest,
+    ) -> Result<InstallPlan, AppError> {
+        let layout = crate::scope_layout::ScopeLayout::global(
+            paths,
+            crate::inventory::detected_agent_dirs(paths),
+        );
+        super::validate_request(paths, &layout, request)
+    }
+
+    fn verify_install(
+        paths: &AppPaths,
+        plan: &InstallPlan,
+        cli_results: &[CliSkillResult],
+    ) -> InstallVerification {
+        let layout = crate::scope_layout::ScopeLayout::global(paths, Vec::new());
+        super::verify_install(&layout, plan, cli_results)
+    }
+
+    fn conflicts_for(
+        paths: &AppPaths,
+        skills: &[String],
+        retry_source: Option<&str>,
+    ) -> Result<Option<AppError>, AppError> {
+        let layout = crate::scope_layout::ScopeLayout::global(paths, Vec::new());
+        super::conflicts_for(paths, &layout, skills, retry_source)
+    }
+
+    fn ensure_extra_attachments(
+        paths: &AppPaths,
+        plan: &InstallPlan,
+        installed: &[String],
+    ) -> HashMap<String, AppError> {
+        let layout = crate::scope_layout::ScopeLayout::global(paths, Vec::new());
+        super::ensure_extra_attachments(&layout, plan, installed)
+    }
 
     const SUCCESS: &str = include_str!("../../tests/fixtures/cli/install-success.txt");
     const PARTIAL: &str = include_str!("../../tests/fixtures/cli/install-partial.txt");
@@ -922,6 +1121,9 @@ mod tests {
                 skills_dir: PathBuf::from("/Users/tester/.qoder/skills"),
             }],
             retry: false,
+            scope: crate::scope::ScopeId::Global,
+            cwd: None,
+            global: true,
         }
     }
 
@@ -986,6 +1188,9 @@ mod tests {
                 .collect(),
             targets,
             retry: false,
+            scope: crate::scope::ScopeId::Global,
+            cwd: None,
+            global: true,
         }
     }
 
@@ -1372,6 +1577,9 @@ mod tests {
                 skills_dir: workbook.clone(),
             }],
             retry: false,
+            scope: crate::scope::ScopeId::Global,
+            cwd: None,
+            global: true,
         };
 
         let errors = ensure_extra_attachments(&paths, &plan, &["find-skills".to_string()]);
@@ -1406,12 +1614,215 @@ mod tests {
                 skills_dir: workbook.clone(),
             }],
             retry: false,
+            scope: crate::scope::ScopeId::Global,
+            cwd: None,
+            global: true,
         };
         let errors = ensure_extra_attachments(&paths, &other_plan, &["other".to_string()]);
         assert_eq!(errors.len(), 1);
         assert_eq!(
             errors[&"other".to_string()].code,
             ErrorCode::AgentAttachFailed
+        );
+    }
+
+    #[test]
+    fn project_install_runs_in_the_root_without_global_and_keeps_universal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let root = tmp.path().join("projects/app");
+        fs::create_dir_all(home.join(".claude/skills")).unwrap();
+        fs::create_dir_all(root.join(".agents/skills")).unwrap();
+        fs::create_dir_all(root.join(".claude/skills")).unwrap();
+        let paths = AppPaths::new(&home, tmp.path().join("app-data"));
+        let project = crate::projects::Project {
+            id: uuid::Uuid::new_v4(),
+            root: root.clone(),
+            display_name: "app".to_string(),
+            added_at: 1,
+            last_opened_at: 1,
+        };
+        let layout = crate::scope_layout::ScopeLayout::project(&paths, project);
+
+        let plan = super::validate_request(
+            &paths,
+            &layout,
+            &request("acme/skills", &["alpha"], &["claude-code"]),
+        )
+        .unwrap();
+        assert!(!plan.global);
+        assert_eq!(plan.cwd.as_deref(), Some(layout.root.as_path()));
+        assert_eq!(
+            plan.scope,
+            crate::scope::ScopeId::project(layout.project.as_ref().unwrap().id)
+        );
+        assert_eq!(
+            plan.agent_ids,
+            vec!["claude-code".to_string(), UNIVERSAL_AGENT_ID.to_string()]
+        );
+        assert_eq!(
+            plan.targets[0].skills_dir,
+            layout.root.join(".claude/skills")
+        );
+
+        let spec = install_command(&runtime(), &plan, Duration::from_secs(900));
+        assert_eq!(
+            spec.args,
+            vec![
+                "-y",
+                "skills@1.7.4",
+                "add",
+                "acme/skills",
+                "-s",
+                "alpha",
+                "-a",
+                "claude-code",
+                "-a",
+                "universal",
+                "-y",
+                "--json"
+            ]
+        );
+        assert_eq!(spec.cwd, layout.root);
+        assert!(!spec.args.iter().any(|arg| arg == "-g"));
+    }
+
+    #[test]
+    fn install_lock_snapshots_are_scope_isolated() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+        let root = tmp.path().join("projects/app");
+        fs::create_dir_all(root.join(".agents/skills")).unwrap();
+        fs::write(
+            root.join("skills-lock.json"),
+            r#"{"version":1,"skills":{}}"#,
+        )
+        .unwrap();
+        let paths = AppPaths::new(&home, tmp.path().join("app-data"));
+        paths.ensure_dirs().unwrap();
+        fs::create_dir_all(paths.agents_root()).unwrap();
+        fs::write(paths.lock_path(), r#"{"version":3,"skills":{}}"#).unwrap();
+
+        let global = crate::scope_layout::ScopeLayout::global(&paths, Vec::new());
+        let global_snapshot = super::snapshot_lock(&paths, &global, "task-global").unwrap();
+        assert_eq!(global_snapshot.parent().unwrap(), paths.backups_dir());
+        assert!(global_snapshot.join("skill-lock.json").is_file());
+        assert!(!global_snapshot.to_string_lossy().contains("project-"));
+
+        let project = crate::projects::Project {
+            id: uuid::Uuid::new_v4(),
+            root: root.clone(),
+            display_name: "app".to_string(),
+            added_at: 1,
+            last_opened_at: 1,
+        };
+        let layout = crate::scope_layout::ScopeLayout::project(&paths, project);
+        let project_snapshot = super::snapshot_lock(&paths, &layout, "task-project").unwrap();
+        let project_root = paths
+            .backups_dir()
+            .join(format!("project-{}", layout.scope.project_id().unwrap()));
+        assert_eq!(project_snapshot.parent().unwrap(), project_root);
+        assert!(project_snapshot.join("skills-lock.json").is_file());
+        assert!(!project_snapshot.join("skill-lock.json").exists());
+    }
+
+    #[test]
+    fn project_extra_link_is_created_inside_the_project_and_verified() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let root = tmp.path().join("projects/app");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(root.join(".agents/skills")).unwrap();
+        let paths = AppPaths::new(&home, tmp.path().join("app-data"));
+        fs::create_dir_all(paths.app_data()).unwrap();
+        fs::write(
+            paths.agents_config_path(),
+            r#"{
+                "version": 1,
+                "agents": [
+                    {"id": "acme", "displayName": "Acme", "skillsDir": "~/.acme/skills", "projectSkillsDir": ".acme/skills"}
+                ]
+            }"#,
+        )
+        .unwrap();
+        let project = crate::projects::Project {
+            id: uuid::Uuid::new_v4(),
+            root: root.clone(),
+            display_name: "app".to_string(),
+            added_at: 1,
+            last_opened_at: 1,
+        };
+        let layout = crate::scope_layout::ScopeLayout::project(&paths, project);
+        let canonical = layout.canonical_dir.join("find-skills");
+        fs::create_dir_all(&canonical).unwrap();
+        fs::write(canonical.join("SKILL.md"), "# find-skills\n").unwrap();
+        fs::write(
+            layout.lock_path.clone(),
+            serde_json::json!({
+                "version": 1,
+                "skills": {
+                    "find-skills": {
+                        "source": "acme/skills",
+                        "sourceType": "github",
+                        "sourceUrl": "https://github.com/acme/skills.git",
+                        "skillPath": "skills/find-skills/SKILL.md",
+                        "computedHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let extra_dir = layout.root.join(".acme/skills");
+        assert!(!extra_dir.exists());
+        let plan = InstallPlan {
+            source: "acme/skills".to_string(),
+            skills: vec!["find-skills".to_string()],
+            agent_ids: vec![UNIVERSAL_AGENT_ID.to_string()],
+            targets: vec![InstallTarget {
+                id: "acme".to_string(),
+                display_name: "Acme".to_string(),
+                universal: false,
+                skills_dir: extra_dir.clone(),
+            }],
+            retry: false,
+            scope: layout.scope.clone(),
+            cwd: Some(layout.root.clone()),
+            global: false,
+        };
+
+        let errors = super::ensure_extra_attachments(&layout, &plan, &["find-skills".to_string()]);
+        assert!(errors.is_empty(), "{errors:?}");
+        let link = extra_dir.join("find-skills");
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            fs::canonicalize(&link).unwrap(),
+            fs::canonicalize(&canonical).unwrap()
+        );
+        assert!(
+            !paths.canonical_skills_dir().exists(),
+            "global store untouched"
+        );
+
+        let results = vec![CliSkillResult {
+            name: Some("find-skills".to_string()),
+            status: CliSkillStatus::Installed,
+            error: None,
+            reason: None,
+        }];
+        let verification = super::verify_install(&layout, &plan, &results);
+        assert_eq!(
+            verification.results[0].status,
+            TaskSkillStatus::Installed,
+            "{:?}",
+            verification.results[0].error
         );
     }
 

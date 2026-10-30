@@ -28,6 +28,7 @@ use crate::security::safe_component;
 
 pub const BACKUP_MANIFEST_FILE: &str = "attachment-manifest.json";
 pub const BACKUP_LOCK_FILE: &str = "skill-lock.json";
+pub const BACKUP_PROJECT_LOCK_FILE: &str = "skills-lock.json";
 pub const BACKUP_LOCK_ABSENT_FILE: &str = "lock-absent.txt";
 pub const BACKUP_CANONICAL_DIR: &str = "canonical";
 pub const BACKUP_ATTACHMENTS_DIR: &str = "attachments";
@@ -74,6 +75,7 @@ pub struct ManifestAttachment {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackupSnapshot {
     pub action: BackupAction,
+    pub scope: crate::scope::ScopeId,
     pub skill: String,
     pub path: PathBuf,
     pub lock_present: bool,
@@ -92,6 +94,8 @@ impl BackupSnapshot {
 pub struct BackupStore {
     root: PathBuf,
     lock_path: PathBuf,
+    lock_file_name: &'static str,
+    scope: crate::scope::ScopeId,
 }
 
 impl BackupStore {
@@ -99,6 +103,23 @@ impl BackupStore {
         Self {
             root: paths.backups_dir(),
             lock_path: paths.lock_path(),
+            lock_file_name: BACKUP_LOCK_FILE,
+            scope: crate::scope::ScopeId::Global,
+        }
+    }
+
+    /// Scope-isolated snapshots. Global keeps the historical flat directory;
+    /// project snapshots live under `backups/project-<id>/` and back up that
+    /// project's own `skills-lock.json`.
+    pub fn for_layout(paths: &AppPaths, layout: &crate::scope_layout::ScopeLayout) -> Self {
+        match layout.scope.project_id() {
+            None => Self::new(paths),
+            Some(id) => Self {
+                root: paths.backups_dir().join(format!("project-{id}")),
+                lock_path: layout.lock_path.clone(),
+                lock_file_name: BACKUP_PROJECT_LOCK_FILE,
+                scope: layout.scope.clone(),
+            },
         }
     }
 
@@ -106,6 +127,8 @@ impl BackupStore {
         Self {
             root: root.into(),
             lock_path: lock_path.into(),
+            lock_file_name: BACKUP_LOCK_FILE,
+            scope: crate::scope::ScopeId::Global,
         }
     }
 
@@ -153,7 +176,7 @@ impl BackupStore {
         attachments: &[BackupAttachment],
         agents: &[String],
     ) -> Result<BackupSnapshot, AppError> {
-        let lock_present = match fs::copy(&self.lock_path, directory.join(BACKUP_LOCK_FILE)) {
+        let lock_present = match fs::copy(&self.lock_path, directory.join(self.lock_file_name)) {
             Ok(_) => true,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 fs::write(
@@ -217,6 +240,7 @@ impl BackupStore {
         let manifest = Manifest {
             version: BACKUP_MANIFEST_VERSION,
             action,
+            scope: self.scope.as_string(),
             skill: skill.to_string(),
             created_at_epoch_ms: now_ms(),
             agents: agents.to_vec(),
@@ -234,6 +258,7 @@ impl BackupStore {
 
         Ok(BackupSnapshot {
             action,
+            scope: self.scope.clone(),
             skill: skill.to_string(),
             path: directory.to_path_buf(),
             lock_present,
@@ -261,6 +286,7 @@ impl BackupStore {
 struct Manifest {
     version: u32,
     action: BackupAction,
+    scope: String,
     skill: String,
     created_at_epoch_ms: u64,
     agents: Vec<String>,
@@ -553,6 +579,77 @@ mod tests {
             )
             .unwrap();
         assert_eq!(snapshot.path.parent().unwrap(), fixture.paths.backups_dir());
+    }
+
+    #[test]
+    fn project_snapshots_are_scope_isolated_and_back_up_the_project_lock() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let paths = AppPaths::new(&home, tmp.path().join("app-data"));
+        let root = tmp.path().join("projects/app");
+        let canonical = root.join(".agents/skills/alpha");
+        fs::create_dir_all(&canonical).unwrap();
+        fs::write(canonical.join("SKILL.md"), "# project alpha\n").unwrap();
+        fs::write(
+            root.join("skills-lock.json"),
+            r#"{"version":1,"skills":{"alpha":{"source":"acme/skills","sourceType":"github","computedHash":"abc"}}}"#,
+        )
+        .unwrap();
+        let copy = root.join(".claude/skills/alpha");
+        fs::create_dir_all(&copy).unwrap();
+        fs::write(copy.join("SKILL.md"), "# project copy\n").unwrap();
+
+        let project = crate::projects::Project {
+            id: uuid::Uuid::new_v4(),
+            root: root.clone(),
+            display_name: "app".to_string(),
+            added_at: 1,
+            last_opened_at: 1,
+        };
+        let scope = project.scope();
+        let layout = crate::scope_layout::ScopeLayout::project(&paths, project);
+        let snapshot = BackupStore::for_layout(&paths, &layout)
+            .create(
+                BackupAction::Uninstall,
+                "alpha",
+                Some(&canonical),
+                &[BackupAttachment {
+                    agent_id: "claude-code".to_string(),
+                    agent_name: "Claude Code".to_string(),
+                    path: copy,
+                    mode: AttachmentMode::Copy,
+                }],
+                &["claude-code".to_string(), "universal".to_string()],
+            )
+            .unwrap();
+
+        assert_eq!(snapshot.scope, scope);
+        assert_eq!(
+            snapshot.path.parent().unwrap(),
+            paths
+                .backups_dir()
+                .join(format!("project-{}", scope.project_id().unwrap()))
+        );
+        assert!(snapshot.path.join(BACKUP_PROJECT_LOCK_FILE).is_file());
+        assert!(!snapshot.path.join(BACKUP_LOCK_FILE).exists());
+        assert_eq!(
+            fs::read_to_string(snapshot.path.join("canonical/SKILL.md")).unwrap(),
+            "# project alpha\n"
+        );
+        assert_eq!(
+            fs::read_to_string(snapshot.path.join("attachments/claude-code/SKILL.md")).unwrap(),
+            "# project copy\n"
+        );
+        let manifest: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(snapshot.path.join(BACKUP_MANIFEST_FILE)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(manifest["scope"], serde_json::json!(scope.as_string()));
+        assert_eq!(
+            manifest["lockSource"],
+            serde_json::json!(layout.lock_path.to_string_lossy())
+        );
+        assert!(!paths.lock_path().exists(), "global lock is never read");
     }
 
     #[test]

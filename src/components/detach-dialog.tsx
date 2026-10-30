@@ -15,6 +15,8 @@ interface DetachDialogProps {
   pending: boolean;
   progressMessage?: string;
   error: AppError | null;
+  /** Disabled for unavailable/error scopes. */
+  disabled?: boolean;
   onClose: () => void;
   onConfirm: () => void;
 }
@@ -32,6 +34,7 @@ export function DetachDialog({
   pending,
   progressMessage,
   error,
+  disabled = false,
   onClose,
   onConfirm,
 }: DetachDialogProps) {
@@ -190,7 +193,7 @@ export function DetachDialog({
             <Button
               size="sm"
               aria-busy={pending}
-              disabled={pending}
+              disabled={pending || disabled}
               onClick={onConfirm}
             >
               {pending ? "正在断开…" : "确认断开"}

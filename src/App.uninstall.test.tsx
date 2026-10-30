@@ -14,6 +14,7 @@ import { createQueryClient } from "./lib/query-client";
 import type {
   AppError,
   InventorySnapshot,
+  ScopeId,
   TaskEvent,
   TaskPhase,
   TaskResult,
@@ -293,6 +294,9 @@ describe("uninstall", () => {
       expect(uninstallCallsOf(state)).toEqual([{ skillId: "alpha" }]),
     );
     expect(uninstallCallsOf(state)[0]).toEqual({ skillId: "alpha" });
+    expect(
+      state.backend.callsOf(API_COMMANDS.startUninstall)[0]?.payload.scope,
+    ).toBe("global");
 
     emitOn(
       state,
@@ -425,5 +429,65 @@ describe("uninstall", () => {
     expect(
       within(dialog).getByRole("button", { name: "确认卸载" }),
     ).toBeEnabled();
+  });
+
+  it("uninstalls a project skill by its scope-qualified id", async () => {
+    const projectId = "11111111-1111-4111-8111-111111111111";
+    const projectScope: ScopeId = `project:${projectId}`;
+    const backend = createFakeBackend({
+      data: {
+        projects: {
+          projects: [
+            {
+              id: projectId,
+              root: "/tmp/skills-proj",
+              displayName: "skills-proj",
+              addedAt: 1,
+              lastOpenedAt: 2,
+              available: true,
+            },
+          ],
+          lastActiveScope: projectScope,
+          warnings: [],
+        },
+        snapshots: {
+          [projectScope]: makeSnapshot({
+            skills: [
+              makeSkill({
+                id: `${projectScope}/alpha`,
+                name: "alpha",
+                canonicalPath: "/tmp/skills-proj/.agents/skills/alpha",
+              }),
+            ],
+          }),
+        },
+      },
+      autoTasks: true,
+    }).install();
+    const state: UninstallState = { backend };
+    currentState = state;
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <App />
+      </QueryClientProvider>,
+    );
+
+    const dialog = await openUninstall("alpha");
+    expect(within(dialog).getByTestId("uninstall-command")).toHaveTextContent(
+      "skills remove -s",
+    );
+    expect(
+      within(dialog).getByTestId("uninstall-command"),
+    ).not.toHaveTextContent("-g");
+
+    await confirmUninstall(dialog);
+    await waitFor(() =>
+      expect(uninstallCallsOf(state)).toEqual([
+        { skillId: `${projectScope}/alpha` },
+      ]),
+    );
+    expect(
+      state.backend.callsOf(API_COMMANDS.startUninstall)[0]?.payload.scope,
+    ).toBe(projectScope);
   });
 });

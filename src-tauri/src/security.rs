@@ -15,6 +15,9 @@ use crate::error::AppError;
 pub enum RootKind {
     Canonical,
     Agent,
+    /// A registered project root. Content and open commands may only read
+    /// inside such a root while the project remains registered.
+    Project,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,6 +38,13 @@ impl AllowedRoot {
         Self {
             path: path.into(),
             kind: RootKind::Agent,
+        }
+    }
+
+    pub fn project(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            kind: RootKind::Project,
         }
     }
 }
@@ -275,6 +285,28 @@ mod tests {
         symlink(&real, &root).unwrap();
         let roots = vec![AllowedRoot::canonical(root.clone())];
         ensure_allowed(&root.join("alpha"), &roots).unwrap();
+    }
+
+    #[test]
+    fn project_roots_allow_only_their_own_contents() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        let skill = project.join(".agents/skills/alpha");
+        fs::create_dir_all(&skill).unwrap();
+        let outside = tmp.path().join("outside/beta");
+        fs::create_dir_all(&outside).unwrap();
+        symlink(&outside, project.join(".agents/skills/escaped")).unwrap();
+        let roots = vec![AllowedRoot::project(project.clone())];
+
+        assert_eq!(
+            ensure_allowed(&skill, &roots).unwrap().kind,
+            RootKind::Project
+        );
+        let error = ensure_allowed(&outside, &roots).unwrap_err();
+        assert_eq!(error.code, crate::error::ErrorCode::PathOutsideAllowedRoot);
+        let escaped = project.join(".agents/skills/escaped");
+        let error = ensure_allowed(&escaped, &roots).unwrap_err();
+        assert_eq!(error.code, crate::error::ErrorCode::PathOutsideAllowedRoot);
     }
 
     #[test]

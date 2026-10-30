@@ -8,6 +8,36 @@ export type PathSource =
   | "login_shell"
   | "none";
 
+/** The only two scope shapes the IPC contract accepts. */
+export type ScopeId = "global" | `project:${string}`;
+
+export const GLOBAL_SCOPE: ScopeId = "global";
+
+export interface ProjectEntry {
+  /** Stable UUID assigned at registration; never changes on relocate. */
+  id: string;
+  /** Canonical absolute path recorded at registration. */
+  root: string;
+  /** Always the root directory basename; projects cannot be renamed. */
+  displayName: string;
+  addedAt: number;
+  lastOpenedAt: number;
+  /** False when the root is missing, not a directory or unreadable. */
+  available: boolean;
+  unavailableReason?: string;
+  /** Project lock parse/read failure; present even when the scope is inactive. */
+  lockError?: string;
+}
+
+export interface ProjectList {
+  /** Ordered by lastOpenedAt, newest first. */
+  projects: ProjectEntry[];
+  /** Restored scope, falling back to global when missing or unavailable. */
+  lastActiveScope: ScopeId;
+  /** App-level warning, e.g. a corrupt registry preserved on disk. */
+  warnings: string[];
+}
+
 export type ToolState = "ok" | "missing" | "too_old" | "error" | "not_checked";
 
 export type LockStatus = "ok" | "missing" | "corrupt" | "unsupported" | "unreadable";
@@ -76,6 +106,8 @@ export type MutationKind = "install" | "update" | "uninstall";
 /** Startup verification for a mutation whose process ended before finishing. */
 export interface InterruptedReport {
   markerPath: string;
+  /** Scope that owns the interrupted mutation; legacy markers are global. */
+  scope?: ScopeId;
   markerCorrupt: boolean;
   markerError?: string;
   taskId?: string;
@@ -91,6 +123,7 @@ export interface InterruptedReport {
 
 export interface ActiveMutationInfo {
   taskId: string;
+  scope?: ScopeId;
   kind: MutationKind;
   skills: string[];
   startedAtEpochMs: number;
@@ -158,6 +191,8 @@ export interface PreviewSummary {
 
 export interface TaskResult {
   action: TaskAction;
+  /** Scope that owns this result; results never cross scopes. */
+  scope?: ScopeId;
   overall: TaskOverall;
   skills: TaskSkillResult[];
   warnings: AppError[];
@@ -224,6 +259,11 @@ export interface DetachResult {
 }
 
 export interface InventorySkill {
+  /**
+   * Scope-composite identity. Global ids are the plain name; project ids are
+   * `project:<uuid>/<name>` and are opaque to the UI.
+   */
+  id: string;
   name: string;
   description: string | null;
   source: string | null;
@@ -245,6 +285,8 @@ export interface InventoryAgent {
   origin: AgentOrigin;
   /** False only for extra agents whose detection path does not exist. */
   detected: boolean;
+  /** Configured project-relative skills directory (extras only). */
+  projectSkillsDir?: string | null;
 }
 
 /** Result of a native attach to one agent. */
@@ -261,17 +303,28 @@ export interface ExtraAgentInput {
   id: string;
   displayName: string;
   skillsDir: string;
+  /** Optional project-relative skills directory (validated by the backend). */
+  projectSkillsDir?: string | null;
 }
 
 export interface ExtraAgent extends ExtraAgentInput {
   builtin: boolean;
 }
 
+export interface ExtraProjectDetachment {
+  projectId: string;
+  projectName: string;
+  /** Scope-composite skill ids detached from this project. */
+  detached: string[];
+}
+
 export interface RemoveExtraAgentResult {
   id: string;
   displayName: string;
-  /** Skill ids detached before the definition was removed. */
+  /** Global skill ids detached before the definition was removed. */
   detached: string[];
+  /** Project detachments performed before the definition was removed. */
+  projects: ExtraProjectDetachment[];
 }
 
 export interface AnomalyGroup {
@@ -285,11 +338,19 @@ export interface AnomalySummary {
   unmanaged: AnomalyGroup;
   broken: AnomalyGroup;
   modified: AnomalyGroup;
+  /** Project paths whose resolved location escapes the registered root. */
+  escape: AnomalyGroup;
 }
 
 export interface InventorySnapshot {
   skills: InventorySkill[];
   agents: InventoryAgent[];
+  /**
+   * Scope install/attach target set (spec §3.5). Project scope includes
+   * globally detected catalog agents and configured extras whose project
+   * directory does not exist yet.
+   */
+  installTargets: InventoryAgent[];
   anomalies: AnomalySummary;
   warnings: string[];
   generatedAtEpochMs: number;
@@ -350,6 +411,8 @@ export interface UpdateCheckState {
   failedSourceCount: number;
   cachedSourceCount: number;
   skippedSourceCount: number;
+  /** Candidate count from the last check, per scope. */
+  candidateCount?: number;
 }
 
 /** Anomaly summary extended with read-only update anomalies. */

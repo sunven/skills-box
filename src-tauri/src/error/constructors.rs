@@ -198,7 +198,73 @@ impl AppError {
             "路径不在允许的 skill 目录内，已拒绝打开。",
         )
         .detail(detail)
-        .hint("只允许打开 canonical store 或已知 agent 目录中的 skill。")
+        .hint("只允许打开 canonical store、已知 agent 目录或已注册项目根中的 skill。")
+    }
+
+    pub fn project_not_found(id: &str) -> Self {
+        Self::new(ErrorCode::ProjectNotFound, format!("找不到项目「{id}」。"))
+            .hint("请刷新项目列表；该项目可能已被遗忘。")
+    }
+
+    pub fn project_invalid_root(detail: impl Into<String>) -> Self {
+        Self::new(ErrorCode::ProjectInvalidRoot, "不能使用该项目目录。")
+            .detail(detail)
+            .hint("请选择已存在、可读且不是 /、home 或全局 canonical store 的目录。")
+    }
+
+    pub fn project_root_unavailable(name: &str, detail: impl Into<String>) -> Self {
+        Self::new(
+            ErrorCode::ProjectRootUnavailable,
+            format!("项目「{name}」的路径不可用。"),
+        )
+        .detail(detail)
+        .hint("请重新定位项目，或将其从列表中遗忘。")
+    }
+
+    pub fn project_duplicate(root: &std::path::Path, name: &str) -> Self {
+        Self::new(
+            ErrorCode::ProjectDuplicate,
+            format!("目录已注册为项目「{name}」。"),
+        )
+        .detail(root.display().to_string())
+        .hint("同一个目录只能注册一次；嵌套与重叠的不同目录仍可分别添加。")
+    }
+
+    pub fn project_registry_corrupt(detail: impl Into<String>) -> Self {
+        Self::new(
+            ErrorCode::ProjectRegistryCorrupt,
+            "项目注册表不可用，已停止写入。",
+        )
+        .detail(detail)
+        .hint("原文件未被覆盖；请修复或移除应用数据中的 projects.json 后重试。")
+    }
+
+    /// Project locks are v1; the global `lock.unsupported_version` copy names
+    /// the wrong version and path, so project scopes get their own code.
+    pub fn project_lock_unsupported_version(version: u64) -> Self {
+        Self::new(
+            ErrorCode::ProjectLockUnsupported,
+            format!("项目 Skill lock 版本不受支持（v{version}），需要 v1。"),
+        )
+        .detail(format!("version = {version}"))
+        .hint("请使用 skills@1.7.4 在项目根重新生成 skills-lock.json。")
+    }
+
+    /// Same `lock.corrupt` family as the global lock so the frontend keeps one
+    /// lock-error branch, with project-specific copy and hint.
+    pub fn project_lock_corrupt(detail: impl Into<String>) -> Self {
+        Self::new(
+            ErrorCode::LockCorrupt,
+            "项目 Skill lock 文件损坏，无法解析。",
+        )
+        .detail(detail)
+        .hint("请检查项目根目录的 skills-lock.json，或从备份恢复后再试。")
+    }
+
+    pub fn project_lock_read_failed(detail: impl Into<String>) -> Self {
+        Self::new(ErrorCode::LockReadFailed, "无法读取项目 Skill lock 文件。")
+            .detail(detail)
+            .hint("请检查项目根目录 skills-lock.json 的权限。")
     }
 
     pub fn open_failed(detail: impl Into<String>) -> Self {
@@ -554,6 +620,24 @@ impl AppError {
             .detail(detail)
             .hint("请检查应用数据目录的权限后重试。")
             .retryable(true)
+    }
+
+    pub fn extra_agent_remove_blocked(projects: &[String]) -> Self {
+        Self::new(
+            ErrorCode::ExtraProjectBlocked,
+            "无法删除额外 agent：仍有项目不可用。",
+        )
+        .detail(projects.join("\n"))
+        .hint("请先重新定位或遗忘这些项目，再删除该 agent；它的项目挂载尚未被清理。")
+    }
+
+    pub fn extra_agent_project_dir_blocked(projects: &[String]) -> Self {
+        Self::new(
+            ErrorCode::ExtraProjectBlocked,
+            "无法修改额外 agent 的项目目录：项目可能仍保留挂载。",
+        )
+        .detail(projects.join("\n"))
+        .hint("请先在相关项目中卸载该 agent 的挂载；不可用项目需先重新定位或遗忘。")
     }
 
     pub fn backup_failed(detail: impl Into<String>) -> Self {

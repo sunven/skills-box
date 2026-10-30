@@ -72,6 +72,7 @@ export function makeSkill(
   overrides: Partial<InventorySkill> & { name: string },
 ): InventorySkill {
   return {
+    id: overrides.name,
     description: null,
     source: null,
     management: "managed",
@@ -107,6 +108,7 @@ export function makeAnomalies(
     unmanaged: group(0),
     broken: group(0),
     modified: group(0),
+    escape: group(0),
     ...overrides,
   };
 }
@@ -117,6 +119,7 @@ export function makeSnapshot(
   return {
     skills: [],
     agents: defaultAgents,
+    installTargets: overrides.agents ?? defaultAgents,
     anomalies: makeAnomalies(),
     warnings: [],
     generatedAtEpochMs: 1793163988000,

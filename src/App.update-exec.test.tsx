@@ -332,6 +332,9 @@ describe("update execution", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "开始更新" }));
     await waitFor(() => expect(updateCalls(state)).toEqual([["alpha"]]));
     expect(updateCalls(state)[0]).toEqual(["alpha"]);
+    expect(
+      state.backend.callsOf(API_COMMANDS.startUpdate)[0]?.payload.scope,
+    ).toBe("global");
 
     emitOn(
       state,

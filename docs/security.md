@@ -5,9 +5,15 @@ reference for release review and for ticket 11 (acceptance).
 
 ## Renderer permissions
 
-- Tauri capabilities expose **only** `core:default` for the `main` window
-  (`src-tauri/capabilities/default.json`). There is no `shell`, `fs`, `dialog`
-  or `opener` permission in the frontend.
+- Tauri capabilities expose **only** `core:default` and `dialog:allow-open`
+  for the `main` window (`src-tauri/capabilities/default.json`). The dialog
+  plugin is used solely by the project-registration folder picker; no save,
+  message or ask dialog is allowed. There is no `shell`, `fs` or `opener`
+  permission in the frontend.
+- `add_project` / `relocate_project` accept the folder chosen by that picker.
+  They are the only path inputs: Rust canonicalizes, deduplicates and rejects
+  `/`, the user home and the global canonical store, and the resulting root is
+  the only extra root content reads may reach.
 - The opener is used only from Rust commands: `open_skill_folder`,
   `open_skill_file`, `reveal_app_data` (server-resolved paths guarded by
   `security::ensure_allowed`) and `open_external_url` (absolute `https://` with
