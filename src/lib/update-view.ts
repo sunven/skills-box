@@ -414,9 +414,10 @@ export function computeUpdateSummary(skills: UpdateViewSkill[]): UpdateSummary {
         break;
       case "unknown": {
         const note = skill.updateResult?.note ?? "无法检查更新。";
-        const reason = note.includes("上限") || note.includes("尚未检查")
-          ? "not_checked"
-          : "unknown";
+        const reason =
+          skill.updateResult?.unknownReason === "not_checked"
+            ? "not_checked"
+            : "unknown";
         skipped.push(skip(skill, reason, note));
         break;
       }

@@ -76,6 +76,16 @@ pub enum UpdateSourceStatus {
     Skipped,
 }
 
+/// Why a skill could not be checked. `NotChecked` means a source limit or a
+/// skipped source; `Uncheckable` means the source data itself cannot be
+/// compared. The frontend groups skip reasons from this instead of prose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateUnknownReason {
+    NotChecked,
+    Uncheckable,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateSkillResult {
@@ -86,6 +96,8 @@ pub struct UpdateSkillResult {
     pub lock_hash: Option<String>,
     pub remote_hash: Option<String>,
     pub state: UpdateState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unknown_reason: Option<UpdateUnknownReason>,
     pub cached: bool,
     pub last_success_at_epoch_ms: Option<u64>,
     pub previous_state: Option<UpdateState>,
@@ -441,6 +453,7 @@ impl UpdateService {
                             lock_hash: Some(target.lock_hash.clone()),
                             remote_hash: None,
                             state: UpdateState::Error,
+                            unknown_reason: None,
                             cached: false,
                             last_success_at_epoch_ms: previous_checked_at,
                             previous_state: previous,
@@ -526,6 +539,7 @@ impl UpdateService {
                     lock_hash: Some(target.lock_hash.clone()),
                     remote_hash: None,
                     state: UpdateState::Unknown,
+                    unknown_reason: Some(UpdateUnknownReason::NotChecked),
                     cached: false,
                     last_success_at_epoch_ms,
                     previous_state: previous,
@@ -569,6 +583,7 @@ impl UpdateService {
                     lock_hash: Some(target.lock_hash.clone()),
                     remote_hash: None,
                     state: UpdateState::Error,
+                    unknown_reason: None,
                     cached: false,
                     last_success_at_epoch_ms,
                     previous_state: previous,
@@ -689,6 +704,7 @@ fn uncheckable_result(entry: &LockEntry, note: String) -> UpdateSkillResult {
         lock_hash: (!entry.skill_folder_hash.is_empty()).then(|| entry.skill_folder_hash.clone()),
         remote_hash: None,
         state: UpdateState::Unknown,
+        unknown_reason: Some(UpdateUnknownReason::Uncheckable),
         cached: false,
         last_success_at_epoch_ms: None,
         previous_state: None,
@@ -758,6 +774,8 @@ fn success_result(
         lock_hash: Some(target.lock_hash.clone()),
         remote_hash: evaluation.remote_hash,
         state: evaluation.state,
+        unknown_reason: (evaluation.state == UpdateState::Unknown)
+            .then_some(UpdateUnknownReason::Uncheckable),
         cached,
         last_success_at_epoch_ms: Some(checked_at_epoch_ms),
         previous_state: None,
@@ -1631,6 +1649,11 @@ mod tests {
             skipped_states
                 .iter()
                 .all(|skill| skill.note.as_deref().unwrap().contains("上限"))
+        );
+        assert!(
+            skipped_states
+                .iter()
+                .all(|skill| skill.unknown_reason == Some(UpdateUnknownReason::NotChecked))
         );
         assert!(
             report

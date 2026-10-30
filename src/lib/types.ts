@@ -365,6 +365,7 @@ export interface UpdateSkillResult {
   lockHash: string | null;
   remoteHash: string | null;
   state: UpdateState;
+  unknownReason?: "not_checked" | "uncheckable";
   cached: boolean;
   lastSuccessAtEpochMs: number | null;
   previousState: UpdateState | null;

@@ -244,6 +244,7 @@ describe("computeUpdateSummary", () => {
       [skill("alpha")],
       report([
         updateResult("alpha", "unknown", {
+          unknownReason: "not_checked",
           note: "本次检查达到来源上限（20 个），该来源尚未检查。",
         }),
       ]),

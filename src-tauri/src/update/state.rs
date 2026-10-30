@@ -283,6 +283,7 @@ mod tests {
             lock_hash: None,
             remote_hash: None,
             state,
+            unknown_reason: None,
             cached: false,
             last_success_at_epoch_ms: None,
             previous_state: None,

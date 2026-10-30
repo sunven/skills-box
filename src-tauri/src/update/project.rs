@@ -318,6 +318,8 @@ impl ProjectUpdateService {
                 lock_hash: Some(target.lock_hash.clone()),
                 remote_hash: evaluation.remote_hash,
                 state: evaluation.state,
+                unknown_reason: (evaluation.state == UpdateState::Unknown)
+                    .then_some(super::UpdateUnknownReason::Uncheckable),
                 cached,
                 last_success_at_epoch_ms: Some(entry.fetched_at_epoch_ms),
                 previous_state: None,
@@ -422,6 +424,7 @@ impl ProjectUpdateService {
                 lock_hash: Some(target.lock_hash.clone()),
                 remote_hash: None,
                 state: UpdateState::Error,
+                unknown_reason: None,
                 cached,
                 last_success_at_epoch_ms: previous_fetched_at,
                 previous_state: None,
@@ -632,6 +635,8 @@ fn pending_result(target: &ProjectTarget, state: UpdateState, note: String) -> U
         lock_hash: Some(target.lock_hash.clone()),
         remote_hash: None,
         state,
+        unknown_reason: (state == UpdateState::Unknown)
+            .then_some(super::UpdateUnknownReason::NotChecked),
         cached: false,
         last_success_at_epoch_ms: None,
         previous_state: None,
@@ -1143,6 +1148,37 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.code, crate::error::ErrorCode::PathInvalid);
+    }
+
+    #[tokio::test]
+    async fn source_limit_marks_pending_skills_not_checked() {
+        let root = project_root();
+        write_lock(
+            root.path(),
+            serde_json::json!({
+                "alpha": entry("acme/skills", "github", "alpha/SKILL.md", ALPHA_HASH),
+            }),
+        );
+        let (service, _tmp) = service(
+            FakeArchiveClient::default(),
+            Arc::new(TestClock::new(1_000)),
+            ProjectCheckConfig {
+                max_sources: 0,
+                ..ProjectCheckConfig::default()
+            },
+        );
+
+        let report = service.check(&layout(root.path()), None).await.unwrap();
+        let alpha = report
+            .skills
+            .iter()
+            .find(|skill| skill.name == "alpha")
+            .unwrap();
+        assert_eq!(alpha.state, UpdateState::Unknown);
+        assert_eq!(
+            alpha.unknown_reason,
+            Some(crate::update::UpdateUnknownReason::NotChecked)
+        );
     }
 
     #[tokio::test]
