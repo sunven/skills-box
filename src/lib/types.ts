@@ -25,6 +25,8 @@ export interface ProjectEntry {
   /** False when the root is missing, not a directory or unreadable. */
   available: boolean;
   unavailableReason?: string;
+  /** Project lock parse/read failure; present even when the scope is inactive. */
+  lockError?: string;
 }
 
 export interface ProjectList {
@@ -409,7 +411,7 @@ export interface UpdateCheckState {
   failedSourceCount: number;
   cachedSourceCount: number;
   skippedSourceCount: number;
-  /** Candidate count from the last check; ticket 05 supplies it per scope. */
+  /** Candidate count from the last check, per scope. */
   candidateCount?: number;
 }
 

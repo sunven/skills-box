@@ -46,6 +46,10 @@ pub struct ProjectEntry {
     pub available: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unavailable_reason: Option<String>,
+    /// Project lock parse/read failure, so an inactive scope can still show its
+    /// error badge without loading the inventory.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lock_error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -167,6 +171,7 @@ impl ProjectRegistry {
             project.last_opened_at = now;
         }
         let project = file.projects[index].clone();
+        file.last_active_scope = project.scope();
         self.save(&file)?;
         self.forget_check_state(&project.scope());
         Ok(self.entry(project))
@@ -263,6 +268,7 @@ impl ProjectRegistry {
     fn entry(&self, project: Project) -> ProjectEntry {
         match availability(&project.root) {
             Ok(()) => ProjectEntry {
+                lock_error: project_lock_error(&project.root),
                 project,
                 available: true,
                 unavailable_reason: None,
@@ -271,6 +277,7 @@ impl ProjectRegistry {
                 project,
                 available: false,
                 unavailable_reason: Some(reason),
+                lock_error: None,
             },
         }
     }
@@ -430,6 +437,14 @@ fn availability(root: &Path) -> Result<(), String> {
     }
     fs::read_dir(root).map_err(|error| format!("目录不可读：{error}"))?;
     Ok(())
+}
+
+/// Parsed once per listed project so an inactive scope can show its error
+/// badge without loading the inventory. A missing lock is a normal empty state.
+fn project_lock_error(root: &Path) -> Option<String> {
+    crate::project_lock::ProjectLockFile::read(&root.join("skills-lock.json"))
+        .err()
+        .map(|error| error.message)
 }
 
 fn canonical_or_raw(path: &Path) -> PathBuf {
@@ -929,6 +944,12 @@ mod tests {
         assert_eq!(relocated.project.display_name, "new-name");
         assert!(relocated.project.last_opened_at > entry.project.last_opened_at);
         assert_eq!(fixture.scope(), relocated.project.scope());
+        let reloaded = ProjectRegistry::new(fixture.paths.clone()).list();
+        assert_eq!(
+            reloaded.last_active_scope,
+            relocated.project.scope(),
+            "relocate persists the new active scope for the next launch"
+        );
         assert!(old_root.is_dir());
         assert_eq!(
             fs::read_to_string(old_root.join("keep.md")).unwrap(),
@@ -1035,6 +1056,40 @@ mod tests {
         assert_eq!(project["lastOpenedAt"], 2_000);
         assert_eq!(project["available"], true);
         assert!(project.get("unavailableReason").is_none());
+        assert!(project.get("lockError").is_none());
+    }
+
+    #[test]
+    fn list_reports_an_inactive_project_lock_error_without_loading_its_inventory() {
+        let fixture = Fixture::new();
+        let healthy = fixture.add(&fixture.root("healthy"));
+        let broken_root = fixture.root("broken");
+        fs::write(broken_root.join("skills-lock.json"), "{not json").unwrap();
+        let broken = fixture.add(&broken_root);
+        fixture
+            .registry
+            .set_active_scope(&healthy.project.scope())
+            .unwrap();
+
+        let list = fixture.registry.list();
+        let entry = |id: Uuid| {
+            list.projects
+                .iter()
+                .find(|entry| entry.project.id == id)
+                .unwrap()
+        };
+        assert_eq!(entry(healthy.project.id).lock_error, None);
+        let broken_entry = entry(broken.project.id);
+        assert!(!broken_entry.lock_error.as_deref().unwrap_or("").is_empty());
+        assert_eq!(list.last_active_scope, healthy.project.scope());
+        let json = serde_json::to_value(&list).unwrap();
+        let broken_json = json["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|project| project["id"] == broken.project.id.to_string())
+            .unwrap();
+        assert!(broken_json["lockError"].is_string());
     }
 
     #[test]

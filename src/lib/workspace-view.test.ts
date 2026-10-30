@@ -183,4 +183,52 @@ describe("workspace projection", () => {
     expect(view.lastCheck?.outcome).toBe("partial");
     expect(view.lastCheck?.warnings).toEqual([]);
   });
+
+  it("maps the real lock.corrupt code and flags an inactive project lock error", () => {
+    const id = "11111111-1111-4111-8111-111111111111";
+    const scope = `project:${id}` as const;
+    const projects = {
+      projects: [
+        {
+          id,
+          root: "/tmp/skills-proj",
+          displayName: "skills-proj",
+          addedAt: 1,
+          lastOpenedAt: 2,
+          available: true,
+          lockError: "项目 lock 已损坏。",
+        },
+      ],
+      lastActiveScope: GLOBAL_SCOPE,
+      warnings: [],
+    };
+    const inactive = buildWorkspaceView({
+      activeScope: GLOBAL_SCOPE,
+      projects,
+      filters: filters(),
+      sort: "recent",
+      selectedName: null,
+      updateMode: null,
+      updateSkillName: null,
+    });
+    expect(inactive.scopeProjects[0]?.error).toBe(true);
+
+    const active = buildWorkspaceView({
+      activeScope: scope,
+      projects,
+      snapshot: makeSnapshot(),
+      scopeError: {
+        code: "lock.corrupt",
+        message: "项目 lock 已损坏。",
+        retryable: false,
+      },
+      filters: filters(),
+      sort: "recent",
+      selectedName: null,
+      updateMode: null,
+      updateSkillName: null,
+    });
+    expect(active.projectHeader?.lockLabel).toBe("锁损坏");
+    expect(active.projectHeader?.lockTone).toBe("negative");
+  });
 });
