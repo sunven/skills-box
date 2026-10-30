@@ -9,10 +9,16 @@ import { useModalFocus } from "../hooks/use-modal-focus";
 import { asAppError, attachAgent, fallbackError } from "../lib/api";
 import { promiseDriver, useMutation } from "../lib/mutation";
 import type { MutationRow } from "../lib/mutation";
-import type { AgentAttachment, InventoryAgent } from "../lib/types";
+import type {
+  AgentAttachment,
+  InventoryAgent,
+  ScopeId,
+} from "../lib/types";
 
 interface AttachDialogProps {
   open: boolean;
+  scope: ScopeId;
+  skillId: string;
   skillName: string;
   agents: InventoryAgent[];
   attachments: AgentAttachment[];
@@ -26,6 +32,8 @@ interface AttachDialogProps {
  */
 export function AttachDialog({
   open,
+  scope,
+  skillId,
   skillName,
   agents,
   attachments,
@@ -36,7 +44,8 @@ export function AttachDialog({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const mutation = useMutation({
     action: "attach",
-    skillId: skillName,
+    scope,
+    skillId,
     fallbackFailure: "挂载失败。",
     fallbackStart: "挂载失败。",
   });
@@ -109,7 +118,7 @@ export function AttachDialog({
               message: `正在挂载到 ${agent.displayName}…`,
             });
             try {
-              await attachAgent(skillName, agent.id);
+              await attachAgent(skillId, agent.id, scope);
               rows.push({
                 name: agent.displayName,
                 status: "success",

@@ -28,8 +28,9 @@ export function AnomalyBanner({ anomalies, onOpen }: AnomalyBannerProps) {
           {" "}
           · {anomalies.stale.count} 条 stale lock · {anomalies.unmanaged.count}{" "}
           个未受管 · {anomalies.broken.count} 个断链 ·{" "}
-          {anomalies.modified.count} 个本地改动 · {anomalies.pathMissing.count}{" "}
-          个源路径缺失 · {anomalies.checkFailed.count} 个检查失败
+          {anomalies.modified.count} 个本地改动 · {anomalies.escape.count}{" "}
+          个路径逃逸 · {anomalies.pathMissing.count} 个源路径缺失 ·{" "}
+          {anomalies.checkFailed.count} 个检查失败
         </span>
       </span>
       <span className="link">查看只读提示</span>
@@ -46,7 +47,13 @@ interface AnomalyDialogProps {
 const CATEGORIES: Array<{
   key: keyof Pick<
     AnomalyView,
-    "stale" | "unmanaged" | "broken" | "modified" | "pathMissing" | "checkFailed"
+    | "stale"
+    | "unmanaged"
+    | "broken"
+    | "modified"
+    | "escape"
+    | "pathMissing"
+    | "checkFailed"
   >;
   label: string;
   description: string;
@@ -71,6 +78,12 @@ const CATEGORIES: Array<{
     label: "本地改动",
     description:
       "当前文件与基线或 lock hash 不一致；「本地改动?」表示首次扫描无法确认，更新前需确认并备份。",
+  },
+  {
+    key: "escape",
+    label: "路径逃逸",
+    description:
+      "项目 canonical 或 agent 项目目录解析后位于项目根之外；只读提示，禁止读取内容。",
   },
   {
     key: "pathMissing",

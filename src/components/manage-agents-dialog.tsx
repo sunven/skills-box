@@ -9,6 +9,7 @@ import { useModalFocus } from "../hooks/use-modal-focus";
 import { addExtraAgent, fallbackError, removeExtraAgent } from "../lib/api";
 import { promiseDriver, useMutation } from "../lib/mutation";
 import type { AppError, InventoryAgent, InventorySkill } from "../lib/types";
+import { GLOBAL_SCOPE } from "../lib/types";
 
 interface ManageAgentsDialogProps {
   open: boolean;
@@ -43,12 +44,14 @@ export function ManageAgentsDialog({
   const [deleting, setDeleting] = useState<string | null>(null);
   const addMutation = useMutation({
     action: "manage_add",
+    scope: GLOBAL_SCOPE,
     onEnvironmentRecheck: onChanged,
     fallbackFailure: "添加额外 agent 失败。",
     fallbackStart: "添加额外 agent 失败。",
   });
   const removeMutation = useMutation({
     action: "manage_remove",
+    scope: GLOBAL_SCOPE,
     onEnvironmentRecheck: onChanged,
     fallbackFailure: "删除额外 agent 失败。",
     fallbackStart: "删除额外 agent 失败。",

@@ -1,11 +1,18 @@
 import type { ReactNode } from "react";
 import { AlertTriangle, Loader2, Search } from "lucide-react";
 import { AnomalyBanner } from "./anomaly-panel";
+import { ProjectHeader } from "./project-header";
 import { SkillRow } from "./skill-row";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
-import type { AnomalyView, UpdateViewSkill } from "../lib/types";
+import type {
+  AnomalyView,
+  AppError,
+  ProjectEntry,
+  UpdateViewSkill,
+} from "../lib/types";
 import { SORT_OPTIONS, type SortKey } from "../lib/inventory-view";
+import type { ProjectHeaderView } from "../lib/workspace-view";
 
 interface SkillListPaneProps {
   totalSkills: number;
@@ -18,6 +25,14 @@ interface SkillListPaneProps {
   selectedName: string | null;
   isLoading: boolean;
   error: unknown;
+  scopeError?: AppError | null;
+  projectHeader?: ProjectHeaderView | null;
+  unavailableProject?: ProjectEntry | null;
+  refreshingProject?: boolean;
+  onRefreshProject?: () => void;
+  onInstall?: () => void;
+  onRelocate?: (project: ProjectEntry) => void;
+  onForget?: (project: ProjectEntry) => void;
   onQueryChange: (query: string) => void;
   onSortChange: (sort: SortKey) => void;
   onSelect: (name: string) => void;
@@ -59,6 +74,14 @@ export function SkillListPane({
   selectedName,
   isLoading,
   error,
+  scopeError,
+  projectHeader,
+  unavailableProject,
+  refreshingProject = false,
+  onRefreshProject,
+  onInstall,
+  onRelocate,
+  onForget,
   onQueryChange,
   onSortChange,
   onSelect,
@@ -68,9 +91,13 @@ export function SkillListPane({
 }: SkillListPaneProps) {
   return (
     <section aria-label="Skill 列表" className="canvas">
-      <div className="canvas-head">
-        <div className="min-w-0">
-          <h1 className="canvas-title">全局 Skills</h1>
+      {projectHeader ? (
+        <>
+          <ProjectHeader
+            view={projectHeader}
+            refreshing={refreshingProject}
+            onRefresh={onRefreshProject ?? (() => {})}
+          />
           <p className="canvas-summary">
             <span className="n">{totalSkills}</span> 个 skill ·{" "}
             <span className="n">{sourceCount}</span> 个来源 ·{" "}
@@ -83,8 +110,26 @@ export function SkillListPane({
             </span>{" "}
             个异常
           </p>
+        </>
+      ) : (
+        <div className="canvas-head">
+          <div className="min-w-0">
+            <h1 className="canvas-title">全局 Skills</h1>
+            <p className="canvas-summary">
+              <span className="n">{totalSkills}</span> 个 skill ·{" "}
+              <span className="n">{sourceCount}</span> 个来源 ·{" "}
+              <span className={candidateCount > 0 ? "update" : "n"}>
+                {candidateCount}
+              </span>{" "}
+              个可更新 ·{" "}
+              <span className={anomalies.total > 0 ? "anomaly" : "n"}>
+                {anomalies.total}
+              </span>{" "}
+              个异常
+            </p>
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="toolbar">
         <div className="toolbar-search">
@@ -118,7 +163,33 @@ export function SkillListPane({
       <AnomalyBanner anomalies={anomalies} onOpen={onOpenAnomalies} />
 
       <div className="list-panel">
-        {isLoading && totalSkills === 0 ? (
+        {unavailableProject ? (
+          <EmptyState
+            title="项目路径不可用"
+            description={
+              unavailableProject.unavailableReason ??
+              "项目根目录不存在、不是目录或不可读。条目会保留，可以重新定位或遗忘。"
+            }
+            action={
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onRelocate?.(unavailableProject)}
+                >
+                  重新定位
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => onForget?.(unavailableProject)}
+                >
+                  遗忘项目
+                </Button>
+              </div>
+            }
+          />
+        ) : isLoading && totalSkills === 0 ? (
           <div
             role="status"
             className="flex flex-1 items-center justify-center gap-2 p-8 text-[12.5px] text-muted-foreground"
@@ -134,10 +205,12 @@ export function SkillListPane({
                 aria-hidden="true"
               />
               <h2 className="mt-2 text-sm font-medium text-foreground">
-                库存读取失败
+                {projectHeader ? "项目读取失败" : "库存读取失败"}
               </h2>
               <p className="mt-1.5 text-[12.5px] leading-relaxed text-muted-foreground">
-                不会以空列表代替真实库存。请检查权限后重试。
+                {scopeError
+                  ? `${scopeError.message}${scopeError.detail ? ` · ${scopeError.detail}` : ""}`
+                  : "不会以空列表代替真实库存。请检查权限后重试。"}
               </p>
               <Button
                 variant="outline"
@@ -151,8 +224,23 @@ export function SkillListPane({
           </div>
         ) : totalSkills === 0 ? (
           <EmptyState
-            title="暂无 skill"
-            description="还没有全局 skill。安装后会显示在这里；也可以先在终端运行 npx skills add … -g。"
+            title={projectHeader ? "项目暂无 skill" : "暂无 skill"}
+            description={
+              projectHeader
+                ? "这个项目还没有 skill。安装后会写入项目的 .agents/skills，并记录在项目 lock 中。"
+                : "还没有全局 skill。安装后会显示在这里；也可以先在终端运行 npx skills add … -g。"
+            }
+            action={
+              projectHeader && onInstall ? (
+                <Button
+                  size="sm"
+                  data-testid="project-empty-install"
+                  onClick={onInstall}
+                >
+                  安装 skill
+                </Button>
+              ) : undefined
+            }
           />
         ) : visibleSkills.length === 0 ? (
           <EmptyState

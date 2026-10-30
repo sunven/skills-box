@@ -387,6 +387,8 @@ export interface UpdateCheckState {
   failedSourceCount: number;
   cachedSourceCount: number;
   skippedSourceCount: number;
+  /** Candidate count from the last check; ticket 05 supplies it per scope. */
+  candidateCount?: number;
 }
 
 /** Anomaly summary extended with read-only update anomalies. */

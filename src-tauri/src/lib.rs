@@ -101,6 +101,9 @@ pub fn run() {
             focus_main_window(app);
         }))
         .plugin(tauri_plugin_opener::init())
+        // Folder picker for registering project roots. Only `dialog:allow-open`
+        // is exposed to the renderer; no save/message/ask permissions.
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState::new(paths))
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
