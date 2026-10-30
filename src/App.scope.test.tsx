@@ -278,6 +278,27 @@ describe("scope switcher", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows an error badge for an inactive project with a corrupt lock", async () => {
+    const broken = project({ lockError: "项目 lock 已损坏（skills.alpha）" });
+    createFakeBackend({
+      data: { projects: projectList([broken], GLOBAL_SCOPE) },
+    }).install();
+
+    renderApp();
+
+    const row = await screen.findByRole("button", {
+      name: "切换到项目 skills-proj",
+    });
+    expect(
+      within(row.parentElement as HTMLElement).getByTestId(
+        "scope-error-badge",
+      ),
+    ).toHaveTextContent("错误");
+    expect(
+      screen.getByRole("button", { name: "切换到全局" }),
+    ).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("auto-checks a stale project scope on switch without rechecking the global scope", async () => {
     const backend = createFakeBackend({
       data: {
@@ -324,7 +345,7 @@ describe("scope switcher", () => {
     expect(backend.callsOf("check_updates")).toHaveLength(scopes.length);
   });
 
-  it("leaves a fresh project scope alone until the user refreshes it", async () => {
+  it("checks a fresh project scope once at launch and waits afterwards", async () => {
     const backend = createFakeBackend({
       data: {
         projects: projectList([project()], PROJECT_SCOPE),
@@ -347,21 +368,20 @@ describe("scope switcher", () => {
 
     renderApp();
     await screen.findByText("alpha");
-    await waitFor(() => {
-      expect(backend.callsOf("get_inventory").length).toBeGreaterThan(0);
-    });
-    // A fresh persisted attempt means switching to the scope does not check.
-    expect(backend.callsOf("check_updates")).toHaveLength(0);
-
-    fireEvent.click(
-      await screen.findByRole("button", { name: "刷新项目" }),
-    );
+    // Every launch checks the active scope once, even with a recent attempt.
     await waitFor(() => {
       expect(backend.callsOf("check_updates")).toHaveLength(1);
     });
     expect(backend.callsOf("check_updates")[0]?.payload.scope).toBe(
       PROJECT_SCOPE,
     );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "刷新项目" }),
+    );
+    await waitFor(() => {
+      expect(backend.callsOf("check_updates")).toHaveLength(2);
+    });
   });
 
   it("keeps project lock errors inside the project view and offers a retry", async () => {
@@ -371,7 +391,7 @@ describe("scope switcher", () => {
         get_inventory: ({ scope }) => {
           if (scope === PROJECT_SCOPE) {
             throw {
-              code: "project.lock_corrupt",
+              code: "lock.corrupt",
               message: "项目 lock 已损坏。",
               retryable: false,
             };
@@ -482,6 +502,14 @@ describe("scope switcher", () => {
     expect(backend.callsOf("relocate_project")[0]?.payload).toEqual({
       id: PROJECT_ID,
       root: "/tmp/moved-proj",
+    });
+    // The relocated scope is persisted as the active scope for the restart.
+    await waitFor(() => {
+      expect(
+        backend
+          .callsOf("set_active_scope")
+          .map((call) => call.payload.scope),
+      ).toEqual([PROJECT_SCOPE]);
     });
     const header = await screen.findByTestId("project-header");
     expect(within(header).getByText("/tmp/moved-proj")).toBeInTheDocument();
@@ -625,6 +653,40 @@ describe("scope switcher", () => {
     const install = backend.callsOf("start_install")[0]!.payload;
     expect(install.scope).toBe(PROJECT_SCOPE);
     expect(install.request.agents).toEqual([]);
+  });
+
+  it("switches the install wizard scope and resets it to step 1", async () => {
+    const backend = createFakeBackend({
+      data: {
+        projects: projectList([project()], PROJECT_SCOPE),
+        snapshots: { [PROJECT_SCOPE]: makeSnapshot() },
+      },
+    }).install();
+
+    renderApp();
+    expect(await screen.findByText("项目暂无 skill")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("project-empty-install"));
+    const wizard = await screen.findByTestId("install-wizard");
+    const select = within(wizard).getByLabelText("目标作用域");
+    expect(select).toHaveValue(PROJECT_SCOPE);
+
+    fireEvent.change(select, { target: { value: GLOBAL_SCOPE } });
+
+    await waitFor(() => {
+      expect(
+        backend
+          .callsOf("set_active_scope")
+          .map((call) => call.payload.scope),
+      ).toEqual([GLOBAL_SCOPE]);
+    });
+    const updated = screen.getByTestId("install-wizard");
+    await waitFor(() => {
+      expect(within(updated).getByTestId("install-target-scope")).toHaveTextContent(
+        "全局",
+      );
+    });
+    expect(within(updated).getByLabelText("仓库来源")).toHaveValue("");
+    expect(within(updated).queryByTestId("install-confirm")).toBeNull();
   });
 
   it("shows relocate and forget actions for an unavailable active project", async () => {
