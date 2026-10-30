@@ -8,6 +8,34 @@ export type PathSource =
   | "login_shell"
   | "none";
 
+/** The only two scope shapes the IPC contract accepts. */
+export type ScopeId = "global" | `project:${string}`;
+
+export const GLOBAL_SCOPE: ScopeId = "global";
+
+export interface ProjectEntry {
+  /** Stable UUID assigned at registration; never changes on relocate. */
+  id: string;
+  /** Canonical absolute path recorded at registration. */
+  root: string;
+  /** Always the root directory basename; projects cannot be renamed. */
+  displayName: string;
+  addedAt: number;
+  lastOpenedAt: number;
+  /** False when the root is missing, not a directory or unreadable. */
+  available: boolean;
+  unavailableReason?: string;
+}
+
+export interface ProjectList {
+  /** Ordered by lastOpenedAt, newest first. */
+  projects: ProjectEntry[];
+  /** Restored scope, falling back to global when missing or unavailable. */
+  lastActiveScope: ScopeId;
+  /** App-level warning, e.g. a corrupt registry preserved on disk. */
+  warnings: string[];
+}
+
 export type ToolState = "ok" | "missing" | "too_old" | "error" | "not_checked";
 
 export type LockStatus = "ok" | "missing" | "corrupt" | "unsupported" | "unreadable";

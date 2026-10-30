@@ -241,6 +241,7 @@ describe("attach an existing skill", () => {
     expect(attachCalls[0]!.payload).toEqual({
       skillId: "alpha",
       agentId: "workbuddy",
+      scope: "global",
     });
     await waitFor(() => {
       expect(pane.getByText("WorkBuddy")).toBeInTheDocument();

@@ -173,6 +173,9 @@ impl EnvResolver {
         let static_candidates = self.static_node_candidates();
         let mut node_result = self.search_nodes(static_candidates.clone()).await;
         let mut warnings = extra_agents.warnings;
+        if let Some(warning) = crate::projects::registry_warning(&self.paths) {
+            warnings.push(warning);
+        }
         let mut login_dirs: Vec<PathBuf> = Vec::new();
 
         if !override_mode && node_result.npx.is_none() {
@@ -1274,6 +1277,35 @@ mod tests {
 
     fn issue_codes(report: &EnvReport) -> Vec<ErrorCode> {
         report.issues.iter().map(|issue| issue.code).collect()
+    }
+
+    #[tokio::test]
+    async fn reports_a_corrupt_project_registry_as_an_environment_warning() {
+        let mut fixture = Fixture::new();
+        fs::create_dir_all(fixture.paths.app_data()).unwrap();
+        fs::write(fixture.paths.projects_path(), "{not json").unwrap();
+        let node = make_node_bin(&fixture._tmp.path().join("fnm/aliases/default/bin"));
+        let git = make_git(&fixture._tmp.path().join("git-bin"));
+        fixture.search.fnm_bases = vec![fixture._tmp.path().join("fnm")];
+        fixture.search.git_candidates = vec![git.clone()];
+        let executor = Arc::new(standard_executor(
+            &node, "v24.15.0", "11.12.1", "1.7.4", &git,
+        ));
+
+        let report = fixture.resolver(executor).resolve().await.unwrap();
+
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("项目注册表不可用")),
+            "{:?}",
+            report.warnings
+        );
+        assert!(
+            report.mutations_enabled,
+            "the project registry is not a toolchain issue"
+        );
     }
 
     #[tokio::test]

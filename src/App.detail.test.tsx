@@ -677,7 +677,7 @@ describe("skill detail drawer", () => {
     const folderCall = calls.find(
       (call) => call.command === "open_skill_folder",
     )!;
-    expect(folderCall.payload).toEqual({ skillId: "alpha" });
+    expect(folderCall.payload).toEqual({ skillId: "alpha", scope: "global" });
 
     const opener = toolbar().getByRole("button", {
       name: "用默认应用打开",
@@ -694,6 +694,7 @@ describe("skill detail drawer", () => {
     expect(fileCall.payload).toEqual({
       skillId: "alpha",
       path: "SKILL.md",
+      scope: "global",
     });
 
     fireEvent.click(treeRow("references"));
@@ -716,6 +717,7 @@ describe("skill detail drawer", () => {
     expect(secondCall.payload).toEqual({
       skillId: "alpha",
       path: "references/api.md",
+      scope: "global",
     });
   });
 

@@ -101,26 +101,59 @@ impl UpdateCheckStateStore {
     }
 
     pub fn store(&self, state: &UpdateCheckState) -> io::Result<()> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let serialized = serde_json::to_string(state)
+        let serialized = serde_json::to_vec(state)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        let temp = self.path.with_file_name(format!(
-            ".tmp-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_nanos())
-                .unwrap_or_default()
-        ));
-        fs::write(&temp, serialized)?;
-        if let Err(error) = fs::rename(&temp, &self.path) {
-            let _ = fs::remove_file(&temp);
-            return Err(error);
-        }
-        Ok(())
+        write_atomic(&self.path, &serialized)
     }
+
+    /// Drop one scope's persisted state. Version 1 only ever stored the global
+    /// check, so forgetting a project leaves it untouched; version 2 removes the
+    /// scope key. A missing or corrupt file is left as-is.
+    pub fn forget_scope(&self, scope: &crate::scope::ScopeId) -> io::Result<()> {
+        let raw = match fs::read_to_string(&self.path) {
+            Ok(raw) => raw,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            return Ok(());
+        };
+        if value.get("version").and_then(serde_json::Value::as_u64) != Some(2) {
+            return Ok(());
+        }
+        let Some(scopes) = value
+            .get_mut("scopes")
+            .and_then(serde_json::Value::as_object_mut)
+        else {
+            return Ok(());
+        };
+        if scopes.remove(&scope.as_string()).is_none() {
+            return Ok(());
+        }
+        let serialized = serde_json::to_vec(&value)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        write_atomic(&self.path, &serialized)
+    }
+}
+
+fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let temp = path.with_file_name(format!(
+        ".tmp-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default()
+    ));
+    fs::write(&temp, bytes)?;
+    if let Err(error) = fs::rename(&temp, path) {
+        let _ = fs::remove_file(&temp);
+        return Err(error);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -261,5 +294,70 @@ mod tests {
         let paths = AppPaths::new(tmp.path().join("home"), tmp.path().join("app-data"));
         let store = UpdateCheckStateStore::new(&paths);
         assert_eq!(store.path(), paths.update_check_state_path());
+    }
+
+    #[test]
+    fn forget_scope_removes_only_that_scope_from_a_v2_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = UpdateCheckStateStore::from_path(tmp.path().join("app-data/update-check.json"));
+        let project = crate::scope::ScopeId::project(
+            uuid::Uuid::parse_str("5a7b6c1d-2e3f-4a5b-8c9d-0e1f2a3b4c5d").unwrap(),
+        );
+        let other = crate::scope::ScopeId::project(
+            uuid::Uuid::parse_str("0f1e2d3c-4b5a-4697-8879-6a5b4c3d2e1f").unwrap(),
+        );
+        fs::create_dir_all(store.path().parent().unwrap()).unwrap();
+        fs::write(
+            store.path(),
+            serde_json::json!({
+                "version": 2,
+                "scopes": {
+                    "global": { "version": 1, "lastAttemptAt": 1 },
+                    project.as_string(): { "version": 1, "lastAttemptAt": 2 },
+                    other.as_string(): { "version": 1, "lastAttemptAt": 3 }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        store.forget_scope(&project).unwrap();
+
+        let value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(store.path()).unwrap()).unwrap();
+        assert_eq!(value["version"], 2);
+        assert!(value["scopes"].get("global").is_some());
+        assert!(value["scopes"].get(other.as_string()).is_some());
+        assert!(value["scopes"].get(project.as_string()).is_none());
+    }
+
+    #[test]
+    fn forget_scope_leaves_v1_missing_and_corrupt_files_untouched() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = UpdateCheckStateStore::from_path(tmp.path().join("app-data/update-check.json"));
+        let project = crate::scope::ScopeId::project(uuid::Uuid::new_v4());
+
+        store.forget_scope(&project).unwrap();
+        assert!(!store.path().exists());
+
+        let v1 = serde_json::json!({
+            "version": 1,
+            "lastAttemptAt": 1,
+            "lastSuccessAt": null,
+            "lastOutcome": "ok",
+            "failedSourceCount": 0,
+            "cachedSourceCount": 0,
+            "skippedSourceCount": 0
+        })
+        .to_string();
+        fs::create_dir_all(store.path().parent().unwrap()).unwrap();
+        fs::write(store.path(), &v1).unwrap();
+        store.forget_scope(&project).unwrap();
+        assert_eq!(fs::read_to_string(store.path()).unwrap(), v1);
+
+        let corrupt = "{not json";
+        fs::write(store.path(), corrupt).unwrap();
+        store.forget_scope(&project).unwrap();
+        assert_eq!(fs::read_to_string(store.path()).unwrap(), corrupt);
     }
 }

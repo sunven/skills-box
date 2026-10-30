@@ -6,6 +6,6 @@ export const inventoryQueryKey = ["inventory"] as const;
 export function useInventoryQuery() {
   return useQuery({
     queryKey: inventoryQueryKey,
-    queryFn: getInventory,
+    queryFn: () => getInventory(),
   });
 }
