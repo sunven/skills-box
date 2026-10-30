@@ -1,6 +1,6 @@
 # Skills Box
 
-A macOS-first desktop tool for managing globally installed Agent Skills across coding agents: inventory, install, update, detach, and uninstall.
+A macOS-first desktop tool for managing Agent Skills at global and project scope across coding agents: inventory, install, update, detach, and uninstall.
 
 ## Language
 
@@ -8,8 +8,24 @@ A macOS-first desktop tool for managing globally installed Agent Skills across c
 A skill installed at user scope, available across projects and mounted into one or more agents.
 _Avoid_: user skill, system skill
 
+**Project**:
+A directory registered in the app whose skills are managed independently of the global scope.
+_Avoid_: workspace, folder
+
+**Project root**:
+The directory that anchors one project's skills and agent attachments; relocating a project changes its root but not its identity.
+_Avoid_: project path, folder
+
+**Relocate**:
+Point an existing project at a new root while keeping its identity, used when the old root is unavailable.
+_Avoid_: move, rename
+
+**Forget**:
+Remove a project from the registry without deleting any skill files or attachments.
+_Avoid_: remove project, delete project
+
 **Canonical store**:
-The single directory that holds the actual skill folder shared by all agents.
+The directory that holds one scope's actual skill folders, shared by all agents in that scope.
 _Avoid_: cache, source directory
 
 **Skill**:
@@ -61,19 +77,19 @@ The selected agents plus the canonical store that an install writes to.
 _Avoid_: destination, target agents
 
 **Agent**:
-A coding agent with its own global skills directory, such as Claude Code or Codex.
+A coding agent with its own skills directory for each scope, such as Claude Code or Codex.
 _Avoid_: client, target
 
 **Extra agent**:
-An agent defined outside the vendored CLI catalog, either shipped with the app or added by the user; skills-box attaches its skills natively instead of through the CLI. It appears in the UI only when its detection path exists.
+An agent defined outside the vendored CLI catalog, either shipped with the app or added by the user; skills-box attaches its skills natively instead of through the CLI. It appears in the UI only when its detection path exists, and participates in project scope only when a project skills directory is configured.
 _Avoid_: custom agent, third-party agent
 
 **Agent attachment**:
-The representation of a global skill inside an agent's skills directory, either a symbolic link or a copy. The Chinese UI labels it 「挂载」.
+The representation of a skill inside an agent's skills directory for one scope, either a symbolic link or a copy. The Chinese UI labels it 「挂载」.
 _Avoid_: installation, mount
 
 **Attach**:
-Create a global skill's attachment in one more agent without reinstalling, keeping the canonical store and lock entry intact. It is the inverse of detach and requires the canonical folder.
+Create a skill's attachment in one or more agents without reinstalling, keeping the canonical store and lock entry intact. It is the inverse of detach and requires the canonical folder.
 _Avoid_: mount, enable
 
 **Detach**:
@@ -89,15 +105,15 @@ The record that ties a skill name to its source, path, hash, and install/update 
 _Avoid_: manifest, metadata file
 
 **Update check**:
-The read-only comparison of each managed skill's recorded tree hash against its source, run automatically or on demand. It never changes skill files.
+The read-only comparison of each managed skill's recorded version fingerprint against its source, run automatically or on demand for one scope. It never changes skill files.
 _Avoid_: update, sync, refresh
 
 **Check attempt**:
-One run of an update check, whether automatic or manual. A run that only uses cached source trees is still a check attempt.
+One run of an update check, whether automatic or manual. A run that only uses cached source data is still a check attempt.
 _Avoid_: scan, poll
 
 **Last check**:
-The recorded time of the most recent check attempt over all managed skills. A check scoped to one skill does not advance it.
+The recorded time of the most recent check attempt for one scope. A check scoped to one skill does not advance it.
 _Avoid_: last sync, last refresh
 
 **Last upstream success**:
@@ -109,7 +125,7 @@ Refresh a skill's canonical folder from its source and re-establish its attachme
 _Avoid_: auto-update, sync, upgrade
 
 **Update candidate**:
-A skill whose upstream tree hash differs from the hash recorded in its lock entry.
+A skill whose upstream version fingerprint differs from the one recorded in its lock entry.
 _Avoid_: outdated skill, dirty skill
 
 **Update target**:
@@ -153,5 +169,5 @@ A state that does not match the canonical model, such as an orphan folder, broke
 _Avoid_: error, corruption
 
 **Scope**:
-Whether a skill is global (user-level) or project-level; v1 manages global scope only.
+Whether a skill belongs to the global store or to one registered project.
 _Avoid_: level, target
