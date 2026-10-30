@@ -198,7 +198,7 @@ impl AppError {
             "路径不在允许的 skill 目录内，已拒绝打开。",
         )
         .detail(detail)
-        .hint("只允许打开 canonical store 或已知 agent 目录中的 skill。")
+        .hint("只允许打开 canonical store、已知 agent 目录或已注册项目根中的 skill。")
     }
 
     pub fn project_not_found(id: &str) -> Self {
@@ -237,6 +237,34 @@ impl AppError {
         )
         .detail(detail)
         .hint("原文件未被覆盖；请修复或移除应用数据中的 projects.json 后重试。")
+    }
+
+    /// Project locks are v1; the global `lock.unsupported_version` copy names
+    /// the wrong version and path, so project scopes get their own code.
+    pub fn project_lock_unsupported_version(version: u64) -> Self {
+        Self::new(
+            ErrorCode::ProjectLockUnsupported,
+            format!("项目 Skill lock 版本不受支持（v{version}），需要 v1。"),
+        )
+        .detail(format!("version = {version}"))
+        .hint("请使用 skills@1.7.4 在项目根重新生成 skills-lock.json。")
+    }
+
+    /// Same `lock.corrupt` family as the global lock so the frontend keeps one
+    /// lock-error branch, with project-specific copy and hint.
+    pub fn project_lock_corrupt(detail: impl Into<String>) -> Self {
+        Self::new(
+            ErrorCode::LockCorrupt,
+            "项目 Skill lock 文件损坏，无法解析。",
+        )
+        .detail(detail)
+        .hint("请检查项目根目录的 skills-lock.json，或从备份恢复后再试。")
+    }
+
+    pub fn project_lock_read_failed(detail: impl Into<String>) -> Self {
+        Self::new(ErrorCode::LockReadFailed, "无法读取项目 Skill lock 文件。")
+            .detail(detail)
+            .hint("请检查项目根目录 skills-lock.json 的权限。")
     }
 
     pub fn open_failed(detail: impl Into<String>) -> Self {

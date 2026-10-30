@@ -95,11 +95,9 @@ pub async fn get_inventory(
     state: State<'_, AppState>,
     scope: ScopeId,
 ) -> Result<InventorySnapshot, AppError> {
-    // Scope plumbing only in this ticket: project reads land in ticket 02.
-    let _ = scope;
     let read_model = Arc::clone(&state.read_model);
     read_with_timeout("库存", READ_TIMEOUT, async move {
-        tauri::async_runtime::spawn_blocking(move || read_model.snapshot())
+        tauri::async_runtime::spawn_blocking(move || read_model.snapshot(&scope))
             .await
             .map_err(|error| AppError::skill_read_failed_context("库存", error))?
     })
@@ -112,10 +110,9 @@ pub async fn get_skill_detail(
     scope: ScopeId,
     skill_id: String,
 ) -> Result<SkillDetail, AppError> {
-    let _ = scope;
     let read_model = Arc::clone(&state.read_model);
     read_with_timeout("skill 详情", READ_TIMEOUT, async move {
-        tauri::async_runtime::spawn_blocking(move || read_model.detail(&skill_id))
+        tauri::async_runtime::spawn_blocking(move || read_model.detail(&scope, &skill_id))
             .await
             .map_err(|error| AppError::skill_read_failed_context("skill 详情", error))?
     })
@@ -131,11 +128,10 @@ pub async fn list_skill_dir(
     skill_id: String,
     path: String,
 ) -> Result<SkillDirListing, AppError> {
-    let _ = scope;
     let paths = state.paths.clone();
     let read_model = Arc::clone(&state.read_model);
     blocking_read("skill 内容目录", move || {
-        let root = read_model.resolve_root(&skill_id)?;
+        let root = read_model.resolve_root(&scope, &skill_id)?;
         content::list(&paths, &root, &path)
     })
     .await
@@ -150,11 +146,10 @@ pub async fn read_skill_file(
     skill_id: String,
     path: String,
 ) -> Result<SkillFileContent, AppError> {
-    let _ = scope;
     let paths = state.paths.clone();
     let read_model = Arc::clone(&state.read_model);
     blocking_read("skill 文件", move || {
-        let root = read_model.resolve_root(&skill_id)?;
+        let root = read_model.resolve_root(&scope, &skill_id)?;
         content::read_file(&paths, &root, &path)
     })
     .await
@@ -167,9 +162,11 @@ pub async fn open_skill_folder(
     scope: ScopeId,
     skill_id: String,
 ) -> Result<(), AppError> {
-    let _ = scope;
     let read_model = Arc::clone(&state.read_model);
-    let resolved = blocking_read("skill 路径", move || read_model.resolve_root(&skill_id)).await?;
+    let resolved = blocking_read("skill 路径", move || {
+        read_model.resolve_root(&scope, &skill_id)
+    })
+    .await?;
     app.opener()
         .open_path(resolved.to_string_lossy().to_string(), None::<&str>)
         .map_err(|error| AppError::open_failed(error.to_string()))
@@ -183,10 +180,9 @@ pub async fn open_skill_file(
     skill_id: String,
     path: String,
 ) -> Result<(), AppError> {
-    let _ = scope;
     let read_model = Arc::clone(&state.read_model);
     let resolved = blocking_read("skill 文件路径", move || {
-        let root = read_model.resolve_root(&skill_id)?;
+        let root = read_model.resolve_root(&scope, &skill_id)?;
         content::resolve_open_path(&root, &path)
     })
     .await?;

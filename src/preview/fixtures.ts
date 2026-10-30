@@ -370,6 +370,7 @@ const seeds: Seed[] = [
 ];
 
 const skills: InventorySkill[] = seeds.map((seed) => ({
+  id: seed.name,
   name: seed.name,
   description: seed.description,
   source: seed.source,
@@ -397,6 +398,7 @@ export const snapshot: InventorySnapshot = {
     unmanaged: { count: 2, examples: ["teach", "edit-article"] },
     broken: { count: 1, examples: ["triage · Gemini CLI"] },
     modified: { count: 1, examples: ["handoff"] },
+    escape: { count: 0, examples: [] },
   },
   warnings: [],
   generatedAtEpochMs: NOW,

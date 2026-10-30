@@ -84,7 +84,8 @@ pub struct SkillDetail {
 }
 
 pub fn read(paths: &AppPaths, skill_id: &str) -> Result<SkillDetail, AppError> {
-    crate::read_model::ReadModel::new(paths.clone()).detail(skill_id)
+    crate::read_model::ReadModel::new(paths.clone())
+        .detail(&crate::scope::ScopeId::global(), skill_id)
 }
 
 /// One-shot injectable entry point for tests and fixtures. Production reads go

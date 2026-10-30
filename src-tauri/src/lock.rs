@@ -24,8 +24,9 @@ pub struct LockEntry {
     pub reference: Option<String>,
     pub skill_path: Option<String>,
     pub skill_folder_hash: String,
-    pub installed_at: String,
-    pub updated_at: String,
+    /// Global locks always carry timestamps; project locks (v1) have none.
+    pub installed_at: Option<String>,
+    pub updated_at: Option<String>,
     pub plugin_name: Option<String>,
     pub source_base_url: Option<String>,
     pub well_known_digest: Option<String>,
@@ -135,8 +136,8 @@ fn parse_entry(name: &str, raw: &serde_json::Value) -> Result<LockEntry, AppErro
         reference: optional("ref")?,
         skill_path: optional("skillPath")?,
         skill_folder_hash: required("skillFolderHash")?,
-        installed_at: required("installedAt")?,
-        updated_at: required("updatedAt")?,
+        installed_at: Some(required("installedAt")?),
+        updated_at: Some(required("updatedAt")?),
         plugin_name: optional("pluginName")?,
         source_base_url: optional("sourceBaseUrl")?,
         well_known_digest: optional("wellKnownDigest")?,
@@ -199,7 +200,10 @@ mod tests {
         let alpha = lock.get("alpha").unwrap();
         assert_eq!(alpha.source, "owner/repo");
         assert_eq!(alpha.skill_path.as_deref(), Some("skills/alpha/SKILL.md"));
-        assert_eq!(alpha.updated_at, "2026-02-03T04:05:06.000Z");
+        assert_eq!(
+            alpha.updated_at.as_deref(),
+            Some("2026-02-03T04:05:06.000Z")
+        );
         assert_eq!(alpha.reference, None);
 
         let beta = lock.get("beta").unwrap();

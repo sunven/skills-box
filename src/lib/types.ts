@@ -252,6 +252,11 @@ export interface DetachResult {
 }
 
 export interface InventorySkill {
+  /**
+   * Scope-composite identity. Global ids are the plain name; project ids are
+   * `project:<uuid>/<name>` and are opaque to the UI.
+   */
+  id: string;
   name: string;
   description: string | null;
   source: string | null;
@@ -289,6 +294,8 @@ export interface ExtraAgentInput {
   id: string;
   displayName: string;
   skillsDir: string;
+  /** Optional project-relative skills directory (validated by the backend). */
+  projectSkillsDir?: string | null;
 }
 
 export interface ExtraAgent extends ExtraAgentInput {
@@ -313,6 +320,8 @@ export interface AnomalySummary {
   unmanaged: AnomalyGroup;
   broken: AnomalyGroup;
   modified: AnomalyGroup;
+  /** Project paths whose resolved location escapes the registered root. */
+  escape: AnomalyGroup;
 }
 
 export interface InventorySnapshot {
