@@ -409,7 +409,7 @@ impl TaskManager {
         &self,
         scope: &crate::scope::ScopeId,
     ) -> Result<crate::scope_layout::ScopeLayout, AppError> {
-        let layout = crate::scope_layout::ScopeLayout::resolve(
+        let layout = crate::scope_layout::ScopeLayout::resolve_detected(
             &self.inner.paths,
             &self.inner.projects,
             scope,

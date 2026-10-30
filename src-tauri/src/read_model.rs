@@ -168,13 +168,8 @@ impl ReadModel {
     /// Resolve the paths for one scope. An unavailable project is a distinct
     /// scope state (`project.root_unavailable`), never an inventory error.
     fn layout(&self, scope: &ScopeId) -> Result<ScopeLayout, AppError> {
-        match scope {
-            ScopeId::Global => Ok(ScopeLayout::global(&self.paths, self.detected_agents())),
-            ScopeId::Project(id) => {
-                let entry = self.projects.lookup_available(*id)?;
-                Ok(ScopeLayout::project(&self.paths, entry.project))
-            }
-        }
+        let agents = self.detected_agents();
+        ScopeLayout::resolve(&self.paths, &self.projects, scope, &agents)
     }
 
     /// Rebuild the requested scope's catalog and every per-skill view. This is

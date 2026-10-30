@@ -83,18 +83,33 @@ impl ScopeLayout {
     /// Resolve one scope through the app registry. A project that is missing
     /// from the registry is `project.not_found`; an unavailable root is a
     /// scope state that blocks every mutation before work starts.
+    ///
+    /// `global_agents` is the detected or overridden global agent list; project
+    /// scope ignores it and derives its agent directories from the catalog.
     pub fn resolve(
         paths: &AppPaths,
         projects: &ProjectRegistry,
         scope: &ScopeId,
+        global_agents: &[AgentDir],
     ) -> Result<Self, AppError> {
         match scope {
-            ScopeId::Global => Ok(Self::global(paths, inventory::detected_agent_dirs(paths))),
+            ScopeId::Global => Ok(Self::global(paths, global_agents.to_vec())),
             ScopeId::Project(id) => {
                 let entry = projects.lookup_available(*id)?;
                 Ok(Self::project(paths, entry.project))
             }
         }
+    }
+
+    /// Resolve with freshly detected global agent directories. Mutations and
+    /// the project update check use this; the read model passes its override.
+    pub fn resolve_detected(
+        paths: &AppPaths,
+        projects: &ProjectRegistry,
+        scope: &ScopeId,
+    ) -> Result<Self, AppError> {
+        let agents = inventory::detected_agent_dirs(paths);
+        Self::resolve(paths, projects, scope, &agents)
     }
 
     pub fn is_global(&self) -> bool {

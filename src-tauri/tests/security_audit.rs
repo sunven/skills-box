@@ -245,8 +245,8 @@ fn project_scope_grants_only_the_registered_root_and_rejects_escapes() {
 
     // The project root must come from the registry. Resolving the scope is the
     // only way commands obtain project read roots.
-    let layout =
-        ScopeLayout::resolve(&paths, &registry, &entry.project.scope()).expect("registered scope");
+    let layout = ScopeLayout::resolve_detected(&paths, &registry, &entry.project.scope())
+        .expect("registered scope");
     let roots = layout.allowed_roots();
     assert_eq!(
         roots.len(),
