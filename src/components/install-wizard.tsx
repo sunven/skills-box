@@ -24,7 +24,6 @@ import type {
 } from "../lib/types";
 import { GLOBAL_SCOPE } from "../lib/types";
 import { projectCanonicalPath, projectScope } from "../lib/scope";
-import { useTaskEvents } from "../lib/task-runner";
 import { taskEventDriver, useMutation } from "../lib/mutation";
 
 interface InstallWizardProps {
@@ -191,7 +190,9 @@ export function InstallWizard({
     }
   }, []);
 
-  const previewDriver = useTaskEvents({
+  const previewMutation = useMutation({
+    action: "preview",
+    scope,
     fallbackFailure: "预览失败，请重试。",
     fallbackStart: "无法开始预览，请稍后重试。",
     onEvent: handlePreviewEvent,
@@ -203,7 +204,7 @@ export function InstallWizard({
     fallbackStart: "无法开始安装，请稍后重试。",
   });
 
-  const previewState = previewDriver.state;
+  const previewState = previewMutation.state;
   const installState = installMutation.state;
   const previewRunning = previewState.running;
   const installRunning = installState.running;
@@ -258,7 +259,7 @@ export function InstallWizard({
   }, [open, step, projectMode, targetAgents, inventorySkills]);
 
   const closeWizard = useCallback(() => {
-    const previewTask = previewDriver.stateRef.current;
+    const previewTask = previewMutation.stateRef.current;
     const installTask = installMutation.stateRef.current;
     if (installTask.running) {
       // Before the CLI spawns the task can still be cancelled. Once writing
@@ -274,14 +275,14 @@ export function InstallWizard({
         // Closing is best-effort cancellation; the read-only task times out.
       });
     }
-    previewDriver.reset();
+    previewMutation.reset();
     installMutation.reset();
     onCloseRef.current();
   }, [
     installMutation.reset,
     installMutation.stateRef,
-    previewDriver.reset,
-    previewDriver.stateRef,
+    previewMutation.reset,
+    previewMutation.stateRef,
   ]);
 
   const resetPreviewSelection = useCallback(() => {
@@ -297,10 +298,10 @@ export function InstallWizard({
 
   useEffect(() => {
     if (!open) return;
-    previewDriver.reset();
+    previewMutation.reset();
     resetPreviewSelection();
     setSourceInput("");
-  }, [open, scope, resetPreviewSelection, previewDriver.reset]);
+  }, [open, scope, resetPreviewSelection, previewMutation.reset]);
 
   useModalFocus({
     open,
@@ -358,17 +359,19 @@ export function InstallWizard({
     if (previewRunning || installRunning) return;
     const source = sourceInput.trim();
     if (!source) {
-      previewDriver.setStartError(
+      previewMutation.setStartError(
         fallbackError("请输入公开 GitHub 仓库，例如 owner/repo。"),
       );
       return;
     }
     resetPreviewSelection();
-    previewDriver.start({
-      total: 1,
-      message: "正在准备预览…",
-      launch: (onEvent) => startPreview(source, onEvent, scope),
-    });
+    void previewMutation.start(
+      taskEventDriver({
+        total: 1,
+        message: "正在准备预览…",
+        launch: (onEvent) => startPreview(source, onEvent, scope),
+      }),
+    );
   };
 
   const handleStartInstall = (names: string[], retry = false) => {
@@ -403,7 +406,7 @@ export function InstallWizard({
     if (installRunning) {
       void installMutation.cancel("任务已结束，无法取消。");
     } else {
-      void previewDriver.cancel("任务已结束，无法取消。");
+      void previewMutation.cancel("任务已结束，无法取消。");
     }
   };
 
@@ -567,7 +570,7 @@ export function InstallWizard({
               </p>
 
               <MutationError error={previewState.startError} showCode />
-              <MutationError error={previewState.taskError} />
+              <MutationError error={previewState.error} />
 
               {previewRunning ? (
                 <MutationProgress

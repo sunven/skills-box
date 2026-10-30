@@ -11,7 +11,7 @@ import type { MutableRefObject } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { asAppError, cancelTask, fallbackError } from "./api";
-import { TASK_SKILL_STATUS_LABELS } from "./task-runner";
+import { TASK_SKILL_STATUS_LABELS } from "./task-labels";
 import { inventoryQueryKey } from "../hooks/use-inventory";
 import { projectsQueryKey } from "../hooks/use-projects";
 import { skillQueryKey, skillQueryPrefix } from "../hooks/use-skill-detail";
@@ -302,6 +302,8 @@ export type MutationRunAction =
       type: "terminal";
       phase: TaskPhase | null;
       message?: string;
+      completed?: number;
+      total?: number;
       result: MutationResultView | null;
     }
   | {
@@ -346,6 +348,8 @@ export function mutationRunReducer(
         running: false,
         cancelling: false,
         phase: action.phase,
+        completed: action.completed ?? state.completed,
+        total: action.total ?? state.total,
         message: action.message || state.message,
         result: action.result,
         error: null,
@@ -562,6 +566,8 @@ export function useMutation(options: MutationOptions): MutationHandle {
             type: "terminal",
             phase: event.phase,
             message: event.message,
+            completed: event.completed,
+            total: event.total,
             result,
           });
           settle(seq, result);

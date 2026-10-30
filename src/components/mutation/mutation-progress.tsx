@@ -1,6 +1,6 @@
 import { Loader2 } from "lucide-react";
 import { Button } from "../ui/button";
-import { TASK_PHASE_LABELS } from "../../lib/task-runner";
+import { TASK_PHASE_LABELS } from "../../lib/task-labels";
 import type { TaskPhase } from "../../lib/types";
 
 export interface MutationProgressProps {
