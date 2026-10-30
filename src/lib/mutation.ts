@@ -53,7 +53,8 @@ export type MutationAction =
   | "manage_remove"
   | "project_add"
   | "project_relocate"
-  | "project_forget";
+  | "project_forget"
+  | "preview";
 
 export type MutationOutcome = TaskResult["overall"];
 
@@ -144,6 +145,12 @@ const HEADING_LABELS: Record<
     partial: "遗忘项目部分失败",
     failed: "遗忘项目失败",
     cancelled: "遗忘项目已取消",
+  },
+  preview: {
+    success: "预览完成",
+    partial: "预览部分失败",
+    failed: "预览失败",
+    cancelled: "预览已取消",
   },
 };
 
@@ -304,6 +311,7 @@ export type MutationRunAction =
       error: AppError;
     }
   | { type: "startFailed"; error: AppError }
+  | { type: "startError"; error: AppError | null }
   | { type: "cancelling"; value: boolean }
   | { type: "cancelRejected"; message: string }
   | { type: "cancelFailed"; error: AppError }
@@ -358,6 +366,8 @@ export function mutationRunReducer(
         phase: null,
         startError: action.error,
       };
+    case "startError":
+      return { ...state, startError: action.error };
     case "cancelling":
       return { ...state, cancelling: action.value };
     case "cancelRejected":
@@ -418,6 +428,7 @@ export function mutationRefreshPlan(
       );
     case "manage_add":
     case "manage_remove":
+    case "preview":
       return invalidate([]);
     case "project_add":
     case "project_relocate":
@@ -493,6 +504,8 @@ export interface MutationOptions extends MutationRefreshOptions {
   fallbackFailure: string;
   /** Shown when a task invoke rejects before a task exists. */
   fallbackStart: string;
+  /** Read-only observers (preview wizard steps) for each task event. */
+  onEvent?: (event: TaskEvent) => void;
 }
 
 export interface MutationHandle {
@@ -503,6 +516,8 @@ export interface MutationHandle {
   start: (driver: MutationDriver) => Promise<MutationResultView | null>;
   cancel: (fallbackMessage?: string) => Promise<void>;
   reset: () => void;
+  /** Local validation error, shown before a task exists. */
+  setStartError: (error: AppError | null) => void;
 }
 
 export function useMutation(options: MutationOptions): MutationHandle {
@@ -535,6 +550,7 @@ export function useMutation(options: MutationOptions): MutationHandle {
   const handleTaskEvent = useCallback(
     (seq: number, event: TaskEvent) => {
       if (runSeq.current !== seq) return;
+      optionsRef.current.onEvent?.(event);
       const fallback = optionsRef.current.fallbackFailure;
       switch (event.phase) {
         case "completed":
@@ -688,5 +704,9 @@ export function useMutation(options: MutationOptions): MutationHandle {
     dispatch({ type: "reset" });
   }, []);
 
-  return { state, stateRef, start, cancel, reset };
+  const setStartError = useCallback((error: AppError | null) => {
+    dispatch({ type: "startError", error });
+  }, []);
+
+  return { state, stateRef, start, cancel, reset, setStartError };
 }

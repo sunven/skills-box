@@ -212,6 +212,20 @@ describe("mutation lifecycle", () => {
     });
   });
 
+  it("sets and clears a local start error", () => {
+    let state = mutationRunReducer(initialMutationState(), {
+      type: "startError",
+      error: { message: "请输入公开 GitHub 仓库。", retryable: false },
+    });
+    expect(state.startError).toEqual({
+      message: "请输入公开 GitHub 仓库。",
+      retryable: false,
+    });
+
+    state = mutationRunReducer(state, { type: "startError", error: null });
+    expect(state.startError).toBeNull();
+  });
+
   it("reports cancel rejections as mutation errors and resets cleanly", () => {
     let state = mutationRunReducer(initialMutationState(), {
       type: "start",
@@ -255,6 +269,10 @@ describe("mutation refresh", () => {
       remove: [],
     });
     expect(mutationRefreshPlan("manage_add", GLOBAL_SCOPE)).toEqual({
+      invalidate: [],
+      remove: [],
+    });
+    expect(mutationRefreshPlan("preview", GLOBAL_SCOPE)).toEqual({
       invalidate: [],
       remove: [],
     });
