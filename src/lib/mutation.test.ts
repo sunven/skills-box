@@ -265,6 +265,8 @@ describe("mutation refresh", () => {
         ["inventory", GLOBAL_SCOPE],
         ["skill", GLOBAL_SCOPE],
         ["updateReport", GLOBAL_SCOPE],
+        ["skill-dir", GLOBAL_SCOPE, "alpha"],
+        ["skill-file", GLOBAL_SCOPE, "alpha"],
       ],
       remove: [],
     });
@@ -351,6 +353,12 @@ describe("mutation refresh", () => {
     });
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: ["updateReport", GLOBAL_SCOPE],
+    });
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ["skill-dir", GLOBAL_SCOPE],
+    });
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ["skill-file", GLOBAL_SCOPE],
     });
   });
 

@@ -51,7 +51,7 @@ import {
   resolveInitialScope,
 } from "./lib/scope";
 import { updateReportQueryKey } from "./lib/update-view";
-import { buildWorkspaceView } from "./lib/workspace-view";
+import { createWorkspaceViewSelector } from "./lib/workspace-view";
 import { GLOBAL_SCOPE } from "./lib/types";
 import type {
   ActiveMutationInfo,
@@ -144,9 +144,10 @@ function App() {
   // and the detail drawer re-render at a lower priority.
   const deferredQuery = useDeferredValue(query);
   const scopeError = asAppError(inventoryQuery.error);
+  const [selectWorkspaceView] = useState(createWorkspaceViewSelector);
   const view = useMemo(
     () =>
-      buildWorkspaceView({
+      selectWorkspaceView({
         snapshot,
         projects,
         activeScope: scope,
@@ -163,6 +164,7 @@ function App() {
         updateSkillName,
       }),
     [
+      selectWorkspaceView,
       snapshot,
       projects,
       scope,

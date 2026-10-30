@@ -158,10 +158,19 @@ function selectAlphaSync() {
   return target;
 }
 
-async function selectAlpha() {
+async function selectAlpha(openContent = false) {
   await screen.findByText("alpha");
   const target = selectAlphaSync();
-  await detailPane().findByTestId("skill-markdown-rendered");
+  await waitFor(() =>
+    expect(screen.getByRole("complementary", { name: "详情" })).toHaveAttribute(
+      "aria-busy",
+      "false",
+    ),
+  );
+  if (openContent) {
+    fireEvent.click(tab("内容"));
+    await detailPane().findByTestId("skill-markdown-rendered");
+  }
   return target;
 }
 
@@ -195,6 +204,24 @@ beforeEach(() => {
 });
 
 describe("skill detail drawer", () => {
+  it("loads content only when the content tab is first opened", async () => {
+    const backend = createFakeBackend({
+      data: { snapshot: baseSnapshot() },
+    }).install();
+    renderApp();
+    await selectAlpha();
+
+    expect(tab("操作")).toHaveAttribute("aria-selected", "true");
+    expect(backend.count("list_skill_dir")).toBe(0);
+    expect(backend.count("read_skill_file")).toBe(0);
+    expect(detailPane().queryByTestId("content-toolbar")).toBeNull();
+
+    fireEvent.click(tab("内容"));
+    await detailPane().findByTestId("skill-markdown-rendered");
+    expect(backend.count("list_skill_dir")).toBe(1);
+    expect(backend.count("read_skill_file")).toBe(1);
+  });
+
   it("renders identity, pinned alerts, the content tab, and the actions tab composition", async () => {
     const content =
       "---\nname: alpha\ndescription: Alpha\n---\n\n# Alpha 标题\n\n正文第一段。\n\n- 条目一\n- 条目二\n";
@@ -262,6 +289,7 @@ describe("skill detail drawer", () => {
     fireEvent.keyDown(tab("操作"), { key: "ArrowRight" });
     expect(tab("内容")).toHaveAttribute("aria-selected", "true");
     expect(document.activeElement).toBe(tab("内容"));
+    await pane.findByTestId("skill-markdown-rendered");
     fireEvent.keyDown(tab("内容"), { key: "ArrowLeft" });
     expect(tab("操作")).toHaveAttribute("aria-selected", "true");
     expect(document.activeElement).toBe(tab("操作"));
@@ -363,8 +391,7 @@ describe("skill detail drawer", () => {
   it("browses directories and previews markdown, text, and images", async () => {
     mockCommands({});
     renderApp();
-    await selectAlpha();
-    fireEvent.click(tab("内容"));
+    await selectAlpha(true);
     const pane = detailPane();
 
     fireEvent.click(treeRow("references"));
@@ -445,8 +472,7 @@ describe("skill detail drawer", () => {
           : makeFileContent(skillId, path),
     });
     renderApp();
-    await selectAlpha();
-    fireEvent.click(tab("内容"));
+    await selectAlpha(true);
 
     const pane = detailPane();
     const rendered = pane.getByTestId("skill-markdown-rendered");
@@ -533,6 +559,7 @@ describe("skill detail drawer", () => {
     selectAlphaSync();
 
     const pane = detailPane();
+    fireEvent.click(tab("内容"));
     expect(
       await pane.findByText("从左侧选择文件查看内容"),
     ).toBeInTheDocument();
@@ -587,6 +614,7 @@ describe("skill detail drawer", () => {
     await screen.findByText("alpha");
     selectAlphaSync();
     const pane = detailPane();
+    fireEvent.click(tab("内容"));
 
     expect(await pane.findByText(/文件超过 1 MiB 上限/)).toBeInTheDocument();
     expect(pane.getByText(/当前大小 1 MiB/)).toBeInTheDocument();
@@ -618,7 +646,7 @@ describe("skill detail drawer", () => {
       detail: (skillId) => baseDetail({ name: skillId }),
     });
     renderApp();
-    await selectAlpha();
+    await selectAlpha(true);
     const pane = detailPane();
 
     fireEvent.click(treeRow("references"));
@@ -637,16 +665,14 @@ describe("skill detail drawer", () => {
     );
 
     fireEvent.click(row("beta"));
+    expect(tab("操作")).toHaveAttribute("aria-selected", "true");
+    expect(pane.queryByTestId("content-toolbar")).toBeNull();
+    fireEvent.click(tab("内容"));
+    expect(tab("内容")).toHaveAttribute("aria-selected", "true");
     await waitFor(() =>
       expect(pane.getByTestId("content-preview-path")).toHaveTextContent(
         "SKILL.md",
       ),
-    );
-    expect(tab("操作")).toHaveAttribute("aria-selected", "true");
-    fireEvent.click(tab("内容"));
-    expect(tab("内容")).toHaveAttribute("aria-selected", "true");
-    expect(pane.getByTestId("content-preview-path")).toHaveTextContent(
-      "SKILL.md",
     );
     expect(
       pane
@@ -661,8 +687,7 @@ describe("skill detail drawer", () => {
   it("opens Finder and the selected file with skillId and relative path only", async () => {
     const calls = mockCommands({});
     renderApp();
-    await selectAlpha();
-    fireEvent.click(tab("内容"));
+    await selectAlpha(true);
     const pane = detailPane();
 
     const finder = toolbar().getByRole("button", {
@@ -737,8 +762,7 @@ describe("skill detail drawer", () => {
       },
     });
     renderApp();
-    await selectAlpha();
-    fireEvent.click(tab("内容"));
+    await selectAlpha(true);
     const pane = detailPane();
 
     fireEvent.click(
@@ -760,8 +784,7 @@ describe("skill detail drawer", () => {
   it("refreshes the directory, the selected file, and the detail", async () => {
     const calls = mockCommands({});
     renderApp();
-    await selectAlpha();
-    fireEvent.click(tab("内容"));
+    await selectAlpha(true);
     const count = (command: string) =>
       calls.filter((call) => call.command === command).length;
     const initialList = count("list_skill_dir");
@@ -789,8 +812,7 @@ describe("skill detail drawer", () => {
           : makeFileContent(skillId, path),
     });
     renderApp();
-    await selectAlpha();
-    fireEvent.click(tab("内容"));
+    await selectAlpha(true);
     const pane = detailPane();
 
     expect(pane.getByTestId("skill-markdown-rendered")).toBeInTheDocument();
@@ -856,8 +878,7 @@ describe("skill detail drawer", () => {
   it("moves focus into the drawer and restores it to the row on close", async () => {
     mockCommands({});
     renderApp();
-    const selectedRow = await selectAlpha();
-    fireEvent.click(tab("内容"));
+    const selectedRow = await selectAlpha(true);
     const closeButton = screen.getByRole("button", { name: "关闭详情" });
     expect(document.activeElement).toBe(closeButton);
 

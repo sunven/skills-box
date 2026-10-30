@@ -3,7 +3,11 @@ import {
   defaultFilters,
   type InventoryFilters,
 } from "./inventory-view";
-import { buildWorkspaceView } from "./workspace-view";
+import {
+  buildWorkspaceView,
+  createWorkspaceViewSelector,
+  type WorkspaceViewInput,
+} from "./workspace-view";
 import {
   makeSnapshot,
   makeUpdateViewSkill,
@@ -50,6 +54,75 @@ function filters(overrides: Partial<InventoryFilters> = {}): InventoryFilters {
 }
 
 describe("workspace projection", () => {
+  it("reuses inventory rows while selection, filters, sort and dialog targets change", () => {
+    const select = createWorkspaceViewSelector();
+    const input: WorkspaceViewInput = {
+      activeScope: GLOBAL_SCOPE,
+      snapshot: sampleSnapshot(),
+      updateReport: report([result("alpha", "update")]),
+      filters: filters(),
+      sort: "recent",
+      selectedName: null,
+      updateMode: null,
+      updateSkillName: null,
+    };
+    const initial = select(input);
+    const selected = select({ ...input, selectedName: "alpha" });
+    const filtered = select({
+      ...input,
+      filters: filters({ query: "alpha" }),
+      sort: "name",
+      selectedName: "alpha",
+      updateMode: "single",
+      updateSkillName: "alpha",
+    });
+
+    expect(selected.skills).toBe(initial.skills);
+    expect(filtered.skills).toBe(initial.skills);
+    expect(selected.selectedSkill).toBe(
+      initial.skills.find((skill) => skill.name === "alpha"),
+    );
+    expect(filtered.visibleSkills).toEqual([selected.selectedSkill]);
+    expect(filtered.visibleSkills[0]).toBe(selected.selectedSkill);
+    expect(filtered.statusCounts).toBe(initial.statusCounts);
+    expect(filtered.agentOptions).toBe(initial.agentOptions);
+    expect(filtered.updateDialog?.initialNames).toEqual(["alpha"]);
+  });
+
+  it("recomputes cached inventory data when a report or snapshot changes", () => {
+    const select = createWorkspaceViewSelector();
+    const snapshot = sampleSnapshot();
+    const input: WorkspaceViewInput = {
+      activeScope: GLOBAL_SCOPE,
+      snapshot,
+      updateReport: report([result("alpha", "update")]),
+      filters: filters(),
+      sort: "recent",
+      selectedName: "alpha",
+      updateMode: null,
+      updateSkillName: null,
+    };
+    const initial = select(input);
+    const updated = select({
+      ...input,
+      updateReport: report([result("alpha", "current")]),
+    });
+    expect(updated.selectedSkill?.update).toBe("current");
+    expect(updated.candidateCount).toBe(0);
+    expect(updated.skills).not.toBe(initial.skills);
+
+    const refreshed = select({
+      ...input,
+      snapshot: {
+        ...snapshot,
+        skills: snapshot.skills.filter((skill) => skill.name !== "alpha"),
+      },
+    });
+    expect(refreshed.selectedSkill).toBeNull();
+    expect(refreshed.totalSkills).toBe(3);
+    expect(refreshed.skills.some((skill) => skill.name === "alpha")).toBe(false);
+  });
+
   it("overlays the report and derives rows, counts, options and last check", () => {
     const view = buildWorkspaceView({
       activeScope: GLOBAL_SCOPE,

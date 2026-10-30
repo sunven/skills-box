@@ -28,6 +28,7 @@ import {
   type FakeTask,
 } from "./test/fake-backend";
 import { healthyReport } from "./test/fixtures";
+import { makeDirListing, makeFileContent } from "./test/detail-fixtures";
 import {
   attachment,
   makeAnomalies,
@@ -295,6 +296,108 @@ async function openSingleUpdate(name: string) {
 }
 
 describe("update execution", () => {
+  it.each([false, true])(
+    "refreshes an existing content preview after update (hidden: %s)",
+    async (hidden) => {
+      const state = setup();
+      let updated = false;
+      state.backend.update({
+        readFile: (skillId, path) =>
+          makeFileContent(skillId, path, {
+            content: updated ? "# After update" : "# Before update",
+          }),
+        listDir: (skillId, path) => {
+          const listing = makeDirListing(skillId, path);
+          return updated && path === ""
+            ? {
+                ...listing,
+                entries: [
+                  ...listing.entries,
+                  {
+                    name: "updated.txt",
+                    path: "updated.txt",
+                    kind: "file" as const,
+                    symlink: false,
+                    sizeBytes: 10,
+                    markdown: false,
+                    expandable: false,
+                  },
+                ],
+              }
+            : listing;
+        },
+      });
+      await checkUpdates();
+      fireEvent.click(row("alpha"));
+      fireEvent.click(await screen.findByRole("tab", { name: "内容" }));
+      await detail().findByRole("heading", { name: "Before update" });
+
+      const referenceDir = detail()
+        .getAllByTestId("tree-row")
+        .find((entry) => entry.getAttribute("data-path") === "references")!;
+      fireEvent.click(referenceDir);
+      await waitFor(() => {
+        expect(
+          detail().getAllByTestId("tree-row").some(
+            (entry) => entry.getAttribute("data-path") === "references/api.md",
+          ),
+        ).toBe(true);
+      });
+      fireEvent.click(
+        detail().getAllByTestId("tree-row").find(
+          (entry) => entry.getAttribute("data-path") === "references/api.md",
+        )!,
+      );
+      await waitFor(() =>
+        expect(detail().getByTestId("content-preview-path")).toHaveTextContent(
+          "references/api.md",
+        ),
+      );
+      await waitFor(() =>
+        expect(state.backend.count(API_COMMANDS.readSkillFile)).toBe(2),
+      );
+      if (hidden) fireEvent.click(detail().getByRole("tab", { name: "操作" }));
+      const readsBeforeUpdate = state.backend.count(API_COMMANDS.readSkillFile);
+
+      fireEvent.click(detail().getByRole("button", { name: "更新" }));
+      const dialog = screen.getByRole("dialog", { name: "更新 skill · alpha" });
+      fireEvent.click(within(dialog).getByRole("button", { name: "开始更新" }));
+      await waitFor(() => expect(updateCalls(state)).toEqual([["alpha"]]));
+      updated = true;
+      emitOn(
+        state,
+        0,
+        completed(
+          updateTaskResult("success", [skillResult("alpha", "updated")]),
+          "更新完成",
+        ),
+      );
+      await within(dialog).findByTestId("update-result");
+      fireEvent.click(within(dialog).getByRole("button", { name: "完成" }));
+
+      if (hidden) {
+        expect(state.backend.count(API_COMMANDS.readSkillFile)).toBe(
+          readsBeforeUpdate,
+        );
+        fireEvent.click(detail().getByRole("tab", { name: "内容" }));
+      }
+      await detail().findByRole("heading", { name: "After update" });
+      expect(detail().getByTestId("content-preview-path")).toHaveTextContent(
+        "references/api.md",
+      );
+      await waitFor(() => {
+        expect(
+          detail().getAllByTestId("tree-row").some(
+            (entry) => entry.getAttribute("data-path") === "updated.txt",
+          ),
+        ).toBe(true);
+      });
+      expect(state.backend.count(API_COMMANDS.readSkillFile)).toBeGreaterThan(
+        readsBeforeUpdate,
+      );
+    },
+  );
+
   it("confirms a single update, backs up, updates and reveals backup/log paths", async () => {
     const state = setup();
     await checkUpdates();

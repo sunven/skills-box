@@ -411,6 +411,13 @@ export function mutationRefreshPlan(
     case "install":
       return invalidate([inventoryQueryKey(scope), skillQueryPrefix(scope)]);
     case "update":
+      return invalidate([
+        inventoryQueryKey(scope),
+        skillQueryPrefix(scope),
+        updateReportQueryKey(scope),
+        skillDirQueryPrefix(scope, skillId),
+        skillFileQueryPrefix(scope, skillId),
+      ]);
     case "uninstall":
       return invalidate([
         inventoryQueryKey(scope),

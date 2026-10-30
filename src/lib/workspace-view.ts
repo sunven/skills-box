@@ -14,7 +14,6 @@ import type {
   AnomalySummary,
   AnomalyView,
   AppError,
-  InventoryAgent,
   InventorySnapshot,
   ProjectEntry,
   ProjectList,
@@ -137,30 +136,62 @@ function lockView(
   return { label: "正常", tone: "ok" };
 }
 
-export function buildWorkspaceView(input: WorkspaceViewInput): WorkspaceView {
-  const snapshotSkills = input.snapshot?.skills ?? [];
-  const agents: InventoryAgent[] = input.snapshot?.agents ?? [];
-  const skills = applyUpdateReport(snapshotSkills, input.updateReport);
+type InventoryProjection = Pick<
+  WorkspaceView,
+  | "skills"
+  | "anomalies"
+  | "updateSummary"
+  | "statusCounts"
+  | "sourceOptions"
+  | "agentOptions"
+  | "totalSkills"
+  | "sourceCount"
+  | "candidateCount"
+  | "hasManagedSkills"
+>;
+
+function projectInventory(
+  snapshot: InventorySnapshot | undefined,
+  updateReport: UpdateCheckReport | null | undefined,
+): InventoryProjection {
+  const snapshotSkills = snapshot?.skills ?? [];
+  const skills = applyUpdateReport(snapshotSkills, updateReport);
   const anomalies = withUpdateAnomalies(
-    input.snapshot?.anomalies ?? EMPTY_ANOMALIES,
+    snapshot?.anomalies ?? EMPTY_ANOMALIES,
     skills,
   );
   const updateSummary = computeUpdateSummary(skills);
+  const sourceOptions = computeSourceOptions(skills);
+  return {
+    skills,
+    anomalies,
+    updateSummary,
+    statusCounts: computeStatusCounts(skills),
+    sourceOptions,
+    agentOptions: computeAgentOptions(skills, snapshot?.agents ?? []),
+    totalSkills: skills.length,
+    sourceCount: sourceOptions.length,
+    candidateCount: updateSummary.candidates.length,
+    hasManagedSkills: snapshotSkills.some(
+      (skill) => skill.management === "managed",
+    ),
+  };
+}
+
+function projectWorkspace(
+  input: WorkspaceViewInput,
+  inventory: InventoryProjection,
+): WorkspaceView {
+  const { skills, updateSummary, candidateCount } = inventory;
   const visibleSkills = selectVisibleSkills(skills, input.filters, input.sort);
   const selectedSkill =
     visibleSkills.find((skill) => skill.name === input.selectedName) ?? null;
-  const statusCounts = computeStatusCounts(skills);
-  const sourceOptions = computeSourceOptions(skills);
-  const agentOptions = computeAgentOptions(skills, agents);
   const lastCheck = input.updateCheckState
     ? {
         ...summarizePersistedState(input.updateCheckState),
         warnings: input.lastFullCheck?.warnings ?? [],
       }
     : null;
-  const hasManagedSkills = snapshotSkills.some(
-    (skill) => skill.management === "managed",
-  );
   const activeProject = projectForScope(input.projects, input.activeScope);
   const activeProjectUnavailable = Boolean(
     activeProject && !activeProject.available,
@@ -169,7 +200,6 @@ export function buildWorkspaceView(input: WorkspaceViewInput): WorkspaceView {
     input.activeScope !== "global" && !activeProjectUnavailable
       ? (input.scopeError ?? null)
       : null;
-  const candidateCount = updateSummary.candidates.length;
   const hasLiveReport = input.updateReport != null;
   const scopeState = input.scopeCheckStates?.get(input.activeScope) ?? null;
   const scopeProjects: ScopeProjectView[] = [
@@ -223,31 +253,46 @@ export function buildWorkspaceView(input: WorkspaceViewInput): WorkspaceView {
     ? selectUpdateDialog({
         mode: input.updateMode,
         skills,
-        agents,
+        agents: input.snapshot?.agents ?? [],
         summary: updateSummary,
         singleName: input.updateSkillName,
       })
     : null;
 
   return {
+    ...inventory,
     scopeProjects,
     activeProject,
     activeProjectUnavailable,
     projectHeader,
     scopeError,
-    skills,
     visibleSkills,
     selectedSkill,
-    statusCounts,
-    sourceOptions,
-    agentOptions,
-    anomalies,
-    updateSummary,
     updateDialog,
-    totalSkills: skills.length,
-    sourceCount: sourceOptions.length,
-    candidateCount,
     lastCheck,
-    hasManagedSkills,
+  };
+}
+
+export function buildWorkspaceView(input: WorkspaceViewInput): WorkspaceView {
+  return projectWorkspace(
+    input,
+    projectInventory(input.snapshot, input.updateReport),
+  );
+}
+
+/** Each App owns one selector; UI changes reuse the inventory's row objects. */
+export function createWorkspaceViewSelector() {
+  let snapshot: InventorySnapshot | undefined;
+  let updateReport: UpdateCheckReport | null = null;
+  let inventory: InventoryProjection | undefined;
+
+  return (input: WorkspaceViewInput): WorkspaceView => {
+    const report = input.updateReport ?? null;
+    if (!inventory || snapshot !== input.snapshot || updateReport !== report) {
+      inventory = projectInventory(input.snapshot, report);
+      snapshot = input.snapshot;
+      updateReport = report;
+    }
+    return projectWorkspace(input, inventory);
   };
 }

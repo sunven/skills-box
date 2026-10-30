@@ -1,4 +1,5 @@
 import {
+  Activity,
   lazy,
   memo,
   Suspense,
@@ -48,8 +49,7 @@ import { useSkillDetailQuery } from "../hooks/use-skill-detail";
 import { selectDetailView } from "../lib/detail-view";
 import { cn } from "../lib/utils";
 
-// The Markdown stack is only needed after a skill is selected; keep it out of
-// the startup bundle.
+// Load the Markdown stack when the content tab is first opened.
 const SkillContentTab = lazy(() =>
   import("./skill-content-tab").then((module) => ({
     default: module.SkillContentTab,
@@ -255,6 +255,7 @@ export const DetailPane = memo(function DetailPane({
   const query = useSkillDetailQuery(scope, skillId);
   const detail = query.data ?? null;
   const [tab, setTab] = useState<DetailTab>("actions");
+  const [contentVisited, setContentVisited] = useState(false);
   const [detachTarget, setDetachTarget] = useState<AgentAttachment | null>(null);
   const [detachNotice, setDetachNotice] = useState<DetachResult | null>(null);
   const [attachOpen, setAttachOpen] = useState(false);
@@ -275,6 +276,7 @@ export const DetailPane = memo(function DetailPane({
   if (activeSkillId !== skillId) {
     setActiveSkillId(skillId);
     setTab("actions");
+    setContentVisited(false);
     setDetachTarget(null);
     setDetachNotice(null);
     setAttachOpen(false);
@@ -358,11 +360,16 @@ export const DetailPane = memo(function DetailPane({
     );
   };
 
+  const selectTab = (next: DetailTab) => {
+    setTab(next);
+    if (next === "content") setContentVisited(true);
+  };
+
   const handleTabKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
     event.preventDefault();
     const next: DetailTab = tab === "content" ? "actions" : "content";
-    setTab(next);
+    selectTab(next);
     document.getElementById(`detail-tab-${next}`)?.focus();
   };
 
@@ -677,7 +684,7 @@ export const DetailPane = memo(function DetailPane({
             tabIndex={tab === "actions" ? 0 : -1}
             className="detail-tab"
             data-selected={tab === "actions" ? "true" : "false"}
-            onClick={() => setTab("actions")}
+            onClick={() => selectTab("actions")}
           >
             操作
           </button>
@@ -690,7 +697,7 @@ export const DetailPane = memo(function DetailPane({
             tabIndex={tab === "content" ? 0 : -1}
             className="detail-tab"
             data-selected={tab === "content" ? "true" : "false"}
-            onClick={() => setTab("content")}
+            onClick={() => selectTab("content")}
           >
             内容
           </button>
@@ -705,24 +712,28 @@ export const DetailPane = memo(function DetailPane({
             className="detail-panel detail-panel-content"
             data-testid="detail-content-panel"
           >
-            <Suspense
-              fallback={
-                <div className="content-empty">
-                  <Loader2
-                    className="size-4 animate-spin"
-                    aria-hidden="true"
+            {contentVisited ? (
+              <Activity mode={tab === "content" ? "visible" : "hidden"}>
+                <Suspense
+                  fallback={
+                    <div className="content-empty">
+                      <Loader2
+                        className="size-4 animate-spin"
+                        aria-hidden="true"
+                      />
+                      <p>正在加载内容视图…</p>
+                    </div>
+                  }
+                >
+                  <SkillContentTab
+                    key={skill.id}
+                    scope={scope}
+                    skillId={skill.id}
+                    frontmatterWarning={frontmatterWarning}
                   />
-                  <p>正在加载内容视图…</p>
-                </div>
-              }
-            >
-              <SkillContentTab
-                key={skill.id}
-                scope={scope}
-                skillId={skill.id}
-                frontmatterWarning={frontmatterWarning}
-              />
-            </Suspense>
+                </Suspense>
+              </Activity>
+            ) : null}
           </section>
 
           <section
