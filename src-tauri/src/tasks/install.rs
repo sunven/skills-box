@@ -14,12 +14,16 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-use crate::agents::{DetectionContext, catalog, resolve_global_skills_dir};
+use crate::agents::catalog;
+#[cfg(test)]
+use crate::agents::{DetectionContext, resolve_global_skills_dir};
 use crate::attachment_target::{self, AgentDirectoryState, TargetState};
 use crate::backup::BackupStore;
 use crate::baseline::{BaselineStore, write_warning};
 use crate::cli::CliRuntime;
+#[cfg(test)]
 use crate::env::capture_process_env;
+#[cfg(test)]
 use crate::env::child_env::{ChildEnvParams, build_child_env};
 use crate::error::AppError;
 use crate::error::cli::{self, CliAction};
@@ -28,6 +32,7 @@ use crate::lock::LockFile;
 use crate::paths::AppPaths;
 use crate::process::{CommandSpec, ExecOutput};
 use crate::security;
+use crate::time::now_ms;
 
 use super::conflicts::find_conflicts;
 use super::manager::{TaskAction, TaskPhase, TaskSkillResult, TaskSkillStatus};
@@ -184,10 +189,13 @@ fn is_shell_metacharacter(character: char) -> bool {
     )
 }
 
-fn validate_agents(
-    paths: &AppPaths,
+/// Validate, normalize and dedupe requested agent ids, preserving input order.
+/// `validate` runs before dedupe so every raw entry is checked exactly as the
+/// caller's error precedence expects.
+fn collect_agent_ids(
     raw: &[String],
-) -> Result<(Vec<String>, Vec<InstallTarget>), AppError> {
+    mut validate: impl FnMut(&str) -> Result<(), AppError>,
+) -> Result<Vec<String>, AppError> {
     let mut seen = HashSet::new();
     let mut order = Vec::new();
     for value in raw {
@@ -207,6 +215,28 @@ fn validate_agents(
         if id == UNIVERSAL_AGENT_ID {
             continue;
         }
+        validate(id)?;
+        if seen.insert(id.to_string()) {
+            order.push(id.to_string());
+        }
+    }
+    Ok(order)
+}
+
+fn cli_agent_ids(targets: &[InstallTarget]) -> Vec<String> {
+    targets
+        .iter()
+        .filter(|target| crate::agents::is_catalog_agent(&target.id))
+        .map(|target| target.id.clone())
+        .chain(std::iter::once(UNIVERSAL_AGENT_ID.to_string()))
+        .collect()
+}
+
+fn validate_agents(
+    paths: &AppPaths,
+    raw: &[String],
+) -> Result<(Vec<String>, Vec<InstallTarget>), AppError> {
+    let order = collect_agent_ids(raw, |id| {
         if let Some(definition) = catalog()
             .agents
             .iter()
@@ -218,10 +248,8 @@ fn validate_agents(
         } else if crate::agents::extras::find(paths, id).is_none() {
             return Err(AppError::agent_invalid(format!("未知 agent：{id}")));
         }
-        if seen.insert(id.to_string()) {
-            order.push(id.to_string());
-        }
-    }
+        Ok(())
+    })?;
 
     let detected = crate::inventory::detected_agent_dirs(paths);
     let mut targets = Vec::new();
@@ -251,13 +279,7 @@ fn validate_agents(
 
     // Extra agents are linked natively after the CLI runs, so they never
     // appear in the CLI argument list.
-    let agent_ids = targets
-        .iter()
-        .filter(|target| crate::agents::is_catalog_agent(&target.id))
-        .map(|target| target.id.clone())
-        .chain(std::iter::once(UNIVERSAL_AGENT_ID.to_string()))
-        .collect();
-    Ok((agent_ids, targets))
+    Ok((cli_agent_ids(&targets), targets))
 }
 
 /// Project install targets: globally detected catalog agents plus configured
@@ -268,29 +290,7 @@ fn validate_project_agents(
     layout: &crate::scope_layout::ScopeLayout,
     raw: &[String],
 ) -> Result<(Vec<String>, Vec<InstallTarget>), AppError> {
-    let mut seen = HashSet::new();
-    let mut order = Vec::new();
-    for value in raw {
-        let id = value.trim();
-        let invalid = id.is_empty()
-            || id.len() > 64
-            || id == "*"
-            || id.starts_with('-')
-            || !id.chars().all(|character| {
-                character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
-            });
-        if invalid {
-            return Err(AppError::agent_invalid(format!(
-                "无效的 agent 标识：{value:?}"
-            )));
-        }
-        if id == UNIVERSAL_AGENT_ID {
-            continue;
-        }
-        if seen.insert(id.to_string()) {
-            order.push(id.to_string());
-        }
-    }
+    let order = collect_agent_ids(raw, |_| Ok(()))?;
 
     let available = layout.install_targets(&crate::inventory::detected_agent_dirs(paths));
     let mut targets = Vec::new();
@@ -327,18 +327,13 @@ fn validate_project_agents(
         });
     }
 
-    let agent_ids = targets
-        .iter()
-        .filter(|target| crate::agents::is_catalog_agent(&target.id))
-        .map(|target| target.id.clone())
-        .chain(std::iter::once(UNIVERSAL_AGENT_ID.to_string()))
-        .collect();
+    let agent_ids = cli_agent_ids(&targets);
     Ok((agent_ids, targets))
 }
 
 /// Resolve known agent ids to absolute global skills directories without their
-/// config roots existing. Install validation additionally requires detection;
-/// this helper exists for verification fixtures and future callers.
+/// config roots existing. Used by install fixtures.
+#[cfg(test)]
 pub fn resolve_agent_dirs(paths: &AppPaths, ids: &[String]) -> Vec<AgentDir> {
     let parent = capture_process_env();
     let env = build_child_env(ChildEnvParams {
@@ -1010,13 +1005,6 @@ impl MutationAction for InstallAction {
     }
 
     fn on_cancelled(&self, _unit: &Self::Unit, _preflight: &Preflight, _error: Option<AppError>) {}
-}
-
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

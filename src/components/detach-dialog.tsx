@@ -1,6 +1,7 @@
 import { useRef } from "react";
 import { HardDrive, ShieldAlert, Unlink, X } from "lucide-react";
 import { Button } from "./ui/button";
+import { MutationError } from "./mutation/mutation-error";
 import { MutationProgress } from "./mutation/mutation-progress";
 import { useModalFocus } from "../hooks/use-modal-focus";
 import { ATTACHMENT_LABELS } from "../lib/inventory-view";
@@ -164,22 +165,7 @@ export function DetachDialog({
             />
           ) : null}
 
-          {error ? (
-            <div
-              role="alert"
-              data-testid="detach-error"
-              className="notice mt-3"
-              data-tone="negative"
-            >
-              <div>
-                <p className="font-medium">{error.message}</p>
-                {error.detail ? (
-                  <p className="mono mt-0.5 break-all">{error.detail}</p>
-                ) : null}
-                {error.hint ? <p className="mt-0.5">{error.hint}</p> : null}
-              </div>
-            </div>
-          ) : null}
+          <MutationError error={error} testId="detach-error" monoDetail />
         </div>
 
         <div className="modal-foot">

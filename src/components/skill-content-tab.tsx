@@ -42,7 +42,10 @@ import {
 import {
   useSkillDirQuery,
   useSkillFileQuery,
+  skillDirQueryPrefix,
+  skillFileQueryPrefix,
 } from "../hooks/use-skill-content";
+import { skillQueryKey } from "../hooks/use-skill-detail";
 import type {
   AppError,
   ScopeId,
@@ -118,12 +121,12 @@ export const SkillContentTab = memo(function SkillContentTab({
     setActionError(null);
     try {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["skill", scope, skillId] }),
+        queryClient.invalidateQueries({ queryKey: skillQueryKey(scope, skillId) }),
         queryClient.invalidateQueries({
-          queryKey: ["skill-dir", scope, skillId],
+          queryKey: skillDirQueryPrefix(scope, skillId),
         }),
         queryClient.invalidateQueries({
-          queryKey: ["skill-file", scope, skillId],
+          queryKey: skillFileQueryPrefix(scope, skillId),
         }),
       ]);
     } finally {

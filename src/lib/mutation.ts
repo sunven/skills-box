@@ -12,8 +12,15 @@ import { useQueryClient } from "@tanstack/react-query";
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { asAppError, cancelTask, fallbackError } from "./api";
 import { TASK_SKILL_STATUS_LABELS } from "./task-runner";
+import { inventoryQueryKey } from "../hooks/use-inventory";
+import { skillQueryKey, skillQueryPrefix } from "../hooks/use-skill-detail";
+import {
+  skillDirQueryPrefix,
+  skillFileQueryPrefix,
+} from "../hooks/use-skill-content";
 import type {
   AppError,
+  MutationKind,
   ScopeId,
   TaskEvent,
   TaskPhase,
@@ -22,6 +29,12 @@ import type {
   UpdateCheckReport,
 } from "./types";
 import { markSkillsCurrent, updateReportQueryKey } from "./update-view";
+
+export const MUTATION_KIND_LABELS: Record<MutationKind, string> = {
+  install: "安装",
+  update: "更新",
+  uninstall: "卸载",
+};
 
 export type MutationAction =
   | "install"
@@ -333,28 +346,28 @@ export function mutationRefreshKeys(
 ): QueryKey[] {
   switch (action) {
     case "install":
-      return [["inventory", scope], ["skill", scope]];
+      return [inventoryQueryKey(scope), skillQueryPrefix(scope)];
     case "update":
     case "uninstall":
       return [
-        ["inventory", scope],
-        ["skill", scope],
-        ["updateReport", scope],
+        inventoryQueryKey(scope),
+        skillQueryPrefix(scope),
+        updateReportQueryKey(scope),
       ];
     case "attach":
     case "detach":
       return skillId
         ? [
-            ["inventory", scope],
-            ["skill", scope, skillId],
-            ["skill-dir", scope, skillId],
-            ["skill-file", scope, skillId],
+            inventoryQueryKey(scope),
+            skillQueryKey(scope, skillId),
+            skillDirQueryPrefix(scope, skillId),
+            skillFileQueryPrefix(scope, skillId),
           ]
         : [
-            ["inventory", scope],
-            ["skill", scope],
-            ["skill-dir", scope],
-            ["skill-file", scope],
+            inventoryQueryKey(scope),
+            skillQueryPrefix(scope),
+            skillDirQueryPrefix(scope),
+            skillFileQueryPrefix(scope),
           ];
     case "manage_add":
     case "manage_remove":

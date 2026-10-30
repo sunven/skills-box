@@ -17,7 +17,8 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::time::now_ms;
 
 use serde::Serialize;
 
@@ -82,12 +83,6 @@ pub struct BackupSnapshot {
     pub canonical_present: bool,
     pub agents: Vec<String>,
     pub attachments: Vec<ManifestAttachment>,
-}
-
-impl BackupSnapshot {
-    pub fn manifest_path(&self) -> PathBuf {
-        self.path.join(BACKUP_MANIFEST_FILE)
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -340,13 +335,6 @@ fn copy_tree(source: &Path, destination: &Path) -> io::Result<()> {
 
 fn io_backup_error(path: &Path, error: io::Error) -> AppError {
     AppError::backup_failed(format!("{}：{error}", path.display()))
-}
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

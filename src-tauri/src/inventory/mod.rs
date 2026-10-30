@@ -257,7 +257,13 @@ pub(crate) fn install_target_rows(
     paths: &AppPaths,
     layout: &crate::scope_layout::ScopeLayout,
 ) -> Vec<InventoryAgent> {
-    let detected = detected_agent_dirs(paths);
+    // Global scope returns the layout's agents directly; detection is only
+    // consulted when mapping catalog agents into project target dirs.
+    let detected = if layout.project.is_some() {
+        detected_agent_dirs(paths)
+    } else {
+        Vec::new()
+    };
     layout
         .install_targets(&detected)
         .into_iter()

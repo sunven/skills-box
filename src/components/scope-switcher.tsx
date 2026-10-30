@@ -29,7 +29,7 @@ function ProjectRow({
 }) {
   const { project } = entry;
   const unavailable = entry.unavailable;
-  const failed = entry.checkFailed || entry.error;
+  const failed = entry.error;
   return (
     <div className="scope-project" data-active={entry.active ? "true" : "false"}>
       <button

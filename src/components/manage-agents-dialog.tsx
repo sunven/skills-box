@@ -8,6 +8,7 @@ import { MutationProgress } from "./mutation/mutation-progress";
 import { useModalFocus } from "../hooks/use-modal-focus";
 import { addExtraAgent, fallbackError, removeExtraAgent, updateExtraAgent } from "../lib/api";
 import { promiseDriver, useMutation } from "../lib/mutation";
+import { computeAgentOptions } from "../lib/inventory-view";
 import type { AppError, InventoryAgent, InventorySkill } from "../lib/types";
 import { GLOBAL_SCOPE } from "../lib/types";
 
@@ -85,7 +86,6 @@ export function ManageAgentsDialog({
   const [addError, setAddError] = useState<AppError | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
-  const [deleting, setDeleting] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [editingProjectDir, setEditingProjectDir] = useState("");
   const [editError, setEditError] = useState<AppError | null>(null);
@@ -111,28 +111,24 @@ export function ManageAgentsDialog({
     fallbackStart: "修改额外 agent 失败。",
   });
   const adding = addMutation.state.running;
+  const removing = removeMutation.state.running;
 
   const extras = useMemo(
     () => agents.filter((agent) => agent.origin !== "catalog"),
     [agents],
   );
-  const attachmentCounts = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const skill of skills) {
-      const seenAgents = new Set<string>();
-      for (const attachment of skill.attachments) {
-        if (seenAgents.has(attachment.agentId)) continue;
-        seenAgents.add(attachment.agentId);
-        counts.set(attachment.agentId, (counts.get(attachment.agentId) ?? 0) + 1);
-      }
-    }
-    return counts;
-  }, [skills]);
+  const attachmentCounts = useMemo(
+    () =>
+      new Map(
+        computeAgentOptions(skills, agents).map((option) => [
+          option.id,
+          option.count,
+        ]),
+      ),
+    [skills, agents],
+  );
 
-  const busy =
-    adding ||
-    removeMutation.state.running ||
-    updateMutation.state.running;
+  const busy = adding || removeMutation.state.running || updateMutation.state.running;
 
   useModalFocus({
     open,
@@ -262,7 +258,6 @@ export function ManageAgentsDialog({
   };
 
   const handleDelete = async (agentId: string) => {
-    setDeleting(agentId);
     setNotice(null);
     await removeMutation.start(
       promiseDriver({
@@ -298,7 +293,6 @@ export function ManageAgentsDialog({
         },
       }),
     );
-    setDeleting(null);
   };
 
   return (
@@ -500,7 +494,7 @@ export function ManageAgentsDialog({
                                 variant="ghost"
                                 size="sm"
                                 className="h-7 px-2 text-[12px]"
-                                disabled={deleting !== null}
+                                disabled={removing}
                                 onClick={() => {
                                   setConfirming(null);
                                   removeMutation.reset();
@@ -512,10 +506,12 @@ export function ManageAgentsDialog({
                                 variant="destructive"
                                 size="sm"
                                 className="h-7 px-2 text-[12px]"
-                                disabled={deleting !== null}
+                                disabled={removing}
                                 onClick={() => void handleDelete(agent.id)}
                               >
-                                {deleting === agent.id ? "正在删除…" : "确认删除"}
+                                {removing && confirming === agent.id
+                                  ? "正在删除…"
+                                  : "确认删除"}
                               </Button>
                             </>
                           ) : (

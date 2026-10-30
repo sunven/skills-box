@@ -1,13 +1,8 @@
 import { AlertTriangle, ArchiveRestore } from "lucide-react";
 import { Button } from "./ui/button";
-import type { InterruptedReport, LockHealth, MutationKind, ScopeId } from "../lib/types";
+import { MUTATION_KIND_LABELS as KIND_LABELS } from "../lib/mutation";
+import type { InterruptedReport, LockHealth, ScopeId } from "../lib/types";
 import { GLOBAL_SCOPE } from "../lib/types";
-
-const KIND_LABELS: Record<MutationKind, string> = {
-  install: "安装",
-  update: "更新",
-  uninstall: "卸载",
-};
 
 const LOCK_LABELS: Record<LockHealth["status"], string> = {
   ok: "lock v3 正常",

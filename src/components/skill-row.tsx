@@ -6,14 +6,13 @@ import type { InventorySkill } from "../lib/types";
 import {
   ATTACHMENT_LABELS,
   LOCAL_MODIFICATION_LABELS,
-  UPDATE_LABELS,
   formatUpdatedAt,
   hasBrokenAttachment,
   hasLocalModificationWarning,
   uniqueAttachments,
 } from "../lib/inventory-view";
-import { updateBadgeTitle } from "../lib/update-view";
 import type { UpdateViewSkill } from "../lib/types";
+import { UpdateStatus } from "./update-status";
 
 interface AgentAvatarsProps {
   skill: InventorySkill;
@@ -71,25 +70,6 @@ interface SkillRowProps {
   skill: UpdateViewSkill;
   selected: boolean;
   onSelect: (name: string) => void;
-}
-
-function UpdateStatus({ skill }: { skill: UpdateViewSkill }) {
-  const tone =
-    skill.update === "update"
-      ? "accent"
-      : skill.update === "error" || skill.update === "path_missing"
-        ? "negative"
-        : "muted";
-  return (
-    <span
-      data-testid="update-badge"
-      className="status-chip"
-      data-tone={tone}
-      title={updateBadgeTitle(skill)}
-    >
-      {UPDATE_LABELS[skill.update]}
-    </span>
-  );
 }
 
 export const SkillRow = memo(function SkillRow({
@@ -163,7 +143,7 @@ export const SkillRow = memo(function SkillRow({
         <AgentAvatars skill={skill} />
       </div>
       <div className="skill-status">
-        <UpdateStatus skill={skill} />
+        <UpdateStatus skill={skill} testId="update-badge" />
       </div>
     </button>
   );

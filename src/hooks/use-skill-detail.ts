@@ -2,8 +2,10 @@ import { useQuery } from "@tanstack/react-query";
 import { getSkillDetail } from "../lib/api";
 import type { ScopeId } from "../lib/types";
 
+export const skillQueryPrefix = (scope: ScopeId) => ["skill", scope] as const;
+
 export const skillQueryKey = (scope: ScopeId, skillId: string | null) =>
-  ["skill", scope, skillId] as const;
+  [...skillQueryPrefix(scope), skillId] as const;
 
 /** Detail is only fetched for the selected row, always inside its scope. */
 export function useSkillDetailQuery(

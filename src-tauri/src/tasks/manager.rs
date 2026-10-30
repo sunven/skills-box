@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use serde::Serialize;
 use tokio::sync::{Notify, Semaphore};
@@ -16,6 +16,7 @@ use crate::error::cli::{self, CliAction};
 use crate::interrupted::{InterruptedMutation, MarkerStore, MutationKind};
 use crate::paths::AppPaths;
 use crate::process::{CancelToken, ExecError, ProcessExecutor};
+use crate::time::now_ms;
 
 use super::conflicts::{ConflictInfo, ConflictProvider};
 use super::install::{self, INSTALL_TIMEOUT, InstallPlan, InstallRequest, validate_request};
@@ -1285,13 +1286,6 @@ impl TaskManager {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
-}
-
-pub(super) fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 fn emit(sink: &EventSink, event: TaskEvent) {

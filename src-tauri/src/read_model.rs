@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 use crate::attachment_target::{self, DetachEligibility};
 use crate::baseline::{BaselineStore, LocalModification};
@@ -26,6 +26,7 @@ use crate::projects::ProjectRegistry;
 use crate::scope::ScopeId;
 use crate::scope_layout::ScopeLayout;
 use crate::security::{self, AllowedRoot};
+use crate::time::now_ms;
 
 pub struct ReadModel {
     paths: AppPaths,
@@ -170,15 +171,7 @@ impl ReadModel {
         match scope {
             ScopeId::Global => Ok(ScopeLayout::global(&self.paths, self.detected_agents())),
             ScopeId::Project(id) => {
-                let entry = self.projects.lookup(*id)?;
-                if !entry.available {
-                    return Err(AppError::project_root_unavailable(
-                        &entry.project.display_name,
-                        entry
-                            .unavailable_reason
-                            .unwrap_or_else(|| "目录不可用".to_string()),
-                    ));
-                }
+                let entry = self.projects.lookup_available(*id)?;
                 Ok(ScopeLayout::project(&self.paths, entry.project))
             }
         }
@@ -194,7 +187,7 @@ impl ReadModel {
                 return Err(error);
             }
         };
-        let catalog = match build_catalog_for(&self.paths, &layout) {
+        let catalog = match layout.catalog(&self.paths) {
             Ok(catalog) => catalog,
             Err(error) => {
                 self.remove_cached(scope);
@@ -293,7 +286,7 @@ impl ReadModel {
             }
         }
 
-        let catalog = match build_catalog_for(&self.paths, &layout) {
+        let catalog = match layout.catalog(&self.paths) {
             Ok(catalog) => Arc::new(catalog),
             Err(error) => {
                 self.remove_cached(scope);
@@ -325,18 +318,6 @@ impl ReadModel {
     }
 }
 
-fn build_catalog_for(paths: &AppPaths, layout: &ScopeLayout) -> Result<Catalog, AppError> {
-    match &layout.project {
-        None => inventory::build_catalog(paths, &layout.agents),
-        Some(_) => inventory::build_project_catalog(
-            &layout.root,
-            &layout.canonical_dir,
-            &layout.lock_path,
-            &layout.agents,
-        ),
-    }
-}
-
 /// One-shot read for fixtures and integration tests (global scope).
 pub(crate) fn snapshot_with_agents(
     paths: &AppPaths,
@@ -355,6 +336,7 @@ pub(crate) fn detail_with_agents(
 }
 
 /// One-shot root resolution for fixtures (global scope).
+#[cfg(test)]
 pub(crate) fn resolve_root_with_agents(
     paths: &AppPaths,
     agents: &[AgentDir],
@@ -738,13 +720,6 @@ fn push_unique(values: &mut Vec<String>, value: String) {
     if !values.contains(&value) {
         values.push(value);
     }
-}
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

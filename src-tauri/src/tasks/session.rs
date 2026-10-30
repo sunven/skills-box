@@ -13,10 +13,11 @@ use crate::cli::{CliRuntime, CliRuntimeProvider};
 use crate::error::AppError;
 use crate::error::cli::{self, CliAction};
 use crate::process::{CancelToken, CommandSpec, ExecError, ExecOutput, ProcessExecutor};
+use crate::time::now_ms;
 
 use super::manager::{
     EventSink, FinishOutcome, TaskAction, TaskEvent, TaskOverall, TaskPhase, TaskResult,
-    TaskSkillResult, TaskSkillStatus, now_ms,
+    TaskSkillResult, TaskSkillStatus,
 };
 use super::summary;
 

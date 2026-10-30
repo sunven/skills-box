@@ -297,7 +297,7 @@ fn project_scope_grants_only_the_registered_root_and_rejects_escapes() {
         .split("#[cfg(test)]")
         .next()
         .expect("scope layout has product code");
-    assert!(product.contains("projects.lookup(*id)?"));
+    assert!(product.contains("projects.lookup_available(*id)?"));
     assert!(product.contains("AllowedRoot::project(self.root.clone())"));
     let project_branch = product
         .split("pub fn allowed_roots")

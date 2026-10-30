@@ -2,13 +2,8 @@ import { useRef } from "react";
 import { AlertTriangle, LogOut, X } from "lucide-react";
 import { Button } from "./ui/button";
 import { useModalFocus } from "../hooks/use-modal-focus";
-import type { ActiveMutationInfo, MutationKind } from "../lib/types";
-
-const KIND_LABELS: Record<MutationKind, string> = {
-  install: "安装",
-  update: "更新",
-  uninstall: "卸载",
-};
+import { MUTATION_KIND_LABELS as KIND_LABELS } from "../lib/mutation";
+import type { ActiveMutationInfo } from "../lib/types";
 
 interface ExitDialogProps {
   open: boolean;

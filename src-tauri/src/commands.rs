@@ -27,6 +27,15 @@ use crate::timeouts::READ_TIMEOUT;
 use crate::update::UpdateCheckReport;
 use crate::update::state::UpdateCheckState;
 
+/// Forward task events to the renderer. A closed window must not fail a
+/// read-only task or abort a mutation that may already be writing; the task
+/// finishes and its result is discarded.
+fn task_event_sink(on_event: Channel<TaskEvent>) -> EventSink {
+    Arc::new(move |event| {
+        let _ = on_event.send(event);
+    })
+}
+
 /// Run one read operation under the spec's 30-second hard cap. A stuck local
 /// scan or IPC bridge becomes a retryable `skill.read_timeout` instead of a
 /// spinner that never resolves.
@@ -253,10 +262,7 @@ pub async fn start_preview(
     on_event: Channel<TaskEvent>,
 ) -> Result<TaskId, AppError> {
     // Project preview uses the project root as cwd and never `-g`.
-    let sink: EventSink = Arc::new(move |event| {
-        // A closed window must not fail a read-only task; the task simply ends.
-        let _ = on_event.send(event);
-    });
+    let sink = task_event_sink(on_event);
     state.tasks.start_preview(scope, &source, sink).await
 }
 
@@ -273,15 +279,7 @@ pub async fn check_updates(
     match &scope {
         ScopeId::Global => state.updates.check(skill_ids).await,
         ScopeId::Project(id) => {
-            let entry = state.projects.lookup(*id)?;
-            if !entry.available {
-                return Err(AppError::project_root_unavailable(
-                    &entry.project.display_name,
-                    entry
-                        .unavailable_reason
-                        .unwrap_or_else(|| "目录不可用".to_string()),
-                ));
-            }
+            let entry = state.projects.lookup_available(*id)?;
             state
                 .project_updates
                 .check(&scope, &entry.project.root, skill_ids)
@@ -308,11 +306,7 @@ pub async fn start_install(
     on_event: Channel<TaskEvent>,
 ) -> Result<TaskId, AppError> {
     // Project install runs in the project root without `-g`.
-    let sink: EventSink = Arc::new(move |event| {
-        // A closed window must not abort a mutation that may already be
-        // writing; the task still finishes and its result is discarded.
-        let _ = on_event.send(event);
-    });
+    let sink = task_event_sink(on_event);
     state.tasks.start_install(scope, request, sink).await
 }
 
@@ -366,11 +360,7 @@ pub async fn start_update(
     skill_ids: Vec<String>,
     on_event: Channel<TaskEvent>,
 ) -> Result<TaskId, AppError> {
-    let sink: EventSink = Arc::new(move |event| {
-        // A closed window must not abort a mutation that may already be
-        // writing; the task still finishes and its result is discarded.
-        let _ = on_event.send(event);
-    });
+    let sink = task_event_sink(on_event);
     state.tasks.start_update(scope, skill_ids, sink).await
 }
 
@@ -442,11 +432,7 @@ pub async fn start_uninstall(
     skill_id: String,
     on_event: Channel<TaskEvent>,
 ) -> Result<TaskId, AppError> {
-    let sink: EventSink = Arc::new(move |event| {
-        // A closed window must not abort a mutation that may already be
-        // writing; the task still finishes and its result is discarded.
-        let _ = on_event.send(event);
-    });
+    let sink = task_event_sink(on_event);
     state.tasks.start_uninstall(scope, skill_id, sink).await
 }
 

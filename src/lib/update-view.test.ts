@@ -19,7 +19,6 @@ import {
   selectUpdateDialog,
   summarizePersistedState,
   updateBadgeTitle,
-  updateBadgeVariant,
   withUpdateAnomalies,
 } from "./update-view";
 import {
@@ -254,13 +253,7 @@ describe("computeUpdateSummary", () => {
 });
 
 describe("badges and formatting", () => {
-  it("maps update states to badge variants and tooltips", () => {
-    expect(updateBadgeVariant("current")).toBe("success");
-    expect(updateBadgeVariant("update")).toBe("warning");
-    expect(updateBadgeVariant("unknown")).toBe("muted");
-    expect(updateBadgeVariant("error")).toBe("destructive");
-    expect(updateBadgeVariant("path_missing")).toBe("destructive");
-
+  it("builds update tooltips", () => {
     const failed = {
       ...skill("alpha", { update: "error" }),
       updateResult: updateResult("alpha", "error", {

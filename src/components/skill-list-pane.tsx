@@ -41,6 +41,33 @@ interface SkillListPaneProps {
   onRetry: () => void;
 }
 
+function CanvasSummary({
+  totalSkills,
+  sourceCount,
+  candidateCount,
+  anomalyCount,
+}: {
+  totalSkills: number;
+  sourceCount: number;
+  candidateCount: number;
+  anomalyCount: number;
+}) {
+  return (
+    <p className="canvas-summary">
+      <span className="n">{totalSkills}</span> 个 skill ·{" "}
+      <span className="n">{sourceCount}</span> 个来源 ·{" "}
+      <span className={candidateCount > 0 ? "update" : "n"}>
+        {candidateCount}
+      </span>{" "}
+      个可更新 ·{" "}
+      <span className={anomalyCount > 0 ? "anomaly" : "n"}>
+        {anomalyCount}
+      </span>{" "}
+      个异常
+    </p>
+  );
+}
+
 function EmptyState({
   title,
   description,
@@ -98,35 +125,23 @@ export function SkillListPane({
             refreshing={refreshingProject}
             onRefresh={onRefreshProject ?? (() => {})}
           />
-          <p className="canvas-summary">
-            <span className="n">{totalSkills}</span> 个 skill ·{" "}
-            <span className="n">{sourceCount}</span> 个来源 ·{" "}
-            <span className={candidateCount > 0 ? "update" : "n"}>
-              {candidateCount}
-            </span>{" "}
-            个可更新 ·{" "}
-            <span className={anomalies.total > 0 ? "anomaly" : "n"}>
-              {anomalies.total}
-            </span>{" "}
-            个异常
-          </p>
+          <CanvasSummary
+            totalSkills={totalSkills}
+            sourceCount={sourceCount}
+            candidateCount={candidateCount}
+            anomalyCount={anomalies.total}
+          />
         </>
       ) : (
         <div className="canvas-head">
           <div className="min-w-0">
             <h1 className="canvas-title">全局 Skills</h1>
-            <p className="canvas-summary">
-              <span className="n">{totalSkills}</span> 个 skill ·{" "}
-              <span className="n">{sourceCount}</span> 个来源 ·{" "}
-              <span className={candidateCount > 0 ? "update" : "n"}>
-                {candidateCount}
-              </span>{" "}
-              个可更新 ·{" "}
-              <span className={anomalies.total > 0 ? "anomaly" : "n"}>
-                {anomalies.total}
-              </span>{" "}
-              个异常
-            </p>
+            <CanvasSummary
+              totalSkills={totalSkills}
+              sourceCount={sourceCount}
+              candidateCount={candidateCount}
+              anomalyCount={anomalies.total}
+            />
           </div>
         </div>
       )}

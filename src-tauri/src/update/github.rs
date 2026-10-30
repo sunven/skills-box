@@ -220,7 +220,7 @@ pub trait GitHubTreeClient: Send + Sync {
     ) -> Result<RemoteTree, GitHubFetchError>;
 }
 
-fn validate_repo(source: &str) -> Result<(String, String), GitHubFetchError> {
+pub(super) fn validate_repo(source: &str) -> Result<(String, String), GitHubFetchError> {
     let normalized = crate::tasks::source::validate_source(source)
         .map_err(|error| GitHubFetchError::http(400, error.message))?
         .normalized;

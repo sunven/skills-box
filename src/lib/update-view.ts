@@ -15,14 +15,11 @@ import type {
   UpdateCheckReport,
   UpdateCheckState,
   UpdateViewSkill,
-  UpdateState,
 } from "./types";
 import { UPDATE_LABELS } from "./inventory-view";
 
 export const updateReportQueryKey = (scope: ScopeId) =>
   ["updateReport", scope] as const;
-
-export type UpdateBadgeVariant = "success" | "warning" | "muted" | "destructive";
 
 export type UpdateSkipReason =
   | "local_modified"
@@ -328,20 +325,6 @@ export function markSkillsCurrent(
         : skill,
     ),
   };
-}
-
-export function updateBadgeVariant(state: UpdateState): UpdateBadgeVariant {
-  switch (state) {
-    case "current":
-      return "success";
-    case "update":
-      return "warning";
-    case "error":
-    case "path_missing":
-      return "destructive";
-    default:
-      return "muted";
-  }
 }
 
 export function updateBadgeTitle(skill: UpdateViewSkill): string | undefined {

@@ -91,15 +91,7 @@ impl ScopeLayout {
         match scope {
             ScopeId::Global => Ok(Self::global(paths, inventory::detected_agent_dirs(paths))),
             ScopeId::Project(id) => {
-                let entry = projects.lookup(*id)?;
-                if !entry.available {
-                    return Err(AppError::project_root_unavailable(
-                        &entry.project.display_name,
-                        entry
-                            .unavailable_reason
-                            .unwrap_or_else(|| "目录不可用".to_string()),
-                    ));
-                }
+                let entry = projects.lookup_available(*id)?;
                 Ok(Self::project(paths, entry.project))
             }
         }

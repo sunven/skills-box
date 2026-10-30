@@ -60,6 +60,22 @@ pub struct ProjectList {
     pub warnings: Vec<String>,
 }
 
+impl ProjectEntry {
+    /// Reject an entry whose root cannot be used, carrying the registry's
+    /// reason into the shared scope-state error.
+    pub fn require_available(&self) -> Result<(), AppError> {
+        if self.available {
+            return Ok(());
+        }
+        Err(AppError::project_root_unavailable(
+            &self.project.display_name,
+            self.unavailable_reason
+                .clone()
+                .unwrap_or_else(|| "目录不可用".to_string()),
+        ))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ProjectsFile {
@@ -131,6 +147,14 @@ impl ProjectRegistry {
             Loaded::Missing => Err(AppError::project_not_found(&id.to_string())),
             Loaded::Unusable(detail) => Err(AppError::project_registry_corrupt(detail)),
         }
+    }
+
+    /// Lookup for scope-aware reads and writes: a missing or unusable root is
+    /// rejected before any path is derived from it.
+    pub fn lookup_available(&self, id: Uuid) -> Result<ProjectEntry, AppError> {
+        let entry = self.lookup(id)?;
+        entry.require_available()?;
+        Ok(entry)
     }
 
     pub fn add(&self, root: &str) -> Result<ProjectEntry, AppError> {

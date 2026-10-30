@@ -8,7 +8,9 @@
 use serde::Serialize;
 use std::fs::{self, File};
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 use std::time::UNIX_EPOCH;
 
 use crate::baseline::LocalModification;
@@ -166,6 +168,7 @@ pub(crate) fn read_skill_md(directory: &Path) -> SkillMdRead {
 
 /// Resolve and guard the physical skill folder used by content browsing and
 /// `open_skill_folder`.
+#[cfg(test)]
 pub fn resolve_skill_root(
     paths: &AppPaths,
     agents: &[AgentDir],

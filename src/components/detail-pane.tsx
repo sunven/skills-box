@@ -41,8 +41,9 @@ import {
   formatUpdatedAt,
   shortHash,
 } from "../lib/inventory-view";
-import { formatEpochDateTime, updateBadgeTitle } from "../lib/update-view";
+import { formatEpochDateTime } from "../lib/update-view";
 import type { UpdateViewSkill } from "../lib/types";
+import { UpdateStatus } from "./update-status";
 import { useSkillDetailQuery } from "../hooks/use-skill-detail";
 import { selectDetailView } from "../lib/detail-view";
 import { cn } from "../lib/utils";
@@ -169,25 +170,6 @@ function ClampedDescription({ text }: { text: string }) {
         </button>
       ) : null}
     </div>
-  );
-}
-
-function UpdateStatus({ skill }: { skill: UpdateViewSkill }) {
-  const tone =
-    skill.update === "update"
-      ? "accent"
-      : skill.update === "error" || skill.update === "path_missing"
-        ? "negative"
-        : "muted";
-  return (
-    <span
-      data-testid="detail-update-badge"
-      className="status-chip"
-      data-tone={tone}
-      title={updateBadgeTitle(skill)}
-    >
-      {UPDATE_LABELS[skill.update]}
-    </span>
   );
 }
 
@@ -425,6 +407,7 @@ export const DetailPane = memo(function DetailPane({
               <h2 className="detail-title">{detailView.name}</h2>
               <UpdateStatus
                 skill={{ ...skill, updateResult: updateInfo ?? undefined }}
+                testId="detail-update-badge"
               />
               {management === "copy_only" ? (
                 <span className="skill-note">仅副本</span>
@@ -910,8 +893,7 @@ export const DetailPane = memo(function DetailPane({
           scope={scope}
           skillId={skill.id}
           skillName={skill.name}
-          agents={agents}
-          attachments={attachments}
+          agents={attachableAgents}
           disabled={actionsDisabled}
           onClose={() => setAttachOpen(false)}
         />

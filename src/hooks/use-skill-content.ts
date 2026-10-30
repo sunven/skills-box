@@ -2,17 +2,27 @@ import { useQuery } from "@tanstack/react-query";
 import { listSkillDir, readSkillFile } from "../lib/api";
 import type { ScopeId } from "../lib/types";
 
+export const skillDirQueryPrefix = (scope: ScopeId, skillId?: string) =>
+  skillId === undefined
+    ? (["skill-dir", scope] as const)
+    : (["skill-dir", scope, skillId] as const);
+
 export const skillDirQueryKey = (
   scope: ScopeId,
   skillId: string,
   path: string,
-) => ["skill-dir", scope, skillId, path] as const;
+) => [...skillDirQueryPrefix(scope, skillId), path] as const;
+
+export const skillFileQueryPrefix = (scope: ScopeId, skillId?: string) =>
+  skillId === undefined
+    ? (["skill-file", scope] as const)
+    : (["skill-file", scope, skillId] as const);
 
 export const skillFileQueryKey = (
   scope: ScopeId,
   skillId: string,
   path: string,
-) => ["skill-file", scope, skillId, path] as const;
+) => [...skillFileQueryPrefix(scope, skillId), path] as const;
 
 /**
  * Content entries leave the cache shortly after the drawer closes; image

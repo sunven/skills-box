@@ -315,7 +315,7 @@ fn http_status_error(status: u16) -> GitHubFetchError {
 }
 
 pub fn commit_url(source: &str, reference: Option<&str>) -> Result<reqwest::Url, GitHubFetchError> {
-    let (owner, repo) = split_source(source)?;
+    let (owner, repo) = super::github::validate_repo(source)?;
     let reference = reference
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -337,7 +337,7 @@ pub fn commit_url(source: &str, reference: Option<&str>) -> Result<reqwest::Url,
 }
 
 pub fn archive_url(source: &str, commit: &str) -> Result<reqwest::Url, GitHubFetchError> {
-    let (owner, repo) = split_source(source)?;
+    let (owner, repo) = super::github::validate_repo(source)?;
     if !crate::git_tree::is_git_tree_hash(commit) {
         return Err(GitHubFetchError::parse("归档 commit 不是 40 位 Git SHA"));
     }
@@ -345,16 +345,6 @@ pub fn archive_url(source: &str, commit: &str) -> Result<reqwest::Url, GitHubFet
         "https://codeload.github.com/{owner}/{repo}/tar.gz/{commit}"
     ))
     .map_err(|error| GitHubFetchError::http(0, error.to_string()))
-}
-
-fn split_source(source: &str) -> Result<(String, String), GitHubFetchError> {
-    let normalized = crate::tasks::source::validate_source(source)
-        .map_err(|error| GitHubFetchError::http(400, error.message))?
-        .normalized;
-    let Some((owner, repo)) = normalized.split_once('/') else {
-        return Err(GitHubFetchError::http(400, "来源不是 owner/repo"));
-    };
-    Ok((owner.to_string(), repo.to_string()))
 }
 
 /// Parse `GET /repos/{owner}/{repo}/commits/{ref}`: only the SHA is needed.

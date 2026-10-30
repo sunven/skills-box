@@ -26,7 +26,7 @@ use super::state::{UpdateCheckState, UpdateCheckStateStore};
 use super::{
     Clock, SystemClock, UPDATE_CHECK_CACHE_TTL_MS, UPDATE_CHECK_CONCURRENCY,
     UPDATE_CHECK_DEADLINE_MS, UPDATE_CHECK_MAX_SOURCES, UpdateCheckReport, UpdateSkillResult,
-    UpdateSourceResult, UpdateSourceStatus, uncheckable_result,
+    UpdateSourceResult, UpdateSourceStatus, parent_path, uncheckable_result,
 };
 use crate::error::AppError;
 use crate::inventory::UpdateState;
@@ -330,7 +330,8 @@ impl ProjectUpdateService {
     /// for "last successful check" reporting when the download fails.
     async fn load_or_download(&self, source: &str, commit: &str) -> ArchiveEntry {
         let previous = self.cache.load(commit, self.config.limits);
-        if let Some(cached) = previous.as_ref()
+        let previous_fetched_at = previous.as_ref().map(|cached| cached.fetched_at_epoch_ms);
+        if let Some(cached) = previous
             && is_fresh(
                 cached.fetched_at_epoch_ms,
                 self.clock.now_epoch_ms(),
@@ -338,12 +339,11 @@ impl ProjectUpdateService {
             )
         {
             return ArchiveEntry {
-                archive: Ok(Arc::new(cached.archive.clone())),
+                archive: Ok(Arc::new(cached.archive)),
                 fetched_at_epoch_ms: cached.fetched_at_epoch_ms,
                 cached: true,
             };
         }
-        let previous_fetched_at = previous.as_ref().map(|cached| cached.fetched_at_epoch_ms);
         let now = self.clock.now_epoch_ms();
         let result = async {
             let raw = self
@@ -602,12 +602,6 @@ fn evaluate_target(target: &ProjectTarget, archive: &SourceArchive) -> Evaluatio
             note: Some(format!("无法读取来源文件：{detail}")),
         },
     }
-}
-
-fn parent_path(path: &str) -> String {
-    path.rsplit_once('/')
-        .map(|(parent, _)| parent.to_string())
-        .unwrap_or_default()
 }
 
 fn pending_result(target: &ProjectTarget, state: UpdateState, note: String) -> UpdateSkillResult {

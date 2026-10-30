@@ -10,12 +10,12 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
 use crate::error::AppError;
 use crate::paths::AppPaths;
+use crate::time::now_ms;
 
 pub const OPERATIONS_LOG_FILE: &str = "operations.jsonl";
 
@@ -145,13 +145,6 @@ struct LogLine<'a> {
     backup_path: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<&'a AppError>,
-}
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 /// `YYYY-MM-DDTHH:MM:SS.mmmZ` without pulling in a date-time dependency.

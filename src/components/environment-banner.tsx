@@ -1,6 +1,6 @@
 import { AlertTriangle, Loader2, RotateCcw } from "lucide-react";
 import { Button } from "./ui/button";
-import { isLockError } from "../lib/api";
+import { asAppError, isLockError } from "../lib/api";
 import type { AppError, EnvReport } from "../lib/types";
 
 interface EnvironmentBannerProps {
@@ -12,22 +12,30 @@ interface EnvironmentBannerProps {
 }
 
 function errorText(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === "string" && error.trim()) return error;
-  if (error && typeof error === "object") {
-    const candidate = error as { message?: unknown; detail?: unknown };
-    if (typeof candidate.message === "string" && candidate.message.trim()) {
-      return typeof candidate.detail === "string" && candidate.detail.trim()
-        ? `${candidate.message} · ${candidate.detail}`
-        : candidate.message;
-    }
-    try {
-      return JSON.stringify(error);
-    } catch {
-      return "未知错误";
-    }
-  }
-  return "未知错误";
+  const appError = asAppError(error);
+  if (!appError) return "未知错误";
+  return appError.detail
+    ? `${appError.message} · ${appError.detail}`
+    : appError.message;
+}
+
+function RecheckButton({
+  rechecking,
+  onRecheck,
+}: {
+  rechecking: boolean;
+  onRecheck: () => void;
+}) {
+  return (
+    <Button variant="outline" size="sm" onClick={onRecheck} disabled={rechecking}>
+      {rechecking ? (
+        <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+      ) : (
+        <RotateCcw className="size-3.5" aria-hidden="true" />
+      )}
+      重新检测
+    </Button>
+  );
 }
 
 export function EnvironmentBanner({
@@ -71,19 +79,7 @@ export function EnvironmentBanner({
               只读界面仍可使用。请确认后端命令可用，然后重新检测。
             </p>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onRecheck}
-            disabled={rechecking}
-          >
-            {rechecking ? (
-              <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
-            ) : (
-              <RotateCcw className="size-3.5" aria-hidden="true" />
-            )}
-            重新检测
-          </Button>
+          <RecheckButton rechecking={rechecking} onRecheck={onRecheck} />
         </div>
       </div>
     );
@@ -129,19 +125,7 @@ export function EnvironmentBanner({
             ))}
           </ul>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onRecheck}
-          disabled={rechecking}
-        >
-          {rechecking ? (
-            <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
-          ) : (
-            <RotateCcw className="size-3.5" aria-hidden="true" />
-          )}
-          重新检测
-        </Button>
+        <RecheckButton rechecking={rechecking} onRecheck={onRecheck} />
       </div>
     </div>
   );

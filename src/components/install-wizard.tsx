@@ -23,7 +23,7 @@ import type {
   TaskEvent,
 } from "../lib/types";
 import { GLOBAL_SCOPE } from "../lib/types";
-import { projectCanonicalPath } from "../lib/scope";
+import { projectCanonicalPath, projectScope } from "../lib/scope";
 import { useTaskEvents } from "../lib/task-runner";
 import { taskEventDriver, useMutation } from "../lib/mutation";
 
@@ -284,19 +284,23 @@ export function InstallWizard({
     previewDriver.stateRef,
   ]);
 
-  useEffect(() => {
-    if (!open) return;
-    previewDriver.reset();
+  const resetPreviewSelection = useCallback(() => {
     installMutation.reset();
-    setStep(1);
-    setSourceInput("");
     setPreview(null);
     setSelected(new Set());
-    setManualInput("");
     setSelectedAgents(new Set());
     lastInstallRef.current = null;
     agentsTouchedRef.current = false;
-  }, [open, scope, installMutation.reset, previewDriver.reset]);
+    setManualInput("");
+    setStep(1);
+  }, [installMutation.reset]);
+
+  useEffect(() => {
+    if (!open) return;
+    previewDriver.reset();
+    resetPreviewSelection();
+    setSourceInput("");
+  }, [open, scope, resetPreviewSelection, previewDriver.reset]);
 
   useModalFocus({
     open,
@@ -359,14 +363,7 @@ export function InstallWizard({
       );
       return;
     }
-    installMutation.reset();
-    setPreview(null);
-    setSelected(new Set());
-    setSelectedAgents(new Set());
-    lastInstallRef.current = null;
-    agentsTouchedRef.current = false;
-    setManualInput("");
-    setStep(1);
+    resetPreviewSelection();
     previewDriver.start({
       total: 1,
       message: "正在准备预览…",
@@ -516,7 +513,7 @@ export function InstallWizard({
                 {projects.map((entry) => (
                   <option
                     key={entry.id}
-                    value={`project:${entry.id}`}
+                    value={projectScope(entry.id)}
                     disabled={!entry.available}
                   >
                     {entry.displayName}

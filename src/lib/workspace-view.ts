@@ -59,7 +59,6 @@ export interface ScopeProjectView {
   unavailable: boolean;
   unavailableReason: string | null;
   updateCount: number;
-  checkFailed: boolean;
   error: boolean;
 }
 
@@ -73,7 +72,6 @@ export interface ProjectHeaderView {
   lockTone: ProjectLockTone;
   /** Formatted attempt time, or null when the scope was never checked. */
   lastCheckLabel: string;
-  lastCheckAt: number | null;
 }
 
 export interface WorkspaceViewInput {
@@ -193,12 +191,8 @@ export function buildWorkspaceView(input: WorkspaceViewInput): WorkspaceView {
         active,
         unavailable: !project.available,
         unavailableReason: project.unavailableReason ?? null,
-        updateCount: active
-          ? hasLiveReport
-            ? candidateCount
-            : (state?.candidateCount ?? 0)
-          : (state?.candidateCount ?? 0),
-        checkFailed: state?.lastOutcome === "failed",
+        updateCount:
+          active && hasLiveReport ? candidateCount : (state?.candidateCount ?? 0),
         error:
           project.lockError != null ||
           state?.lastOutcome === "failed" ||
@@ -222,7 +216,6 @@ export function buildWorkspaceView(input: WorkspaceViewInput): WorkspaceView {
           lastCheckLabel: lastCheck
             ? `上次检查：${formatEpochDateTime(lastCheck.lastAttemptAt)}`
             : "尚未检查",
-          lastCheckAt: lastCheck?.lastAttemptAt ?? null,
         };
       })()
     : null;

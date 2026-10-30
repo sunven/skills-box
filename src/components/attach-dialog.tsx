@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link2, X } from "lucide-react";
 import { Button } from "./ui/button";
 import { AgentLogo } from "./agent-logo";
@@ -9,19 +9,15 @@ import { useModalFocus } from "../hooks/use-modal-focus";
 import { asAppError, attachAgent, fallbackError } from "../lib/api";
 import { promiseDriver, useMutation } from "../lib/mutation";
 import type { MutationRow } from "../lib/mutation";
-import type {
-  AgentAttachment,
-  InventoryAgent,
-  ScopeId,
-} from "../lib/types";
+import type { InventoryAgent, ScopeId } from "../lib/types";
 
 interface AttachDialogProps {
   open: boolean;
   scope: ScopeId;
   skillId: string;
   skillName: string;
+  /** Agents still eligible for attachment, as selected by the detail view. */
   agents: InventoryAgent[];
-  attachments: AgentAttachment[];
   /** Disabled for unavailable/error scopes. */
   disabled?: boolean;
   onClose: () => void;
@@ -38,7 +34,6 @@ export function AttachDialog({
   skillId,
   skillName,
   agents,
-  attachments,
   disabled = false,
   onClose,
 }: AttachDialogProps) {
@@ -61,22 +56,6 @@ export function AttachDialog({
     error,
     startError,
   } = mutation.state;
-
-  const attachedIds = useMemo(
-    () => new Set(attachments.map((attachment) => attachment.agentId)),
-    [attachments],
-  );
-  const eligible = useMemo(
-    () =>
-      agents.filter(
-        (agent) =>
-          agent.detected &&
-          !agent.universal &&
-          !agent.shared &&
-          !attachedIds.has(agent.id),
-      ),
-    [agents, attachedIds],
-  );
 
   useModalFocus({
     open,
@@ -104,7 +83,7 @@ export function AttachDialog({
   };
 
   const confirm = async () => {
-    const targets = eligible.filter((agent) => selected.has(agent.id));
+    const targets = agents.filter((agent) => selected.has(agent.id));
     if (targets.length === 0 || running || disabled) return;
     const outcome = await mutation.start(
       promiseDriver({
@@ -188,13 +167,13 @@ export function AttachDialog({
         </div>
 
         <div className="modal-body">
-          {eligible.length === 0 ? (
+          {agents.length === 0 ? (
             <p className="notice">
               没有可挂载的 agent。未检测到或已挂载的 agent 不会出现在这里。
             </p>
           ) : (
             <ul className="space-y-1.5" data-testid="attach-agent-list">
-              {eligible.map((agent) => (
+              {agents.map((agent) => (
                 <li key={agent.id} className="attach-row">
                   <label className="flex w-full cursor-pointer items-center gap-2.5">
                     <input
@@ -270,7 +249,7 @@ export function AttachDialog({
             <Button
               size="sm"
               aria-busy={running}
-              disabled={running || disabled || eligible.length === 0 || selected.size === 0}
+              disabled={running || disabled || agents.length === 0 || selected.size === 0}
               onClick={() => void confirm()}
             >
               {running ? "正在挂载…" : `挂载${selected.size > 0 ? `（${selected.size}）` : ""}`}

@@ -177,10 +177,6 @@ pub fn origin_of(paths: &AppPaths, id: &str) -> AgentOrigin {
     }
 }
 
-pub fn is_extra(paths: &AppPaths, id: &str) -> bool {
-    find(paths, id).is_some()
-}
-
 /// Append one validated user entry. Existing entries are preserved verbatim,
 /// including ones that failed validation, so a hand-edited file is never
 /// silently rewritten into a lossy form.

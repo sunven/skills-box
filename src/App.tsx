@@ -23,7 +23,8 @@ import { UninstallDialog } from "./components/uninstall-dialog";
 import { UpdateDialog } from "./components/update-dialog";
 import { useAutoUpdateCheck } from "./hooks/use-auto-update-check";
 import { environmentQueryKey, useEnvironmentQuery, useRecheckEnvironment } from "./hooks/use-environment";
-import { useInventoryQuery } from "./hooks/use-inventory";
+import { inventoryQueryKey, useInventoryQuery } from "./hooks/use-inventory";
+import { skillQueryPrefix } from "./hooks/use-skill-detail";
 import { projectsQueryKey, useProjectsQuery, useScopeCheckStates } from "./hooks/use-projects";
 import {
   lastFullAttemptQueryKey,
@@ -125,7 +126,6 @@ function App() {
   const [sort, setSort] = useState<SortKey>("recent");
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [detailOpen, setDetailOpen] = useState(false);
   const [anomaliesOpen, setAnomaliesOpen] = useState(false);
   const [installOpen, setInstallOpen] = useState(false);
   const [manageAgentsOpen, setManageAgentsOpen] = useState(false);
@@ -184,9 +184,7 @@ function App() {
   useEffect(() => {
     if (selectedName === null) return;
     if (!view.visibleSkills.some((skill) => skill.name === selectedName)) {
-      const fallback = view.visibleSkills[0]?.name ?? null;
-      setSelectedName(fallback);
-      if (fallback === null) setDetailOpen(false);
+      setSelectedName(view.visibleSkills[0]?.name ?? null);
     }
   }, [view.visibleSkills, selectedName]);
 
@@ -289,8 +287,10 @@ function App() {
   const handleRecheck = () => {
     recheck.mutate();
     void inventoryQuery.refetch();
-    void queryClient.invalidateQueries({ queryKey: ["skill", scope] });
-    void queryClient.invalidateQueries({ queryKey: ["updateReport", scope] });
+    void queryClient.invalidateQueries({ queryKey: skillQueryPrefix(scope) });
+    void queryClient.invalidateQueries({
+      queryKey: updateReportQueryKey(scope),
+    });
   };
 
   const handleCheckUpdates = useCallback(
@@ -329,7 +329,6 @@ function App() {
     setStatus(defaults.status);
     setSort("recent");
     setSelectedName(null);
-    setDetailOpen(false);
     setFiltersOpen(false);
     setAnomaliesOpen(false);
     setUpdateMode(null);
@@ -382,10 +381,9 @@ function App() {
     [queryClient],
   );
 
-  const handleProjectAdded = useCallback(
+  const upsertProject = useCallback(
     (entry: ProjectEntry) => {
-      resetWorkspaceState();
-      setProjectDialog(null);
+      const nextScope = projectScope(entry.id);
       cacheProjectList((previous) => {
         const list = previous ?? {
           projects: [],
@@ -398,36 +396,30 @@ function App() {
             entry,
             ...list.projects.filter((item) => item.id !== entry.id),
           ],
-          lastActiveScope: projectScope(entry.id),
+          lastActiveScope: nextScope,
         };
       });
-      setActiveScope(projectScope(entry.id));
+      setActiveScope(nextScope);
+      return nextScope;
+    },
+    [cacheProjectList],
+  );
+
+  const handleProjectAdded = useCallback(
+    (entry: ProjectEntry) => {
+      resetWorkspaceState();
+      setProjectDialog(null);
+      upsertProject(entry);
       void queryClient.invalidateQueries({ queryKey: projectsQueryKey });
     },
-    [cacheProjectList, queryClient, resetWorkspaceState],
+    [queryClient, resetWorkspaceState, upsertProject],
   );
 
   const handleProjectRelocated = useCallback(
     (entry: ProjectEntry) => {
       resetWorkspaceState();
       setProjectDialog(null);
-      const relocatedScope = projectScope(entry.id);
-      cacheProjectList((previous) => {
-        const list = previous ?? {
-          projects: [],
-          lastActiveScope: GLOBAL_SCOPE,
-          warnings: [],
-        };
-        return {
-          ...list,
-          projects: [
-            entry,
-            ...list.projects.filter((item) => item.id !== entry.id),
-          ],
-          lastActiveScope: relocatedScope,
-        };
-      });
-      setActiveScope(relocatedScope);
+      const relocatedScope = upsertProject(entry);
       clearScopeCheckCache(relocatedScope);
       // The backend already persists this on relocate; the explicit command
       // keeps the cached list and a restart aligned when it races with a
@@ -442,7 +434,7 @@ function App() {
           void queryClient.invalidateQueries({ queryKey: projectsQueryKey });
         });
     },
-    [cacheProjectList, clearScopeCheckCache, queryClient, resetWorkspaceState],
+    [clearScopeCheckCache, queryClient, resetWorkspaceState, upsertProject],
   );
 
   const handleProjectForgotten = useCallback(
@@ -468,10 +460,10 @@ function App() {
           : previous,
       );
       void queryClient.removeQueries({
-        queryKey: ["inventory", forgottenScope],
+        queryKey: inventoryQueryKey(forgottenScope),
       });
       void queryClient.removeQueries({
-        queryKey: ["skill", forgottenScope],
+        queryKey: skillQueryPrefix(forgottenScope),
       });
       clearScopeCheckCache(forgottenScope);
       void queryClient.invalidateQueries({ queryKey: projectsQueryKey });
@@ -481,11 +473,9 @@ function App() {
 
   const handleSelectSkill = useCallback((name: string) => {
     setSelectedName(name);
-    setDetailOpen(true);
   }, []);
 
   const handleCloseDetail = useCallback(() => {
-    setDetailOpen(false);
     setSelectedName(null);
   }, []);
 
@@ -632,7 +622,7 @@ function App() {
               onOpenAnomalies={() => setAnomaliesOpen(true)}
               onRetry={handleRetryInventory}
             />
-            {detailOpen && view.selectedSkill ? (
+            {view.selectedSkill ? (
               <DetailPane
                 scope={scope}
                 skill={view.selectedSkill}
