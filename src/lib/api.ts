@@ -51,6 +51,7 @@ export const API_COMMANDS = {
   detachAgent: "detach_agent",
   attachAgent: "attach_agent",
   addExtraAgent: "add_extra_agent",
+  updateExtraAgent: "update_extra_agent",
   removeExtraAgent: "remove_extra_agent",
   startUninstall: "start_uninstall",
   revealAppData: "reveal_app_data",
@@ -299,6 +300,20 @@ export function attachAgent(
 /** Persist a user-defined extra agent in the app-data `agents.json`. */
 export function addExtraAgent(agent: ExtraAgentInput): Promise<ExtraAgent> {
   return invoke<ExtraAgent>(API_COMMANDS.addExtraAgent, { agent });
+}
+
+/**
+ * Change or clear one extra agent's project skills directory. The backend
+ * rejects the change while registered projects may still hold mounts.
+ */
+export function updateExtraAgent(
+  agentId: string,
+  projectSkillsDir: string | null,
+): Promise<ExtraAgent> {
+  return invoke<ExtraAgent>(API_COMMANDS.updateExtraAgent, {
+    agentId,
+    projectSkillsDir,
+  });
 }
 
 /** Detach its skills first, then remove one user-defined extra agent. */

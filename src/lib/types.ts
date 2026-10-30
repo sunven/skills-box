@@ -283,6 +283,8 @@ export interface InventoryAgent {
   origin: AgentOrigin;
   /** False only for extra agents whose detection path does not exist. */
   detected: boolean;
+  /** Configured project-relative skills directory (extras only). */
+  projectSkillsDir?: string | null;
 }
 
 /** Result of a native attach to one agent. */
@@ -307,11 +309,20 @@ export interface ExtraAgent extends ExtraAgentInput {
   builtin: boolean;
 }
 
+export interface ExtraProjectDetachment {
+  projectId: string;
+  projectName: string;
+  /** Scope-composite skill ids detached from this project. */
+  detached: string[];
+}
+
 export interface RemoveExtraAgentResult {
   id: string;
   displayName: string;
-  /** Skill ids detached before the definition was removed. */
+  /** Global skill ids detached before the definition was removed. */
   detached: string[];
+  /** Project detachments performed before the definition was removed. */
+  projects: ExtraProjectDetachment[];
 }
 
 export interface AnomalyGroup {

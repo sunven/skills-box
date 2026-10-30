@@ -5,6 +5,7 @@ import App from "./App";
 import { createQueryClient } from "./lib/query-client";
 import type {
   AgentAttachment,
+  AppError,
   InventoryAgent,
   InventorySnapshot,
 } from "./lib/types";
@@ -44,6 +45,7 @@ const acmeAgent: InventoryAgent = {
   globalSkillsDir: "~/.acme/skills",
   origin: "user",
   detected: false,
+  projectSkillsDir: ".acme/skills",
 };
 
 function renderApp() {
@@ -78,14 +80,18 @@ function mockCommands(options: {
   agents: InventoryAgent[];
   initial?: AgentAttachment[];
   attachError?: { code: string; message: string; detail?: string };
+  commands?: Partial<FakeHandlers>;
 }): readonly FakeCall[] {
-  const commands: Partial<FakeHandlers> = options.attachError
-    ? {
-        attach_agent: () => {
-          throw options.attachError!;
-        },
-      }
-    : {};
+  const commands: Partial<FakeHandlers> = {
+    ...(options.attachError
+      ? {
+          attach_agent: () => {
+            throw options.attachError!;
+          },
+        }
+      : {}),
+    ...options.commands,
+  };
   return createFakeBackend({
     data: {
       environment: healthyReport(),
@@ -131,6 +137,9 @@ describe("extra agent management", () => {
     ).toBeNull();
     expect(within(rows[1]!).getByText("自定义")).toBeInTheDocument();
     expect(within(rows[1]!).getByText("未检测到")).toBeInTheDocument();
+    expect(
+      within(rows[1]!).getByTestId("manage-agent-project-dir"),
+    ).toHaveTextContent("项目目录：.acme/skills");
 
     fireEvent.change(within(dialog).getByLabelText("id"), {
       target: { value: "acme2" },
@@ -141,6 +150,12 @@ describe("extra agent management", () => {
     fireEvent.change(within(dialog).getByLabelText("skills 目录"), {
       target: { value: "~/.acme2/skills" },
     });
+    fireEvent.change(
+      within(dialog).getByLabelText("项目内 skills 目录（可选）"),
+      {
+        target: { value: ".acme2/skills" },
+      },
+    );
     fireEvent.click(within(dialog).getByRole("button", { name: "添加" }));
 
     expect(
@@ -153,6 +168,7 @@ describe("extra agent management", () => {
         id: "acme2",
         displayName: "Acme Two",
         skillsDir: "~/.acme2/skills",
+        projectSkillsDir: ".acme2/skills",
       },
     });
 
@@ -200,6 +216,133 @@ describe("extra agent management", () => {
     expect(
       calls.filter((call) => call.command === "add_extra_agent"),
     ).toHaveLength(0);
+  });
+
+  it("validates the optional project directory before calling the backend", async () => {
+    const calls = mockCommands({
+      agents: [claudeAgent, workbuddyAgent, acmeAgent],
+    });
+    renderApp();
+    await screen.findByText("alpha");
+    fireEvent.click(screen.getByRole("button", { name: "管理 agent" }));
+    const dialog = screen.getByRole("dialog", { name: /管理 agent/ });
+
+    fireEvent.change(within(dialog).getByLabelText("id"), {
+      target: { value: "acme3" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("显示名"), {
+      target: { value: "Acme Three" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("skills 目录"), {
+      target: { value: "~/.acme3/skills" },
+    });
+    for (const invalid of ["/abs/skills", "../escape", ".agents/skills"]) {
+      fireEvent.change(
+        within(dialog).getByLabelText("项目内 skills 目录（可选）"),
+        { target: { value: invalid } },
+      );
+      fireEvent.click(within(dialog).getByRole("button", { name: "添加" }));
+      expect(
+        await within(dialog).findByTestId("manage-agents-add-error"),
+      ).toHaveTextContent(/项目内 skills 目录/);
+    }
+    expect(
+      calls.filter((call) => call.command === "add_extra_agent"),
+    ).toHaveLength(0);
+  });
+
+  it("edits the project directory and surfaces the guard error", async () => {
+    const calls = mockCommands({
+      agents: [claudeAgent, workbuddyAgent, acmeAgent],
+    });
+    renderApp();
+    await screen.findByText("alpha");
+    fireEvent.click(screen.getByRole("button", { name: "管理 agent" }));
+    const dialog = screen.getByRole("dialog", { name: /管理 agent/ });
+
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "编辑 Acme Agent" }),
+    );
+    const input = within(dialog).getByLabelText(
+      "项目内 skills 目录 Acme Agent",
+    );
+    expect(input).toHaveValue(".acme/skills");
+    fireEvent.change(input, { target: { value: ".acme2/skills" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+
+    expect(
+      await within(dialog).findByTestId("manage-agents-notice"),
+    ).toHaveTextContent(/已更新 Acme Agent 的项目目录为 .acme2\/skills/);
+    const updateCalls = calls.filter(
+      (call) => call.command === "update_extra_agent",
+    );
+    expect(updateCalls).toHaveLength(1);
+    expect(updateCalls[0]!.payload).toEqual({
+      agentId: "acme",
+      projectSkillsDir: ".acme2/skills",
+    });
+  });
+
+  it("shows the project guard while changing a directory with mounts", async () => {
+    mockCommands({
+      agents: [claudeAgent, workbuddyAgent, acmeAgent],
+      commands: {
+        update_extra_agent: () => {
+          throw {
+            code: "extra.project_blocked",
+            message: "无法修改额外 agent 的项目目录：项目可能仍保留挂载。",
+            detail: "app（/tmp/app）：仍有 1 个挂载（alpha）",
+            hint: "请先在相关项目中卸载该 agent 的挂载。",
+            retryable: false,
+          } satisfies AppError;
+        },
+      },
+    });
+    renderApp();
+    await screen.findByText("alpha");
+    fireEvent.click(screen.getByRole("button", { name: "管理 agent" }));
+    const dialog = screen.getByRole("dialog", { name: /管理 agent/ });
+
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "编辑 Acme Agent" }),
+    );
+    fireEvent.change(
+      within(dialog).getByLabelText("项目内 skills 目录 Acme Agent"),
+      { target: { value: ".acme2/skills" } },
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+
+    expect(
+      await within(dialog).findByTestId("manage-agents-edit-error"),
+    ).toHaveTextContent(/app（\/tmp\/app）：仍有 1 个挂载/);
+  });
+
+  it("shows the removal guard for unavailable projects", async () => {
+    mockCommands({
+      agents: [claudeAgent, workbuddyAgent, acmeAgent],
+      commands: {
+        remove_extra_agent: () => {
+          throw {
+            code: "extra.project_blocked",
+            message: "无法删除额外 agent：仍有项目不可用。",
+            detail: "gone（/tmp/gone）：目录不存在",
+            retryable: false,
+          } satisfies AppError;
+        },
+      },
+    });
+    renderApp();
+    await screen.findByText("alpha");
+    fireEvent.click(screen.getByRole("button", { name: "管理 agent" }));
+    const dialog = screen.getByRole("dialog", { name: /管理 agent/ });
+
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "删除 Acme Agent" }),
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认删除" }));
+    expect(
+      await within(dialog).findByTestId("manage-agents-error"),
+    ).toHaveTextContent(/gone（\/tmp\/gone）：目录不存在/);
   });
 });
 

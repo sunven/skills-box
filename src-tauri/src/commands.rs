@@ -408,6 +408,20 @@ pub async fn add_extra_agent(
     state.tasks.add_extra_agent(agent).await
 }
 
+/// Change or clear a user extra agent's project skills directory. The project
+/// guard rejects the change while registered projects may still hold mounts.
+#[tauri::command]
+pub async fn update_extra_agent(
+    state: State<'_, AppState>,
+    agent_id: String,
+    project_skills_dir: Option<String>,
+) -> Result<ExtraAgent, AppError> {
+    state
+        .tasks
+        .update_extra_agent(agent_id, project_skills_dir)
+        .await
+}
+
 /// Remove a user-defined extra agent, detaching its skills first.
 #[tauri::command]
 pub async fn remove_extra_agent(
