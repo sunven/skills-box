@@ -248,6 +248,7 @@ function App() {
 
   const mutateCheckUpdates = checkUpdates.mutate;
   const runAutoCheck = useCallback(async () => {
+    
     try {
       const active = await getActiveMutation();
       if (active) return false;
@@ -259,10 +260,21 @@ function App() {
   }, [mutateCheckUpdates]);
 
   useAutoUpdateCheck({
+    scope,
     enabled:
-      inventoryQuery.isSuccess && !scopeBlocked && view.hasManagedSkills,
+      inventoryQuery.isSuccess &&
+      updateCheckStateQuery.isSuccess &&
+      !scopeBlocked &&
+      view.hasManagedSkills,
     checking: checkUpdates.isPending,
-    lastFullAttemptAt: lastFullAttemptQuery.data,
+    // The persisted attempt lets a scope switched into the foreground be
+    // checked only when its own six-hour window expired; the session slot
+    // keeps a manual check's fresh anchor for this scope.
+    lastFullAttemptAt:
+      Math.max(
+        lastFullAttemptQuery.data ?? 0,
+        updateCheckStateQuery.data?.lastAttemptAt ?? 0,
+      ) || null,
     onCheck: runAutoCheck,
   });
 
