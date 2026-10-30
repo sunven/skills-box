@@ -55,7 +55,7 @@ describe("useAutoUpdateCheck", () => {
     expect(onCheck).toHaveBeenCalledTimes(2);
   });
 
-  it("does not check a fresh scope immediately and uses its persisted attempt", () => {
+  it("checks the first active scope even with a fresh persisted attempt", () => {
     const onCheck = vi.fn();
     renderHook((props: Props) => useAutoUpdateCheck({ ...props, onCheck }), {
       initialProps: {
@@ -66,17 +66,18 @@ describe("useAutoUpdateCheck", () => {
       },
     });
 
-    expect(onCheck).not.toHaveBeenCalled();
+    // A launch always checks once, regardless of the persisted attempt.
+    expect(onCheck).toHaveBeenCalledTimes(1);
 
     act(() => {
-      vi.advanceTimersByTime(AUTO_UPDATE_CHECK_INTERVAL_MS - HOUR - 1);
+      vi.advanceTimersByTime(AUTO_UPDATE_CHECK_INTERVAL_MS - 1);
     });
-    expect(onCheck).not.toHaveBeenCalled();
+    expect(onCheck).toHaveBeenCalledTimes(1);
 
     act(() => {
       vi.advanceTimersByTime(1);
     });
-    expect(onCheck).toHaveBeenCalledTimes(1);
+    expect(onCheck).toHaveBeenCalledTimes(2);
   });
 
   it("checks a stale scope as soon as it becomes active", () => {
@@ -106,7 +107,8 @@ describe("useAutoUpdateCheck", () => {
         },
       },
     );
-    expect(onCheck).not.toHaveBeenCalled();
+    // The session's first evaluation checks the active scope immediately.
+    expect(onCheck).toHaveBeenCalledTimes(1);
 
     // Switching to a stale project triggers exactly that scope's check.
     rerender({
@@ -115,7 +117,7 @@ describe("useAutoUpdateCheck", () => {
       checking: false,
       lastFullAttemptAt: NOW - 2 * AUTO_UPDATE_CHECK_INTERVAL_MS,
     });
-    expect(onCheck).toHaveBeenCalledTimes(1);
+    expect(onCheck).toHaveBeenCalledTimes(2);
 
     // Switching back to the still-fresh global scope does not re-check it.
     rerender({
@@ -124,12 +126,12 @@ describe("useAutoUpdateCheck", () => {
       checking: false,
       lastFullAttemptAt: NOW - HOUR,
     });
-    expect(onCheck).toHaveBeenCalledTimes(1);
+    expect(onCheck).toHaveBeenCalledTimes(2);
 
     act(() => {
       vi.advanceTimersByTime(AUTO_UPDATE_CHECK_INTERVAL_MS - HOUR);
     });
-    expect(onCheck).toHaveBeenCalledTimes(2);
+    expect(onCheck).toHaveBeenCalledTimes(3);
   });
 
   it("does not re-check a scope that was already evaluated this session", () => {
@@ -188,10 +190,13 @@ describe("useAutoUpdateCheck", () => {
       },
     );
 
+    // The first evaluation still starts the check while another is pending.
+    expect(onCheck).toHaveBeenCalledTimes(1);
+
     act(() => {
       vi.advanceTimersByTime(AUTO_UPDATE_CHECK_INTERVAL_MS);
     });
-    expect(onCheck).not.toHaveBeenCalled();
+    expect(onCheck).toHaveBeenCalledTimes(1);
 
     rerender({
       scope: GLOBAL_SCOPE,
@@ -203,7 +208,7 @@ describe("useAutoUpdateCheck", () => {
     act(() => {
       vi.advanceTimersByTime(1);
     });
-    expect(onCheck).toHaveBeenCalledTimes(1);
+    expect(onCheck).toHaveBeenCalledTimes(2);
   });
 
   it("resets only the current scope's timer after a manual full attempt", () => {
@@ -220,7 +225,7 @@ describe("useAutoUpdateCheck", () => {
       },
     );
 
-    expect(onCheck).not.toHaveBeenCalled();
+    expect(onCheck).toHaveBeenCalledTimes(1);
 
     rerender({
       scope: PROJECT_SCOPE,
@@ -232,12 +237,12 @@ describe("useAutoUpdateCheck", () => {
     act(() => {
       vi.advanceTimersByTime(AUTO_UPDATE_CHECK_INTERVAL_MS);
     });
-    expect(onCheck).not.toHaveBeenCalled();
+    expect(onCheck).toHaveBeenCalledTimes(1);
 
     act(() => {
       vi.advanceTimersByTime(HOUR);
     });
-    expect(onCheck).toHaveBeenCalledTimes(1);
+    expect(onCheck).toHaveBeenCalledTimes(2);
   });
 
   it("schedules a retry after a skipped due attempt", async () => {
@@ -251,24 +256,26 @@ describe("useAutoUpdateCheck", () => {
       },
     });
 
-    expect(onCheck).not.toHaveBeenCalled();
+    // The first evaluation checks even though this persists a fresh attempt.
+    expect(onCheck).toHaveBeenCalledTimes(1);
+
     await act(async () => {
       await vi.advanceTimersByTimeAsync(AUTO_UPDATE_CHECK_INTERVAL_MS);
     });
-    expect(onCheck).toHaveBeenCalledTimes(1);
+    expect(onCheck).toHaveBeenCalledTimes(2);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(AUTO_UPDATE_CHECK_INTERVAL_MS - 1);
     });
-    expect(onCheck).toHaveBeenCalledTimes(1);
+    expect(onCheck).toHaveBeenCalledTimes(2);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1);
     });
-    expect(onCheck).toHaveBeenCalledTimes(2);
+    expect(onCheck).toHaveBeenCalledTimes(3);
   });
 
-  it("does not start an initial check when a full check already ran", () => {
+  it("starts the first enabled evaluation even when a full check already ran", () => {
     const onCheck = vi.fn();
     const { rerender } = renderHook(
       (props: Props) => useAutoUpdateCheck({ ...props, onCheck }),
@@ -289,11 +296,11 @@ describe("useAutoUpdateCheck", () => {
       lastFullAttemptAt: NOW,
     });
 
-    expect(onCheck).not.toHaveBeenCalled();
+    expect(onCheck).toHaveBeenCalledTimes(1);
     act(() => {
       vi.advanceTimersByTime(AUTO_UPDATE_CHECK_INTERVAL_MS);
     });
-    expect(onCheck).toHaveBeenCalledTimes(1);
+    expect(onCheck).toHaveBeenCalledTimes(2);
   });
 
   it("still starts only one initial check under StrictMode", () => {

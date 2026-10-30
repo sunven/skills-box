@@ -16,12 +16,13 @@ interface AutoUpdateCheckOptions {
 }
 
 /**
- * Per-scope six-hour update checking. Each scope is checked when it first
- * becomes active and is stale (no state, or the last attempt is older than six
- * hours); a fresh scope only schedules the remainder of its interval. Manual
- * full checks advance that scope's anchor and never reset another scope's
- * timer. Changing `scope` starts a fresh evaluation without touching the
- * previous scope.
+ * Per-scope six-hour update checking. The first evaluation of an app session
+ * always checks the active scope, even when its persisted attempt is recent:
+ * every launch gets one check. Later scope switches are only checked when that
+ * scope has no state or its last attempt is older than six hours; a fresh scope
+ * only schedules the remainder of its interval. Manual full checks advance that
+ * scope's anchor and never reset another scope's timer. Changing `scope` starts
+ * a fresh evaluation without touching the previous scope.
  */
 export function useAutoUpdateCheck({
   scope = GLOBAL_SCOPE,
@@ -32,6 +33,7 @@ export function useAutoUpdateCheck({
 }: AutoUpdateCheckOptions) {
   const onCheckRef = useRef(onCheck);
   const startedForScope = useRef<ScopeId | null>(null);
+  const evaluatedOnce = useRef(false);
   const [baseline, setBaseline] = useState<{ scope: ScopeId; at: number } | null>(
     null,
   );
@@ -49,7 +51,10 @@ export function useAutoUpdateCheck({
     startedForScope.current = scope;
     const now = Date.now();
     setSkipAnchor(null);
+    const firstEvaluation = !evaluatedOnce.current;
+    evaluatedOnce.current = true;
     if (
+      !firstEvaluation &&
       lastFullAttemptAt != null &&
       now - lastFullAttemptAt < AUTO_UPDATE_CHECK_INTERVAL_MS
     ) {
