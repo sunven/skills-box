@@ -124,6 +124,7 @@ Date: 2026-10-30
 - 项目：`computedHash` 是 CLI 的 SHA-256 内容指纹（64 位十六进制）。检查按 (source, ref) 分组，解析最新 commit，按 commit 下载一次来源归档，用与 CLI 相同的算法计算每个 skill 文件夹的 SHA-256，与 lock 比较。
 - 两条检查路径共用 `update_target` 的来源/ref 解析与安全校验（ADR 0009）；项目路径只替换指纹域与远端材料，`git_tree.rs` 保持不变。
 - 指纹算法必须与 pinned CLI 一致：递归收集文件，排除 `.git` 与 `node_modules`，相对路径使用 `/`，按路径排序，依次 hash 路径与内容，输出 SHA-256 十六进制。
+- 指纹排序依赖 CLI 的 `localeCompare`（ICU）。当前实现只覆盖可排序的 ASCII 路径；含非 ASCII 相对路径的 skill 明确报告「不支持检测」，而不是用猜测的排序冒虚假更新的风险。这类项目因此不会显示 Current/Update；这是已记录的限制（ADR 0012），不在此处实现 ICU。
 - 仅 `sourceType=github` 且来源为公开 GitHub 的条目可检查；其余显示「不支持检测」，与全局一致。
 - 更新状态按 scope 保存：`update-check.json` v2 为 `scopeId -> state`；v1 数据迁移为全局作用域条目。
 
