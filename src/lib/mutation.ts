@@ -13,7 +13,7 @@ import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { asAppError, cancelTask, fallbackError } from "./api";
 import { TASK_SKILL_STATUS_LABELS } from "./task-labels";
 import { inventoryQueryKey } from "../hooks/use-inventory";
-import { projectsQueryKey } from "../hooks/use-projects";
+import { projectsQueryKey } from "./scope";
 import { skillQueryKey, skillQueryPrefix } from "../hooks/use-skill-detail";
 import {
   skillDirQueryPrefix,

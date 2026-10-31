@@ -16,24 +16,27 @@ pub struct Frontmatter {
 /// when a block was parsed (fields may still be absent), and `Err(_)` when the
 /// block is malformed.
 pub fn parse(raw: &str) -> Result<Option<Frontmatter>, String> {
-    let lines: Vec<&str> = raw.lines().collect();
-    if lines.first().map(|line| line.trim_end()) != Some("---") {
+    let mut lines = raw.lines();
+    if lines.next().map(|line| line.trim_end()) != Some("---") {
         return Ok(None);
     }
-    let Some(end) = lines
-        .iter()
-        .enumerate()
-        .skip(1)
-        .find(|(_, line)| line.trim_end() == "---")
-        .map(|(index, _)| index)
-    else {
+    let mut body: Vec<&str> = Vec::new();
+    let mut closed = false;
+    for line in lines {
+        if line.trim_end() == "---" {
+            closed = true;
+            break;
+        }
+        body.push(line);
+    }
+    if !closed {
         return Err("frontmatter 缺少结束分隔符".to_string());
-    };
+    }
 
     let mut frontmatter = Frontmatter::default();
-    let mut index = 1;
-    while index < end {
-        let line = lines[index];
+    let mut index = 0;
+    while index < body.len() {
+        let line = body[index];
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {
             index += 1;
@@ -53,7 +56,7 @@ pub fn parse(raw: &str) -> Result<Option<Frontmatter>, String> {
 
         let parsed = match value {
             ">" | "|" | ">-" | "|-" | ">+" | "|+" => {
-                let (block, next) = read_block(&lines, index + 1, end, value.starts_with('>'));
+                let (block, next) = read_block(&body, index + 1, value.starts_with('>'));
                 index = next;
                 Some(block)
             }
@@ -73,10 +76,10 @@ pub fn parse(raw: &str) -> Result<Option<Frontmatter>, String> {
     Ok(Some(frontmatter))
 }
 
-fn read_block(lines: &[&str], start: usize, end: usize, folded: bool) -> (String, usize) {
+fn read_block(lines: &[&str], start: usize, folded: bool) -> (String, usize) {
     let mut index = start;
     let mut collected: Vec<String> = Vec::new();
-    while index < end {
+    while index < lines.len() {
         let line = lines[index];
         if !line.trim().is_empty() && !line.starts_with([' ', '\t']) {
             break;

@@ -4,6 +4,8 @@
 import type { ProjectEntry, ProjectList, ScopeId } from "./types";
 import { GLOBAL_SCOPE } from "./types";
 
+export const projectsQueryKey = ["projects"] as const;
+
 export function projectScope(projectId: string): ScopeId {
   return `project:${projectId}`;
 }

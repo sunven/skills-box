@@ -142,9 +142,7 @@ export function InstallWizard({
   const closeRef = useRef<HTMLButtonElement>(null);
   const onCloseRef = useRef(onClose);
   const agentsTouchedRef = useRef(false);
-  const lastInstallRef = useRef<{ skills: string[]; agents: string[] } | null>(
-    null,
-  );
+  const lastInstallRef = useRef<string[] | null>(null);
 
   const [step, setStep] = useState<Step>(1);
   const [sourceInput, setSourceInput] = useState("");
@@ -379,7 +377,7 @@ export function InstallWizard({
       return;
     }
     const requestAgents = Array.from(selectedAgents);
-    lastInstallRef.current = { skills: names, agents: requestAgents };
+    lastInstallRef.current = names;
     setStep(5);
     // `retry` is only set by the explicit retry buttons. A plain install
     // still rejects every same-name managed/stale/copy-only row.
@@ -1014,7 +1012,7 @@ export function InstallWizard({
                     variant="ghost"
                     size="sm"
                     onClick={() =>
-                      void handleStartInstall(lastInstall.skills, true)
+                      void handleStartInstall(lastInstall, true)
                     }
                   >
                     重试

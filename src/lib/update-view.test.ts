@@ -352,7 +352,7 @@ describe("selectUpdateDialog", () => {
       singleName: null,
     });
     expect(all.initialNames).toEqual(["alpha"]);
-    expect(all.copyCandidateCount).toBe(1);
+    expect(all.copyCandidates.size).toBe(1);
     expect(all.singleCopyAgents).toEqual([]);
 
     const single = selectUpdateDialog({

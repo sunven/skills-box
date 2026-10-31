@@ -8,6 +8,7 @@ import type {
   AnomalyGroup,
   AnomalySummary,
   AnomalyView,
+  AttachmentMode,
   InventoryAgent,
   InventorySkill,
   ScopeId,
@@ -75,7 +76,6 @@ export interface UpdateDialogView {
   singleCopyAgents: string[];
   singleAffectedAgents: string[];
   copyCandidates: Set<string>;
-  copyCandidateCount: number;
 }
 
 export function selectUpdateDialog(input: {
@@ -103,10 +103,10 @@ export function selectUpdateDialog(input: {
         singleSkill.localModification === "unknown"),
   );
   const singleCopyAgents = singleSkill
-    ? copyAgentNames(singleSkill, universalIds)
+    ? agentNamesForModes(singleSkill, universalIds, ["copy"])
     : [];
   const singleAffectedAgents = singleSkill
-    ? affectedAgentNames(singleSkill, universalIds)
+    ? agentNamesForModes(singleSkill, universalIds, ["copy", "link"])
     : [];
   const initialNames =
     input.mode === "single"
@@ -122,10 +122,15 @@ export function selectUpdateDialog(input: {
   }
   const copyCandidates = new Set(
     input.summary.candidates
-      .filter((skill) => copyAgentNames(skill, universalIds).length > 0)
+      .filter((skill) =>
+        skill.attachments.some(
+          (attachment) =>
+            attachment.mode === "copy" &&
+            !universalIds.has(attachment.agentId),
+        ),
+      )
       .map((skill) => skill.name),
   );
-  const copyCandidateCount = copyCandidates.size;
 
   return {
     mode: input.mode,
@@ -138,30 +143,18 @@ export function selectUpdateDialog(input: {
     singleCopyAgents,
     singleAffectedAgents,
     copyCandidates,
-    copyCandidateCount,
   };
 }
 
-function copyAgentNames(
+function agentNamesForModes(
   skill: UpdateViewSkill,
   universalIds: Set<string>,
+  modes: AttachmentMode[],
 ): string[] {
   return skill.attachments
     .filter(
       (attachment) =>
-        attachment.mode === "copy" && !universalIds.has(attachment.agentId),
-    )
-    .map((attachment) => attachment.agentName);
-}
-
-function affectedAgentNames(
-  skill: UpdateViewSkill,
-  universalIds: Set<string>,
-): string[] {
-  return skill.attachments
-    .filter(
-      (attachment) =>
-        (attachment.mode === "link" || attachment.mode === "copy") &&
+        modes.includes(attachment.mode) &&
         !universalIds.has(attachment.agentId),
     )
     .map((attachment) => attachment.agentName);

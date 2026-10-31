@@ -343,7 +343,7 @@ fn log_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::inventory::{self, AgentDir, ManagementState};
+    use crate::inventory::{AgentDir, ManagementState};
     use std::os::unix::fs::symlink;
 
     struct Fixture {
@@ -545,8 +545,11 @@ mod tests {
         assert!(lines[0].get("backupPath").is_none());
         assert!(lines[0].get("error").is_none());
         assert!(lines[0]["time"].as_str().unwrap().ends_with('Z'));
+        let layout =
+            crate::scope_layout::ScopeLayout::global(&fixture.paths, fixture.agents.clone());
         assert_eq!(
-            inventory::locate_with_agents(&fixture.paths, &fixture.agents, "alpha")
+            layout
+                .locate(&fixture.paths, "alpha")
                 .unwrap()
                 .unwrap()
                 .attachments

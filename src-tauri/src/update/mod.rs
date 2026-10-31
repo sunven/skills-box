@@ -437,7 +437,6 @@ impl UpdateService {
                     })
                     .collect();
                 GroupOutcome {
-                    key: group.key(),
                     source: UpdateSourceResult {
                         source: group.source,
                         reference: group.reference,
@@ -481,7 +480,6 @@ impl UpdateService {
                     })
                     .collect();
                 GroupOutcome {
-                    key: group.key(),
                     source: UpdateSourceResult {
                         source: group.source,
                         reference: group.reference,
@@ -519,7 +517,6 @@ impl UpdateService {
             })
             .collect();
         GroupOutcome {
-            key: group.key(),
             source: UpdateSourceResult {
                 source: group.source,
                 reference: group.reference,
@@ -566,7 +563,6 @@ impl UpdateService {
             })
             .collect();
         GroupOutcome {
-            key: group.key(),
             source: UpdateSourceResult {
                 source: group.source,
                 reference: group.reference,
@@ -610,7 +606,6 @@ impl UpdateService {
             })
             .collect();
         GroupOutcome {
-            key: group.key(),
             source: UpdateSourceResult {
                 source: group.source,
                 reference: group.reference,
@@ -660,8 +655,6 @@ struct Target {
 }
 
 struct GroupOutcome {
-    #[allow(dead_code)]
-    key: GroupKey,
     source: UpdateSourceResult,
     skills: Vec<UpdateSkillResult>,
     warnings: Vec<String>,

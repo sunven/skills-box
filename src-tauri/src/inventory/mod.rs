@@ -329,11 +329,6 @@ pub struct AttachmentLocation {
     pub mode: AttachmentMode,
 }
 
-pub fn locate(paths: &AppPaths, name: &str) -> Result<Option<LocatedSkill>, AppError> {
-    let agents = detected_agent_dirs(paths);
-    locate_with_agents(paths, &agents, name)
-}
-
 pub(crate) fn locate_in_catalog(catalog: &Catalog, name: &str) -> Option<LocatedSkill> {
     let canonical_path = catalog.canonical.get(name).cloned();
     let aggregate = catalog.aggregates.get(name);
@@ -365,15 +360,6 @@ pub(crate) fn locate_in_catalog(catalog: &Catalog, name: &str) -> Option<Located
             .unwrap_or_default(),
         lock_entry,
     })
-}
-
-pub fn locate_with_agents(
-    paths: &AppPaths,
-    agents: &[AgentDir],
-    name: &str,
-) -> Result<Option<LocatedSkill>, AppError> {
-    let catalog = build_catalog(paths, agents)?;
-    Ok(locate_in_catalog(&catalog, name))
 }
 
 #[derive(Debug)]

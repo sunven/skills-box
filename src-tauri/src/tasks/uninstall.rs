@@ -146,14 +146,6 @@ pub fn plan_uninstall(
     })
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UninstallVerification {
-    /// `Ok(())` only when the canonical folder, every attachment path and the
-    /// lock key are gone.
-    pub result: Result<(), AppError>,
-    pub warnings: Vec<AppError>,
-}
-
 /// The pinned CLI cannot see extra agents, so their links and copies survive
 /// `skills remove`. Remove them natively before verification; failures are
 /// warnings here and become a `verify.attachment_present` result afterwards.
@@ -202,7 +194,7 @@ pub fn remove_extra_attachments(plan: &UninstallPlan, warnings: &mut Vec<AppErro
 pub fn verify_uninstall(
     layout: &crate::scope_layout::ScopeLayout,
     plan: &UninstallPlan,
-) -> UninstallVerification {
+) -> Result<(), AppError> {
     let mut leftovers: Vec<String> = Vec::new();
     let mut canonical_present = None;
     if let Some(canonical) = &plan.canonical
@@ -231,14 +223,11 @@ pub fn verify_uninstall(
     let lock_present = match layout.lock() {
         Ok(lock) => lock.contains(&plan.name),
         Err(error) => {
-            return UninstallVerification {
-                result: Err(AppError::verify_failed(format!(
-                    "无法确认 lock 是否已清理：{}",
-                    error.message
-                ))
-                .detail(error.detail.unwrap_or_default())),
-                warnings: Vec::new(),
-            };
+            return Err(AppError::verify_failed(format!(
+                "无法确认 lock 是否已清理：{}",
+                error.message
+            ))
+            .detail(error.detail.unwrap_or_default()));
         }
     };
     if lock_present {
@@ -246,7 +235,7 @@ pub fn verify_uninstall(
     }
 
     let detail = leftovers.join("；");
-    let result = if let Some(canonical) = canonical_present {
+    if let Some(canonical) = canonical_present {
         Err(AppError::verify_canonical_present(&plan.name, &canonical)
             .detail(format!("仍存在：{detail}")))
     } else if let Some(attachment) = attachments_present.first() {
@@ -260,11 +249,6 @@ pub fn verify_uninstall(
         Err(AppError::verify_lock_present(&plan.name).detail(detail))
     } else {
         Ok(())
-    };
-
-    UninstallVerification {
-        result,
-        warnings: Vec::new(),
     }
 }
 
@@ -396,9 +380,8 @@ impl MutationAction for UninstallAction {
         if output.success() {
             remove_extra_attachments(plan, &mut warnings);
         }
-        let mut verification = verify_uninstall(&self.layout, plan);
-        warnings.append(&mut verification.warnings);
-        let outcome = evaluate_output(&output, verification.result);
+        let verification = verify_uninstall(&self.layout, plan);
+        let outcome = evaluate_output(&output, verification);
         let status = if outcome.is_ok() {
             TaskSkillStatus::Removed
         } else {
@@ -496,7 +479,7 @@ mod tests {
         super::plan_uninstall(paths, &layout, name)
     }
 
-    fn verify_uninstall(paths: &AppPaths, plan: &UninstallPlan) -> UninstallVerification {
+    fn verify_uninstall(paths: &AppPaths, plan: &UninstallPlan) -> Result<(), AppError> {
         let layout = crate::scope_layout::ScopeLayout::global(paths, Vec::new());
         super::verify_uninstall(&layout, plan)
     }
@@ -816,7 +799,7 @@ mod tests {
         remove_skill(&fixture, "alpha");
 
         let verification = verify_uninstall(&fixture.paths, &plan);
-        assert_eq!(verification.result, Ok(()));
+        assert_eq!(verification, Ok(()));
         assert!(!fixture.canonical.exists());
         assert!(!fixture.qoder.join("alpha").exists());
         assert!(!fixture.claude.join("alpha").exists());
@@ -836,7 +819,7 @@ mod tests {
         remove_path(&fixture.gemini.join("alpha"));
         remove_lock_key(&fixture.paths, "alpha");
 
-        let error = verify_uninstall(&fixture.paths, &plan).result.unwrap_err();
+        let error = verify_uninstall(&fixture.paths, &plan).unwrap_err();
         assert_eq!(error.code, ErrorCode::VerifyCanonicalPresent);
         assert!(error.message.contains("canonical"));
         assert!(error.detail.unwrap().contains("alpha"));
@@ -853,7 +836,7 @@ mod tests {
         // Claude's copy remains; verification must not claim success.
         assert!(fixture.claude.join("alpha").is_dir());
 
-        let error = verify_uninstall(&fixture.paths, &plan).result.unwrap_err();
+        let error = verify_uninstall(&fixture.paths, &plan).unwrap_err();
         assert_eq!(error.code, ErrorCode::VerifyAttachmentPresent);
         assert!(error.message.contains("Claude Code"));
         assert!(error.detail.unwrap().contains(".claude/skills/alpha"));
@@ -870,7 +853,7 @@ mod tests {
         // Qoder's symlink now dangles but still exists on disk.
         assert!(fs::symlink_metadata(fixture.qoder.join("alpha")).is_ok());
 
-        let error = verify_uninstall(&fixture.paths, &plan).result.unwrap_err();
+        let error = verify_uninstall(&fixture.paths, &plan).unwrap_err();
         assert_eq!(error.code, ErrorCode::VerifyAttachmentPresent);
         assert!(error.message.contains("Qoder"));
     }
@@ -884,7 +867,7 @@ mod tests {
         remove_path(&fixture.claude.join("alpha"));
         remove_path(&fixture.gemini.join("alpha"));
 
-        let error = verify_uninstall(&fixture.paths, &plan).result.unwrap_err();
+        let error = verify_uninstall(&fixture.paths, &plan).unwrap_err();
         assert_eq!(error.code, ErrorCode::VerifyLockPresent);
         assert!(error.message.contains("lock"));
     }
@@ -899,13 +882,13 @@ mod tests {
         remove_path(&fixture.gemini.join("alpha"));
         fs::remove_file(fixture.paths.lock_path()).unwrap();
         assert_eq!(
-            verify_uninstall(&fixture.paths, &plan).result,
+            verify_uninstall(&fixture.paths, &plan),
             Ok(()),
             "a missing lock means there is no key left"
         );
 
         fs::write(fixture.paths.lock_path(), "{not json").unwrap();
-        let error = verify_uninstall(&fixture.paths, &plan).result.unwrap_err();
+        let error = verify_uninstall(&fixture.paths, &plan).unwrap_err();
         assert_eq!(error.code, ErrorCode::VerifyFailed);
     }
 
@@ -916,7 +899,7 @@ mod tests {
         // The CLI exited 0 but nothing was removed.
         let verification = verify_uninstall(&fixture.paths, &plan);
         assert_eq!(
-            verification.result.unwrap_err().code,
+            verification.unwrap_err().code,
             ErrorCode::VerifyCanonicalPresent
         );
     }

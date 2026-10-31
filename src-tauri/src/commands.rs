@@ -112,12 +112,7 @@ pub async fn get_inventory(
     scope: ScopeId,
 ) -> Result<InventorySnapshot, AppError> {
     let read_model = Arc::clone(&state.read_model);
-    read_with_timeout("库存", READ_TIMEOUT, async move {
-        tauri::async_runtime::spawn_blocking(move || read_model.snapshot(&scope))
-            .await
-            .map_err(|error| AppError::skill_read_failed_context("库存", error))?
-    })
-    .await
+    blocking_read("库存", move || read_model.snapshot(&scope)).await
 }
 
 #[tauri::command]
@@ -127,12 +122,7 @@ pub async fn get_skill_detail(
     skill_id: String,
 ) -> Result<SkillDetail, AppError> {
     let read_model = Arc::clone(&state.read_model);
-    read_with_timeout("skill 详情", READ_TIMEOUT, async move {
-        tauri::async_runtime::spawn_blocking(move || read_model.detail(&scope, &skill_id))
-            .await
-            .map_err(|error| AppError::skill_read_failed_context("skill 详情", error))?
-    })
-    .await
+    blocking_read("skill 详情", move || read_model.detail(&scope, &skill_id)).await
 }
 
 /// Lazy directory listing for the content tab. The frontend sends a skill id
@@ -252,7 +242,7 @@ where
     read_with_timeout(what, READ_TIMEOUT, async move {
         tauri::async_runtime::spawn_blocking(work)
             .await
-            .map_err(|error| AppError::skill_read_failed_context("skill 内容", error))?
+            .map_err(|error| AppError::skill_read_failed_context(what, error))?
     })
     .await
 }

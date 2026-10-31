@@ -7,6 +7,7 @@ import {
   type ScopeId,
   type UpdateCheckReport,
 } from "./types";
+import { projectForScope, projectsQueryKey, projectScope } from "./scope";
 import { mergeUpdateReports, updateReportQueryKey } from "./update-view";
 
 export const updateCheckStateQueryKey = (scope: ScopeId) =>
@@ -34,10 +35,8 @@ class UpdateCheckLifecycle {
 
   private current(scope: ScopeId, revision?: string): boolean {
     if (scope === GLOBAL_SCOPE) return true;
-    const projects = this.client.getQueryData<ProjectList>(["projects"]);
-    const project = projects?.projects.find(
-      (entry) => `project:${entry.id}` === scope,
-    );
+    const projects = this.client.getQueryData<ProjectList>(projectsQueryKey);
+    const project = projectForScope(projects, scope);
     const known = this.revisions.has(scope)
       ? this.revisions.get(scope)
       : projects && !project
@@ -135,17 +134,17 @@ class UpdateCheckLifecycle {
     ]) {
       void this.client.cancelQueries({ queryKey });
     }
-    this.client.setQueryData<ProjectList>(["projects"], (previous) =>
+    this.client.setQueryData<ProjectList>(projectsQueryKey, (previous) =>
       previous
         ? {
             ...previous,
             projects:
               revision === null
                 ? previous.projects.filter(
-                    (project) => `project:${project.id}` !== scope,
+                    (project) => projectScope(project.id) !== scope,
                   )
                 : previous.projects.map((project) =>
-                    `project:${project.id}` === scope
+                    projectScope(project.id) === scope
                       ? { ...project, checkRevision: revision }
                       : project,
                   ),

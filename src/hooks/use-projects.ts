@@ -3,8 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { getUpdateCheckStates, listProjects } from "../lib/api";
 import type { ScopeId, UpdateCheckState } from "../lib/types";
 import { updateCheckStatesQueryKey } from "./use-updates";
-
-export const projectsQueryKey = ["projects"] as const;
+import { projectsQueryKey } from "../lib/scope";
 
 /** App-registered scopes plus the persisted active scope. */
 export function useProjectsQuery() {

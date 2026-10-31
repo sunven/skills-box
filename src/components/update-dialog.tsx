@@ -73,7 +73,6 @@ export function UpdateDialog({
     singleCopyAgents,
     singleAffectedAgents,
     copyCandidates,
-    copyCandidateCount,
   } = view;
   const canStart =
     !running &&
@@ -383,7 +382,7 @@ export function UpdateDialog({
                 )}
               </section>
 
-              {copyCandidateCount > 0 ? (
+              {copyCandidates.size > 0 ? (
                 <div
                   data-testid="update-copy-warning"
                   className="notice sm:col-span-2" data-tone="warning"
@@ -395,7 +394,7 @@ export function UpdateDialog({
                   <div>
                     <p className="font-medium">copy 挂载将转为 symlink</p>
                     <p className="mt-0.5">
-                      有 {copyCandidateCount} 个候选带 copy 挂载；更新前会先备份副本目录，更新后改为指向共享 canonical 的符号链接。
+                      有 {copyCandidates.size} 个候选带 copy 挂载；更新前会先备份副本目录，更新后改为指向共享 canonical 的符号链接。
                     </p>
                   </div>
                 </div>

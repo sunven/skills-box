@@ -25,7 +25,8 @@ import { useAutoUpdateCheck } from "./hooks/use-auto-update-check";
 import { environmentQueryKey, useEnvironmentQuery, useRecheckEnvironment } from "./hooks/use-environment";
 import { useInventoryQuery } from "./hooks/use-inventory";
 import { skillQueryPrefix } from "./hooks/use-skill-detail";
-import { projectsQueryKey, useProjectsQuery, useScopeCheckStates } from "./hooks/use-projects";
+import { useProjectsQuery, useScopeCheckStates } from "./hooks/use-projects";
+import { projectsQueryKey } from "./lib/scope";
 import {
   useCheckUpdates,
   useLastFullAttemptQuery,
