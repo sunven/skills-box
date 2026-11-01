@@ -64,6 +64,10 @@ _Avoid_: ghost, orphan
 The upstream origin a skill is installed from; v1 accepts public GitHub repositories.
 _Avoid_: repo, registry
 
+**Source archive**:
+The files of a source at one commit, used by a project update check to compare skill content with the recorded version fingerprint.
+_Avoid_: backup snapshot, installed skill copy
+
 **Install**:
 Add a skill from a source to the canonical store and attach it to the selected agents.
 _Avoid_: add, sync

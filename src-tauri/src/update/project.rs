@@ -14,12 +14,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use futures::StreamExt;
-use tokio::sync::Mutex;
 
 use super::archive::{
-    ArchiveClient, ArchiveError, ArchiveLimits, CommitArchiveCache, SourceArchive,
+    ArchiveClient, ArchiveLimits, CommitArchiveCache, SourceArchive, SourceArchives,
 };
-use super::cache::is_fresh;
 use super::content_hash::{self, FolderHashError};
 use super::{
     Clock, SystemClock, UPDATE_CHECK_CACHE_TTL_MS, UPDATE_CHECK_CONCURRENCY,
@@ -203,9 +201,13 @@ impl ProjectUpdateService {
         if groups.is_empty() {
             return Vec::new();
         }
-        // One archive per commit, shared by every group that resolves to it.
-        let archives: Arc<Mutex<BTreeMap<String, Arc<ArchiveEntry>>>> =
-            Arc::new(Mutex::new(BTreeMap::new()));
+        let archives = SourceArchives::new(
+            Arc::clone(&self.client),
+            self.cache.clone(),
+            Arc::clone(&self.clock),
+            self.config.cache_ttl_ms,
+            self.config.limits,
+        );
         let pending: BTreeMap<GroupKey, Group> = groups
             .iter()
             .cloned()
@@ -218,7 +220,7 @@ impl ProjectUpdateService {
         let concurrency = self.config.concurrency.max(1);
         let mut stream = futures::stream::iter(groups.into_iter().map(|group| {
             let key = group.key();
-            let archives = Arc::clone(&archives);
+            let archives = &archives;
             async move { (key, self.group_outcome(group, archives).await) }
         }))
         .buffer_unordered(concurrency);
@@ -236,47 +238,26 @@ impl ProjectUpdateService {
         outcomes
     }
 
-    async fn group_outcome(
-        &self,
-        group: Group,
-        archives: Arc<Mutex<BTreeMap<String, Arc<ArchiveEntry>>>>,
-    ) -> GroupOutcome {
-        let commit = match self
-            .client
-            .latest_commit(&group.source, group.reference.as_deref())
+    async fn group_outcome(&self, group: Group, archives: &SourceArchives) -> GroupOutcome {
+        let acquired = match archives
+            .acquire(&group.source, group.reference.as_deref())
             .await
         {
-            Ok(commit) => commit,
-            Err(error) => {
-                return self.failed_outcome(group, error.to_app_error(), None, false);
-            }
-        };
-        let (entry, reused) = {
-            let mut entries = archives.lock().await;
-            if let Some(entry) = entries.get(&commit) {
-                (Arc::clone(entry), true)
-            } else {
-                let entry = Arc::new(self.load_or_download(&group.source, &commit).await);
-                entries.insert(commit.clone(), Arc::clone(&entry));
-                (entry, false)
-            }
-        };
-        let cached = reused || entry.cached;
-        let archive = match &entry.archive {
-            Ok(archive) => archive,
+            Ok(acquired) => acquired,
             Err(failure) => {
                 return self.failed_outcome(
                     group,
-                    failure.error.clone(),
+                    failure.error,
                     failure.previous_fetched_at,
                     false,
                 );
             }
         };
+        let cached = acquired.cached;
 
         let mut skills = Vec::new();
         for target in &group.targets {
-            let evaluation = evaluate_target(target, archive);
+            let evaluation = evaluate_target(target, &acquired.archive);
             skills.push(UpdateSkillResult {
                 name: target.name.clone(),
                 source: Some(group.source.clone()),
@@ -287,7 +268,7 @@ impl ProjectUpdateService {
                 unknown_reason: (evaluation.state == UpdateState::Unknown)
                     .then_some(super::UpdateUnknownReason::Uncheckable),
                 cached,
-                last_success_at_epoch_ms: Some(entry.fetched_at_epoch_ms),
+                last_success_at_epoch_ms: Some(acquired.fetched_at_epoch_ms),
                 previous_state: None,
                 error: None,
                 note: evaluation.note,
@@ -305,73 +286,12 @@ impl ProjectUpdateService {
                 skill_count: group.targets.len(),
                 cached,
                 truncated: false,
-                last_success_at_epoch_ms: Some(entry.fetched_at_epoch_ms),
+                last_success_at_epoch_ms: Some(acquired.fetched_at_epoch_ms),
                 error: None,
                 note: None,
             },
             skills,
             warnings: Vec::new(),
-        }
-    }
-
-    /// Fresh cache hit first; otherwise one download. A stale entry is kept
-    /// for "last successful check" reporting when the download fails.
-    async fn load_or_download(&self, source: &str, commit: &str) -> ArchiveEntry {
-        let mut previous_fetched_at = self.cache.fetched_at(commit);
-        if let Some(fetched_at) = previous_fetched_at
-            && is_fresh(
-                fetched_at,
-                self.clock.now_epoch_ms(),
-                self.config.cache_ttl_ms,
-            )
-        {
-            if let Some(cached) = self.cache.load(commit, self.config.limits) {
-                return ArchiveEntry {
-                    archive: Ok(Arc::new(cached.archive)),
-                    fetched_at_epoch_ms: cached.fetched_at_epoch_ms,
-                    cached: true,
-                };
-            }
-            // Fresh metadata with an unreadable payload is not a cache hit.
-            previous_fetched_at = None;
-        }
-        let now = self.clock.now_epoch_ms();
-        let result = async {
-            let raw = self
-                .client
-                .download_archive(source, commit)
-                .await
-                .map_err(ArchiveError::from)?;
-            if raw.len() as u64 > self.config.limits.max_compressed_bytes {
-                return Err(ArchiveError::TooLarge {
-                    detail: format!("压缩包为 {} 字节", raw.len()),
-                });
-            }
-            let archive = SourceArchive::from_tar_gz(&raw, self.config.limits)?;
-            Ok::<_, ArchiveError>((raw, archive))
-        }
-        .await;
-        match result {
-            Ok((raw, archive)) => {
-                if let Err(error) = self.cache.store(commit, &raw, now) {
-                    // A cache write failure must not fail the check; the
-                    // archive is already parsed.
-                    let _ = error;
-                }
-                ArchiveEntry {
-                    archive: Ok(Arc::new(archive)),
-                    fetched_at_epoch_ms: now,
-                    cached: false,
-                }
-            }
-            Err(error) => ArchiveEntry {
-                archive: Err(ArchiveFailure {
-                    error: error.to_app_error(),
-                    previous_fetched_at,
-                }),
-                fetched_at_epoch_ms: previous_fetched_at.unwrap_or(now),
-                cached: false,
-            },
         }
     }
 
@@ -426,17 +346,6 @@ impl ProjectUpdateService {
             false,
         )
     }
-}
-
-struct ArchiveEntry {
-    archive: Result<Arc<SourceArchive>, ArchiveFailure>,
-    fetched_at_epoch_ms: u64,
-    cached: bool,
-}
-
-struct ArchiveFailure {
-    error: AppError,
-    previous_fetched_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -625,6 +534,7 @@ mod tests {
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
     const COMMIT_A: &str = "1aee802d9139d4df84d017de44fb1b37a7b614e9";
+    const COMMIT_B: &str = "0123456789abcdef0123456789abcdef01234567";
     const ALPHA_HASH: &str = "b9d08da8ac776d566beb814c50480e5edfc5422384e327cdc58629d102b491f1";
     const BETA_HASH: &str = "894071b670b3c183fb53284dba3e725204618c4ef085eb7b6208d2961969534e";
     const ALPHA_OLD_HASH: &str = "9a669b2c5f46470c263ccd0b72686556915cd9085ad0de4a04d5ca18c9ca0a17";
@@ -653,6 +563,8 @@ mod tests {
         commit_calls: Arc<AtomicUsize>,
         download_calls: Arc<AtomicUsize>,
         delay: Option<std::time::Duration>,
+        download_pause:
+            Option<tokio::sync::mpsc::UnboundedSender<(String, tokio::sync::oneshot::Sender<()>)>>,
     }
 
     impl FakeArchiveClient {
@@ -714,6 +626,11 @@ mod tests {
             commit: &str,
         ) -> Result<Vec<u8>, GitHubFetchError> {
             self.download_calls.fetch_add(1, Ordering::SeqCst);
+            if let Some(paused) = &self.download_pause {
+                let (resume, waiting) = tokio::sync::oneshot::channel();
+                paused.send((commit.to_string(), resume)).unwrap();
+                waiting.await.unwrap();
+            }
             self.archives
                 .get(&(source.to_string(), commit.to_string()))
                 .cloned()
@@ -850,6 +767,114 @@ mod tests {
         assert_eq!(report.sources.len(), 1);
         assert_eq!(report.sources[0].skill_count, 3);
         assert_eq!(report.sources[0].status, UpdateSourceStatus::Ok);
+    }
+
+    #[tokio::test]
+    async fn different_commits_download_before_either_finishes() {
+        let root = project_root();
+        write_lock(
+            root.path(),
+            serde_json::json!({
+                "alpha": entry("acme/skills", "github", "alpha/SKILL.md", ALPHA_HASH),
+                "beta": entry("other/skills", "github", "beta/SKILL.md", ALPHA_OLD_HASH),
+            }),
+        );
+        let (paused, mut requests) = tokio::sync::mpsc::unbounded_channel();
+        let mut client = FakeArchiveClient::default()
+            .with_group("acme/skills", Some("main"), COMMIT_A, scoped_archive())
+            .with_group("other/skills", Some("main"), COMMIT_B, scoped_archive());
+        client.download_pause = Some(paused);
+        let (service, _tmp) = service(
+            client,
+            Arc::new(TestClock::new(1_000)),
+            ProjectCheckConfig::default(),
+        );
+        let layout = layout(root.path());
+        let (report, ()) = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            tokio::join!(service.check(&layout, None), async {
+                let (first, resume_first) = requests.recv().await.unwrap();
+                let (second, resume_second) = requests.recv().await.unwrap();
+                assert_ne!(first, second);
+                resume_first.send(()).unwrap();
+                resume_second.send(()).unwrap();
+            })
+        })
+        .await
+        .expect("different commits must enter download before either is released");
+
+        let report = report.unwrap();
+        assert_eq!(report.sources.len(), 2);
+        assert!(
+            report
+                .sources
+                .iter()
+                .all(|source| source.status == UpdateSourceStatus::Ok)
+        );
+        assert_eq!(report.candidate_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn slow_download_does_not_block_a_completed_source_at_deadline() {
+        let root = project_root();
+        write_lock(
+            root.path(),
+            serde_json::json!({
+                "alpha": entry("acme/skills", "github", "alpha/SKILL.md", ALPHA_HASH),
+                "beta": entry("other/skills", "github", "beta/SKILL.md", ALPHA_OLD_HASH),
+            }),
+        );
+        let (paused, mut requests) = tokio::sync::mpsc::unbounded_channel();
+        let mut client = FakeArchiveClient::default()
+            .with_group("acme/skills", Some("main"), COMMIT_A, scoped_archive())
+            .with_group("other/skills", Some("main"), COMMIT_B, scoped_archive());
+        client.download_pause = Some(paused);
+        let (service, _tmp) = service(
+            client,
+            Arc::new(TestClock::new(1_000)),
+            ProjectCheckConfig {
+                deadline_ms: 20,
+                ..ProjectCheckConfig::default()
+            },
+        );
+        let layout = layout(root.path());
+        let (report, slow) = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            tokio::join!(service.check(&layout, None), async {
+                let first = requests.recv().await.unwrap();
+                let second = requests.recv().await.unwrap();
+                let (fast, slow) = if first.0 == COMMIT_A {
+                    (first, second)
+                } else {
+                    (second, first)
+                };
+                fast.1.send(()).unwrap();
+                slow.1
+            })
+        })
+        .await
+        .expect("both downloads must begin before the check finishes");
+        let report = report.unwrap();
+        let alpha = report
+            .skills
+            .iter()
+            .find(|skill| skill.name == "alpha")
+            .unwrap();
+        let beta = report
+            .skills
+            .iter()
+            .find(|skill| skill.name == "beta")
+            .unwrap();
+        assert_eq!(alpha.state, UpdateState::Current);
+        assert_eq!(beta.state, UpdateState::Error);
+        assert!(
+            slow.is_closed(),
+            "the deadline must release the slow download"
+        );
+        assert!(
+            service
+                .cache
+                .load(COMMIT_B, ArchiveLimits::default())
+                .is_none()
+        );
     }
 
     #[tokio::test]

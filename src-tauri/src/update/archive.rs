@@ -19,6 +19,9 @@ use super::cache::is_fresh;
 use super::github::{GITHUB_API_BASE, GitHubFetchError};
 use crate::paths::AppPaths;
 
+mod acquisition;
+pub(crate) use acquisition::SourceArchives;
+
 /// Hard caps from spec §9/§10.4: one archive download per source per commit,
 /// with bounded memory and a bounded wait.
 pub const ARCHIVE_MAX_BYTES: u64 = 64 * 1024 * 1024;
