@@ -7,7 +7,6 @@ import { MutationProgress } from "./mutation/mutation-progress";
 import { MutationResult } from "./mutation/mutation-result";
 import { useModalFocus } from "../hooks/use-modal-focus";
 import {
-  cancelTask,
   fallbackError,
   startInstall,
   startPreview,
@@ -257,31 +256,8 @@ export function InstallWizard({
   }, [open, step, projectMode, targetAgents, inventorySkills]);
 
   const closeWizard = useCallback(() => {
-    const previewTask = previewMutation.stateRef.current;
-    const installTask = installMutation.stateRef.current;
-    if (installTask.running) {
-      // Before the CLI spawns the task can still be cancelled. Once writing
-      // starts the modal stays open and the backend refuses cancellation.
-      if (installTask.phase !== "preparing") return;
-      if (installTask.taskId) {
-        void cancelTask(installTask.taskId).catch(() => {
-          // Best effort; the backend rejects cancellation after the seal.
-        });
-      }
-    } else if (previewTask.running && previewTask.taskId) {
-      void cancelTask(previewTask.taskId).catch(() => {
-        // Closing is best-effort cancellation; the read-only task times out.
-      });
-    }
-    previewMutation.reset();
-    installMutation.reset();
-    onCloseRef.current();
-  }, [
-    installMutation.reset,
-    installMutation.stateRef,
-    previewMutation.reset,
-    previewMutation.stateRef,
-  ]);
+    if (installMutation.requestClose([previewMutation])) onCloseRef.current();
+  }, [installMutation.requestClose, previewMutation]);
 
   const resetPreviewSelection = useCallback(() => {
     installMutation.reset();
@@ -351,7 +327,7 @@ export function InstallWizard({
     [editableAgents, selectedAgents],
   );
 
-  const writingLocked = installRunning && installPhase !== "preparing";
+  const writingLocked = !installMutation.canClose();
 
   const handlePreview = () => {
     if (previewRunning || installRunning) return;

@@ -537,19 +537,26 @@ export interface MutationHandle {
   start: (driver: MutationDriver) => Promise<MutationResultView | null>;
   cancel: (fallbackMessage?: string) => Promise<void>;
   reset: () => void;
+  canClose: () => boolean;
+  /** Best-effort cancellation and reset; false leaves the run unchanged. */
+  requestClose: (companions?: readonly MutationHandle[]) => boolean;
   /** Local validation error, shown before a task exists. */
   setStartError: (error: AppError | null) => void;
 }
 
 export function useMutation(options: MutationOptions): MutationHandle {
   const queryClient = useQueryClient();
-  const [state, dispatch] = useReducer(
+  const [state, reducerDispatch] = useReducer(
     mutationRunReducer,
     undefined,
     initialMutationState,
   );
   const stateRef = useRef(state);
-  stateRef.current = state;
+  const dispatch = useCallback((action: MutationRunAction) => {
+    // Close and cancel can run before React renders a queued transition.
+    stateRef.current = mutationRunReducer(stateRef.current, action);
+    reducerDispatch(action);
+  }, []);
   const runSeq = useRef(0);
   const resolverRef = useRef<
     ((result: MutationResultView | null) => void) | null
@@ -609,7 +616,7 @@ export function useMutation(options: MutationOptions): MutationHandle {
           });
       }
     },
-    [settle],
+    [dispatch, settle],
   );
 
   const start = useCallback(
@@ -691,16 +698,22 @@ export function useMutation(options: MutationOptions): MutationHandle {
         })();
       });
     },
-    [handleTaskEvent, settle],
+    [dispatch, handleTaskEvent, settle],
   );
 
   const cancel = useCallback(
     async (fallbackMessage = "无法取消任务。") => {
       const current = stateRef.current;
-      if (!current.taskId || current.cancelling) return;
+      if (!current.running || !current.taskId || current.cancelling) return;
+      const seq = runSeq.current;
+      const isCurrent = () =>
+        runSeq.current === seq &&
+        stateRef.current.running &&
+        stateRef.current.taskId === current.taskId;
       dispatch({ type: "cancelling", value: true });
       try {
         const ack = await cancelTask(current.taskId);
+        if (!isCurrent()) return;
         if (!ack.accepted) {
           dispatch({
             type: "cancelRejected",
@@ -708,15 +721,16 @@ export function useMutation(options: MutationOptions): MutationHandle {
           });
         }
       } catch (error) {
+        if (!isCurrent()) return;
         dispatch({
           type: "cancelFailed",
           error: asAppError(error) ?? fallbackError(fallbackMessage),
         });
       } finally {
-        dispatch({ type: "cancelling", value: false });
+        if (isCurrent()) dispatch({ type: "cancelling", value: false });
       }
     },
-    [],
+    [dispatch],
   );
 
   const reset = useCallback(() => {
@@ -725,11 +739,46 @@ export function useMutation(options: MutationOptions): MutationHandle {
     resolverRef.current = null;
     resolve?.(null);
     dispatch({ type: "reset" });
+  }, [dispatch]);
+
+  const canClose = useCallback(() => {
+    const current = stateRef.current;
+    if (!current.running) return true;
+    if (optionsRef.current.action === "preview") return true;
+    return (
+      optionsRef.current.action === "install" && current.phase === "preparing"
+    );
   }, []);
+
+  const requestClose = useCallback(
+    (companions: readonly MutationHandle[] = []) => {
+      const participants = [{ stateRef, canClose, reset }, ...companions];
+      if (participants.some((handle) => !handle.canClose())) return false;
+      const active = participants.find((handle) => handle.stateRef.current.running);
+      const taskId = active?.stateRef.current.taskId;
+      if (taskId) {
+        void cancelTask(taskId).catch(() => {
+          // Closure does not wait for the backend cancellation window.
+        });
+      }
+      for (const handle of participants) handle.reset();
+      return true;
+    },
+    [canClose, reset],
+  );
 
   const setStartError = useCallback((error: AppError | null) => {
     dispatch({ type: "startError", error });
-  }, []);
+  }, [dispatch]);
 
-  return { state, stateRef, start, cancel, reset, setStartError };
+  return {
+    state,
+    stateRef,
+    start,
+    cancel,
+    reset,
+    canClose,
+    requestClose,
+    setStartError,
+  };
 }

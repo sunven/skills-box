@@ -99,12 +99,16 @@ export function UpdateDialog({
     setConfirmed(false);
   }, [open, mode, mutation.reset]);
 
+  const closeDialog = useCallback(() => {
+    if (mutation.requestClose()) onCloseRef.current();
+  }, [mutation.requestClose]);
+
   useModalFocus({
     open,
     panelRef,
     initialFocusRef: closeRef,
-    onClose,
-    canClose: () => !mutation.stateRef.current.running,
+    onClose: closeDialog,
+    canClose: mutation.canClose,
   });
 
   const handleCancelTask = () =>
@@ -117,15 +121,13 @@ export function UpdateDialog({
       ? `更新 skill · ${singleSkill.name}`
       : "更新全部";
   const showInitial = !running && !result;
-  const closeDisabled = running;
+  const closeDisabled = !mutation.canClose();
 
   return (
     <div
       className="modal-overlay"
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget && !running) {
-          onCloseRef.current();
-        }
+        if (event.target === event.currentTarget) closeDialog();
       }}
     >
       <div
@@ -158,7 +160,7 @@ export function UpdateDialog({
             aria-label="关闭更新"
             disabled={closeDisabled}
             title={closeDisabled ? "更新进行中，可在 skill 之间取消" : undefined}
-            onClick={onClose}
+            onClick={closeDialog}
             className="size-7 shrink-0"
           >
             <X className="size-4" aria-hidden="true" />
@@ -452,7 +454,7 @@ export function UpdateDialog({
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={onClose}
+                  onClick={closeDialog}
                   disabled={closeDisabled}
                 >
                   取消
@@ -484,7 +486,7 @@ export function UpdateDialog({
               </Button>
             ) : null}
             {!running && result ? (
-              <Button size="sm" onClick={onClose}>
+              <Button size="sm" onClick={closeDialog}>
                 {result.outcome === "success" ? "完成" : "关闭"}
               </Button>
             ) : null}

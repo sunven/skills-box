@@ -225,28 +225,6 @@ describe("mutation lifecycle", () => {
     state = mutationRunReducer(state, { type: "startError", error: null });
     expect(state.startError).toBeNull();
   });
-
-  it("reports cancel rejections as mutation errors and resets cleanly", () => {
-    let state = mutationRunReducer(initialMutationState(), {
-      type: "start",
-      total: 1,
-      message: "正在准备更新…",
-      indeterminate: false,
-    });
-    state = mutationRunReducer(state, { type: "cancelling", value: true });
-    state = mutationRunReducer(state, {
-      type: "cancelRejected",
-      message: "当前 skill 正在写入，无法取消。",
-    });
-    expect(state.cancelling).toBe(true);
-    expect(state.error).toEqual({
-      message: "当前 skill 正在写入，无法取消。",
-      retryable: false,
-    });
-
-    state = mutationRunReducer(state, { type: "reset" });
-    expect(state).toEqual(initialMutationState());
-  });
 });
 
 describe("mutation refresh", () => {

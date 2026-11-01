@@ -66,12 +66,16 @@ export function UninstallDialog({
     setConfirmed(false);
   }, [open, skill?.name, mutation.reset]);
 
+  const closeDialog = useCallback(() => {
+    if (mutation.requestClose()) onCloseRef.current();
+  }, [mutation.requestClose]);
+
   useModalFocus({
     open,
     panelRef,
     initialFocusRef: closeRef,
-    onClose,
-    canClose: () => !mutation.stateRef.current.running,
+    onClose: closeDialog,
+    canClose: mutation.canClose,
   });
 
   const handleCancelTask = () =>
@@ -85,7 +89,7 @@ export function UninstallDialog({
       ? "无 canonical（仅副本）"
       : (skill.canonicalPath ?? "canonical 路径未知（可能已缺失）");
   const showInitial = !running && !result;
-  const closeDisabled = running;
+  const closeDisabled = !mutation.canClose();
   const removeCommand =
     scope === "global" ? "skills remove -g -s" : "skills remove -s";
 
@@ -93,9 +97,7 @@ export function UninstallDialog({
     <div
       className="modal-overlay"
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget && !running) {
-          onCloseRef.current();
-        }
+        if (event.target === event.currentTarget) closeDialog();
       }}
     >
       <div
@@ -123,7 +125,7 @@ export function UninstallDialog({
             aria-label="关闭卸载"
             disabled={closeDisabled}
             title={closeDisabled ? "卸载进行中，CLI 启动前可取消" : undefined}
-            onClick={onClose}
+            onClick={closeDialog}
             className="size-7 shrink-0"
           >
             <X className="size-4" aria-hidden="true" />
@@ -274,7 +276,7 @@ export function UninstallDialog({
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={onClose}
+                  onClick={closeDialog}
                   disabled={closeDisabled}
                 >
                   取消
@@ -301,7 +303,7 @@ export function UninstallDialog({
               </Button>
             ) : null}
             {!running && result ? (
-              <Button size="sm" onClick={onClose}>
+              <Button size="sm" onClick={closeDialog}>
                 {result.outcome === "success" ? "完成" : "关闭"}
               </Button>
             ) : null}
