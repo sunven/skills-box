@@ -702,11 +702,13 @@
 
 .env-rows {
   display: grid;
-  gap: 1px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px 10px;
 }
 
 .env-row {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 7px;
   border-radius: 4px;
