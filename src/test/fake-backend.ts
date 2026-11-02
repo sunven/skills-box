@@ -1,3 +1,4 @@
+import type { DiscoveryId, DiscoveryState, DiscoveryProgress } from "../lib/discovery";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import type { Channel } from "@tauri-apps/api/core";
 import type { ApiCommand } from "../lib/api";
@@ -10,6 +11,8 @@ import type {
   CancelAck,
   DetachResult,
   EnvReport,
+  GitHubSettingsStatus,
+  GitHubAuthTestResult,
   ExtraAgent,
   ExtraAgentInput,
   InstallRequest,
@@ -41,6 +44,15 @@ type Factory<T> = T | (() => T);
 type MaybePromise<T> = T | Promise<T>;
 
 export interface FakeCommandContract {
+  get_discovery_state: { args: Record<string, never>; result: DiscoveryState };
+  start_discovery_scan: { args: { manual?: boolean }; result: DiscoveryProgress };
+  acknowledge_discoveries: { args: { ids: DiscoveryId[] | null }; result: void };
+  set_discovery_ignored: { args: { id: DiscoveryId; ignored: boolean }; result: void };
+  invalidate_discovery_source: { args: { source: string }; result: void };
+  get_github_settings: { args: Record<string, never>; result: GitHubSettingsStatus };
+  save_github_token: { args: { token: string }; result: GitHubSettingsStatus };
+  clear_github_token: { args: Record<string, never>; result: GitHubSettingsStatus };
+  test_github_auth: { args: Record<string, never>; result: GitHubAuthTestResult };
   get_environment: { args: { refresh?: boolean }; result: EnvReport };
   list_projects: { args: Record<string, never>; result: ProjectList };
   add_project: { args: { root: string }; result: ProjectEntry };
@@ -146,6 +158,8 @@ export type FakeCall = {
 }[ApiCommand];
 
 export interface FakeBackendData {
+  discovery: DiscoveryState;
+  githubSettings: GitHubSettingsStatus;
   environment: Factory<EnvReport>;
   /** Initial in-memory registry; list/add/relocate/forget mutate their own copy. */
   projects: Factory<ProjectList>;
@@ -271,6 +285,8 @@ export function createFakeBackend(
   options: FakeBackendOptions = {},
 ): FakeBackend {
   const defaultData: FakeBackendData = {
+    discovery: { sources: [], skills: [], unreadCount: 0, progress: { runId: 0, running: false, total: 0, completed: 0 }, warnings: [], error: null },
+    githubSettings: { hasSavedToken: false, hasEnvironmentToken: false, effectiveSource: "anonymous" },
     environment: healthyReport(),
     projects: {
       projects: [],
@@ -310,6 +326,7 @@ export function createFakeBackend(
       : 80;
   const autoTasks = Boolean(options.autoTasks);
   let taskCounter = 0;
+  const installSources = new Map<string, string>();
 
   const runCallback = (id: number, payload: unknown) => {
     const internals = (
@@ -332,6 +349,13 @@ export function createFakeBackend(
       channel,
       emit(event) {
         if (!tasks.includes(task)) return;
+        if (event.result?.action === "install") {
+          const source = installSources.get(task.taskId);
+          const installed = new Set(event.result.skills.filter((s) => s.status === "installed").map((s) => s.name.toLowerCase()));
+          const resultScope = event.result.scope ?? GLOBAL_SCOPE;
+          updateDiscovery((s) => s.id.source === source && installed.has(s.id.name) ? { ...s, unread: false,
+            installations: s.installations.map((i) => i.scope === resultScope ? { ...i, status: "installed" } : i) } : s);
+        }
         const index = channelIndexes.get(channel.id) ?? 0;
         channelIndexes.set(channel.id, index + 1);
         runCallback(channel.id, { index, message: event });
@@ -959,7 +983,36 @@ export function createFakeBackend(
     };
   };
 
+  const updateDiscovery = (transform: (skill: DiscoveryState["skills"][number]) => DiscoveryState["skills"][number]) => {
+    const skills = data.discovery.skills.map(transform);
+    data = { ...data, discovery: { ...data.discovery, skills, unreadCount: skills.filter((s) => s.unread && !s.ignored).length } };
+  };
   const defaultHandlers: FakeHandlers = {
+    get_discovery_state: () => data.discovery,
+    start_discovery_scan: () => data.discovery.progress,
+    acknowledge_discoveries: ({ ids }) => {
+      updateDiscovery((s) => !ids || ids.some((id) => id.source === s.id.source && id.name === s.id.name) ? { ...s, unread: false } : s);
+    },
+    set_discovery_ignored: ({ id, ignored }) => {
+      updateDiscovery((s) => id.source === s.id.source && id.name === s.id.name ? { ...s, ignored, unread: false } : s);
+    },
+    invalidate_discovery_source: ({ source }) => {
+      data = { ...data, discovery: { ...data.discovery, sources: data.discovery.sources.map((s) => s.source === source ? { ...s, needsRevalidation: true } : s) } };
+    },
+    get_github_settings: () => ({ ...data.githubSettings }),
+    save_github_token: () => {
+      data = { ...data, githubSettings: { ...data.githubSettings, hasSavedToken: true, effectiveSource: "settings" } };
+      return { ...data.githubSettings };
+    },
+    clear_github_token: () => {
+      data = { ...data, githubSettings: { ...data.githubSettings, hasSavedToken: false,
+        effectiveSource: data.githubSettings.hasEnvironmentToken ? "environment" : "anonymous" } };
+      return { ...data.githubSettings };
+    },
+    test_github_auth: () => ({ source: data.githubSettings.effectiveSource,
+      limit: data.githubSettings.effectiveSource === "anonymous" ? 60 : 5_000,
+      remaining: data.githubSettings.effectiveSource === "anonymous" ? 59 : 4_999,
+      resetAtEpochMs: Date.now() + 3_600_000 }),
     get_environment: () => factoryValue(data.environment),
     list_projects: () => ({
       ...projectList,
@@ -993,6 +1046,7 @@ export function createFakeBackend(
     quit_app: () => undefined,
     start_install: ({ request, scope, onEvent }) => {
       const task = makeTask("start_install", onEvent);
+      installSources.set(task.taskId, request.source.startsWith("https://") ? request.source : request.source.toLowerCase());
       scheduleAutoTask(task, "install", request.skills, scope);
       return task.taskId;
     },
@@ -1099,7 +1153,7 @@ export function createFakeBackend(
           }
           calls.push({
             command: typed,
-            payload,
+            payload: typed === "save_github_token" ? { token: "[redacted]" } : payload,
           } as FakeCall);
           return handlerFor(typed)(payload as never, backend);
         },

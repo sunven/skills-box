@@ -1,10 +1,16 @@
-import { ArrowUpCircle, Download, RefreshCw, SlidersHorizontal } from "lucide-react";
+import { ArrowLeft, ArrowUpCircle, Download, RefreshCw, Settings, SlidersHorizontal } from "lucide-react";
 import { Button } from "./ui/button";
 import { environmentSummary } from "../lib/environment-display";
 import type { AppError, EnvReport, UpdateCheckReport } from "../lib/types";
 import { formatEpochDateTime, type LastCheckSummary } from "../lib/update-view";
 
 interface AppHeaderProps {
+  settingsOpen: boolean;
+  discoveryOpen: boolean;
+  discoveryCount: number;
+  onOpenDiscovery: () => void;
+  onOpenSettings: () => void;
+  onReturnToSkills: () => void;
   report?: EnvReport;
   isLoading: boolean;
   isError: boolean;
@@ -40,6 +46,12 @@ function BrandMark() {
 }
 
 export function AppHeader({
+  settingsOpen,
+  discoveryOpen,
+  discoveryCount,
+  onOpenDiscovery,
+  onOpenSettings,
+  onReturnToSkills,
   report,
   isLoading,
   isError,
@@ -94,7 +106,7 @@ export function AppHeader({
   return (
     <header className="topbar">
       <div className="flex min-w-0 items-center gap-3">
-        <Button
+        {settingsOpen || discoveryOpen ? null : <Button
           variant="ghost"
           size="icon"
           className="rail-toggle"
@@ -103,13 +115,14 @@ export function AppHeader({
           onClick={onToggleFilters}
         >
           <SlidersHorizontal />
-        </Button>
+        </Button>}
         <div className="brand">
           <span className="brand-mark">
             <BrandMark />
           </span>
           <span className="brand-name">Skills Box</span>
           <span
+            role="img"
             className="env-dot"
             data-tone={env.tone}
             title={env.label}
@@ -123,6 +136,8 @@ export function AppHeader({
       </div>
 
       <div className="topbar-actions">
+        <Button variant={discoveryOpen ? "outline" : "ghost"} size="sm" onClick={onOpenDiscovery} aria-label={`发现 (${discoveryCount})`} aria-pressed={discoveryOpen}>发现{discoveryCount > 0 ? <span className="discovery-count" data-testid="discovery-badge">{discoveryCount}</span> : null}</Button>
+        {settingsOpen || discoveryOpen ? <><Button variant="ghost" size="sm" onClick={onReturnToSkills}><ArrowLeft aria-hidden="true" />返回 skills</Button>{discoveryOpen ? <Button variant="ghost" size="icon" aria-label="设置" onClick={onOpenSettings}><Settings aria-hidden="true" /></Button> : null}</> : <>
         <span
           data-testid="last-update-check"
           data-error={!checkingUpdates && updateError ? "true" : undefined}
@@ -181,6 +196,8 @@ export function AppHeader({
           <Download className="size-3.5" aria-hidden="true" />
           安装 skill
         </Button>
+        <Button variant="ghost" size="icon" aria-label="设置" title="设置" onClick={onOpenSettings}><Settings aria-hidden="true" /></Button>
+        </>}
       </div>
     </header>
   );

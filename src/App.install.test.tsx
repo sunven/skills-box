@@ -128,7 +128,7 @@ describe("install wizard steps 1-2", () => {
     const state = setup({
       startError: {
         code: "source.unsupported_subdir",
-        message: "仅支持公开 GitHub 根仓库，不支持子目录。",
+        message: "仅支持公开 HTTPS Git 根仓库，不支持网页子目录链接。",
         retryable: false,
       },
     });
@@ -139,7 +139,7 @@ describe("install wizard steps 1-2", () => {
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "预览仓库" }));
     expect(
-      await within(dialog).findByText("请输入公开 GitHub 仓库，例如 owner/repo。"),
+      await within(dialog).findByText("请输入公开 HTTPS Git 仓库，或 GitHub owner/repo。"),
     ).toBeInTheDocument();
     expect(state.backend.count(API_COMMANDS.startPreview)).toBe(0);
 
@@ -148,7 +148,7 @@ describe("install wizard steps 1-2", () => {
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "预览仓库" }));
     const alert = await within(dialog).findByRole("alert");
-    expect(alert).toHaveTextContent("不支持子目录");
+    expect(alert).toHaveTextContent("不支持网页子目录链接");
     expect(within(dialog).getByText("source.unsupported_subdir")).toBeInTheDocument();
     expect(
       state.backend

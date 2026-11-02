@@ -211,6 +211,28 @@ async function startPreviewAndReachSkills(
 }
 
 describe("install wizard steps 3-5", () => {
+  it("passes the normalized CNB preview source into installation", async () => {
+    const state = setup(snapshotWithDefaultAgents());
+    const dialog = await openWizard();
+    fireEvent.change(within(dialog).getByLabelText("仓库来源"), {
+      target: { value: "https://cnb.cool/cnb/skills/cnb-skill" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "预览仓库" }));
+    await waitFor(() => expect(state.backend.count(API_COMMANDS.startPreview)).toBe(1));
+    expect(state.backend.callsOf(API_COMMANDS.startPreview)[0].payload.source)
+      .toBe("https://cnb.cool/cnb/skills/cnb-skill");
+    emitPreview(state, previewCompleted({
+      ...preview([{ name: "cnb-api", description: "CNB 平台交互命令" }]),
+      source: "https://cnb.cool/cnb/skills/cnb-skill.git",
+    }));
+    await within(dialog).findByLabelText("选择 Claude Code");
+    fireEvent.click(within(dialog).getByRole("button", { name: "下一步" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "开始安装" }));
+    await waitFor(() => expect(state.backend.count(API_COMMANDS.startInstall)).toBe(1));
+    expect((state.backend.callsOf(API_COMMANDS.startInstall)[0].payload.request as { source: string }).source)
+      .toBe("https://cnb.cool/cnb/skills/cnb-skill.git");
+  });
+
   it("defaults agents by managed skills, labels universal and writes canonical", async () => {
     const state = setup(snapshotWithDefaultAgents());
     const dialog = await openWizard();

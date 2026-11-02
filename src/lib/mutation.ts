@@ -1,3 +1,4 @@
+import { discoveryQueryKey } from "./discovery";
 //! One mutation surface for task state, results and refresh.
 //!
 //! CLI actions stream `TaskEvent`s and native actions complete a promise, but
@@ -507,6 +508,9 @@ export function refreshMutationQueries(
         (previous) => markSkillsCurrent(previous, updatedNames),
       );
     }
+  }
+  if (["install", "uninstall", "project_add", "project_relocate", "project_forget"].includes(options.action)) {
+    void queryClient.invalidateQueries({ queryKey: discoveryQueryKey });
   }
   const plan = mutationRefreshPlan(options.action, scope, options.skillId);
   for (const queryKey of plan.invalidate) {

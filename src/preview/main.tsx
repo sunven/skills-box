@@ -1,3 +1,4 @@
+import { discoveryFixture, discoveryProject } from "../test/discovery-fixtures";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -17,13 +18,18 @@ import "../index.css";
 
 createFakeBackend({
   data: {
+    discovery: discoveryFixture(),
+    projects: { projects: [discoveryProject], lastActiveScope: "global", warnings: [] },
     environment,
     snapshot,
     detail: (skillId) => skillDetail(skillId),
     listDir: listSkillDir,
     readFile: readSkillFile,
     updateReport,
-    preview: previewSummary,
+    preview: new URLSearchParams(location.search).has("discovery") ? {
+      source: "acme/skills", parseFailed: false, noSkills: false,
+      skills: ["alpha", "beta", "gamma"].map((name) => ({ name, description: `${name} description` })),
+    } : previewSummary,
   },
   autoTasks: true,
 }).install({ shouldMockEvents: true });

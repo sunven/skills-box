@@ -149,13 +149,36 @@ fn git_mode(kind: &str, mode: Option<&str>) -> Option<GitMode> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GitHubFetchError {
-    Offline { detail: String },
-    RateLimited { detail: String },
-    Http { status: u16, detail: String },
-    Parse { detail: String },
+    Settings {
+        error: crate::error::AppError,
+    },
+    Git {
+        detail: String,
+    },
+    Offline {
+        detail: String,
+    },
+    RateLimited {
+        detail: String,
+        reset_at: Option<u64>,
+        context: Option<String>,
+        revision: Option<u64>,
+    },
+    Http {
+        status: u16,
+        detail: String,
+    },
+    Parse {
+        detail: String,
+    },
 }
 
 impl GitHubFetchError {
+    pub fn git(detail: impl Into<String>) -> Self {
+        Self::Git {
+            detail: detail.into(),
+        }
+    }
     pub fn offline(detail: impl Into<String>) -> Self {
         Self::Offline {
             detail: detail.into(),
@@ -165,6 +188,9 @@ impl GitHubFetchError {
     pub fn rate_limited(detail: impl Into<String>) -> Self {
         Self::RateLimited {
             detail: detail.into(),
+            reset_at: None,
+            context: None,
+            revision: None,
         }
     }
 
@@ -183,8 +209,13 @@ impl GitHubFetchError {
 
     pub fn to_app_error(&self) -> crate::error::AppError {
         match self {
+            Self::Settings { error } => error.clone(),
+            Self::Http { status: 401, .. } => crate::error::AppError::network_auth_failed(),
+            Self::Git { detail } => crate::error::AppError::network_error(detail),
             Self::Offline { detail } => crate::error::AppError::network_offline(detail),
-            Self::RateLimited { detail } => crate::error::AppError::network_rate_limited(detail),
+            Self::RateLimited { detail, .. } => {
+                crate::error::AppError::network_rate_limited(detail)
+            }
             Self::Http {
                 status: 404,
                 detail,
@@ -221,9 +252,12 @@ pub trait GitHubTreeClient: Send + Sync {
 }
 
 pub(super) fn validate_repo(source: &str) -> Result<(String, String), GitHubFetchError> {
-    let normalized = crate::tasks::source::validate_source(source)
-        .map_err(|error| GitHubFetchError::http(400, error.message))?
-        .normalized;
+    let spec = crate::tasks::source::validate_source(source)
+        .map_err(|error| GitHubFetchError::http(400, error.message))?;
+    if spec.kind != crate::tasks::source::SourceKind::GitHub {
+        return Err(GitHubFetchError::http(400, "来源不是 GitHub 仓库"));
+    }
+    let normalized = spec.normalized;
     let Some((owner, repo)) = normalized.split_once('/') else {
         return Err(GitHubFetchError::http(400, "来源不是 owner/repo"));
     };
@@ -304,25 +338,23 @@ pub fn parse_tree_response(raw: &str) -> Result<RemoteTree, GitHubFetchError> {
     Ok(RemoteTree::new(response.sha, response.truncated, entries))
 }
 
-/// Production GitHub client: one unauthenticated recursive Trees request per
-/// source with a hard timeout. Public repositories only (v1 scope).
+/// One recursive Trees request per source, using the shared REST transport.
 #[derive(Debug, Clone)]
 pub struct ReqwestGitHubClient {
-    client: reqwest::Client,
+    api: super::api::GitHubApiClient,
 }
 
 impl ReqwestGitHubClient {
     pub fn new() -> Self {
-        let client = reqwest::Client::builder()
-            .timeout(GITHUB_REQUEST_TIMEOUT)
-            .user_agent(concat!("skills-box/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .unwrap_or_default();
-        Self { client }
+        Self::with_api(super::api::GitHubApiClient::anonymous())
     }
 
     pub fn with_client(client: reqwest::Client) -> Self {
-        Self { client }
+        Self::with_api(super::api::GitHubApiClient::with_client(client))
+    }
+
+    pub fn with_api(api: super::api::GitHubApiClient) -> Self {
+        Self { api }
     }
 }
 
@@ -340,59 +372,12 @@ impl GitHubTreeClient for ReqwestGitHubClient {
         reference: Option<&str>,
     ) -> Result<RemoteTree, GitHubFetchError> {
         let url = tree_url(source, reference)?;
-        let response = self
-            .client
-            .get(url)
-            .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
-            .send()
-            .await
-            .map_err(map_request_error)?;
-
-        let status = response.status();
-        if !status.is_success() {
-            let remaining = header_value(&response, "x-ratelimit-remaining");
-            let retry_after = header_value(&response, "retry-after");
-            let reset = header_value(&response, "x-ratelimit-reset");
-            let body = response.text().await.unwrap_or_default();
-            let mut error = classify_http_error(
-                status.as_u16(),
-                remaining.as_deref(),
-                retry_after.as_deref(),
-                &body,
-            );
-            if let GitHubFetchError::RateLimited { detail } = &mut error
-                && let Some(reset) = reset
-            {
-                detail.push_str(&format!("；x-ratelimit-reset={reset}"));
-            }
-            return Err(error);
-        }
-
-        let body = response.text().await.map_err(|error| {
-            GitHubFetchError::offline(format!("读取 GitHub tree 响应失败：{error}"))
-        })?;
+        let body = self.api.get_text(url).await?;
         parse_tree_response(&body)
     }
 }
 
-fn header_value(response: &reqwest::Response, name: &str) -> Option<String> {
-    response
-        .headers()
-        .get(name)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_string)
-}
-
-fn map_request_error(error: reqwest::Error) -> GitHubFetchError {
-    if error.is_connect() || error.is_timeout() {
-        GitHubFetchError::offline(error.to_string())
-    } else {
-        GitHubFetchError::http(0, error.to_string())
-    }
-}
-
-fn classify_http_error(
+pub(super) fn classify_http_error(
     status: u16,
     rate_limit_remaining: Option<&str>,
     retry_after: Option<&str>,

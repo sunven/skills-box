@@ -1,14 +1,16 @@
 //! Read-only update checking.
 //!
 //! `check_updates` never runs the skills CLI. It reads lock v3, groups entries
-//! by `(source, ref)`, fetches each repository's recursive Git tree once, and
-//! compares the lock's 40-char `skillFolderHash` with the folder tree SHA
-//! computed from that response. Network failures are isolated per source and
+//! by `(source, ref)`, and compares GitHub tree SHAs or generic Git content
+//! fingerprints with the recorded `skillFolderHash`. Network failures are isolated per source and
 //! keep the previous successful result; they never become "current".
 
+pub mod api;
 pub mod archive;
 pub mod cache;
+mod content_check;
 pub mod content_hash;
+pub mod git;
 pub mod github;
 pub mod project;
 pub mod project_checks;
@@ -24,6 +26,9 @@ use crate::error::AppError;
 use crate::inventory::UpdateState;
 use crate::lock::{LockEntry, LockFile};
 use crate::paths::AppPaths;
+use archive::{
+    ArchiveClient, ArchiveLimits, CommitArchiveCache, SourceArchiveClient, SourceArchives,
+};
 use cache::{CachedSourceTree, UpdateCache, is_fresh};
 use github::{GitHubTreeClient, RemoteTree, ReqwestGitHubClient};
 use state::{UpdateCheckState, UpdateCheckStateStore};
@@ -164,6 +169,8 @@ pub enum UpdateCheckResponse {
 pub struct UpdateService {
     paths: AppPaths,
     client: Arc<dyn GitHubTreeClient>,
+    archive_client: Arc<dyn ArchiveClient>,
+    archive_cache: CommitArchiveCache,
     clock: Arc<dyn Clock>,
     cache: UpdateCache,
     state: Arc<UpdateCheckStateStore>,
@@ -178,11 +185,21 @@ impl UpdateService {
 
     /// Production wiring: one store shared with the Project check lifecycle.
     pub fn new_with_store(paths: AppPaths, state: Arc<UpdateCheckStateStore>) -> Self {
+        Self::new_with_api(paths, state, api::GitHubApiClient::anonymous())
+    }
+
+    pub fn new_with_api(
+        paths: AppPaths,
+        state: Arc<UpdateCheckStateStore>,
+        api: api::GitHubApiClient,
+    ) -> Self {
         Self {
             cache: UpdateCache::new(&paths),
             state,
+            archive_client: Arc::new(SourceArchiveClient::with_api(paths.clone(), api.clone())),
+            archive_cache: CommitArchiveCache::new(&paths),
             paths,
-            client: Arc::new(ReqwestGitHubClient::new()),
+            client: Arc::new(ReqwestGitHubClient::with_api(api)),
             clock: Arc::new(SystemClock),
             config: UpdateCheckConfig::default(),
         }
@@ -208,6 +225,8 @@ impl UpdateService {
         Self {
             cache: UpdateCache::new(&paths),
             state,
+            archive_client: Arc::new(SourceArchiveClient::new(paths.clone())),
+            archive_cache: CommitArchiveCache::new(&paths),
             paths,
             client,
             clock,
@@ -239,7 +258,12 @@ impl UpdateService {
         let mut cached_groups = Vec::new();
         let mut network_groups = Vec::new();
         for group in groups.into_values() {
-            match self.cache.load(&group.source, group.reference.as_deref()) {
+            let cached = if group.is_content() {
+                None
+            } else {
+                self.cache.load(&group.source, group.reference.as_deref())
+            };
+            match cached {
                 Some(cached)
                     if is_fresh(cached.fetched_at_epoch_ms, now, self.config.cache_ttl_ms) =>
                 {
@@ -351,7 +375,7 @@ impl UpdateService {
             match checkable_target(entry) {
                 Ok(target) => {
                     let key = GroupKey {
-                        source: target.source.to_ascii_lowercase(),
+                        source: crate::tasks::source::source_identity(&target.source),
                         reference: target.reference.clone(),
                     };
                     groups
@@ -377,6 +401,13 @@ impl UpdateService {
         if groups.is_empty() {
             return Vec::new();
         }
+        let archives = SourceArchives::new(
+            Arc::clone(&self.archive_client),
+            self.archive_cache.clone(),
+            Arc::clone(&self.clock),
+            self.config.cache_ttl_ms,
+            ArchiveLimits::default(),
+        );
         let pending: BTreeMap<GroupKey, (Group, Option<CachedSourceTree>)> = groups
             .iter()
             .cloned()
@@ -389,7 +420,17 @@ impl UpdateService {
         let concurrency = self.config.concurrency.max(1);
         let mut stream = futures::stream::iter(groups.into_iter().map(|(group, cached)| {
             let key = group.key();
-            async move { (key, self.network_outcome(group, cached).await) }
+            let archives = &archives;
+            async move {
+                (
+                    key,
+                    if group.is_content() {
+                        self.content_outcome(group, archives).await
+                    } else {
+                        self.network_outcome(group, cached).await
+                    },
+                )
+            }
         }))
         .buffer_unordered(concurrency);
 
@@ -405,6 +446,73 @@ impl UpdateService {
             }
         }
         outcomes
+    }
+
+    async fn content_outcome(&self, group: Group, archives: &SourceArchives) -> GroupOutcome {
+        let acquired = match archives
+            .acquire(&group.source, group.reference.as_deref())
+            .await
+        {
+            Ok(acquired) => acquired,
+            Err(failure) => {
+                let mut outcome = self.timeout_outcome(group, None);
+                outcome.source.error = Some(failure.error.clone());
+                outcome.source.last_success_at_epoch_ms = failure.previous_fetched_at;
+                for skill in &mut outcome.skills {
+                    skill.error = Some(failure.error.clone());
+                    skill.last_success_at_epoch_ms = failure.previous_fetched_at;
+                }
+                return outcome;
+            }
+        };
+        let skills = group
+            .targets
+            .iter()
+            .map(|target| {
+                let evaluation = content_check::evaluate_target(
+                    &content_check::ContentTarget {
+                        name: target.name.clone(),
+                        skill_path: target.skill_path.clone(),
+                        lock_hash: target.lock_hash.clone(),
+                    },
+                    &acquired.archive,
+                );
+                UpdateSkillResult {
+                    name: target.name.clone(),
+                    source: Some(group.source.clone()),
+                    reference: group.reference.clone(),
+                    lock_hash: Some(target.lock_hash.clone()),
+                    remote_hash: evaluation.remote_hash,
+                    state: evaluation.state,
+                    unknown_reason: (evaluation.state == UpdateState::Unknown)
+                        .then_some(UpdateUnknownReason::Uncheckable),
+                    cached: acquired.cached,
+                    last_success_at_epoch_ms: Some(acquired.fetched_at_epoch_ms),
+                    previous_state: None,
+                    error: None,
+                    note: evaluation.note,
+                }
+            })
+            .collect();
+        GroupOutcome {
+            source: UpdateSourceResult {
+                source: group.source,
+                reference: group.reference,
+                status: if acquired.cached {
+                    UpdateSourceStatus::Cached
+                } else {
+                    UpdateSourceStatus::Ok
+                },
+                skill_count: group.targets.len(),
+                cached: acquired.cached,
+                truncated: false,
+                last_success_at_epoch_ms: Some(acquired.fetched_at_epoch_ms),
+                error: None,
+                note: None,
+            },
+            skills,
+            warnings: Vec::new(),
+        }
     }
 
     async fn network_outcome(
@@ -637,9 +745,15 @@ struct Group {
 }
 
 impl Group {
+    fn is_content(&self) -> bool {
+        self.targets
+            .first()
+            .is_some_and(|target| content_hash::is_content_hash(&target.lock_hash))
+    }
+
     fn key(&self) -> GroupKey {
         GroupKey {
-            source: self.source.to_ascii_lowercase(),
+            source: crate::tasks::source::source_identity(&self.source),
             reference: self.reference.clone(),
         }
     }
@@ -667,14 +781,18 @@ struct Evaluation {
 }
 
 fn checkable_target(entry: &LockEntry) -> Result<Target, String> {
-    if !entry.source_type.eq_ignore_ascii_case("github") {
-        return Err("仅支持公开 GitHub 来源，无法检查更新。".to_string());
+    if !crate::update_target::supported_type(&entry.source_type) {
+        return Err("仅支持公开 HTTPS Git 来源，无法检查更新。".to_string());
     }
     let hash = entry.skill_folder_hash.trim();
     if hash.is_empty() {
         return Err("未记录版本指纹，无法检查更新。".to_string());
     }
-    if !crate::git_tree::is_git_tree_hash(hash) {
+    if !entry.source_type.eq_ignore_ascii_case("github") {
+        if !content_hash::is_content_hash(hash) {
+            return Err("版本指纹不是 64 位 SHA-256 内容指纹，无法比较。".to_string());
+        }
+    } else if !crate::git_tree::is_git_tree_hash(hash) {
         if hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err(
                 "记录的是 64 位内容指纹（SHA-256），无法与 Git tree SHA 比较。".to_string(),
@@ -691,7 +809,7 @@ fn checkable_target(entry: &LockEntry) -> Result<Target, String> {
     };
     let target = crate::update_target::resolve(entry).map_err(|error| match error {
         crate::update_target::UpdateTargetError::Source { .. } => {
-            "来源不是公开 GitHub 仓库，无法检查更新。".to_string()
+            "来源不是公开 HTTPS Git 仓库，无法检查更新。".to_string()
         }
         crate::update_target::UpdateTargetError::Reference { .. } => {
             "lock ref 不是安全的分支/标签名，无法检查更新。".to_string()
@@ -997,6 +1115,186 @@ mod tests {
         ) -> UpdateService {
             UpdateService::with_dependencies(self.paths.clone(), client, clock, config)
         }
+    }
+
+    struct ContentClient {
+        commit_calls: AtomicUsize,
+        download_calls: AtomicUsize,
+        fail: std::sync::atomic::AtomicBool,
+        delay: Duration,
+    }
+
+    impl Default for ContentClient {
+        fn default() -> Self {
+            Self {
+                commit_calls: AtomicUsize::new(0),
+                download_calls: AtomicUsize::new(0),
+                fail: std::sync::atomic::AtomicBool::new(false),
+                delay: Duration::ZERO,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ArchiveClient for ContentClient {
+        fn cache_namespace(&self, _source: &str) -> &'static str {
+            "git"
+        }
+        async fn latest_commit(
+            &self,
+            _source: &str,
+            _reference: Option<&str>,
+        ) -> Result<String, GitHubFetchError> {
+            self.commit_calls.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep(self.delay).await;
+            if self.fail.load(Ordering::SeqCst) {
+                Err(GitHubFetchError::git("upstream unavailable"))
+            } else {
+                Ok("0123456789abcdef0123456789abcdef01234567".into())
+            }
+        }
+        async fn download_archive(
+            &self,
+            _source: &str,
+            _commit: &str,
+        ) -> Result<Vec<u8>, GitHubFetchError> {
+            self.download_calls.fetch_add(1, Ordering::SeqCst);
+            let mut tar = tar::Builder::new(flate2::write::GzEncoder::new(
+                Vec::new(),
+                flate2::Compression::default(),
+            ));
+            for (path, content) in [
+                ("root/current/SKILL.md", b"current".as_slice()),
+                ("root/changed/SKILL.md", b"changed".as_slice()),
+            ] {
+                let mut header = tar::Header::new_gnu();
+                header.set_size(content.len() as u64);
+                header.set_mode(0o644);
+                header.set_cksum();
+                tar.append_data(&mut header, path, content).unwrap();
+            }
+            Ok(tar.into_inner().unwrap().finish().unwrap())
+        }
+    }
+
+    fn git_entry(source: &str, path: &str, hash: &str) -> serde_json::Value {
+        serde_json::json!({ "source": source, "sourceUrl": source, "sourceType": "git", "skillPath": path, "skillFolderHash": hash, "installedAt": "2026-01-01T00:00:00.000Z", "updatedAt": "2026-01-01T00:00:00.000Z" })
+    }
+
+    #[tokio::test]
+    async fn mixed_github_and_git_sources_check_cache_and_isolate_failures() {
+        let fixture = Fixture::new();
+        let source = "https://cnb.cool/cnb/skills/cnb-skill.git";
+        let current_hash =
+            content_hash::hash_entries(vec![("SKILL.md".into(), b"current".to_vec())]).unwrap();
+        std::fs::write(fixture.paths.lock_path(), serde_json::json!({"version": 3, "skills": {
+            "github": LockSpec::github("github", "acme/skills", None, "skills/alpha/SKILL.md", ALPHA_TREE).to_json(),
+            "current": git_entry(source, "current/SKILL.md", &current_hash),
+            "changed": git_entry(source, "changed/SKILL.md", &current_hash),
+            "missing": git_entry(source, "missing/SKILL.md", &current_hash),
+        }}).to_string()).unwrap();
+        let github = Arc::new(FakeGitHub::default().with_tree("acme/skills", None, fixture_tree()));
+        let archive = Arc::new(ContentClient::default());
+        let mut service = fixture.service(
+            github.clone(),
+            Arc::new(TestClock::new(1_000)),
+            UpdateCheckConfig::default(),
+        );
+        service.archive_client = archive.clone();
+        let report = service.check(None).await.unwrap();
+        assert_eq!(
+            report
+                .skills
+                .iter()
+                .find(|s| s.name == "current")
+                .unwrap()
+                .state,
+            UpdateState::Current
+        );
+        assert_eq!(
+            report
+                .skills
+                .iter()
+                .find(|s| s.name == "changed")
+                .unwrap()
+                .state,
+            UpdateState::Update
+        );
+        assert_eq!(
+            report
+                .skills
+                .iter()
+                .find(|s| s.name == "missing")
+                .unwrap()
+                .state,
+            UpdateState::PathMissing
+        );
+        assert_eq!(report.sources.len(), 2);
+        let cached = service.check(None).await.unwrap();
+        assert_eq!(cached.cached_source_count, 2);
+        assert_eq!(archive.download_calls.load(Ordering::SeqCst), 1);
+        archive.fail.store(true, Ordering::SeqCst);
+        let failed = service.check(None).await.unwrap();
+        assert_eq!(
+            failed
+                .skills
+                .iter()
+                .find(|s| s.name == "current")
+                .unwrap()
+                .state,
+            UpdateState::Error
+        );
+        assert_eq!(
+            failed
+                .skills
+                .iter()
+                .find(|s| s.name == "github")
+                .unwrap()
+                .state,
+            UpdateState::Current
+        );
+    }
+
+    #[tokio::test]
+    async fn git_paths_keep_case_and_share_the_source_budget_and_deadline() {
+        let fixture = Fixture::new();
+        let source_a = "https://git.example.com/Group/Skills.git";
+        let source_b = "https://git.example.com/group/skills.git";
+        std::fs::write(
+            fixture.paths.lock_path(),
+            serde_json::json!({"version": 3, "skills": {
+                "a": git_entry(source_a, "current/SKILL.md", &"a".repeat(64)),
+                "b": git_entry(source_b, "current/SKILL.md", &"a".repeat(64)),
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let archive = Arc::new(ContentClient::default());
+        let mut service = fixture.service(
+            Arc::new(FakeGitHub::default()),
+            Arc::new(TestClock::new(1_000)),
+            UpdateCheckConfig::default(),
+        );
+        service.archive_client = archive.clone();
+        assert_eq!(service.check(None).await.unwrap().sources.len(), 2);
+        service.config.max_sources = 1;
+        assert_eq!(service.check(None).await.unwrap().skipped_source_count, 1);
+        service.config.deadline_ms = 10;
+        service.archive_client = Arc::new(ContentClient {
+            delay: Duration::from_millis(100),
+            ..ContentClient::default()
+        });
+        assert_eq!(
+            service
+                .check(None)
+                .await
+                .unwrap()
+                .sources
+                .iter()
+                .filter(|s| s.status == UpdateSourceStatus::Error)
+                .count(),
+            1
+        );
     }
 
     struct LockSpec {

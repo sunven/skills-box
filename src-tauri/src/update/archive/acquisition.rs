@@ -69,11 +69,12 @@ impl SourceArchives {
             })?;
         let (acquisition, reused) = {
             let mut acquisitions = self.acquisitions.lock().await;
-            if let Some(acquisition) = acquisitions.get(&commit) {
+            let key = format!("{}:{commit}", self.client.cache_namespace(source));
+            if let Some(acquisition) = acquisitions.get(&key) {
                 (acquisition.clone(), true)
             } else {
                 let acquisition = self.acquisition(source.to_string(), commit.clone());
-                acquisitions.insert(commit, acquisition.clone());
+                acquisitions.insert(key, acquisition.clone());
                 (acquisition, false)
             }
         };
@@ -87,7 +88,7 @@ impl SourceArchives {
         // Capture dependencies, not this module: the map owns the future and
         // must release it when the Check attempt ends, without a holding cycle.
         let client = Arc::clone(&self.client);
-        let cache = self.cache.clone();
+        let cache = self.cache.namespaced(self.client.cache_namespace(&source));
         let clock = Arc::clone(&self.clock);
         let cache_ttl_ms = self.cache_ttl_ms;
         let limits = self.limits;

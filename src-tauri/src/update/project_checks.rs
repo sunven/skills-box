@@ -43,7 +43,21 @@ impl ProjectUpdateChecks {
         projects: Arc<ProjectRegistry>,
         state: Arc<UpdateCheckStateStore>,
     ) -> Self {
-        let checker = ProjectUpdateService::new(paths.clone());
+        Self::with_api(
+            paths,
+            projects,
+            state,
+            super::api::GitHubApiClient::anonymous(),
+        )
+    }
+
+    pub fn with_api(
+        paths: AppPaths,
+        projects: Arc<ProjectRegistry>,
+        state: Arc<UpdateCheckStateStore>,
+        api: super::api::GitHubApiClient,
+    ) -> Self {
+        let checker = ProjectUpdateService::with_api(paths.clone(), api);
         Self::with_checker(paths, projects, state, checker)
     }
 

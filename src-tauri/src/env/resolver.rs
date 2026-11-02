@@ -125,6 +125,28 @@ pub struct EnvResolver {
 }
 
 impl EnvResolver {
+    /// Read-only Git source access does not probe or require Node/npx.
+    pub async fn git_runtime(&self) -> Result<super::GitRuntime, AppError> {
+        self.paths
+            .ensure_dirs()
+            .map_err(|error| AppError::path_app_data(error.to_string()))?;
+        let mut git = self.resolve_git(&[]).await;
+        if git.info.is_none() {
+            let login = self.login_shell_paths().await;
+            git = self.resolve_git(&login.dirs).await;
+        }
+        let info = git.info.ok_or_else(|| {
+            AppError::env_git_missing(
+                git.status
+                    .detail
+                    .unwrap_or_else(|| "未找到 Git".to_string()),
+            )
+        })?;
+        Ok(super::GitRuntime {
+            program: info.path.clone(),
+            env: self.base_child_env(None, info.path.parent()),
+        })
+    }
     pub fn new(
         paths: AppPaths,
         executor: Arc<dyn ProcessExecutor>,
@@ -1205,6 +1227,44 @@ mod tests {
         let git = dir.join("git");
         make_executable(&git);
         git
+    }
+
+    #[tokio::test]
+    async fn git_runtime_does_not_require_or_probe_node() {
+        let mut fixture = Fixture::new();
+        let git = make_git(&fixture._tmp.path().join("git-bin"));
+        fixture.search.git_candidates.push(git.clone());
+        let executor = Arc::new(ScriptedExecutor::new().expect(
+            "git",
+            &["--version"],
+            ScriptedResponse::ok("git version 2.54.0\n"),
+        ));
+        let runtime = fixture
+            .resolver(executor.clone())
+            .git_runtime()
+            .await
+            .unwrap();
+        assert_eq!(runtime.program, git);
+        assert_eq!(executor.call_count(), 1);
+        assert_eq!(runtime.env["GIT_TERMINAL_PROMPT"], "0");
+    }
+
+    #[tokio::test]
+    async fn git_runtime_reports_missing_git_without_probing_node() {
+        let fixture = Fixture::new();
+        let executor = Arc::new(login_rule(ScriptedExecutor::new(), ""));
+        let error = fixture
+            .resolver(executor.clone())
+            .git_runtime()
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::EnvGitMissing);
+        assert!(
+            executor
+                .calls()
+                .iter()
+                .all(|call| call.program.file_name().unwrap() == "zsh")
+        );
     }
 
     fn standard_executor(

@@ -442,9 +442,15 @@ pub fn conflicts_for(
     let conflicts = find_conflicts(paths, layout, skills)?;
     for name in skills {
         if let Some(conflict) = conflicts.get(name) {
-            let retryable_managed = retry_source.is_some()
-                && conflict.management == ManagementState::Managed
-                && conflict.source.as_deref() == retry_source;
+            let retryable_managed =
+                retry_source.is_some()
+                    && conflict.management == ManagementState::Managed
+                    && conflict.source.as_deref().zip(retry_source).is_some_and(
+                        |(existing, retry)| {
+                            super::source::source_identity(existing)
+                                == super::source::source_identity(retry)
+                        },
+                    );
             if retryable_managed {
                 continue;
             }
@@ -698,7 +704,9 @@ fn verify_installed(
                 // repository. A different base means the CLI wrote a lock
                 // entry for an unexpected repository.
                 let expected = plan.source.split('#').next().unwrap_or(&plan.source);
-                if entry.source != expected {
+                if super::source::source_identity(&entry.source)
+                    != super::source::source_identity(expected)
+                {
                     return Err(AppError::verify_lock_mismatch(
                         name,
                         expected,

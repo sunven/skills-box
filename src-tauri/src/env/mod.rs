@@ -7,6 +7,12 @@ mod resolver;
 
 use serde::Serialize;
 
+#[derive(Debug, Clone)]
+pub struct GitRuntime {
+    pub program: std::path::PathBuf,
+    pub env: std::collections::BTreeMap<String, String>,
+}
+
 use crate::agents::DetectedAgent;
 use crate::cli::{CliRuntime, CliRuntimeProvider};
 use crate::error::AppError;

@@ -1,3 +1,4 @@
+import type { DiscoveryInstallSeed } from "../lib/discovery";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, PackageOpen, X } from "lucide-react";
 import { Button } from "./ui/button";
@@ -8,6 +9,7 @@ import { MutationResult } from "./mutation/mutation-result";
 import { useModalFocus } from "../hooks/use-modal-focus";
 import {
   fallbackError,
+  invalidateDiscoverySource,
   startInstall,
   startPreview,
 } from "../lib/api";
@@ -27,6 +29,7 @@ import { taskEventDriver, useMutation } from "../lib/mutation";
 
 interface InstallWizardProps {
   open: boolean;
+  seed?: DiscoveryInstallSeed | null;
   scope: ScopeId;
   /** Active project for project scope; null for global. */
   project?: ProjectEntry | null;
@@ -128,6 +131,7 @@ function StepBars({ step }: { step: Step }) {
 
 export function InstallWizard({
   open,
+  seed = null,
   scope,
   project = null,
   projects = [],
@@ -143,6 +147,9 @@ export function InstallWizard({
   const agentsTouchedRef = useRef(false);
   const lastInstallRef = useRef<string[] | null>(null);
 
+  const seedRef = useRef(seed);
+  seedRef.current = seed;
+  const [seedIssue, setSeedIssue] = useState<string | null>(null);
   const [step, setStep] = useState<Step>(1);
   const [sourceInput, setSourceInput] = useState("");
   const [preview, setPreview] = useState<PreviewSummary | null>(null);
@@ -159,6 +166,23 @@ export function InstallWizard({
     if (event.phase === "completed") {
       const resultPreview = event.result?.preview ?? null;
       setPreview(resultPreview);
+      setSeedIssue(null);
+      const intent = seedRef.current;
+      if (intent && resultPreview) {
+        const matches = resultPreview.skills.filter((s) => s.name.toLowerCase() === intent.name.toLowerCase());
+        if (resultPreview.parseFailed || matches.length !== 1 || resultPreview.noSkills) {
+          setSelected(new Set());
+          setSeedIssue("此发现项在实际预览中已不存在或无法按名称区分。请关闭向导并重新检查上游。");
+          setStep(2);
+          void invalidateDiscoverySource(intent.source).catch(() => {
+            setSeedIssue("此发现项无法安装，且目录失效标记保存失败。请修复发现记录后重新检查上游。");
+          });
+          return;
+        }
+        setSelected(new Set(matches[0].conflict ? [] : [matches[0].name]));
+        setStep(resultPreview.skills.length === 1 && !matches[0].conflict ? 3 : 2);
+        return;
+      }
       if (resultPreview) {
         const installable = resultPreview.skills.filter(
           (skill) => !skill.conflict,
@@ -267,6 +291,7 @@ export function InstallWizard({
     lastInstallRef.current = null;
     agentsTouchedRef.current = false;
     setManualInput("");
+    setSeedIssue(null);
     setStep(1);
   }, [installMutation.reset]);
 
@@ -274,8 +299,12 @@ export function InstallWizard({
     if (!open) return;
     previewMutation.reset();
     resetPreviewSelection();
-    setSourceInput("");
-  }, [open, scope, resetPreviewSelection, previewMutation.reset]);
+    setSourceInput(seed?.source ?? "");
+    if (seed) {
+      void previewMutation.start(taskEventDriver({ total: 1, message: "正在验证发现项…",
+        launch: (onEvent) => startPreview(seed.source, onEvent, scope) }));
+    }
+  }, [open, scope, seed?.source, seed?.name, resetPreviewSelection, previewMutation.reset, previewMutation.start]);
 
   useModalFocus({
     open,
@@ -304,6 +333,7 @@ export function InstallWizard({
   const selectedNames = useMemo(() => Array.from(selected), [selected]);
   const effectiveNames = preview?.parseFailed ? manualNames : selectedNames;
   const nextDisabled =
+    Boolean(seedIssue) ||
     !preview ||
     preview.noSkills ||
     (preview.parseFailed
@@ -334,7 +364,7 @@ export function InstallWizard({
     const source = sourceInput.trim();
     if (!source) {
       previewMutation.setStartError(
-        fallbackError("请输入公开 GitHub 仓库，例如 owner/repo。"),
+        fallbackError("请输入公开 HTTPS Git 仓库，或 GitHub owner/repo。"),
       );
       return;
     }
@@ -349,7 +379,7 @@ export function InstallWizard({
   };
 
   const handleStartInstall = (names: string[], retry = false) => {
-    if (!preview || installRunning || previewRunning || names.length === 0) {
+    if (seedIssue || !preview || installRunning || previewRunning || names.length === 0) {
       return;
     }
     const requestAgents = Array.from(selectedAgents);
@@ -458,13 +488,14 @@ export function InstallWizard({
         data-testid="install-wizard"
         className="modal-panel max-w-2xl"
       >
+        {seedIssue ? <p role="alert" className="notice m-4" data-tone="error">{seedIssue}</p> : null}
         <div className="modal-head">
           <div className="min-w-0">
             <h2 id="install-wizard-title" className="modal-title">
               安装 skill · {stepTitle}
             </h2>
             <p className="modal-sub">
-              v1 只接受公开 GitHub 根仓库，只安装默认分支。
+              支持公开 HTTPS Git 根仓库，只安装默认分支。
             </p>
             <p
               data-testid="install-target-scope"
@@ -523,8 +554,9 @@ export function InstallWizard({
               <div className="flex items-start gap-2">
                 <Input
                   aria-label="仓库来源"
-                  placeholder="owner/repo 或 https://github.com/owner/repo"
+                  placeholder="GitHub owner/repo 或 HTTPS Git 仓库地址"
                   value={sourceInput}
+                  readOnly={Boolean(seed)}
                   onChange={(event) => setSourceInput(event.target.value)}
                   onKeyDown={(event) => {
                     if (event.key === "Enter") void handlePreview();
@@ -540,7 +572,7 @@ export function InstallWizard({
                 </Button>
               </div>
               <p className="mt-2 text-[12px] text-muted-foreground">
-                示例：mattpocock/skills · 将读取仓库内的 SKILL.md 列表。不支持子目录、#ref、GitLab、SSH、本地路径或 Notion。
+                示例：mattpocock/skills · 将读取仓库内的 SKILL.md 列表。不支持子目录、#ref、SSH、本地路径或 Notion。
               </p>
 
               <MutationError error={previewState.startError} showCode />
@@ -601,7 +633,7 @@ export function InstallWizard({
                 </div>
               ) : null}
 
-              {preview.parseFailed ? (
+              {preview.parseFailed && !seed ? (
                 <>
                   <div
                     role="alert"
@@ -941,7 +973,7 @@ export function InstallWizard({
           <div className="modal-foot-note">
             {step === 5 && writingLocked
               ? "写入阶段不可取消"
-              : "Esc 关闭 · 公开 GitHub · 仅默认分支"}
+              : "Esc 关闭 · 公开 HTTPS Git · 仅默认分支"}
           </div>
           <div className="flex items-center gap-2">
             {step === 2 || step === 3 ? (

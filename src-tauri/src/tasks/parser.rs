@@ -6,12 +6,12 @@
 //! There is deliberately no dependency on paths or hashes — the preview does
 //! not print them.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Names and descriptions can be long; keep raw fallback payloads bounded.
 const RAW_OUTPUT_LIMIT: usize = 16 * 1024;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParsedSkill {
     pub name: String,
@@ -98,7 +98,9 @@ pub fn parse_preview_output(raw: &str) -> PreviewParseOutcome {
     }
 
     if skills.is_empty() {
-        PreviewParseOutcome::NoSkills
+        PreviewParseOutcome::Failed {
+            raw: truncate_chars(&cleaned, RAW_OUTPUT_LIMIT),
+        }
     } else {
         PreviewParseOutcome::Skills(skills)
     }

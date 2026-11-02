@@ -4,6 +4,21 @@
 use super::{AppError, ErrorCode};
 
 impl AppError {
+    pub fn discovery_read_failed() -> Self {
+        Self::new(
+            ErrorCode::DiscoveryReadFailed,
+            "发现历史无法读取，原文件已保留。",
+        )
+        .hint("请修复或恢复 app data 中的 discovery.json 后重启应用。")
+    }
+    pub fn discovery_write_failed() -> Self {
+        Self::new(
+            ErrorCode::DiscoveryWriteFailed,
+            "发现记录保存失败，本次操作未保存。",
+        )
+        .retryable(true)
+    }
+
     pub fn update_state_cleanup_failed(detail: impl Into<String>) -> Self {
         Self::new(
             ErrorCode::UpdateStateCleanupFailed,
@@ -177,7 +192,7 @@ impl AppError {
             format!("无法从 lock 解析 skill「{name}」的来源，已跳过更新。"),
         )
         .detail(detail)
-        .hint("只支持公开 GitHub 来源；可重新安装该 skill 以恢复来源记录。")
+        .hint("只支持公开 HTTPS Git 来源；可重新安装该 skill 以恢复来源记录。")
     }
 
     pub fn update_local_modified(name: &str, detail: impl Into<String>) -> Self {
@@ -295,24 +310,24 @@ impl AppError {
     pub fn source_missing() -> Self {
         Self::new(
             ErrorCode::SourceMissing,
-            "请输入公开 GitHub 仓库，例如 owner/repo。",
+            "请输入公开 HTTPS Git 仓库，或 GitHub owner/repo。",
         )
-        .hint("示例：vercel-labs/skills 或 https://github.com/vercel-labs/skills")
+        .hint("示例：vercel-labs/skills 或 https://cnb.cool/cnb/skills/cnb-skill")
     }
 
     pub fn source_invalid(detail: impl Into<String>) -> Self {
         Self::new(
             ErrorCode::SourceInvalid,
-            "来源格式无效。仅支持 owner/repo 或 https://github.com/owner/repo。",
+            "来源格式无效。请输入 HTTPS Git 仓库地址或 GitHub owner/repo。",
         )
         .detail(detail)
-        .hint("只接受公开 GitHub 根仓库，且只安装默认分支。")
+        .hint("只接受公开 HTTPS Git 根仓库，且只安装默认分支。")
     }
 
     pub fn source_unsupported_subdir() -> Self {
         Self::new(
             ErrorCode::SourceUnsupportedSubdir,
-            "仅支持公开 GitHub 根仓库，不支持子目录。",
+            "仅支持公开 HTTPS Git 根仓库，不支持网页子目录链接。",
         )
         .hint("请去掉仓库后面的子目录，例如 owner/repo。")
     }
@@ -328,9 +343,9 @@ impl AppError {
     pub fn source_unsupported_provider(provider: &str) -> Self {
         Self::new(
             ErrorCode::SourceUnsupportedProvider,
-            format!("不支持该来源（{provider}），仅支持公开 GitHub 仓库。"),
+            format!("不支持该来源（{provider}），仅支持公开 HTTPS Git 仓库。"),
         )
-        .hint("请使用 owner/repo 或 https://github.com/owner/repo。")
+        .hint("请使用 HTTPS Git 仓库地址，或 GitHub owner/repo。")
     }
 
     pub fn source_preview_failed(detail: impl Into<String>) -> Self {
@@ -368,7 +383,31 @@ impl AppError {
             "GitHub 检查额度已用尽，已保留上次检查结果。",
         )
         .detail(detail)
-        .hint("请等待额度恢复后再次手动检查更新。")
+        .hint("可在设置中配置 GitHub token，或等待额度恢复后再次手动检查更新。")
+        .retryable(true)
+    }
+
+    pub fn network_auth_failed() -> Self {
+        Self::new(ErrorCode::NetworkAuthFailed, "GitHub token 无效或已失效。")
+            .hint("请在设置中替换 token；如果使用 GITHUB_TOKEN，请修改启动环境并重启应用。")
+    }
+
+    pub fn settings_invalid_token() -> Self {
+        Self::new(ErrorCode::SettingsInvalidToken, "Token 格式无效。")
+            .hint("请输入不含空白或控制字符的 GitHub token，长度不超过 4,096 字符。")
+    }
+
+    pub fn settings_read_failed() -> Self {
+        Self::new(ErrorCode::SettingsReadFailed, "无法读取 GitHub 认证配置。")
+            .hint("请在设置页重新保存 token 或删除已保存的配置。")
+    }
+
+    pub fn settings_write_failed() -> Self {
+        Self::new(
+            ErrorCode::SettingsWriteFailed,
+            "无法保存 GitHub 认证配置，原配置已保留。",
+        )
+        .hint("请检查应用数据目录的权限后重试。")
         .retryable(true)
     }
 

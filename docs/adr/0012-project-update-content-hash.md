@@ -14,7 +14,8 @@ Global update checks compare lock v3 `skillFolderHash` — a 40-character Git tr
 ## Consequences
 
 - A project check costs one archive download per source per new commit, cached by commit; per-scope checking (six-hour staleness) bounds the cost.
-- Only public GitHub sources are checkable; other entry types show "unsupported", matching global behavior.
+- Public HTTPS Git sources are checkable. GitHub keeps the API/codeload acquisition path; generic Git resolves a commit and shallowly fetches it into a temporary checkout through the existing process executor. The checkout is packaged with the CLI's exclusions, including files marked `export-ignore`, because install clones rather than exports it. The content evaluator is shared by project checks and global generic Git entries, whose lock v3 hashes are also SHA-256. GitHub global entries keep their tree-SHA check.
+- Archive caches are separated by acquisition method and shared by commit within each method. Dropping a check cancels the acquisition worker, terminates its process group and cleans up its temporary checkout. Git acquisition probes Git independently of Node/npx; read-only checks do not require the CLI toolchain.
 - Rust must mirror the CLI folder-hash algorithm exactly and stay pinned to the vendored CLI version; parity is enforced with golden vectors.
 - The existing Git tree implementation in `git_tree.rs` is untouched; the content-hash path adds its own walker and archive cache.
 - Project lock entries carry no install/update timestamps, so the UI shows "—" for those fields.

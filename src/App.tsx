@@ -1,3 +1,6 @@
+import { DiscoveryPage } from "./components/discovery-page";
+import { useDiscovery } from "./hooks/use-discovery";
+import type { DiscoveryInstallSeed } from "./lib/discovery";
 import {
   useCallback,
   useDeferredValue,
@@ -18,6 +21,7 @@ import { LockErrorScreen } from "./components/lock-error-screen";
 import { ManageAgentsDialog } from "./components/manage-agents-dialog";
 import { ProjectDialogs, type ProjectDialogState } from "./components/project-dialogs";
 import { ScopeSwitcher } from "./components/scope-switcher";
+import { SettingsPage } from "./components/settings-page";
 import { SkillListPane } from "./components/skill-list-pane";
 import { UninstallDialog } from "./components/uninstall-dialog";
 import { UpdateDialog } from "./components/update-dialog";
@@ -129,6 +133,10 @@ function App() {
   const [anomaliesOpen, setAnomaliesOpen] = useState(false);
   const [installOpen, setInstallOpen] = useState(false);
   const [manageAgentsOpen, setManageAgentsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [discoveryOpen, setDiscoveryOpen] = useState(false);
+  const [installSeed, setInstallSeed] = useState<DiscoveryInstallSeed | null>(null);
+  const discovery = useDiscovery(scopeReady && !quitting);
   const [updateTarget, setUpdateTarget] = useState<
     { mode: "all" } | { mode: "single"; name: string } | null
   >(null);
@@ -427,11 +435,17 @@ function App() {
   return (
     <div className="app-shell text-foreground">
       <AppHeader
+        settingsOpen={settingsOpen}
+        discoveryOpen={discoveryOpen}
+        discoveryCount={discovery.query.data?.unreadCount ?? 0}
+        onOpenDiscovery={() => { setSettingsOpen(false); setDiscoveryOpen(true); }}
+        onOpenSettings={() => { setSettingsOpen(true); setDiscoveryOpen(false); }}
+        onReturnToSkills={() => { setSettingsOpen(false); setDiscoveryOpen(false); }}
         report={report}
         isLoading={environment.isPending}
         isError={environment.isError}
         mutationsEnabled={mutationsEnabled}
-        onInstall={() => setInstallOpen(true)}
+        onInstall={() => { setInstallSeed(null); setInstallOpen(true); }}
         updateReport={updateData}
         lastCheck={view.lastCheck}
         updateError={updateError}
@@ -443,6 +457,9 @@ function App() {
         filtersOpen={filtersOpen}
         onToggleFilters={() => setFiltersOpen((open) => !open)}
       />
+      {settingsOpen ? <SettingsPage /> : discoveryOpen ? <DiscoveryPage discovery={discovery} scope={scope}
+        projects={projects?.projects ?? EMPTY_PROJECTS} mutationsEnabled={mutationsEnabled}
+        onSelectScope={handleSelectScope} onInstall={(seed) => { setInstallSeed(seed); setInstallOpen(true); }} /> : <>
       {projectWarnings.length > 0 ? (
         <div
           className="notice mx-4 my-2 flex items-center justify-between gap-3"
@@ -543,7 +560,7 @@ function App() {
               }
               refreshingProject={checkUpdates.isPending}
               onRefreshProject={handleRefreshProject}
-              onInstall={() => setInstallOpen(true)}
+              onInstall={() => { setInstallSeed(null); setInstallOpen(true); }}
               onRelocate={(project) =>
                 setProjectDialog({ mode: "relocate", project })
               }
@@ -580,6 +597,7 @@ function App() {
           ) : null}
         </>
       )}
+      </>}
       <AnomalyDialog
         anomalies={view.anomalies}
         open={anomaliesOpen}
@@ -609,6 +627,7 @@ function App() {
       />
       <InstallWizard
         open={installOpen}
+        seed={installSeed}
         scope={scope}
         project={activeProject}
         projects={projects?.projects ?? EMPTY_PROJECTS}
@@ -616,7 +635,7 @@ function App() {
         agents={report?.agents ?? EMPTY_DETECTED_AGENTS}
         installTargets={snapshot?.installTargets ?? EMPTY_INVENTORY_AGENTS}
         onSelectScope={handleSelectScope}
-        onClose={() => setInstallOpen(false)}
+        onClose={() => { setInstallOpen(false); setInstallSeed(null); }}
       />
       <ProjectDialogs
         state={projectDialog}

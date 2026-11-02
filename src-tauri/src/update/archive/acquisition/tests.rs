@@ -36,6 +36,13 @@ impl FakeClient {
 
 #[async_trait::async_trait]
 impl ArchiveClient for FakeClient {
+    fn cache_namespace(&self, source: &str) -> &'static str {
+        if source.starts_with("https://") {
+            "git"
+        } else {
+            ""
+        }
+    }
     async fn latest_commit(
         &self,
         _source: &str,
@@ -58,6 +65,41 @@ impl ArchiveClient for FakeClient {
         }
         self.archive.clone()
     }
+}
+
+#[tokio::test]
+async fn acquisition_methods_keep_separate_commit_caches() {
+    let fixture = Fixture::new(FakeClient::new());
+    let archives = fixture.archives();
+    let first = archives.acquire(SOURCE, None).await.unwrap();
+    let second = archives
+        .acquire("https://cnb.cool/group/repo.git", None)
+        .await
+        .unwrap();
+    assert!(!first.cached && !second.cached);
+    assert_eq!(fixture.downloads(), 2);
+    assert!(
+        fixture
+            .cache
+            .load(COMMIT, ArchiveLimits::default())
+            .is_some()
+    );
+    assert!(
+        fixture
+            .cache
+            .namespaced("git")
+            .load(COMMIT, ArchiveLimits::default())
+            .is_some()
+    );
+    let archives = fixture.archives();
+    assert!(
+        archives
+            .acquire("https://cnb.cool/group/repo.git", None)
+            .await
+            .unwrap()
+            .cached
+    );
+    assert_eq!(fixture.downloads(), 2);
 }
 
 struct Fixture {

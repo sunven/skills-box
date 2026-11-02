@@ -6,7 +6,7 @@
 //! the codeload archive for each commit is downloaded once, cached by commit,
 //! and hashed per skill folder with the CLI-identical algorithm.
 //!
-//! Non-GitHub entries, unsafe refs and non-64-hex fingerprints are reported as
+//! Unsupported sources, unsafe refs and non-64-hex fingerprints are reported as
 //! unsupported rows; source failures stay inside their source. Publication and
 //! persisted summaries belong to the Project Update check lifecycle.
 
@@ -15,14 +15,13 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 
-use super::archive::{
-    ArchiveClient, ArchiveLimits, CommitArchiveCache, SourceArchive, SourceArchives,
-};
-use super::content_hash::{self, FolderHashError};
+use super::archive::{ArchiveClient, ArchiveLimits, CommitArchiveCache, SourceArchives};
+use super::content_check::{ContentTarget as ProjectTarget, evaluate_target};
+use super::content_hash;
 use super::{
     Clock, SystemClock, UPDATE_CHECK_CACHE_TTL_MS, UPDATE_CHECK_CONCURRENCY,
     UPDATE_CHECK_DEADLINE_MS, UPDATE_CHECK_MAX_SOURCES, UpdateCheckReport, UpdateSkillResult,
-    UpdateSourceResult, UpdateSourceStatus, parent_path, uncheckable_result,
+    UpdateSourceResult, UpdateSourceStatus, uncheckable_result,
 };
 use crate::error::AppError;
 use crate::inventory::UpdateState;
@@ -64,9 +63,13 @@ pub struct ProjectUpdateService {
 
 impl ProjectUpdateService {
     pub fn new(paths: AppPaths) -> Self {
+        Self::with_api(paths, super::api::GitHubApiClient::anonymous())
+    }
+
+    pub fn with_api(paths: AppPaths, api: super::api::GitHubApiClient) -> Self {
         Self::with_dependencies(
-            paths,
-            Arc::new(super::archive::ReqwestArchiveClient::new()),
+            paths.clone(),
+            Arc::new(super::archive::SourceArchiveClient::with_api(paths, api)),
             Arc::new(SystemClock),
             ProjectCheckConfig::default(),
         )
@@ -364,29 +367,16 @@ struct Group {
 impl Group {
     fn key(&self) -> GroupKey {
         GroupKey {
-            source: self.source.to_ascii_lowercase(),
+            source: crate::tasks::source::source_identity(&self.source),
             reference: self.reference.clone(),
         }
     }
-}
-
-#[derive(Debug, Clone)]
-struct ProjectTarget {
-    name: String,
-    skill_path: String,
-    lock_hash: String,
 }
 
 struct GroupOutcome {
     source: UpdateSourceResult,
     skills: Vec<UpdateSkillResult>,
     warnings: Vec<String>,
-}
-
-struct Evaluation {
-    state: UpdateState,
-    remote_hash: Option<String>,
-    note: Option<String>,
 }
 
 fn collect_targets(
@@ -402,7 +392,7 @@ fn collect_targets(
         match checkable_target(entry) {
             Ok((target, source, reference)) => {
                 let key = GroupKey {
-                    source: source.to_ascii_lowercase(),
+                    source: crate::tasks::source::source_identity(&source),
                     reference: reference.clone(),
                 };
                 groups
@@ -424,8 +414,8 @@ fn collect_targets(
 /// Validation order mirrors the global check: source type, fingerprint domain,
 /// skillPath, then the shared source/ref resolver (ADR 0009).
 fn checkable_target(entry: &LockEntry) -> Result<(ProjectTarget, String, Option<String>), String> {
-    if !entry.source_type.eq_ignore_ascii_case("github") {
-        return Err("仅支持公开 GitHub 来源，无法检查更新。".to_string());
+    if !crate::update_target::supported_type(&entry.source_type) {
+        return Err("仅支持公开 HTTPS Git 来源，无法检查更新。".to_string());
     }
     let hash = entry.skill_folder_hash.trim();
     if hash.is_empty() {
@@ -447,7 +437,7 @@ fn checkable_target(entry: &LockEntry) -> Result<(ProjectTarget, String, Option<
     let target: UpdateTarget =
         crate::update_target::resolve(entry).map_err(|error| match error {
             crate::update_target::UpdateTargetError::Source { .. } => {
-                "来源不是公开 GitHub 仓库，无法检查更新。".to_string()
+                "来源不是公开 HTTPS Git 仓库，无法检查更新。".to_string()
             }
             crate::update_target::UpdateTargetError::Reference { .. } => {
                 "lock ref 不是安全的分支/标签名，无法检查更新。".to_string()
@@ -462,47 +452,6 @@ fn checkable_target(entry: &LockEntry) -> Result<(ProjectTarget, String, Option<
         target.source,
         target.reference,
     ))
-}
-
-fn evaluate_target(target: &ProjectTarget, archive: &SourceArchive) -> Evaluation {
-    let folder = if archive.contains_file(&target.skill_path) {
-        parent_path(&target.skill_path)
-    } else if archive.contains_folder(&target.skill_path) {
-        target.skill_path.clone()
-    } else {
-        return Evaluation {
-            state: UpdateState::PathMissing,
-            remote_hash: None,
-            note: Some("来源中已找不到记录的 skillPath，可能已被删除或移动。".to_string()),
-        };
-    };
-    let entries = archive.files_under(&folder);
-    match content_hash::hash_entries(entries) {
-        Ok(remote_hash) => {
-            let state = if remote_hash.eq_ignore_ascii_case(&target.lock_hash) {
-                UpdateState::Current
-            } else {
-                UpdateState::Update
-            };
-            Evaluation {
-                state,
-                remote_hash: Some(remote_hash),
-                note: None,
-            }
-        }
-        Err(FolderHashError::UnsupportedPath(detail)) => Evaluation {
-            state: UpdateState::Unknown,
-            remote_hash: None,
-            note: Some(format!(
-                "skill 文件夹 {detail}，无法用 CLI 的排序规则计算内容指纹。"
-            )),
-        },
-        Err(FolderHashError::Io(detail)) => Evaluation {
-            state: UpdateState::Unknown,
-            remote_hash: None,
-            note: Some(format!("无法读取来源文件：{detail}")),
-        },
-    }
 }
 
 fn pending_result(target: &ProjectTarget, state: UpdateState, note: String) -> UpdateSkillResult {
@@ -724,6 +673,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn git_and_gitlab_project_entries_use_content_fingerprints() {
+        let root = project_root();
+        let source = "https://cnb.cool/cnb/skills/cnb-skill.git";
+        let git_entry = |name: &str, hash: &str, path: &str| {
+            serde_json::json!({
+                "source": source, "sourceUrl": source, "sourceType": name,
+                "ref": "main", "skillPath": path, "computedHash": hash,
+            })
+        };
+        write_lock(
+            root.path(),
+            serde_json::json!({
+                "alpha": git_entry("git", ALPHA_HASH, "alpha/SKILL.md"),
+                "beta": git_entry("gitlab", ALPHA_OLD_HASH, "beta/SKILL.md"),
+                "missing": git_entry("git", ALPHA_HASH, "missing/SKILL.md"),
+            }),
+        );
+        let client = FakeArchiveClient::default().with_group(
+            source,
+            Some("main"),
+            COMMIT_A,
+            scoped_archive(),
+        );
+        let (service, _tmp) = service(
+            client,
+            Arc::new(TestClock::new(1_000)),
+            ProjectCheckConfig::default(),
+        );
+        let report = service.check(&layout(root.path()), None).await.unwrap();
+        assert_eq!(
+            report
+                .skills
+                .iter()
+                .find(|s| s.name == "alpha")
+                .unwrap()
+                .state,
+            UpdateState::Current
+        );
+        assert_eq!(
+            report
+                .skills
+                .iter()
+                .find(|s| s.name == "beta")
+                .unwrap()
+                .state,
+            UpdateState::Update
+        );
+        assert_eq!(
+            report
+                .skills
+                .iter()
+                .find(|s| s.name == "missing")
+                .unwrap()
+                .state,
+            UpdateState::PathMissing
+        );
+        assert_eq!(report.sources.len(), 1);
+        let cached = service.check(&layout(root.path()), None).await.unwrap();
+        assert!(cached.sources[0].cached);
+    }
+
+    #[tokio::test]
     async fn groups_by_source_and_ref_and_downloads_each_commit_once() {
         let root = project_root();
         write_lock(
@@ -759,7 +770,7 @@ mod tests {
         assert_eq!(beta.remote_hash.as_deref(), Some(BETA_HASH));
         let local = report.skills.iter().find(|s| s.name == "local").unwrap();
         assert_eq!(local.state, UpdateState::Unknown);
-        assert!(local.note.as_deref().unwrap().contains("GitHub"));
+        assert!(local.note.as_deref().unwrap().contains("HTTPS Git"));
 
         // alpha, alpha-copy and beta share (source, ref): one commit lookup,
         // one archive download.

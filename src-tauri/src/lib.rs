@@ -8,6 +8,7 @@ pub mod commands;
 pub mod content;
 pub mod detach;
 pub mod detail;
+pub mod discovery;
 pub mod env;
 pub mod error;
 pub mod extra_agent_guard;
@@ -26,6 +27,7 @@ pub mod read_model;
 pub mod scope;
 pub mod scope_layout;
 pub mod security;
+pub mod settings;
 pub mod tasks;
 mod time;
 pub mod timeouts;
@@ -56,6 +58,9 @@ pub struct AppState {
     pub tasks: TaskManager,
     pub updates: UpdateService,
     pub project_updates: ProjectUpdateChecks,
+    pub settings: Arc<settings::SettingsService>,
+    pub github_api: update::api::GitHubApiClient,
+    pub discovery: discovery::DiscoveryService,
     /// Set by `quit_app` so window/exit events stop preventing the exit.
     pub exiting: AtomicBool,
 }
@@ -66,26 +71,45 @@ impl AppState {
         let runtime: Arc<dyn CliRuntimeProvider> = environment.clone();
         let projects = Arc::new(ProjectRegistry::new(paths.clone()));
         let check_states = Arc::new(UpdateCheckStateStore::new(&paths));
+        let settings = Arc::new(settings::SettingsService::from_process(paths.clone()));
+        let github_api = update::api::GitHubApiClient::new(Arc::clone(&settings));
         let tasks = TaskManager::with_projects(
-            runtime,
+            runtime.clone(),
             Arc::new(TokioExecutor),
             Arc::new(InventoryConflictProvider::new(paths.clone())),
             paths.clone(),
             Arc::clone(&projects),
             TaskManagerConfig::default(),
         );
+        let read_model = Arc::new(ReadModel::with_projects(
+            paths.clone(),
+            Arc::clone(&projects),
+        ));
+        let discovery = discovery::DiscoveryService::new(
+            paths.clone(),
+            Arc::clone(&projects),
+            Arc::clone(&read_model),
+            runtime,
+            tasks.clone(),
+            github_api.clone(),
+        );
         Self {
-            read_model: Arc::new(ReadModel::with_projects(
-                paths.clone(),
-                Arc::clone(&projects),
-            )),
+            read_model,
+            discovery,
             projects: Arc::clone(&projects),
-            updates: UpdateService::new_with_store(paths.clone(), Arc::clone(&check_states)),
-            project_updates: ProjectUpdateChecks::new(
+            updates: UpdateService::new_with_api(
+                paths.clone(),
+                Arc::clone(&check_states),
+                github_api.clone(),
+            ),
+            project_updates: ProjectUpdateChecks::with_api(
                 paths.clone(),
                 Arc::clone(&projects),
                 check_states,
+                github_api.clone(),
             ),
+            settings,
+            github_api,
             paths,
             environment,
             tasks,
@@ -131,11 +155,34 @@ pub fn run() {
                     api.prevent_close();
                     use tauri::Emitter;
                     let _ = window.emit("exit-requested", active);
+                } else {
+                    // Closing the main window ends discovery as well; a macOS
+                    // window lifecycle must not leave an invisible scan running.
+                    api.prevent_close();
+                    state.exiting.store(true, Ordering::SeqCst);
+                    let discovery = state.discovery.clone();
+                    let tasks = state.tasks.clone();
+                    let app = window.app_handle().clone();
+                    discovery.shutdown();
+                    tauri::async_runtime::spawn(async move {
+                        let _ = tasks.shutdown_mutations().await;
+                        discovery.shutdown_and_wait().await;
+                        app.exit(0);
+                    });
                 }
             }
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_environment,
+            commands::get_discovery_state,
+            commands::start_discovery_scan,
+            commands::acknowledge_discoveries,
+            commands::set_discovery_ignored,
+            commands::invalidate_discovery_source,
+            commands::get_github_settings,
+            commands::save_github_token,
+            commands::clear_github_token,
+            commands::test_github_auth,
             commands::list_projects,
             commands::add_project,
             commands::relocate_project,
@@ -170,6 +217,9 @@ pub fn run() {
         .expect("error while building tauri application");
 
     app.run(|app_handle, event| {
+        if let tauri::RunEvent::Exit = event {
+            app_handle.state::<AppState>().discovery.shutdown();
+        }
         if let tauri::RunEvent::ExitRequested { api, .. } = event {
             let state = app_handle.state::<AppState>();
             if state.exiting.load(Ordering::SeqCst) {
@@ -181,6 +231,15 @@ pub fn run() {
                 api.prevent_exit();
                 use tauri::Emitter;
                 let _ = app_handle.emit("exit-requested", active);
+            } else {
+                api.prevent_exit();
+                state.exiting.store(true, Ordering::SeqCst);
+                let discovery = state.discovery.clone();
+                let app = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    discovery.shutdown_and_wait().await;
+                    app.exit(0);
+                });
             }
         }
     });

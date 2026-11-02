@@ -38,7 +38,7 @@ use super::session::{
 #[derive(Debug, Clone)]
 pub struct UpdateItem {
     pub name: String,
-    /// Normalized `owner/repo`, with `#ref` appended only when the lock pinned
+    /// Normalized source, with `#ref` appended only when the lock pinned
     /// a non-default branch/tag/commit.
     pub source: String,
     pub canonical: PathBuf,

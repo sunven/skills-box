@@ -61,11 +61,23 @@ A lock entry with no corresponding skill folder anywhere.
 _Avoid_: ghost, orphan
 
 **Source**:
-The upstream origin a skill is installed from; v1 accepts public GitHub repositories.
+The upstream origin a skill is installed from; accepts public Git repositories over HTTPS.
 _Avoid_: repo, registry
 
+**Discovery source**:
+A source associated with at least one existing installation record in Global scope or a registered Project, whose default branch is followed for Source discovery.
+_Avoid_: subscription, watched repository
+
+**Source catalog**:
+The latest successfully observed set of skills available from a Discovery source, shared across Global and Project scopes.
+_Avoid_: inventory, lock file
+
+**Discovered skill**:
+A skill observed in a Source catalog, identified by its source and case-insensitive name. A change to its source path alone does not change its identity.
+_Avoid_: managed skill, update candidate
+
 **Source archive**:
-The files of a source at one commit, used by a project update check to compare skill content with the recorded version fingerprint.
+The files of a source at one commit, used by an update check to compare skill content with the recorded version fingerprint.
 _Avoid_: backup snapshot, installed skill copy
 
 **Install**:
@@ -75,6 +87,26 @@ _Avoid_: add, sync
 **Install preview**:
 The read-only list of skills discovered in a source before installation.
 _Avoid_: scan, listing
+
+**Source discovery**:
+The read-only inspection of Discovery sources to find skills available from upstream, including those not installed locally. The Chinese UI labels it 「发现」.
+_Avoid_: update check, automatic install
+
+**New skill**:
+A Discovered skill first encountered after its source's initial successful discovery. Existing uninstalled skills encountered during that initial discovery are available discoveries, without the 「新增」 label.
+_Avoid_: update candidate, uninstalled skill
+
+**Unread discovery**:
+A New skill whose discovery reminder remains unacknowledged, independently of where it is installed.
+_Avoid_: uninstalled skill, update candidate
+
+**Ignored discovery**:
+A Discovered skill the user has excluded from ordinary discovery listings and reminders across all Scopes. Restoring it makes it visible as acknowledged.
+_Avoid_: uninstalled skill, deleted skill
+
+**Discovery history**:
+A source's record of previously observed Discovered skills and the user's decisions about their reminders, retained while the source is inactive.
+_Avoid_: source catalog, lock file
 
 **Install target**:
 The selected agents plus the canonical store that an install writes to.
@@ -137,7 +169,7 @@ A skill whose upstream version fingerprint differs from the one recorded in its 
 _Avoid_: outdated skill, dirty skill
 
 **Update target**:
-The normalized GitHub source and optional safe ref resolved from a lock entry; update checks and update execution share it.
+The normalized source and optional safe ref resolved from a lock entry; update checks and update execution share it.
 _Avoid_: source spec, repo ref
 
 **Local modification**:

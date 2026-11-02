@@ -89,6 +89,10 @@ impl AppPaths {
         self.app_data.join("agents.json")
     }
 
+    pub fn settings_path(&self) -> PathBuf {
+        self.app_data.join("settings.json")
+    }
+
     /// Registered project roots and the last active scope.
     pub fn projects_path(&self) -> PathBuf {
         self.app_data.join("projects.json")

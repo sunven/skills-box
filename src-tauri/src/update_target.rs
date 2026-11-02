@@ -1,9 +1,9 @@
-//! Resolve a lock entry to the GitHub source and ref that update checking and
+//! Resolve a lock entry to the source and ref that update checking and
 //! execution share. Source selection and ref safety are decided once here;
 //! callers keep their own diagnostics and CLI argument building.
 
 use crate::lock::LockEntry;
-use crate::tasks::source::validate_source;
+use crate::tasks::source::{SourceKind, SourceSpec, validate_source};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateTarget {
@@ -13,7 +13,7 @@ pub struct UpdateTarget {
 }
 
 impl UpdateTarget {
-    /// `owner/repo`, with `#ref` appended only when the lock pinned one.
+    /// Normalized source, with `#ref` appended only when the lock pinned one.
     pub fn cli_source(&self) -> String {
         match self.reference.as_deref() {
             Some(reference) => format!("{}#{reference}", self.source),
@@ -39,14 +39,34 @@ impl UpdateTargetError {
 /// Normalize only the repository source. Ref validity is deliberately not
 /// checked so callers that display a stale lock can keep a usable source.
 pub fn resolve_source(entry: &LockEntry) -> Result<String, UpdateTargetError> {
-    if !entry.source_type.eq_ignore_ascii_case("github") {
+    resolve_spec(entry).map(|spec| spec.normalized)
+}
+
+pub fn supported_type(source_type: &str) -> bool {
+    ["github", "git", "gitlab"]
+        .iter()
+        .any(|kind| source_type.eq_ignore_ascii_case(kind))
+}
+
+fn resolve_spec(entry: &LockEntry) -> Result<SourceSpec, UpdateTargetError> {
+    if !supported_type(&entry.source_type) {
         return Err(UpdateTargetError::Source {
             detail: source_detail(entry),
         });
     }
-    for candidate in [entry.source.as_str(), entry.source_url.as_str()] {
+    let github = entry.source_type.eq_ignore_ascii_case("github");
+    let candidates = if github {
+        [entry.source.as_str(), entry.source_url.as_str()]
+    } else {
+        [entry.source_url.as_str(), entry.source.as_str()]
+    };
+    for candidate in candidates {
         if let Ok(spec) = validate_source(candidate) {
-            return Ok(spec.normalized);
+            if (github && spec.kind == SourceKind::GitHub)
+                || (!github && spec.kind == SourceKind::Git)
+            {
+                return Ok(spec);
+            }
         }
     }
     Err(UpdateTargetError::Source {
@@ -138,6 +158,37 @@ mod tests {
             None,
         );
         assert_eq!(resolve_source(&fallback).unwrap(), "acme/skills");
+    }
+
+    #[test]
+    fn resolves_git_and_gitlab_urls_and_preserves_safe_refs() {
+        for source_type in ["git", "gitlab"] {
+            let target = resolve(&entry(
+                "old/slug",
+                source_type,
+                "https://cnb.cool/cnb/skills/cnb-skill",
+                Some("dev/next"),
+            ))
+            .unwrap();
+            assert_eq!(
+                target.cli_source(),
+                "https://cnb.cool/cnb/skills/cnb-skill.git#dev/next"
+            );
+            assert_eq!(
+                resolve_source(&entry(
+                    "https://gitlab.com/group/sub/Skills.git",
+                    source_type,
+                    "",
+                    None
+                ))
+                .unwrap(),
+                "https://gitlab.com/group/sub/Skills.git"
+            );
+            assert!(resolve(&entry("owner/repo", source_type, "", None)).is_err());
+            assert!(resolve(&entry("ssh://git@host/repo", source_type, "", None)).is_err());
+        }
+        assert!(resolve(&entry("https://cnb.cool/group/repo", "github", "", None)).is_err());
+        assert!(resolve(&entry("https://github.com/owner/repo", "git", "", None)).is_err());
     }
 
     #[test]

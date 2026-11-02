@@ -29,6 +29,43 @@ use crate::update::UpdateCheckResponse;
 use crate::update::project_checks::{ForgetProjectResult, RelocateProjectResult};
 use crate::update::state::UpdateCheckState;
 
+#[tauri::command]
+pub fn get_github_settings(
+    state: State<'_, AppState>,
+) -> Result<crate::settings::GitHubSettingsStatus, AppError> {
+    state.settings.status()
+}
+
+#[tauri::command]
+pub fn save_github_token(
+    state: State<'_, AppState>,
+    token: String,
+) -> Result<crate::settings::GitHubSettingsStatus, AppError> {
+    state.settings.save(&token)
+}
+
+#[tauri::command]
+pub fn clear_github_token(
+    state: State<'_, AppState>,
+) -> Result<crate::settings::GitHubSettingsStatus, AppError> {
+    state.settings.clear()
+}
+
+#[tauri::command]
+pub async fn test_github_auth(
+    state: State<'_, AppState>,
+) -> Result<crate::update::api::GitHubAuthTestResult, AppError> {
+    let result = state
+        .github_api
+        .test_auth()
+        .await
+        .map_err(|error| error.to_app_error())?;
+    state
+        .discovery
+        .auth_succeeded(&result.context, result.revision, result.remaining);
+    Ok(result)
+}
+
 /// Forward task events to the renderer. A closed window must not fail a
 /// read-only task or abort a mutation that may already be writing; the task
 /// finishes and its result is discarded.
@@ -87,7 +124,9 @@ pub fn relocate_project(
     root: String,
 ) -> Result<RelocateProjectResult, AppError> {
     let _change = state.tasks.begin_registry_change()?;
-    state.project_updates.relocate(&id, &root)
+    let result = state.project_updates.relocate(&id, &root)?;
+    state.discovery.refresh();
+    Ok(result)
 }
 
 #[tauri::command]
@@ -96,7 +135,9 @@ pub fn forget_project(
     id: String,
 ) -> Result<ForgetProjectResult, AppError> {
     let _change = state.tasks.begin_registry_change()?;
-    state.project_updates.forget(&id)
+    let result = state.project_updates.forget(&id)?;
+    state.discovery.refresh();
+    Ok(result)
 }
 
 #[tauri::command]
@@ -317,7 +358,17 @@ pub async fn start_install(
     on_event: Channel<TaskEvent>,
 ) -> Result<TaskId, AppError> {
     // Project install runs in the project root without `-g`.
-    let sink = task_event_sink(on_event);
+    let discovery = state.discovery.clone();
+    let source = crate::tasks::validate_source(&request.source)?.identity();
+    let sink: EventSink = Arc::new(move |mut event| {
+        if let Some(result) = &mut event.result {
+            if let Err(error) = discovery.acknowledge_installed(&source, &result.skills) {
+                result.warnings.push(error);
+            }
+            discovery.refresh();
+        }
+        let _ = on_event.send(event);
+    });
     state.tasks.start_install(scope, request, sink).await
 }
 
@@ -350,6 +401,7 @@ pub fn dismiss_interrupted_mutation(state: State<'_, AppState>) -> Result<(), Ap
 #[tauri::command]
 pub async fn quit_app(app: AppHandle, state: State<'_, AppState>) -> Result<(), AppError> {
     state.exiting.store(true, Ordering::SeqCst);
+    state.discovery.shutdown_and_wait().await;
     let tasks = state.tasks.clone();
     let report = tasks.shutdown_mutations().await;
     if report.timed_out {
@@ -570,4 +622,49 @@ mod tests {
             assert!(!error.retryable);
         }
     }
+}
+
+#[tauri::command]
+pub async fn get_discovery_state(
+    state: State<'_, AppState>,
+) -> Result<crate::discovery::DiscoveryState, AppError> {
+    let service = state.discovery.clone();
+    read_with_timeout("发现记录", READ_TIMEOUT, async move {
+        tauri::async_runtime::spawn_blocking(move || service.get_state())
+            .await
+            .map_err(|_| AppError::task_internal("发现记录读取失败", "blocking worker failed"))
+    })
+    .await
+}
+#[tauri::command]
+pub async fn start_discovery_scan(
+    state: State<'_, AppState>,
+    manual: Option<bool>,
+) -> Result<crate::discovery::DiscoveryProgress, AppError> {
+    let service = state.discovery.clone();
+    tauri::async_runtime::spawn_blocking(move || service.start(manual.unwrap_or(false)))
+        .await
+        .map_err(|_| AppError::task_internal("发现扫描无法启动", "blocking worker failed"))?
+}
+#[tauri::command]
+pub fn acknowledge_discoveries(
+    state: State<'_, AppState>,
+    ids: Option<Vec<crate::discovery::DiscoveryId>>,
+) -> Result<(), AppError> {
+    state.discovery.acknowledge(ids)
+}
+#[tauri::command]
+pub fn set_discovery_ignored(
+    state: State<'_, AppState>,
+    id: crate::discovery::DiscoveryId,
+    ignored: bool,
+) -> Result<(), AppError> {
+    state.discovery.set_ignored(id, ignored)
+}
+#[tauri::command]
+pub fn invalidate_discovery_source(
+    state: State<'_, AppState>,
+    source: String,
+) -> Result<(), AppError> {
+    state.discovery.invalidate(source)
 }

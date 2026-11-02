@@ -1,3 +1,4 @@
+import type { DiscoveryId, DiscoveryState, DiscoveryProgress } from "./discovery";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   ActiveMutationInfo,
@@ -6,6 +7,8 @@ import type {
   CancelAck,
   DetachResult,
   EnvReport,
+  GitHubSettingsStatus,
+  GitHubAuthTestResult,
   ExtraAgent,
   ExtraAgentInput,
   InstallRequest,
@@ -28,7 +31,16 @@ import { GLOBAL_SCOPE } from "./types";
 
 /** Every IPC command the frontend may invoke. */
 export const API_COMMANDS = {
+  getDiscoveryState: "get_discovery_state",
+  startDiscoveryScan: "start_discovery_scan",
+  acknowledgeDiscoveries: "acknowledge_discoveries",
+  setDiscoveryIgnored: "set_discovery_ignored",
+  invalidateDiscoverySource: "invalidate_discovery_source",
   getEnvironment: "get_environment",
+  getGitHubSettings: "get_github_settings",
+  saveGitHubToken: "save_github_token",
+  clearGitHubToken: "clear_github_token",
+  testGitHubAuth: "test_github_auth",
   listProjects: "list_projects",
   addProject: "add_project",
   relocateProject: "relocate_project",
@@ -68,6 +80,22 @@ export type ApiCommand = (typeof API_COMMANDS)[keyof typeof API_COMMANDS];
  */
 export function getEnvironment(refresh = false): Promise<EnvReport> {
   return invoke<EnvReport>(API_COMMANDS.getEnvironment, { refresh });
+}
+
+export function getGitHubSettings(): Promise<GitHubSettingsStatus> {
+  return invoke<GitHubSettingsStatus>(API_COMMANDS.getGitHubSettings);
+}
+
+export function saveGitHubToken(token: string): Promise<GitHubSettingsStatus> {
+  return invoke<GitHubSettingsStatus>(API_COMMANDS.saveGitHubToken, { token });
+}
+
+export function clearGitHubToken(): Promise<GitHubSettingsStatus> {
+  return invoke<GitHubSettingsStatus>(API_COMMANDS.clearGitHubToken);
+}
+
+export function testGitHubAuth(): Promise<GitHubAuthTestResult> {
+  return invoke<GitHubAuthTestResult>(API_COMMANDS.testGitHubAuth);
 }
 
 /** App-registered projects plus the restored active scope. */
@@ -406,4 +434,20 @@ export function fallbackError(message: string): AppError {
 /** The lock-family errors drive the full-screen lock recovery path. */
 export function isLockError(error: AppError | null | undefined): boolean {
   return error?.code?.startsWith("lock.") ?? false;
+}
+
+export function getDiscoveryState(): Promise<DiscoveryState> {
+  return invoke<DiscoveryState>(API_COMMANDS.getDiscoveryState);
+}
+export function startDiscoveryScan(manual = false): Promise<DiscoveryProgress> {
+  return invoke<DiscoveryProgress>(API_COMMANDS.startDiscoveryScan, { manual });
+}
+export function acknowledgeDiscoveries(ids?: DiscoveryId[]): Promise<void> {
+  return invoke<void>(API_COMMANDS.acknowledgeDiscoveries, { ids: ids ?? null });
+}
+export function setDiscoveryIgnored(id: DiscoveryId, ignored: boolean): Promise<void> {
+  return invoke<void>(API_COMMANDS.setDiscoveryIgnored, { id, ignored });
+}
+export function invalidateDiscoverySource(source: string): Promise<void> {
+  return invoke<void>(API_COMMANDS.invalidateDiscoverySource, { source });
 }

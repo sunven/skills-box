@@ -1,3 +1,4 @@
+import { API_COMMANDS } from "./lib/api";
 import { StrictMode } from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -737,7 +738,7 @@ describe("manual update checking", () => {
     ).not.toBeInTheDocument();
     expect(document.activeElement).toBe(updateAll);
     // Only the read-only check ran; no execution command exists yet.
-    expect(calls.every((call) => !call.command.startsWith("start_"))).toBe(true);
+    expect(calls.every((call) => call.command === API_COMMANDS.startDiscoveryScan || !call.command.startsWith("start_"))).toBe(true);
   });
 
   it("shows cached results instantly and labels the tooltip", async () => {

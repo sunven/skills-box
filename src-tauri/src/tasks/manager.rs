@@ -10,17 +10,19 @@ use std::time::Duration;
 use serde::Serialize;
 use tokio::sync::{Notify, Semaphore};
 
-use crate::cli::{CliRuntimeProvider, ScopedCli};
+use crate::cli::CliRuntimeProvider;
 use crate::error::cli::{self, CliAction};
 use crate::error::{AppError, ErrorCode};
 use crate::interrupted::{InterruptedMutation, MarkerStore, MutationKind};
 use crate::paths::AppPaths;
-use crate::process::{CancelToken, ExecError, ProcessExecutor};
+#[cfg(test)]
+use crate::process::ExecError;
+use crate::process::{CancelToken, ProcessExecutor};
 use crate::time::now_ms;
 
 use super::conflicts::{ConflictInfo, ConflictProvider};
 use super::install::{self, INSTALL_TIMEOUT, InstallPlan, InstallRequest, validate_request};
-use super::parser::{ParsedSkill, PreviewParseOutcome, parse_preview_output};
+use super::parser::{ParsedSkill, PreviewParseOutcome};
 use super::session;
 use super::source::{SourceSpec, validate_source};
 use super::uninstall as uninstall_task;
@@ -138,7 +140,7 @@ pub struct PreviewSkill {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreviewSummary {
-    /// Normalized `owner/repo`.
+    /// Normalized GitHub shorthand or HTTPS Git clone URL.
     pub source: String,
     pub skills: Vec<PreviewSkill>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -991,24 +993,6 @@ impl TaskManager {
             return;
         }
 
-        let runtime = tokio::select! {
-            result = self.inner.runtime.cli_runtime() => match result {
-                Ok(runtime) => runtime,
-                Err(error) => {
-                    self.finish(&task_id, &sink, FinishOutcome::Failed(error));
-                    return;
-                }
-            },
-            _ = cancel.cancelled() => {
-                self.finish(&task_id, &sink, FinishOutcome::Cancelled);
-                return;
-            }
-        };
-        if cancel.is_cancelled() {
-            self.finish(&task_id, &sink, FinishOutcome::Cancelled);
-            return;
-        }
-
         emit(
             &sink,
             TaskEvent::progress(
@@ -1019,32 +1003,29 @@ impl TaskManager {
                 1,
             ),
         );
-        let spec = ScopedCli::new(&runtime, &layout).preview(
+        let (output, parsed) = match super::preview::source_preview(
+            self.inner.runtime.as_ref(),
+            self.inner.executor.as_ref(),
             &self.inner.paths,
+            &layout,
             &source.normalized,
             self.inner.config.preview_timeout,
-        );
-        let output = match self.inner.executor.run(spec, cancel.clone()).await {
-            Ok(output) => output,
-            Err(ExecError::Cancelled) => {
+            cancel.clone(),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) if cancel.is_cancelled() => {
                 self.finish(&task_id, &sink, FinishOutcome::Cancelled);
                 return;
             }
             Err(error) => {
-                self.finish(
-                    &task_id,
-                    &sink,
-                    FinishOutcome::Failed(cli::classify_exec_error(CliAction::Preview, error)),
-                );
+                self.finish(&task_id, &sink, FinishOutcome::Failed(error));
                 return;
             }
         };
-        if cancel.is_cancelled() {
-            self.finish(&task_id, &sink, FinishOutcome::Cancelled);
-            return;
-        }
 
-        match parse_preview_output(&output.stdout) {
+        match parsed {
             PreviewParseOutcome::Skills(skills) => {
                 let total = skills.len().max(1) as u32;
                 emit(

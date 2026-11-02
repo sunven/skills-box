@@ -1,9 +1,9 @@
-//! Source archives for project content fingerprints.
+//! Source archives for project and global Git content fingerprints.
 //!
 //! Project update checks compare a SHA-256 content hash, so they need the
-//! remote files, not the Git tree metadata the global check uses. For each
+//! remote files, not the Git tree metadata the global GitHub check uses. For each
 //! `(source, ref)` group the checker resolves the latest commit, then downloads
-//! the codeload archive once per commit. Archives are size- and time-capped and
+//! the archive once per commit and acquisition method. Archives are size- and time-capped and
 //! cached by commit under app data `cache/archives/`.
 
 use std::collections::BTreeMap;
@@ -205,6 +205,10 @@ fn is_installer_exclusion(path: &str) -> bool {
 /// used in production; tests provide a scripted fake.
 #[async_trait]
 pub trait ArchiveClient: Send + Sync {
+    /// Different acquisition methods can export different files at one commit.
+    fn cache_namespace(&self, _source: &str) -> &'static str {
+        ""
+    }
     /// Latest commit SHA for `source` at the lock's ref (default branch when
     /// no ref is pinned). Must be a 40-character Git SHA.
     async fn latest_commit(
@@ -221,23 +225,84 @@ pub trait ArchiveClient: Send + Sync {
     ) -> Result<Vec<u8>, GitHubFetchError>;
 }
 
+pub struct SourceArchiveClient {
+    github: ReqwestArchiveClient,
+    git: super::git::GitArchiveClient,
+}
+
+impl SourceArchiveClient {
+    pub fn new(paths: AppPaths) -> Self {
+        Self::with_api(paths, super::api::GitHubApiClient::anonymous())
+    }
+
+    pub fn with_api(paths: AppPaths, api: super::api::GitHubApiClient) -> Self {
+        Self {
+            github: ReqwestArchiveClient::with_api(api),
+            git: super::git::GitArchiveClient::new(paths),
+        }
+    }
+}
+
+#[async_trait]
+impl ArchiveClient for SourceArchiveClient {
+    fn cache_namespace(&self, source: &str) -> &'static str {
+        if source.starts_with("https://") {
+            "git"
+        } else {
+            ""
+        }
+    }
+
+    async fn latest_commit(
+        &self,
+        source: &str,
+        reference: Option<&str>,
+    ) -> Result<String, GitHubFetchError> {
+        if source.starts_with("https://") {
+            self.git.latest_commit(source, reference).await
+        } else {
+            self.github.latest_commit(source, reference).await
+        }
+    }
+
+    async fn download_archive(
+        &self,
+        source: &str,
+        commit: &str,
+    ) -> Result<Vec<u8>, GitHubFetchError> {
+        if source.starts_with("https://") {
+            self.git.download_archive(source, commit).await
+        } else {
+            self.github.download_archive(source, commit).await
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ReqwestArchiveClient {
     client: reqwest::Client,
+    api: super::api::GitHubApiClient,
 }
 
 impl ReqwestArchiveClient {
     pub fn new() -> Self {
+        Self::with_api(super::api::GitHubApiClient::anonymous())
+    }
+
+    pub fn with_api(api: super::api::GitHubApiClient) -> Self {
         let client = reqwest::Client::builder()
             .timeout(ARCHIVE_DOWNLOAD_TIMEOUT)
             .user_agent(concat!("skills-box/", env!("CARGO_PKG_VERSION")))
             .build()
             .unwrap_or_default();
-        Self { client }
+        Self { client, api }
     }
 
     pub fn with_client(client: reqwest::Client) -> Self {
-        Self { client }
+        Self {
+            api: super::api::GitHubApiClient::with_client(client.clone()),
+            client,
+        }
     }
 }
 
@@ -255,12 +320,7 @@ impl ArchiveClient for ReqwestArchiveClient {
         reference: Option<&str>,
     ) -> Result<String, GitHubFetchError> {
         let url = commit_url(source, reference)?;
-        let response = self.client.get(url).send().await.map_err(map_reqwest)?;
-        let status = response.status();
-        if !status.is_success() {
-            return Err(http_status_error(status.as_u16()));
-        }
-        let body = response.text().await.map_err(map_reqwest)?;
+        let body = self.api.get_text(url).await?;
         parse_commit_response(&body)
     }
 
@@ -270,6 +330,13 @@ impl ArchiveClient for ReqwestArchiveClient {
         commit: &str,
     ) -> Result<Vec<u8>, GitHubFetchError> {
         let url = archive_url(source, commit)?;
+        self.download(url).await
+    }
+}
+
+impl ReqwestArchiveClient {
+    /// Separate uncredentialed transport for codeload downloads.
+    pub(super) async fn download(&self, url: reqwest::Url) -> Result<Vec<u8>, GitHubFetchError> {
         let mut response = self.client.get(url).send().await.map_err(map_reqwest)?;
         let status = response.status();
         if !status.is_success() {
@@ -387,6 +454,13 @@ pub struct CommitArchiveCache {
 }
 
 impl CommitArchiveCache {
+    pub(crate) fn namespaced(&self, namespace: &str) -> Self {
+        if namespace.is_empty() {
+            self.clone()
+        } else {
+            Self::from_dir(self.dir.join(namespace))
+        }
+    }
     pub fn new(paths: &AppPaths) -> Self {
         Self {
             dir: paths.cache_dir().join("archives"),

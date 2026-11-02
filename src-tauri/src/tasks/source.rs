@@ -1,15 +1,36 @@
 //! Validation and normalization for install sources.
 //!
-//! v1 only accepts public GitHub root repositories — `owner/repo` or
-//! `https://github.com/owner/repo` — and always installs the default branch.
-//! Everything else (subdirectories, refs, GitLab, SSH, local paths, Notion)
-//! is rejected before any CLI process is spawned.
+//! Public HTTPS root repositories and GitHub `owner/repo` shorthand.
+//! Generic URLs end in `.git` so the pinned CLI treats them as Git sources.
 
 use crate::error::AppError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceSpec {
     pub normalized: String,
+    pub kind: SourceKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceKind {
+    GitHub,
+    Git,
+}
+
+impl SourceSpec {
+    /// GitHub paths are case insensitive; other Git services may distinguish them.
+    pub fn identity(&self) -> String {
+        match self.kind {
+            SourceKind::GitHub => self.normalized.to_ascii_lowercase(),
+            SourceKind::Git => self.normalized.clone(),
+        }
+    }
+}
+
+pub fn source_identity(source: &str) -> String {
+    validate_source(source)
+        .map(|spec| spec.identity())
+        .unwrap_or_else(|_| source.to_string())
 }
 
 pub fn validate_source(input: &str) -> Result<SourceSpec, AppError> {
@@ -34,19 +55,11 @@ pub fn validate_source(input: &str) -> Result<SourceSpec, AppError> {
         return Err(AppError::source_unsupported_provider("SSH / Git"));
     }
 
-    if let Some(rest) = value.strip_prefix("https://") {
-        let (host, path) = match rest.split_once('/') {
-            Some((host, path)) => (host, path),
-            None => (rest, ""),
-        };
-        let host_lower = host.to_ascii_lowercase();
-        return match host_lower.as_str() {
-            "github.com" | "www.github.com" => parse_github_path(path),
-            host if host.contains("gitlab") => Err(AppError::source_unsupported_provider("GitLab")),
-            host if host.contains("notion") => Err(AppError::source_unsupported_provider("Notion")),
-            "" => Err(AppError::source_invalid("URL 缺少主机名")),
-            other => Err(AppError::source_unsupported_provider(other)),
-        };
+    if value
+        .get(..8)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("https://"))
+    {
+        return parse_https(value);
     }
     if value.starts_with("http://") {
         return Err(AppError::source_unsupported_provider(
@@ -77,6 +90,70 @@ pub fn validate_source(input: &str) -> Result<SourceSpec, AppError> {
     }
 
     parse_shorthand(value)
+}
+
+fn parse_https(value: &str) -> Result<SourceSpec, AppError> {
+    let mut url =
+        reqwest::Url::parse(value).map_err(|_| AppError::source_invalid("HTTPS URL 格式无效"))?;
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(AppError::source_invalid("仓库 URL 不支持内嵌凭据"));
+    }
+    if url.query().is_some() {
+        return Err(AppError::source_invalid("不支持 URL 查询参数"));
+    }
+    let host = url
+        .host_str()
+        .ok_or_else(|| AppError::source_invalid("URL 缺少主机名"))?;
+    if matches!(
+        host,
+        "notion.so"
+            | "www.notion.so"
+            | "notion.site"
+            | "www.notion.site"
+            | "raw.githubusercontent.com"
+    ) {
+        return Err(AppError::source_unsupported_provider(host));
+    }
+    let path = value[8..]
+        .split_once('/')
+        .map(|(_, path)| path)
+        .unwrap_or("");
+    if matches!(host, "github.com" | "www.github.com") {
+        if url.port().is_some() {
+            return Err(AppError::source_invalid("GitHub URL 不支持自定义端口"));
+        }
+        return parse_github_path(path);
+    }
+    let cleaned = path.trim_end_matches('/');
+    let segments: Vec<_> = cleaned.split('/').collect();
+    if segments
+        .iter()
+        .any(|segment| !is_valid_component(segment) || matches!(*segment, "." | ".."))
+    {
+        return Err(AppError::source_invalid("仓库路径包含空段或无效字符"));
+    }
+    if segments
+        .windows(2)
+        .any(|pair| pair == ["-", "tree"] || pair == ["-", "blob"])
+        || (host == "gitee.com" && segments.len() >= 4 && matches!(segments[2], "tree" | "blob"))
+    {
+        return Err(AppError::source_unsupported_subdir());
+    }
+    // The pinned parser recognizes these hosts with unanchored regexes.
+    // Do not let an embedded host name redirect a generic source elsewhere.
+    if value.contains("github.com/") || (host != "gitlab.com" && value.contains("gitlab.com/")) {
+        return Err(AppError::source_invalid("来源会被 CLI 识别为另一 Git 主机"));
+    }
+    let git_path = if cleaned.ends_with(".git") {
+        cleaned.to_string()
+    } else {
+        format!("{cleaned}.git")
+    };
+    url.set_path(&format!("/{git_path}"));
+    Ok(SourceSpec {
+        normalized: url.to_string(),
+        kind: SourceKind::Git,
+    })
 }
 
 fn is_local_path(value: &str) -> bool {
@@ -148,6 +225,7 @@ fn parse_owner_repo(value: &str) -> Result<SourceSpec, AppError> {
     }
     Ok(SourceSpec {
         normalized: format!("{owner}/{repo}"),
+        kind: SourceKind::GitHub,
     })
 }
 
@@ -196,6 +274,65 @@ mod tests {
     }
 
     #[test]
+    fn accepts_https_git_sources_with_nested_paths_and_ports() {
+        for input in [
+            "https://cnb.cool/cnb/skills/cnb-skill",
+            "https://cnb.cool/cnb/skills/cnb-skill/",
+            "https://cnb.cool/cnb/skills/cnb-skill.git",
+        ] {
+            assert_eq!(
+                normalized(input),
+                "https://cnb.cool/cnb/skills/cnb-skill.git"
+            );
+        }
+        assert_eq!(
+            normalized("https://gitlab.com/group/subgroup/Skills"),
+            "https://gitlab.com/group/subgroup/Skills.git"
+        );
+        assert_eq!(
+            normalized("https://GIT.example.com:8443/Group/Skills"),
+            "https://git.example.com:8443/Group/Skills.git"
+        );
+        assert_eq!(
+            normalized("https://gitee.com/owner/repo"),
+            "https://gitee.com/owner/repo.git"
+        );
+        assert_eq!(
+            source_identity("https://git.example.com/Group/Skills"),
+            "https://git.example.com/Group/Skills.git"
+        );
+        assert_ne!(
+            source_identity("https://git.example.com/Group/Skills"),
+            source_identity("https://git.example.com/group/skills")
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_or_ambiguous_git_urls_before_spawn() {
+        for input in [
+            "https://git.example.com",
+            "https://user:secret@git.example.com/repo",
+            "https://git.example.com/a/../repo",
+            "https://git.example.com/a//repo",
+            "https://git.example.com/repo?x=1",
+            "https://git.example.com/re po",
+            "https://git.example.com/%2e%2e/repo",
+            "https://git.example.com/github.com/owner/repo",
+            "https://evilgitlab.com/owner/repo",
+        ] {
+            assert_eq!(code(input), ErrorCode::SourceInvalid, "{input}");
+        }
+        assert_eq!(
+            code("https://gitlab.com/group/repo/-/tree/main/skill"),
+            ErrorCode::SourceUnsupportedSubdir
+        );
+        assert_eq!(
+            code("https://gitee.com/group/repo/tree/main"),
+            ErrorCode::SourceUnsupportedSubdir
+        );
+    }
+
+    #[test]
     fn rejects_empty_and_whitespace_only_sources() {
         assert_eq!(code(""), ErrorCode::SourceMissing);
         assert_eq!(code("   "), ErrorCode::SourceMissing);
@@ -221,11 +358,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_non_github_providers_with_explicit_errors() {
-        assert_eq!(
-            code("https://gitlab.com/group/repo"),
-            ErrorCode::SourceUnsupportedProvider
-        );
+    fn rejects_unsupported_providers_with_explicit_errors() {
         assert_eq!(
             code("gitlab.com/group/repo"),
             ErrorCode::SourceUnsupportedProvider

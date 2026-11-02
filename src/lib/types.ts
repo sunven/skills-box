@@ -13,6 +13,21 @@ export type ScopeId = "global" | `project:${string}`;
 
 export const GLOBAL_SCOPE: ScopeId = "global";
 
+export type GitHubTokenSource = "settings" | "environment" | "anonymous";
+
+export interface GitHubSettingsStatus {
+  hasSavedToken: boolean;
+  hasEnvironmentToken: boolean;
+  effectiveSource: GitHubTokenSource;
+}
+
+export interface GitHubAuthTestResult {
+  source: GitHubTokenSource;
+  limit: number;
+  remaining: number;
+  resetAtEpochMs: number;
+}
+
 export interface ProjectEntry {
   /** Stable UUID assigned at registration; never changes on relocate. */
   id: string;

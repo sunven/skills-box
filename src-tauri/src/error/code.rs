@@ -63,6 +63,12 @@ pub enum ErrorCode {
     NetworkOffline,
     NetworkRateLimited,
     NetworkError,
+    NetworkAuthFailed,
+    SettingsInvalidToken,
+    SettingsReadFailed,
+    SettingsWriteFailed,
+    DiscoveryReadFailed,
+    DiscoveryWriteFailed,
     CliFailed,
     CliSpawnFailed,
     CliTimeout,
@@ -156,6 +162,12 @@ impl ErrorCode {
         Self::NetworkOffline,
         Self::NetworkRateLimited,
         Self::NetworkError,
+        Self::NetworkAuthFailed,
+        Self::SettingsInvalidToken,
+        Self::SettingsReadFailed,
+        Self::SettingsWriteFailed,
+        Self::DiscoveryReadFailed,
+        Self::DiscoveryWriteFailed,
         Self::CliFailed,
         Self::CliSpawnFailed,
         Self::CliTimeout,
@@ -249,6 +261,12 @@ impl ErrorCode {
             Self::NetworkOffline => "network.offline",
             Self::NetworkRateLimited => "network.rate_limited",
             Self::NetworkError => "network.error",
+            Self::NetworkAuthFailed => "network.auth_failed",
+            Self::SettingsInvalidToken => "settings.invalid_token",
+            Self::SettingsReadFailed => "settings.read_failed",
+            Self::SettingsWriteFailed => "settings.write_failed",
+            Self::DiscoveryReadFailed => "discovery.read_failed",
+            Self::DiscoveryWriteFailed => "discovery.write_failed",
             Self::CliFailed => "cli.failed",
             Self::CliSpawnFailed => "cli.spawn_failed",
             Self::CliTimeout => "cli.timeout",
@@ -314,7 +332,7 @@ mod tests {
 
     #[test]
     fn all_codes_are_unique_and_stable() {
-        assert_eq!(ErrorCode::ALL.len(), 89);
+        assert_eq!(ErrorCode::ALL.len(), 95);
         let values: Vec<&str> = ErrorCode::ALL.iter().map(|code| code.as_str()).collect();
         let unique: HashSet<&str> = values.iter().copied().collect();
         assert_eq!(unique.len(), values.len());
@@ -379,6 +397,12 @@ mod tests {
                 "network.offline",
                 "network.rate_limited",
                 "network.error",
+                "network.auth_failed",
+                "settings.invalid_token",
+                "settings.read_failed",
+                "settings.write_failed",
+                "discovery.read_failed",
+                "discovery.write_failed",
                 "cli.failed",
                 "cli.spawn_failed",
                 "cli.timeout",

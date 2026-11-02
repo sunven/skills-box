@@ -72,6 +72,31 @@ object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'
   `remove -a`, `remove --all`, `add --all`, `-a '*'` or `--copy`.
 - Mutations are serialized and create a lock snapshot before writing.
 
+## GitHub authentication
+
+- Rust owns the shared settings service. Saved credentials take precedence
+  over the application's inherited `GITHUB_TOKEN`, followed by anonymous
+  access. The startup environment is captured once without executing a shell.
+- Settings reads, saves and deletions return only presence flags and the
+  effective credential source. Token drafts cross IPC only when saved; they
+  are not retained in frontend query/mutation caches, localStorage, debug
+  output, operation logs or the fake backend's recorded calls.
+- `settings.json` stores plaintext credentials in the application data
+  directory. Both the final file and the temporary replacement have Unix
+  `0600` permissions before any token is written. Writes use an atomic rename;
+  failed writes retain the previous file and in-memory credentials. Reads
+  reject symlinks and non-regular files, cap file size, and repair loose file
+  permissions. Invalid configuration reports a repairable error and never
+  silently falls back to another credential.
+- Authentication is attached per request, solely to `api.github.com`, for
+  Trees API, commit lookup, and `/rate_limit`. The Authorization header is
+  marked sensitive, API redirects are disabled, and error bodies are redacted.
+  Codeload uses a separate uncredentialed transport; Git and pinned CLI child
+  environments continue to exclude `GITHUB_TOKEN` and `GH_TOKEN`.
+- HTTP 401 reports invalid/expired credentials without retrying another
+  token. Authentication tests and settings operations require no new
+  renderer permissions or remote CSP origins.
+
 ## Debug-only test hooks
 
 `SKILLS_BOX_ROOT`, `SKILLS_BOX_NODE` and `SKILLS_BOX_FAKE_CLI` are honored only
@@ -91,3 +116,22 @@ in debug builds:
   skill name or path is interpolated into it. Release builds cannot reach
   `apply_fake_cli` with `debug = false`, so the release binary has no shell
   execution path.
+
+
+## Source discovery
+
+- Discovery reads only Global and currently registered Project installation
+  records. A retained snapshot is usable only at the same Project revision;
+  Forget/Relocate revoke it in memory even if auxiliary persistence fails.
+- Source network/CLI work runs without a Mutation permit. The shared preview
+  seam uses pinned `add <source> -l [-g]` and explicitly removes GitHub token
+  variables from subprocess environments. Native tokens stay on the GitHub
+  REST origin. No remote file browser or automatic installation is added.
+- `discovery.json` stores catalog/history, scope-source snapshots, and a
+  credential fingerprint for rate-limit context, never the token. Reads are
+  bounded at 32 MiB and reject unsupported/corrupt data and symlinks. Writes
+  use an atomic rename and mode `0600`. Failed writes do not acknowledge
+  reminders or claim that ignore decisions were saved.
+- Application exit cancels queued work and the read-only process groups. Source
+  generation and credential revisions prevent late requests from publishing
+  into a revoked association or setting a new credential's cooldown.

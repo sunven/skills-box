@@ -18,6 +18,8 @@ We add `src-tauri/src/git_tree.rs` with typed `GitMode`/`GitTreeEntry`, `object_
 
 ## Consequences
 
+- Source resolution now accepts public HTTPS Git sources as well as GitHub. `SourceSpec` distinguishes the two: GitHub keeps `owner/repo`, while generic Git keeps an HTTPS clone URL with `.git` so the pinned CLI does not attempt web downloads. Generic lock entries (`git`/`gitlab`) prefer `sourceUrl`, then a complete HTTPS `source`; GitHub entries retain the original source selection. Source identity preserves generic path case. Install still uses the default branch, while updates preserve safe lock refs.
+
 - Check and execution resolve the same source/ref; unsafe refs no longer trigger GitHub requests during checking.
 - `UpdateItem.lock_source` and `UpdateItem.reference` are removed; only the CLI source string remains.
 - Local and remote tree hashes are unchanged and now share one implementation and one fixed-SHA contract test.
