@@ -27,6 +27,8 @@ interface SkillListPaneProps {
   anomalies: AnomalyView;
   sourceCount: number;
   candidateCount: number;
+  availableDiscoveryCount: number;
+  onOpenAvailableDiscoveries: () => void;
   query: string;
   sort: SortKey;
   status: StatusFilter;
@@ -109,6 +111,8 @@ export function SkillListPane({
   anomalies,
   sourceCount,
   candidateCount,
+  availableDiscoveryCount,
+  onOpenAvailableDiscoveries,
   query,
   sort,
   status,
@@ -216,7 +220,11 @@ export function SkillListPane({
             </option>
           ))}
         </select>
-        <span className="toolbar-count">{visibleSkills.length} 个</span>
+        <div className="ml-auto flex items-center gap-3">
+          {availableDiscoveryCount > 0 ? <Button variant="outline" size="sm" className="text-accent"
+            title="查看当前来源在此作用域可安装的 skills" onClick={onOpenAvailableDiscoveries}>可安装 {availableDiscoveryCount}</Button> : null}
+          <span className="toolbar-count">{visibleSkills.length} 个</span>
+        </div>
       </div>
 
       <AnomalyBanner anomalies={anomalies} onOpen={onOpenAnomalies} />

@@ -3,7 +3,7 @@ import { Download, RefreshCw, Search, X } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { asAppError, fallbackError } from "../lib/api";
-import { discoveryKey, filterDiscoveries, installationFor, installationLabels,
+import { discoveryKey, filterDiscoveries, installationFor, installationLabels, isDiscoveryInstallable,
   type DiscoveredSkill, type DiscoveryFilter, type DiscoveryInstallSeed } from "../lib/discovery";
 import type { ProjectEntry, ScopeId } from "../lib/types";
 import type { useDiscovery } from "../hooks/use-discovery";
@@ -16,16 +16,18 @@ interface Props {
   scope: ScopeId; projects: ProjectEntry[]; mutationsEnabled: boolean;
   onSelectScope: (scope: ScopeId) => void;
   onInstall: (seed: DiscoveryInstallSeed) => void;
+  initialFilter: DiscoveryFilter;
+  initialSource: string;
 }
 function SourceAddress({ source }: { source: string }) {
   return <span className="mono discovery-source-address" title={source.startsWith("https://") ? source : `https://github.com/${source}`}>{source}</span>;
 }
-export function DiscoveryPage({ discovery, scope, projects, mutationsEnabled, onSelectScope, onInstall }: Props) {
+export function DiscoveryPage({ discovery, scope, projects, mutationsEnabled, onSelectScope, onInstall, initialFilter, initialSource }: Props) {
   const { query, pending, error } = discovery;
   const data = query.data;
-  const [filter, setFilter] = useState<DiscoveryFilter>("uninstalled");
+  const [filter, setFilter] = useState<DiscoveryFilter>(initialFilter);
   const [search, setSearch] = useState("");
-  const [source, setSource] = useState("all");
+  const [source, setSource] = useState(initialSource);
   const [selected, setSelected] = useState<string | null>(null);
   const deferredSearch = useDeferredValue(search);
   const visible = useMemo(() => filterDiscoveries(data?.skills ?? [], scope, filter, deferredSearch, source),
@@ -34,7 +36,7 @@ export function DiscoveryPage({ discovery, scope, projects, mutationsEnabled, on
   const displayedError = error ?? data?.error ?? (query.isError ? asAppError(query.error) ?? fallbackError("无法读取发现记录。") : null);
   function install(skill: DiscoveredSkill) { onInstall({ source: skill.id.source, name: skill.name }); }
   function canInstall(skill: DiscoveredSkill) {
-    return mutationsEnabled && !pending && !skill.installIssue && installationFor(skill, scope) === "notInstalled";
+    return mutationsEnabled && !pending && isDiscoveryInstallable(skill, scope);
   }
   function showAllNew() { setFilter("new"); setSearch(""); setSource("all"); }
   return <main className="discovery-page" aria-labelledby="discovery-title">
@@ -63,7 +65,7 @@ export function DiscoveryPage({ discovery, scope, projects, mutationsEnabled, on
           </select>
         </label>
         <div className="discovery-tabs" role="group" aria-label="发现筛选">
-          {([['uninstalled', '当前作用域未安装'], ['all', '全部'], ['new', '新增'], ['ignored', '已忽略']] as const).map(([value, label]) =>
+          {([['uninstalled', '当前作用域未安装'], ['available', '可安装'], ['all', '全部'], ['new', '新增'], ['ignored', '已忽略']] as const).map(([value, label]) =>
             <Button key={value} variant={filter === value ? "outline" : "ghost"} size="sm" aria-pressed={filter === value} onClick={() => setFilter(value)}>{label}</Button>)}
         </div>
         <label className="discovery-search"><Search className="size-4" aria-hidden="true" /><Input aria-label="搜索发现的 skills" placeholder="搜索名称或描述" value={search} onChange={(e) => setSearch(e.target.value)} /></label>

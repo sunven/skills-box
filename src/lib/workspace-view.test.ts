@@ -20,6 +20,7 @@ import type {
   UpdateState,
 } from "./types";
 import { GLOBAL_SCOPE } from "./types";
+import { discovered, discoveryFixture, discoveryProjectScope } from "../test/discovery-fixtures";
 
 function result(name: string, state: UpdateState): UpdateSkillResult {
   return {
@@ -54,6 +55,36 @@ function filters(overrides: Partial<InventoryFilters> = {}): InventoryFilters {
 }
 
 describe("workspace projection", () => {
+  it.each([
+    ["all", 4], ["acme/skills", 2], ["Acme/Skills", 2],
+    ["https://git.example.com/Group/Skills.git", 1],
+    ["https://git.example.com/group/skills.git", 1],
+    ["__unknown__", 0],
+  ])("counts installable discoveries for source %s without changing inventory totals", (source, expected) => {
+    const discovery = discoveryFixture();
+    const view = buildWorkspaceView({
+      activeScope: GLOBAL_SCOPE, snapshot: sampleSnapshot(),
+      discovery: discoveryFixture({ skills: [...discovery.skills,
+        discovered("baseline", "notInstalled"),
+        discovered("upper", "notInstalled", { unread: true, id: { source: "https://git.example.com/Group/Skills.git", name: "upper" } }),
+        discovered("lower", "notInstalled", { unread: true, id: { source: "https://git.example.com/group/skills.git", name: "lower" } }),
+        discovered("ignored", "notInstalled", { ignored: true }),
+        discovered("invalid", "notInstalled", { installIssue: "名称不可安装" }),
+        discovered("conflict", "conflict"), discovered("stale", "stale"), discovered("unknown", "unknown"),
+      ] }),
+      filters: filters({ source }), sort: "recent", selectedName: null, updateMode: null, updateSkillName: null,
+    });
+    expect(view.availableDiscoveryCount).toBe(expected);
+    expect(view.totalSkills).toBe(4);
+  });
+  it("counts available skills in the selected scope", () => {
+    const input: WorkspaceViewInput = {
+      activeScope: GLOBAL_SCOPE, snapshot: sampleSnapshot(), discovery: discoveryFixture(),
+      filters: filters({ source: "acme/skills" }), sort: "recent", selectedName: null, updateMode: null, updateSkillName: null,
+    };
+    expect(buildWorkspaceView(input).availableDiscoveryCount).toBe(1);
+    expect(buildWorkspaceView({ ...input, activeScope: discoveryProjectScope }).availableDiscoveryCount).toBe(2);
+  });
   it("reuses inventory rows while selection, filters, sort and dialog targets change", () => {
     const select = createWorkspaceViewSelector();
     const input: WorkspaceViewInput = {

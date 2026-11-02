@@ -9,6 +9,7 @@ import type { PreviewSummary, TaskEvent } from "./lib/types";
 import { createFakeBackend, type FakeBackend } from "./test/fake-backend";
 import { discovered, discoveryFixture, discoveryProject, discoveryProjectScope } from "./test/discovery-fixtures";
 import { healthyReport } from "./test/fixtures";
+import { makeSkill, makeSnapshot, sampleSnapshot } from "./test/inventory-fixtures";
 
 function setup(options: Parameters<typeof createFakeBackend>[0] = {}) {
   const backend = createFakeBackend({ ...options, data: { environment: healthyReport(), discovery: discoveryFixture(),
@@ -32,6 +33,85 @@ const preview: PreviewSummary = { source: "acme/skills", parseFailed: false, noS
   skills: ["alpha", "beta", "gamma"].map((name) => ({ name, description: `${name} description` })) };
 
 describe("source discovery", () => {
+  it("opens installable discoveries for the selected source from the inventory toolbar", async () => {
+    const discovery = discoveryFixture();
+    const { backend } = setup({ data: {
+      snapshot: sampleSnapshot(),
+      discovery: discoveryFixture({
+        sources: [...discovery.sources, { ...discovery.sources[0]!, source: "other/repo" }],
+        skills: [...discovery.skills,
+          discovered("other", "notInstalled", { id: { source: "other/repo", name: "other" }, isNew: true, unread: true }),
+          discovered("ignored", "notInstalled", { isNew: true, unread: true, ignored: true }),
+          discovered("read", "notInstalled", { isNew: true }),
+        ],
+        unreadCount: 3,
+      }),
+    } });
+    await screen.findByRole("button", { name: "可安装 3" });
+    expect(screen.getAllByTestId("skill-row")).toHaveLength(4);
+    const sidebar = within(screen.getByRole("complementary", { name: "筛选" }));
+    fireEvent.click(sidebar.getByRole("button", { name: /acme\/skills/ }));
+    fireEvent.change(screen.getByLabelText("搜索 skill、来源或描述"), { target: { value: "alpha" } });
+    fireEvent.click(screen.getByRole("button", { name: "可安装 2" }));
+    expect(screen.getByRole("button", { name: "可安装" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByLabelText("发现来源筛选")).toHaveValue("acme/skills");
+    expect(screen.getByLabelText("发现目标作用域")).toHaveValue("global");
+    expect(screen.queryByRole("button", { name: "beta" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "gamma" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "read" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "other" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "alpha" })).not.toBeInTheDocument();
+    expect(backend.count("acknowledge_discoveries")).toBe(0);
+    fireEvent.click(screen.getByRole("button", { name: "返回 skills" }));
+    expect(screen.getByLabelText("搜索 skill、来源或描述")).toHaveValue("alpha");
+    fireEvent.click(within(screen.getByRole("complementary", { name: "筛选" })).getByRole("button", { name: /other\/repo/ }));
+    fireEvent.click(screen.getByRole("button", { name: "可安装 1" }));
+    expect(screen.getByLabelText("发现来源筛选")).toHaveValue("other/repo");
+    expect(screen.getByRole("button", { name: "other" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "beta" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "返回 skills" }));
+    fireEvent.click(within(screen.getByRole("complementary", { name: "筛选" })).getByRole("button", { name: /来源未知/ }));
+    expect(screen.queryByRole("button", { name: /^可安装 \d+$/ })).not.toBeInTheDocument();
+  });
+  it("keeps available counts after reading and updates them after ignoring", async () => {
+    setup({ data: { snapshot: sampleSnapshot() } });
+    fireEvent.click(await screen.findByRole("button", { name: "可安装 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "gamma" }));
+    await screen.findByRole("button", { name: "发现 (1)" });
+    fireEvent.click(screen.getByRole("button", { name: "返回 skills" }));
+    fireEvent.click(screen.getByRole("button", { name: "可安装 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "全部已读" }));
+    await screen.findByRole("button", { name: "发现 (0)" });
+    fireEvent.click(screen.getByRole("button", { name: "返回 skills" }));
+    fireEvent.click(screen.getByRole("button", { name: "可安装 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "忽略 gamma" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "gamma" })).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "返回 skills" }));
+    expect(screen.queryByRole("button", { name: /^可安装 \d+$/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "发现 (0)" }));
+    expect(screen.getByRole("button", { name: "当前作用域未安装" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByLabelText("发现来源筛选")).toHaveValue("all");
+  });
+  it("shows twelve available skills after the first scan of a 38-item source with 26 installed", async () => {
+    const source = "mattpocock/skills";
+    const skills = Array.from({ length: 38 }, (_, i) => discovered(`skill-${i}`, i < 26 ? "installed" : "notInstalled", {
+      id: { source, name: `skill-${i}` },
+    }));
+    const discovery = discoveryFixture({ skills, unreadCount: 0 });
+    setup({ data: {
+      snapshot: makeSnapshot({ skills: skills.slice(0, 26).map((skill) => makeSkill({ name: skill.name, source })) }),
+      discovery: { ...discovery, sources: [{ ...discovery.sources[0]!, source }] },
+    } });
+    const sidebar = within(await screen.findByRole("complementary", { name: "筛选" }));
+    fireEvent.click(await sidebar.findByRole("button", { name: /mattpocock\/skills/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "可安装 12" }));
+    expect(screen.getByLabelText("发现来源筛选")).toHaveValue(source);
+    expect(screen.getByRole("button", { name: "可安装" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("显示 12 项")).toBeInTheDocument();
+    for (const skill of skills.slice(26)) expect(screen.getByRole("button", { name: `安装 ${skill.name}` })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "skill-0" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "发现 (0)" })).toBeInTheDocument();
+  });
   it("projects the 60/20 baseline and scope-independent unread filtering", () => {
     const skills = Array.from({ length: 60 }, (_, i) => discovered(`skill-${i}`, i < 20 ? "installed" : "notInstalled"));
     expect(filterDiscoveries(skills, "global", "uninstalled", "", "all")).toHaveLength(40);

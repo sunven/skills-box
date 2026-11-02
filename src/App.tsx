@@ -1,6 +1,6 @@
 import { DiscoveryPage } from "./components/discovery-page";
 import { useDiscovery } from "./hooks/use-discovery";
-import type { DiscoveryInstallSeed } from "./lib/discovery";
+import type { DiscoveryFilter, DiscoveryInstallSeed } from "./lib/discovery";
 import {
   useCallback,
   useDeferredValue,
@@ -132,7 +132,7 @@ function App() {
   const [anomaliesOpen, setAnomaliesOpen] = useState(false);
   const [installOpen, setInstallOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [discoveryOpen, setDiscoveryOpen] = useState(false);
+  const [discoveryEntry, setDiscoveryEntry] = useState<{ filter: DiscoveryFilter; source: string } | null>(null);
   const [installSeed, setInstallSeed] = useState<DiscoveryInstallSeed | null>(null);
   const discovery = useDiscovery(scopeReady && !quitting);
   const [updateTarget, setUpdateTarget] = useState<
@@ -156,6 +156,7 @@ function App() {
     () =>
       selectWorkspaceView({
         snapshot,
+        discovery: discovery.query.data,
         projects,
         activeScope: scope,
         scopeError,
@@ -173,6 +174,7 @@ function App() {
     [
       selectWorkspaceView,
       snapshot,
+      discovery.query.data,
       projects,
       scope,
       scopeError,
@@ -441,11 +443,11 @@ function App() {
     <div className="app-shell text-foreground">
       <AppHeader
         settingsOpen={settingsOpen}
-        discoveryOpen={discoveryOpen}
+        discoveryOpen={discoveryEntry !== null}
         discoveryCount={discovery.query.data?.unreadCount ?? 0}
-        onOpenDiscovery={() => { setSettingsOpen(false); setDiscoveryOpen(true); }}
-        onOpenSettings={() => { setSettingsOpen(true); setDiscoveryOpen(false); }}
-        onReturnToSkills={() => { setSettingsOpen(false); setDiscoveryOpen(false); }}
+        onOpenDiscovery={() => { setSettingsOpen(false); setDiscoveryEntry({ filter: "uninstalled", source: "all" }); }}
+        onOpenSettings={() => { setSettingsOpen(true); setDiscoveryEntry(null); }}
+        onReturnToSkills={() => { setSettingsOpen(false); setDiscoveryEntry(null); }}
         report={report}
         isLoading={environment.isPending}
         isError={environment.isError}
@@ -461,7 +463,7 @@ function App() {
         updateCandidateCount={view.candidateCount}
         filtersOpen={filtersOpen}
         onToggleFilters={() => setFiltersOpen((open) => !open)}
-        scopeSwitcher={settingsOpen || discoveryOpen ? null : (
+        scopeSwitcher={settingsOpen || discoveryEntry ? null : (
           <ScopeSwitcher
             activeScope={scope}
             projects={view.scopeProjects}
@@ -478,7 +480,8 @@ function App() {
           />
         )}
       />
-      {settingsOpen ? <SettingsPage onAgentsChanged={handleRecheck} /> : discoveryOpen ? <DiscoveryPage discovery={discovery} scope={scope}
+      {settingsOpen ? <SettingsPage onAgentsChanged={handleRecheck} /> : discoveryEntry ? <DiscoveryPage discovery={discovery} scope={scope}
+        initialFilter={discoveryEntry.filter} initialSource={discoveryEntry.source}
         projects={projects?.projects ?? EMPTY_PROJECTS} mutationsEnabled={mutationsEnabled}
         onSelectScope={handleSelectScope} onInstall={(seed) => { setInstallSeed(seed); setInstallOpen(true); }} /> : <>
       {projectWarnings.length > 0 ? (
@@ -547,6 +550,8 @@ function App() {
               anomalies={view.anomalies}
               sourceCount={view.sourceCount}
               candidateCount={view.candidateCount}
+              availableDiscoveryCount={view.availableDiscoveryCount}
+              onOpenAvailableDiscoveries={() => setDiscoveryEntry({ filter: "available", source: view.discoverySource })}
               query={query}
               sort={sort}
               status={status}

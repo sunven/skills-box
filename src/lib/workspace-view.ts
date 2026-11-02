@@ -28,6 +28,7 @@ import {
   projectScope,
 } from "./scope";
 import { isLockError } from "./api";
+import { filterDiscoveries, type DiscoveryState } from "./discovery";
 import {
   applyUpdateReport,
   computeUpdateSummary,
@@ -74,6 +75,7 @@ export interface ProjectHeaderView {
 
 export interface WorkspaceViewInput {
   snapshot?: InventorySnapshot;
+  discovery?: DiscoveryState;
   projects?: ProjectList;
   activeScope: ScopeId;
   /** Active scope inventory failure; project lock errors are scope states. */
@@ -108,6 +110,8 @@ export interface WorkspaceView {
   totalSkills: number;
   sourceCount: number;
   candidateCount: number;
+  availableDiscoveryCount: number;
+  discoverySource: string;
   lastCheck: LastCheckSummary | null;
   hasManagedSkills: boolean;
 }
@@ -184,6 +188,12 @@ function projectWorkspace(
 ): WorkspaceView {
   const { skills, updateSummary, candidateCount } = inventory;
   const visibleSkills = selectVisibleSkills(skills, input.filters, input.sort);
+  const discoverySource = input.filters.source.startsWith("https://")
+    ? input.filters.source
+    : input.filters.source.toLowerCase();
+  const availableDiscoveryCount = filterDiscoveries(
+    input.discovery?.skills ?? [], input.activeScope, "available", "", discoverySource,
+  ).length;
   const selectedSkill =
     visibleSkills.find((skill) => skill.name === input.selectedName) ?? null;
   const lastCheck = input.updateCheckState
@@ -267,6 +277,8 @@ function projectWorkspace(
     projectHeader,
     scopeError,
     visibleSkills,
+    availableDiscoveryCount,
+    discoverySource,
     selectedSkill,
     updateDialog,
     lastCheck,

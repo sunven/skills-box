@@ -141,8 +141,8 @@ export function SettingsPage({ onAgentsChanged }: { onAgentsChanged: () => void 
               <p className="mt-2 text-[12px] text-muted-foreground">测试当前生效的配置；输入新 token 后请先保存。</p>
               {test ? <div className="notice mt-3" role="status" data-tone="positive">
                 <p>{test.source === "anonymous" ? "匿名连接成功" : "GitHub 认证成功"} · {sourceLabels[test.source]}</p>
-                <p className="mt-1 num">剩余额度：{test.remaining.toLocaleString()} / {test.limit.toLocaleString()}</p>
-                <p className="mt-1">额度恢复时间：{formatEpochDateTime(test.resetAtEpochMs)}</p>
+                <p className="num">剩余额度：{test.remaining.toLocaleString()} / {test.limit.toLocaleString()}</p>
+                <p>额度恢复时间：{formatEpochDateTime(test.resetAtEpochMs)}</p>
               </div> : null}
             </div>
             {notice ? <p className="notice" role="status">{notice}</p> : null}
