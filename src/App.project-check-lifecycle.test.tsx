@@ -83,7 +83,10 @@ function renderApp(client = createQueryClient()) {
 
 async function confirmRelocate() {
   fireEvent.click(
-    await screen.findByRole("button", { name: "重新定位项目 project" }),
+    await screen.findByRole("button", {
+      name: "重新定位项目 project",
+      hidden: true,
+    }),
   );
   const dialog = await screen.findByTestId("project-dialog");
   fireEvent.click(within(dialog).getByRole("button", { name: "选择文件夹" }));
@@ -145,7 +148,10 @@ describe("Project Update check lifecycle in the app", () => {
       );
       expect(
         within(
-          screen.getByRole("button", { name: "切换到项目 project" }),
+          screen.getByRole("button", {
+            name: "切换到项目 project",
+            hidden: true,
+          }),
         ).getByTestId("scope-update-badge"),
       ).toHaveTextContent("2");
 
@@ -161,7 +167,10 @@ describe("Project Update check lifecycle in the app", () => {
         client.invalidateQueries({ queryKey: ["projects"] }),
       );
       await confirmRelocate();
-      await screen.findByRole("button", { name: "切换到项目 moved" });
+      await screen.findByRole("button", {
+        name: "切换到项目 moved",
+        hidden: true,
+      });
       await waitFor(() =>
         expect(
           backend
@@ -271,12 +280,18 @@ describe("Project Update check lifecycle in the app", () => {
       if (action === "relocate") {
         await confirmRelocate();
         expect(
-          await screen.findByRole("button", { name: "切换到项目 moved" }),
+          await screen.findByRole("button", {
+            name: "切换到项目 moved",
+            hidden: true,
+          }),
         ).toHaveAttribute("aria-pressed", "true");
         expect(backend.callsOf("relocate_project")).toHaveLength(1);
       } else {
         fireEvent.click(
-          await screen.findByRole("button", { name: "遗忘项目 project" }),
+          await screen.findByRole("button", {
+            name: "遗忘项目 project",
+            hidden: true,
+          }),
         );
         const dialog = await screen.findByTestId("project-dialog");
         fireEvent.click(
@@ -288,7 +303,10 @@ describe("Project Update check lifecycle in the app", () => {
           ).not.toBeInTheDocument(),
         );
         expect(
-          screen.queryByRole("button", { name: "切换到项目 project" }),
+          screen.queryByRole("button", {
+            name: "切换到项目 project",
+            hidden: true,
+          }),
         ).not.toBeInTheDocument();
         expect(backend.callsOf("forget_project")).toHaveLength(1);
       }

@@ -11,7 +11,14 @@ import type {
   ProjectEntry,
   UpdateViewSkill,
 } from "../lib/types";
-import { SORT_OPTIONS, type SortKey } from "../lib/inventory-view";
+import {
+  SORT_OPTIONS,
+  STATUS_FILTERS,
+  type AgentOption,
+  type SortKey,
+  type StatusCounts,
+  type StatusFilter,
+} from "../lib/inventory-view";
 import type { ProjectHeaderView } from "../lib/workspace-view";
 
 interface SkillListPaneProps {
@@ -22,6 +29,10 @@ interface SkillListPaneProps {
   candidateCount: number;
   query: string;
   sort: SortKey;
+  status: StatusFilter;
+  statusCounts: StatusCounts;
+  agent: string;
+  agents: AgentOption[];
   selectedName: string | null;
   isLoading: boolean;
   error: unknown;
@@ -35,6 +46,8 @@ interface SkillListPaneProps {
   onForget?: (project: ProjectEntry) => void;
   onQueryChange: (query: string) => void;
   onSortChange: (sort: SortKey) => void;
+  onStatusChange: (status: StatusFilter) => void;
+  onAgentChange: (agent: string) => void;
   onSelect: (name: string) => void;
   onClearFilters: () => void;
   onOpenAnomalies: () => void;
@@ -98,6 +111,10 @@ export function SkillListPane({
   candidateCount,
   query,
   sort,
+  status,
+  statusCounts,
+  agent,
+  agents,
   selectedName,
   isLoading,
   error,
@@ -111,6 +128,8 @@ export function SkillListPane({
   onForget,
   onQueryChange,
   onSortChange,
+  onStatusChange,
+  onAgentChange,
   onSelect,
   onClearFilters,
   onOpenAnomalies,
@@ -164,11 +183,36 @@ export function SkillListPane({
           aria-label="排序"
           value={sort}
           onChange={(event) => onSortChange(event.target.value as SortKey)}
-          className="h-9 rounded-md border border-border-strong bg-card px-2 text-[12.5px] text-foreground"
+          className="toolbar-select h-9 rounded-md border border-border-strong bg-card px-2 text-[12.5px] text-foreground"
         >
           {SORT_OPTIONS.map((option) => (
             <option key={option.value} value={option.value}>
               {option.label}
+            </option>
+          ))}
+        </select>
+        <select
+          aria-label="状态筛选"
+          value={status}
+          onChange={(event) => onStatusChange(event.target.value as StatusFilter)}
+          className="toolbar-select h-9 rounded-md border border-border-strong bg-card px-2 text-[12.5px] text-foreground"
+        >
+          {STATUS_FILTERS.map((filter) => (
+            <option key={filter.value} value={filter.value}>
+              {filter.value === "all" ? "全部状态" : filter.label} ({statusCounts[filter.value]})
+            </option>
+          ))}
+        </select>
+        <select
+          aria-label="Agent 筛选"
+          value={agent}
+          onChange={(event) => onAgentChange(event.target.value)}
+          className="toolbar-select toolbar-agent-select h-9 rounded-md border border-border-strong bg-card px-2 text-[12.5px] text-foreground"
+        >
+          <option value="all">全部 Agent ({totalSkills})</option>
+          {agents.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.displayName}{option.shared ? " · 共享" : !option.detected ? " · 未检测" : ""} ({option.count})
             </option>
           ))}
         </select>

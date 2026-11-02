@@ -53,7 +53,11 @@ function renderApp() {
 }
 
 function scopeRow(name: string): HTMLElement {
-  return screen.getByRole("button", { name: `切换到项目 ${name}` });
+  // jsdom hides native popovers but does not implement their opening actions.
+  return screen.getByRole("button", {
+    name: `切换到项目 ${name}`,
+    hidden: true,
+  });
 }
 
 function checkState(
@@ -149,6 +153,7 @@ describe("scope switcher", () => {
     ).toHaveAttribute("aria-pressed", "true");
     const row = await screen.findByRole("button", {
       name: "切换到项目 skills-proj",
+      hidden: true,
     });
     expect(row).toHaveAttribute("aria-pressed", "false");
     expect(
@@ -258,12 +263,14 @@ describe("scope switcher", () => {
 
     const healthyRow = await screen.findByRole("button", {
       name: "切换到项目 skills-proj",
+      hidden: true,
     });
     expect(
       within(healthyRow).getByTestId("scope-update-badge"),
     ).toHaveTextContent("2");
     const brokenRow = screen.getByRole("button", {
       name: "切换到项目 missing-proj",
+      hidden: true,
     });
     const brokenContainer = brokenRow.parentElement as HTMLElement;
     expect(
@@ -275,6 +282,7 @@ describe("scope switcher", () => {
     expect(
       within(brokenContainer).getByRole("button", {
         name: "重新定位项目 missing-proj",
+        hidden: true,
       }),
     ).toBeInTheDocument();
   });
@@ -289,6 +297,7 @@ describe("scope switcher", () => {
 
     const row = await screen.findByRole("button", {
       name: "切换到项目 skills-proj",
+      hidden: true,
     });
     expect(
       within(row.parentElement as HTMLElement).getByTestId(
@@ -325,7 +334,10 @@ describe("scope switcher", () => {
     }).install();
 
     renderApp();
-    await screen.findByRole("button", { name: "切换到项目 skills-proj" });
+    await screen.findByRole("button", {
+      name: "切换到项目 skills-proj",
+      hidden: true,
+    });
     // Global has no managed skills, so it does not check at launch.
     expect(backend.callsOf("check_updates")).toHaveLength(0);
 
@@ -342,7 +354,10 @@ describe("scope switcher", () => {
 
     // Returning to global does not add a check for either scope.
     fireEvent.click(screen.getByRole("button", { name: "切换到全局" }));
-    await screen.findByRole("button", { name: "切换到项目 skills-proj" });
+    await screen.findByRole("button", {
+      name: "切换到项目 skills-proj",
+      hidden: true,
+    });
     expect(backend.callsOf("check_updates")).toHaveLength(scopes.length);
   });
 
@@ -437,7 +452,10 @@ describe("scope switcher", () => {
 
     renderApp();
     fireEvent.click(
-      await screen.findByRole("button", { name: "添加项目" }),
+      await screen.findByRole("button", {
+        name: "添加项目",
+        hidden: true,
+      }),
     );
     const dialog = await screen.findByTestId("project-dialog");
     fireEvent.click(
@@ -451,7 +469,10 @@ describe("scope switcher", () => {
     );
 
     expect(
-      await screen.findByRole("button", { name: "切换到项目 newproj" }),
+      await screen.findByRole("button", {
+        name: "切换到项目 newproj",
+        hidden: true,
+      }),
     ).toHaveAttribute("aria-pressed", "true");
     await waitFor(() => {
       expect(screen.queryByTestId("project-dialog")).not.toBeInTheDocument();
@@ -486,7 +507,10 @@ describe("scope switcher", () => {
     }).install();
 
     renderApp();
-    fireEvent.click(await screen.findByRole("button", { name: "添加项目" }));
+    fireEvent.click(await screen.findByRole("button", {
+      name: "添加项目",
+      hidden: true,
+    }));
     const dialog = await screen.findByTestId("project-dialog");
     fireEvent.click(
       within(dialog).getByRole("button", { name: "选择文件夹" }),
@@ -518,6 +542,7 @@ describe("scope switcher", () => {
     fireEvent.click(
       await screen.findByRole("button", {
         name: "重新定位项目 skills-proj",
+        hidden: true,
       }),
     );
     const dialog = await screen.findByTestId("project-dialog");
@@ -532,7 +557,10 @@ describe("scope switcher", () => {
     );
 
     expect(
-      await screen.findByRole("button", { name: "切换到项目 moved-proj" }),
+      await screen.findByRole("button", {
+        name: "切换到项目 moved-proj",
+        hidden: true,
+      }),
     ).toHaveAttribute("aria-pressed", "true");
     expect(backend.callsOf("relocate_project")[0]?.payload).toEqual({
       id: PROJECT_ID,
@@ -552,7 +580,10 @@ describe("scope switcher", () => {
 
     renderApp();
     fireEvent.click(
-      await screen.findByRole("button", { name: "遗忘项目 skills-proj" }),
+      await screen.findByRole("button", {
+        name: "遗忘项目 skills-proj",
+        hidden: true,
+      }),
     );
     const dialog = await screen.findByTestId("project-dialog");
     expect(
@@ -564,7 +595,10 @@ describe("scope switcher", () => {
 
     await waitFor(() => {
       expect(
-        screen.queryByRole("button", { name: "切换到项目 skills-proj" }),
+        screen.queryByRole("button", {
+          name: "切换到项目 skills-proj",
+          hidden: true,
+        }),
       ).not.toBeInTheDocument();
     });
     expect(backend.callsOf("forget_project")[0]?.payload.id).toBe(PROJECT_ID);
@@ -730,7 +764,10 @@ describe("scope switcher", () => {
 
     renderApp();
     fireEvent.click(
-      await screen.findByRole("button", { name: "切换到项目 skills-proj" }),
+      await screen.findByRole("button", {
+        name: "切换到项目 skills-proj",
+        hidden: true,
+      }),
     );
 
     expect(await screen.findByText("项目路径不可用")).toBeInTheDocument();

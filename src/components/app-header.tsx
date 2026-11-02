@@ -1,4 +1,5 @@
 import { ArrowLeft, ArrowUpCircle, Download, RefreshCw, Settings, SlidersHorizontal } from "lucide-react";
+import type { ReactNode } from "react";
 import { Button } from "./ui/button";
 import { environmentSummary } from "../lib/environment-display";
 import type { AppError, EnvReport, UpdateCheckReport } from "../lib/types";
@@ -26,6 +27,7 @@ interface AppHeaderProps {
   updateCandidateCount: number;
   filtersOpen: boolean;
   onToggleFilters: () => void;
+  scopeSwitcher?: ReactNode;
 }
 
 function BrandMark() {
@@ -67,6 +69,7 @@ export function AppHeader({
   updateCandidateCount,
   filtersOpen,
   onToggleFilters,
+  scopeSwitcher,
 }: AppHeaderProps) {
   const failedSources = lastCheck?.failedSourceCount ?? 0;
   const outcomeSuffix =
@@ -134,6 +137,8 @@ export function AppHeader({
           </span>
         </div>
       </div>
+
+      <div className="topbar-center">{scopeSwitcher}</div>
 
       <div className="topbar-actions">
         <Button variant={discoveryOpen ? "outline" : "ghost"} size="sm" onClick={onOpenDiscovery} aria-label={`发现 (${discoveryCount})`} aria-pressed={discoveryOpen}>发现{discoveryCount > 0 ? <span className="discovery-count" data-testid="discovery-badge">{discoveryCount}</span> : null}</Button>

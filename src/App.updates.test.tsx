@@ -217,12 +217,10 @@ function row(name: string): HTMLElement {
   return found;
 }
 
-function sidebar() {
-  return within(screen.getByRole("complementary", { name: "筛选" }));
-}
-
-function sidebarButton(name: RegExp): HTMLElement {
-  return sidebar().getByRole("button", { name });
+function selectStatus(value: string) {
+  fireEvent.change(screen.getByRole("combobox", { name: "状态筛选" }), {
+    target: { value },
+  });
 }
 
 function header() {
@@ -291,15 +289,15 @@ describe("manual update checking", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(checkCalls(calls)).toHaveLength(1);
 
-    // Sidebar counts and status filters follow the effective badges.
-    expect(within(sidebarButton(/^可更新/)).getByText("1")).toBeInTheDocument();
-    expect(within(sidebarButton(/^已是最新/)).getByText("1")).toBeInTheDocument();
-    expect(within(sidebarButton(/^未知/)).getByText("2")).toBeInTheDocument();
-    fireEvent.click(sidebarButton(/^可更新/));
+    // Status counts and filters follow the effective badges.
+    expect(screen.getByRole("option", { name: "可更新 (1)" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "已是最新 (1)" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "未知 (2)" })).toBeInTheDocument();
+    selectStatus("update");
     expect(rowNames()).toEqual(["alpha"]);
-    fireEvent.click(sidebarButton(/^已是最新/));
+    selectStatus("current");
     expect(rowNames()).toEqual(["beta"]);
-    fireEvent.click(sidebarButton(/^未知/));
+    selectStatus("unknown");
     expect(rowNames()).toEqual(["gamma", "delta"]);
   });
 
@@ -503,8 +501,8 @@ describe("manual update checking", () => {
       screen.queryByRole("dialog", { name: "异常与只读提示" }),
     ).not.toBeInTheDocument();
 
-    expect(within(sidebarButton(/^异常/)).getByText("2")).toBeInTheDocument();
-    fireEvent.click(sidebarButton(/^异常/));
+    expect(screen.getByRole("option", { name: "异常 (2)" })).toBeInTheDocument();
+    selectStatus("anomaly");
     expect(rowNames()).toEqual(["beta", "alpha"]);
   });
 

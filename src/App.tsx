@@ -18,7 +18,6 @@ import { FilterSidebar } from "./components/filter-sidebar";
 import { InstallWizard } from "./components/install-wizard";
 import { InterruptedBanner } from "./components/interrupted-banner";
 import { LockErrorScreen } from "./components/lock-error-screen";
-import { ManageAgentsDialog } from "./components/manage-agents-dialog";
 import { ProjectDialogs, type ProjectDialogState } from "./components/project-dialogs";
 import { ScopeSwitcher } from "./components/scope-switcher";
 import { SettingsPage } from "./components/settings-page";
@@ -132,7 +131,6 @@ function App() {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [anomaliesOpen, setAnomaliesOpen] = useState(false);
   const [installOpen, setInstallOpen] = useState(false);
-  const [manageAgentsOpen, setManageAgentsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [discoveryOpen, setDiscoveryOpen] = useState(false);
   const [installSeed, setInstallSeed] = useState<DiscoveryInstallSeed | null>(null);
@@ -194,6 +192,13 @@ function App() {
       updateSkillName,
     ],
   );
+
+  useEffect(() => {
+    if (snapshot && !inventoryQuery.isError && agent !== "all"
+      && !view.agentOptions.some((option) => option.id === agent)) {
+      setAgent("all");
+    }
+  }, [snapshot, inventoryQuery.isError, view.agentOptions, agent]);
 
   useEffect(() => {
     if (selectedName === null) return;
@@ -456,8 +461,24 @@ function App() {
         updateCandidateCount={view.candidateCount}
         filtersOpen={filtersOpen}
         onToggleFilters={() => setFiltersOpen((open) => !open)}
+        scopeSwitcher={settingsOpen || discoveryOpen ? null : (
+          <ScopeSwitcher
+            activeScope={scope}
+            projects={view.scopeProjects}
+            warnings={projects?.warnings ?? EMPTY_WARNINGS}
+            notice={scopeNotice}
+            onSelect={handleSelectScope}
+            onAddProject={() => setProjectDialog({ mode: "add" })}
+            onRelocate={(project) =>
+              setProjectDialog({ mode: "relocate", project })
+            }
+            onForget={(project) =>
+              setProjectDialog({ mode: "forget", project })
+            }
+          />
+        )}
       />
-      {settingsOpen ? <SettingsPage /> : discoveryOpen ? <DiscoveryPage discovery={discovery} scope={scope}
+      {settingsOpen ? <SettingsPage onAgentsChanged={handleRecheck} /> : discoveryOpen ? <DiscoveryPage discovery={discovery} scope={scope}
         projects={projects?.projects ?? EMPTY_PROJECTS} mutationsEnabled={mutationsEnabled}
         onSelectScope={handleSelectScope} onInstall={(seed) => { setInstallSeed(seed); setInstallOpen(true); }} /> : <>
       {projectWarnings.length > 0 ? (
@@ -509,37 +530,15 @@ function App() {
             >
               <FilterSidebar
                 sources={view.sourceOptions}
-                agents={view.agentOptions}
-                statusCounts={view.statusCounts}
+                totalSkills={view.totalSkills}
                 activeSource={source}
-                activeAgent={agent}
-                activeStatus={status}
                 onSourceChange={handleSourceChange}
-                onAgentChange={handleAgentChange}
-                onStatusChange={handleStatusChange}
                 report={report}
                 envLoading={environment.isPending}
                 envError={environment.isError}
                 rechecking={recheck.isPending}
                 onRecheck={handleRecheck}
                 onClose={() => setFiltersOpen(false)}
-                onManageAgents={() => setManageAgentsOpen(true)}
-                scopeSwitcher={
-                  <ScopeSwitcher
-                    activeScope={scope}
-                    projects={view.scopeProjects}
-                    warnings={projects?.warnings ?? EMPTY_WARNINGS}
-                    notice={scopeNotice}
-                    onSelect={handleSelectScope}
-                    onAddProject={() => setProjectDialog({ mode: "add" })}
-                    onRelocate={(project) =>
-                      setProjectDialog({ mode: "relocate", project })
-                    }
-                    onForget={(project) =>
-                      setProjectDialog({ mode: "forget", project })
-                    }
-                  />
-                }
               />
             </div>
             <SkillListPane
@@ -550,6 +549,10 @@ function App() {
               candidateCount={view.candidateCount}
               query={query}
               sort={sort}
+              status={status}
+              statusCounts={view.statusCounts}
+              agent={agent}
+              agents={view.agentOptions}
               selectedName={view.selectedSkill?.name ?? null}
               isLoading={inventoryQuery.isPending}
               error={inventoryQuery.error}
@@ -569,6 +572,8 @@ function App() {
               }
               onQueryChange={setQuery}
               onSortChange={setSort}
+              onStatusChange={handleStatusChange}
+              onAgentChange={handleAgentChange}
               onSelect={handleSelectSkill}
               onClearFilters={handleClearFilters}
               onOpenAnomalies={() => setAnomaliesOpen(true)}
@@ -616,14 +621,6 @@ function App() {
         scope={scope}
         skill={uninstallSkill}
         onClose={() => setUninstallSkill(null)}
-      />
-      <ManageAgentsDialog
-        open={manageAgentsOpen}
-        agents={snapshot?.agents ?? EMPTY_INVENTORY_AGENTS}
-        skills={view.skills}
-        warnings={snapshot?.warnings ?? EMPTY_WARNINGS}
-        onClose={() => setManageAgentsOpen(false)}
-        onChanged={handleRecheck}
       />
       <InstallWizard
         open={installOpen}

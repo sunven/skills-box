@@ -157,8 +157,8 @@ describe("inventory list", () => {
     fireEvent.change(search, { target: { value: "acme/skills" } });
     expect(rowNames()).toEqual(["beta", "alpha"]);
 
-    // Sidebar counts stay based on the full inventory.
-    expect(within(sidebarButton(/^未受管/)).getByText("1")).toBeInTheDocument();
+    // Status counts stay based on the full inventory.
+    expect(screen.getByRole("option", { name: "未受管 (1)" })).toBeInTheDocument();
 
     fireEvent.change(search, { target: { value: "~/.agents" } });
     expect(rows()).toHaveLength(0);
@@ -174,14 +174,18 @@ describe("inventory list", () => {
     fireEvent.click(sidebarButton(/acme\/skills/));
     expect(rowNames()).toEqual(["beta", "alpha"]);
     expect(screen.getByText("2 个")).toBeInTheDocument();
-    // Sidebar counts remain tied to the full inventory.
-    expect(within(sidebarButton(/^未受管/)).getByText("1")).toBeInTheDocument();
-    expect(within(sidebarButton(/Claude Code/)).getByText("4")).toBeInTheDocument();
+    // Filter counts remain tied to the full inventory.
+    expect(screen.getByRole("option", { name: "未受管 (1)" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Claude Code (4)" })).toBeInTheDocument();
 
-    fireEvent.click(sidebarButton(/Gemini CLI/));
+    fireEvent.change(screen.getByRole("combobox", { name: "Agent 筛选" }), {
+      target: { value: "gemini-cli" },
+    });
     expect(rowNames()).toEqual(["beta"]);
 
-    fireEvent.click(sidebarButton(/^未受管/));
+    fireEvent.change(screen.getByRole("combobox", { name: "状态筛选" }), {
+      target: { value: "unmanaged" },
+    });
     expect(screen.getByText("没有匹配的 skill")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "清除筛选" }));
@@ -208,7 +212,9 @@ describe("inventory list", () => {
     renderApp();
     await screen.findByText("beta");
 
-    fireEvent.click(sidebarButton(/^异常/));
+    fireEvent.change(screen.getByRole("combobox", { name: "状态筛选" }), {
+      target: { value: "anomaly" },
+    });
     expect(rowNames()).toEqual(["delta", "broken", "gamma"]);
     expect(within(row("broken")).getByText("断链")).toBeInTheDocument();
     expect(within(row("delta")).getByText("仅副本")).toBeInTheDocument();
@@ -491,8 +497,10 @@ describe("inventory source of truth", () => {
     renderApp();
     await screen.findByText("alpha");
 
-    expect(within(sidebarButton(/Gemini CLI/)).getByText("1")).toBeInTheDocument();
-    fireEvent.click(sidebarButton(/Gemini CLI/));
+    expect(screen.getByRole("option", { name: "Gemini CLI (1)" })).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("combobox", { name: "Agent 筛选" }), {
+      target: { value: "gemini-cli" },
+    });
     expect(rowNames()).toEqual(["alpha"]);
   });
 });

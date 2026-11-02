@@ -1,6 +1,6 @@
-import { Folder, FolderPen, Globe2, Plus, X } from "lucide-react";
+import { useId, useRef } from "react";
+import { ChevronDown, Folder, FolderPen, Globe2, Plus, X } from "lucide-react";
 import { Badge } from "./ui/badge";
-import { cn } from "../lib/utils";
 import type { ProjectEntry, ScopeId } from "../lib/types";
 import { GLOBAL_SCOPE } from "../lib/types";
 import type { ScopeProjectView } from "../lib/workspace-view";
@@ -101,7 +101,7 @@ function ProjectRow({
   );
 }
 
-/** Fixed global entry plus the app-registered project group. */
+/** Header scope controls with the registered projects in a native popover. */
 export function ScopeSwitcher({
   activeScope,
   projects,
@@ -112,61 +112,101 @@ export function ScopeSwitcher({
   onRelocate,
   onForget,
 }: ScopeSwitcherProps) {
+  const menuId = useId();
+  const menuRef = useRef<HTMLDivElement>(null);
+  const activeProject = projects.find((entry) => entry.active);
+  const closeMenu = () => menuRef.current?.hidePopover?.();
+  const selectScope = (scope: ScopeId) => {
+    closeMenu();
+    onSelect(scope);
+  };
+
   return (
-    <section aria-label="作用域" className="filter-group scope-switcher">
-      <h3 className="filter-label">作用域</h3>
+    <section aria-label="作用域" className="scope-switcher">
       <button
         type="button"
         aria-label="切换到全局"
         aria-pressed={activeScope === GLOBAL_SCOPE}
-        onClick={() => onSelect(GLOBAL_SCOPE)}
-        className={cn(
-          "filter-row",
-          activeScope === GLOBAL_SCOPE && "scope-global-active",
-        )}
+        onClick={() => selectScope(GLOBAL_SCOPE)}
+        className="scope-tab"
+        title="全局 · ~/.agents/skills"
       >
         <Globe2 className="size-3.5 shrink-0" aria-hidden="true" />
-        <span className="filter-name">全局</span>
-        <span className="scope-project-path mono">~/.agents/skills</span>
+        全局
       </button>
-
-      <p className="scope-group-title">项目</p>
-      {projects.length === 0 ? (
-        <p className="filter-note">尚未添加项目</p>
-      ) : (
-        projects.map((entry) => (
-          <ProjectRow
-            key={entry.project.id}
-            entry={entry}
-            onSelect={onSelect}
-            onRelocate={onRelocate}
-            onForget={onForget}
-          />
-        ))
-      )}
       <button
         type="button"
-        aria-label="添加项目"
-        onClick={onAddProject}
-        className="scope-add-button"
+        aria-label="切换项目"
+        aria-pressed={activeScope !== GLOBAL_SCOPE}
+        aria-haspopup="dialog"
+        popoverTarget={menuId}
+        className="scope-tab"
+        title={
+          activeProject
+            ? `${activeProject.project.displayName} · ${activeProject.project.root}`
+            : "选择项目"
+        }
       >
-        <Plus className="size-3.5" aria-hidden="true" />
-        添加项目
+        <Folder className="size-3.5 shrink-0" aria-hidden="true" />
+        项目
+        <ChevronDown className="size-3 shrink-0" aria-hidden="true" />
       </button>
-      {notice ? (
-        <p role="alert" className="filter-note text-destructive">
-          {notice}
-        </p>
-      ) : null}
-      {warnings.map((warning) => (
-        <p
-          key={warning}
-          role="alert"
-          className="filter-note text-destructive"
+
+      <div
+        ref={menuRef}
+        id={menuId}
+        popover="auto"
+        role="dialog"
+        aria-label="选择项目"
+        className="scope-menu"
+      >
+        <h3 className="filter-label">项目</h3>
+        {projects.length === 0 ? (
+          <p className="filter-note">尚未添加项目</p>
+        ) : (
+          projects.map((entry) => (
+            <ProjectRow
+              key={entry.project.id}
+              entry={entry}
+              onSelect={selectScope}
+              onRelocate={(project) => {
+                closeMenu();
+                onRelocate(project);
+              }}
+              onForget={(project) => {
+                closeMenu();
+                onForget(project);
+              }}
+            />
+          ))
+        )}
+        <button
+          type="button"
+          aria-label="添加项目"
+          onClick={() => {
+            closeMenu();
+            onAddProject();
+          }}
+          className="scope-add-button"
         >
-          {warning}
-        </p>
-      ))}
+          <Plus className="size-3.5" aria-hidden="true" />
+          添加项目
+        </button>
+      </div>
+      {notice || warnings.length > 0 ? (
+        <div className="scope-feedback">
+          {notice ? (
+            <p role="alert" className="filter-note text-destructive">
+              {notice}
+            </p>
+          ) : null}
+          {warnings.map((warning) => (
+            <p key={warning} role="alert" className="filter-note text-destructive">
+              {warning}
+            </p>
+          ))}
+        </div>
+      ) : null}
     </section>
   );
 }

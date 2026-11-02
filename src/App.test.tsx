@@ -49,7 +49,8 @@ describe("app shell", () => {
     expect(
       screen.queryByRole("complementary", { name: "详情" }),
     ).not.toBeInTheDocument();
-    expect(screen.getByText("Claude Code")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Agent 筛选" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /Claude Code/ })).toBeInTheDocument();
 
     expect(
       screen.getByRole("button", { name: "安装 skill" }),

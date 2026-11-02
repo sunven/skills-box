@@ -1,38 +1,22 @@
-import type { ReactNode } from "react";
-import { RotateCcw, Settings2, X } from "lucide-react";
+import { RotateCcw, X } from "lucide-react";
 import { Button } from "./ui/button";
-import { AgentLogo } from "./agent-logo";
 import { EnvironmentBadge } from "./environment-badge";
 import { EnvironmentMetrics } from "./environment-metrics";
 import { cn } from "../lib/utils";
-import {
-  STATUS_FILTERS,
-  type AgentOption,
-  type SourceOption,
-  type StatusCounts,
-  type StatusFilter,
-} from "../lib/inventory-view";
+import type { SourceOption } from "../lib/inventory-view";
 import type { EnvReport } from "../lib/types";
 
 interface FilterSidebarProps {
   sources: SourceOption[];
-  agents: AgentOption[];
-  statusCounts: StatusCounts;
+  totalSkills: number;
   activeSource: string;
-  activeAgent: string;
-  activeStatus: StatusFilter;
   onSourceChange: (value: string) => void;
-  onAgentChange: (value: string) => void;
-  onStatusChange: (value: StatusFilter) => void;
   report?: EnvReport;
   envLoading: boolean;
   envError: boolean;
   rechecking: boolean;
   onRecheck: () => void;
   onClose?: () => void;
-  onManageAgents?: () => void;
-  /** Scope switcher rendered at the top of the rail. */
-  scopeSwitcher?: ReactNode;
 }
 
 interface FilterRowProps {
@@ -41,9 +25,6 @@ interface FilterRowProps {
   active: boolean;
   onClick: () => void;
   title?: string;
-  countTone?: "accent";
-  leading?: ReactNode;
-  trailing?: ReactNode;
 }
 
 function FilterRow({
@@ -52,9 +33,6 @@ function FilterRow({
   active,
   onClick,
   title,
-  countTone,
-  leading,
-  trailing,
 }: FilterRowProps) {
   return (
     <button
@@ -64,55 +42,23 @@ function FilterRow({
       title={title}
       className="filter-row"
     >
-      {leading}
       <span className="filter-name">{label}</span>
-      {trailing}
-      <span
-        className={cn(
-          "filter-count",
-          countTone === "accent" && count > 0 && "update-count",
-        )}
-      >
-        {count}
-      </span>
+      <span className="filter-count">{count}</span>
     </button>
-  );
-}
-
-function SectionTitle({
-  children,
-  action,
-}: {
-  children: ReactNode;
-  action?: ReactNode;
-}) {
-  if (!action) return <h3 className="filter-label">{children}</h3>;
-  return (
-    <div className="flex items-center justify-between gap-1">
-      <h3 className="filter-label">{children}</h3>
-      {action}
-    </div>
   );
 }
 
 export function FilterSidebar({
   sources,
-  agents,
-  statusCounts,
+  totalSkills,
   activeSource,
-  activeAgent,
-  activeStatus,
   onSourceChange,
-  onAgentChange,
-  onStatusChange,
   report,
   envLoading,
   envError,
   rechecking,
   onRecheck,
   onClose,
-  onManageAgents,
-  scopeSwitcher,
 }: FilterSidebarProps) {
   return (
     <aside aria-label="筛选" className="rail">
@@ -132,12 +78,11 @@ export function FilterSidebar({
       </div>
 
       <div className="rail-scroll">
-        {scopeSwitcher}
         <section aria-label="来源" className="filter-group">
-          <SectionTitle>来源</SectionTitle>
+          <h3 className="filter-label">来源</h3>
           <FilterRow
             label="全部来源"
-            count={statusCounts.all}
+            count={totalSkills}
             active={activeSource === "all"}
             onClick={() => onSourceChange("all")}
           />
@@ -155,85 +100,6 @@ export function FilterSidebar({
               />
             ))
           )}
-        </section>
-
-        <section aria-label="Agents" className="filter-group">
-          <SectionTitle
-            action={
-              onManageAgents ? (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="size-6"
-                  aria-label="管理 agent"
-                  title="管理额外 agent"
-                  onClick={onManageAgents}
-                >
-                  <Settings2 className="size-3.5" aria-hidden="true" />
-                </Button>
-              ) : null
-            }
-          >
-            Agent
-          </SectionTitle>
-          <FilterRow
-            label="全部 Agent"
-            count={statusCounts.all}
-            active={activeAgent === "all"}
-            onClick={() => onAgentChange("all")}
-            leading={<span className="agent-logo-slot" aria-hidden="true" />}
-          />
-          {agents.length === 0 ? (
-            <p className="filter-note">未检测到 agent</p>
-          ) : (
-            agents.map((agent) => (
-              <FilterRow
-                key={agent.id}
-                label={agent.displayName}
-                count={agent.count}
-                active={activeAgent === agent.id}
-                onClick={() => onAgentChange(agent.id)}
-                leading={
-                  <AgentLogo
-                    agentId={agent.id}
-                    agentName={agent.displayName}
-                  />
-                }
-                trailing={
-                  agent.shared ? (
-                    <span className="text-[11.5px] text-muted-foreground">
-                      共享
-                    </span>
-                  ) : !agent.detected ? (
-                    <span className="text-[11.5px] text-muted-foreground">
-                      未检测
-                    </span>
-                  ) : null
-                }
-                title={
-                  agent.shared
-                    ? `${agent.displayName} · 共享 canonical store`
-                    : !agent.detected
-                      ? `${agent.displayName} · 未检测到（目录不存在，不能作为安装目标）`
-                      : agent.displayName
-                }
-              />
-            ))
-          )}
-        </section>
-
-        <section aria-label="状态" className="filter-group">
-          <SectionTitle>状态</SectionTitle>
-          {STATUS_FILTERS.map((filter) => (
-            <FilterRow
-              key={filter.value}
-              label={filter.label}
-              count={statusCounts[filter.value]}
-              active={activeStatus === filter.value}
-              onClick={() => onStatusChange(filter.value)}
-              countTone={filter.value === "update" ? "accent" : undefined}
-            />
-          ))}
         </section>
       </div>
 

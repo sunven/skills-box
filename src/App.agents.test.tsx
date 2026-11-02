@@ -115,11 +115,65 @@ async function selectAlpha() {
   await screen.findByText("概览");
 }
 
+async function openExtraAgentSettings() {
+  fireEvent.click(await screen.findByRole("button", { name: "设置" }));
+  fireEvent.click(screen.getByRole("button", { name: "额外 Agent" }));
+  const settings = screen.getByRole("region", { name: "额外 Agent" });
+  await within(settings).findByTestId("extra-agent-settings");
+  return settings;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
 describe("extra agent management", () => {
+  it("uses global definitions and attachment counts while a project is active, and refreshes both views", async () => {
+    const projectId = "11111111-1111-4111-8111-111111111111";
+    const projectScope = `project:${projectId}` as const;
+    const backend = createFakeBackend({ data: {
+      projects: {
+        projects: [{ id: projectId, root: "/tmp/app", displayName: "app",
+          addedAt: 1, lastOpenedAt: 2, available: true }],
+        lastActiveScope: projectScope,
+        warnings: [],
+      },
+      snapshot: snapshotWith([attachment("acme")], [
+        claudeAgent, workbuddyAgent,
+        { ...acmeAgent, detected: true, projectSkillsDir: null },
+      ]),
+      snapshots: { [projectScope]: makeSnapshot({
+        skills: [makeSkill({ name: "project-only", attachments: [] })],
+        agents: [claudeAgent],
+      }) },
+    } }).install();
+    renderApp();
+    await screen.findByText("project-only");
+    expect(screen.queryByRole("option", { name: /Acme Agent/ })).toBeNull();
+
+    const settings = await openExtraAgentSettings();
+    const acme = within(settings).getAllByTestId("manage-agent-row")
+      .find((row) => row.dataset.agentId === "acme")!;
+    expect(within(acme).getByText("~/.acme/skills")).toBeInTheDocument();
+    expect(within(acme).getByText("1 个挂载")).toBeInTheDocument();
+    expect(within(acme).getByTestId("manage-agent-project-dir")).toHaveTextContent("未配置");
+
+    const projectReads = backend.callsOf("get_inventory")
+      .filter((call) => call.payload.scope === projectScope).length;
+    fireEvent.click(within(acme).getByRole("button", { name: "删除 Acme Agent" }));
+    fireEvent.click(within(acme).getByRole("button", { name: "确认删除" }));
+    expect(await within(settings).findByTestId("manage-agents-notice")).toHaveTextContent("断开 1 个挂载");
+    await waitFor(() => {
+      expect(within(settings).queryByText("Acme Agent")).toBeNull();
+      expect(backend.callsOf("get_inventory")
+        .filter((call) => call.payload.scope === projectScope).length).toBeGreaterThan(projectReads);
+    });
+    expect(backend.callsOf("get_inventory").some((call) => call.payload.scope === "global")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "返回 skills" }));
+    expect(await screen.findByText("project-only")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "切换到全局" })).toHaveAttribute("aria-pressed", "false");
+  });
+
   it("lists builtin and user extras, adds a definition and confirms deletion", async () => {
     const calls = mockCommands({
       agents: [claudeAgent, workbuddyAgent, acmeAgent],
@@ -127,9 +181,12 @@ describe("extra agent management", () => {
     renderApp();
     await screen.findByText("alpha");
 
-    fireEvent.click(screen.getByRole("button", { name: "管理 agent" }));
-    const dialog = screen.getByRole("dialog", { name: /管理 agent/ });
-    const rows = within(dialog).getAllByTestId("manage-agent-row");
+    fireEvent.change(screen.getByRole("combobox", { name: "Agent 筛选" }), {
+      target: { value: "acme" },
+    });
+    const settings = await openExtraAgentSettings();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    const rows = within(settings).getAllByTestId("manage-agent-row");
     expect(rows).toHaveLength(2);
     expect(within(rows[0]!).getByText("内置")).toBeInTheDocument();
     expect(
@@ -141,25 +198,25 @@ describe("extra agent management", () => {
       within(rows[1]!).getByTestId("manage-agent-project-dir"),
     ).toHaveTextContent("项目目录：.acme/skills");
 
-    fireEvent.change(within(dialog).getByLabelText("id"), {
+    fireEvent.change(within(settings).getByLabelText("id"), {
       target: { value: "acme2" },
     });
-    fireEvent.change(within(dialog).getByLabelText("显示名"), {
+    fireEvent.change(within(settings).getByLabelText("显示名"), {
       target: { value: "Acme Two" },
     });
-    fireEvent.change(within(dialog).getByLabelText("skills 目录"), {
+    fireEvent.change(within(settings).getByLabelText("skills 目录"), {
       target: { value: "~/.acme2/skills" },
     });
     fireEvent.change(
-      within(dialog).getByLabelText("项目内 skills 目录（可选）"),
+      within(settings).getByLabelText("项目内 skills 目录（可选）"),
       {
         target: { value: ".acme2/skills" },
       },
     );
-    fireEvent.click(within(dialog).getByRole("button", { name: "添加" }));
+    fireEvent.click(within(settings).getByRole("button", { name: "添加" }));
 
     expect(
-      await within(dialog).findByTestId("manage-agents-notice"),
+      await within(settings).findByTestId("manage-agents-notice"),
     ).toHaveTextContent(/已添加 Acme Two/);
     const addCalls = calls.filter((call) => call.command === "add_extra_agent");
     expect(addCalls).toHaveLength(1);
@@ -171,23 +228,31 @@ describe("extra agent management", () => {
         projectSkillsDir: ".acme2/skills",
       },
     });
+    expect(await within(settings).findByText("Acme Two")).toBeInTheDocument();
 
     fireEvent.click(
-      within(dialog).getByRole("button", { name: "删除 Acme Agent" }),
+      within(settings).getByRole("button", { name: "删除 Acme Agent" }),
     );
     expect(
-      within(dialog).getByText(/删除会先断开 0 个挂载/),
+      within(settings).getByText(/删除会先断开 0 个挂载/),
     ).toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole("button", { name: "确认删除" }));
+    fireEvent.click(within(settings).getByRole("button", { name: "确认删除" }));
 
     expect(
-      await within(dialog).findByTestId("manage-agents-notice"),
+      await within(settings).findByTestId("manage-agents-notice"),
     ).toHaveTextContent(/已删除 Acme Agent/);
     const removeCalls = calls.filter(
       (call) => call.command === "remove_extra_agent",
     );
     expect(removeCalls).toHaveLength(1);
     expect(removeCalls[0]!.payload).toEqual({ agentId: "acme" });
+    await waitFor(() => expect(within(settings).queryByText("Acme Agent")).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "返回 skills" }));
+    const agentFilter = await screen.findByRole("combobox", { name: "Agent 筛选" });
+    expect(agentFilter).toHaveValue("all");
+    expect(screen.getByText("alpha")).toBeInTheDocument();
+    expect(within(agentFilter).getByRole("option", { name: "Acme Two (0)" })).toBeInTheDocument();
+    expect(within(agentFilter).queryByRole("option", { name: /Acme Agent/ })).toBeNull();
   });
 
   it("rejects invalid input before calling the backend", async () => {
@@ -196,22 +261,21 @@ describe("extra agent management", () => {
     });
     renderApp();
     await screen.findByText("alpha");
-    fireEvent.click(screen.getByRole("button", { name: "管理 agent" }));
-    const dialog = screen.getByRole("dialog", { name: /管理 agent/ });
+    const settings = await openExtraAgentSettings();
 
-    fireEvent.change(within(dialog).getByLabelText("id"), {
+    fireEvent.change(within(settings).getByLabelText("id"), {
       target: { value: "-bad" },
     });
-    fireEvent.change(within(dialog).getByLabelText("显示名"), {
+    fireEvent.change(within(settings).getByLabelText("显示名"), {
       target: { value: "Bad" },
     });
-    fireEvent.change(within(dialog).getByLabelText("skills 目录"), {
+    fireEvent.change(within(settings).getByLabelText("skills 目录"), {
       target: { value: "relative/skills" },
     });
-    fireEvent.click(within(dialog).getByRole("button", { name: "添加" }));
+    fireEvent.click(within(settings).getByRole("button", { name: "添加" }));
 
     expect(
-      await within(dialog).findByTestId("manage-agents-add-error"),
+      await within(settings).findByTestId("manage-agents-add-error"),
     ).toHaveTextContent("id 不合法");
     expect(
       calls.filter((call) => call.command === "add_extra_agent"),
@@ -224,26 +288,25 @@ describe("extra agent management", () => {
     });
     renderApp();
     await screen.findByText("alpha");
-    fireEvent.click(screen.getByRole("button", { name: "管理 agent" }));
-    const dialog = screen.getByRole("dialog", { name: /管理 agent/ });
+    const settings = await openExtraAgentSettings();
 
-    fireEvent.change(within(dialog).getByLabelText("id"), {
+    fireEvent.change(within(settings).getByLabelText("id"), {
       target: { value: "acme3" },
     });
-    fireEvent.change(within(dialog).getByLabelText("显示名"), {
+    fireEvent.change(within(settings).getByLabelText("显示名"), {
       target: { value: "Acme Three" },
     });
-    fireEvent.change(within(dialog).getByLabelText("skills 目录"), {
+    fireEvent.change(within(settings).getByLabelText("skills 目录"), {
       target: { value: "~/.acme3/skills" },
     });
     for (const invalid of ["/abs/skills", "../escape", ".agents/skills"]) {
       fireEvent.change(
-        within(dialog).getByLabelText("项目内 skills 目录（可选）"),
+        within(settings).getByLabelText("项目内 skills 目录（可选）"),
         { target: { value: invalid } },
       );
-      fireEvent.click(within(dialog).getByRole("button", { name: "添加" }));
+      fireEvent.click(within(settings).getByRole("button", { name: "添加" }));
       expect(
-        await within(dialog).findByTestId("manage-agents-add-error"),
+        await within(settings).findByTestId("manage-agents-add-error"),
       ).toHaveTextContent(/项目内 skills 目录/);
     }
     expect(
@@ -257,21 +320,20 @@ describe("extra agent management", () => {
     });
     renderApp();
     await screen.findByText("alpha");
-    fireEvent.click(screen.getByRole("button", { name: "管理 agent" }));
-    const dialog = screen.getByRole("dialog", { name: /管理 agent/ });
+    const settings = await openExtraAgentSettings();
 
     fireEvent.click(
-      within(dialog).getByRole("button", { name: "编辑 Acme Agent" }),
+      within(settings).getByRole("button", { name: "编辑 Acme Agent" }),
     );
-    const input = within(dialog).getByLabelText(
+    const input = within(settings).getByLabelText(
       "项目内 skills 目录 Acme Agent",
     );
     expect(input).toHaveValue(".acme/skills");
     fireEvent.change(input, { target: { value: ".acme2/skills" } });
-    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+    fireEvent.click(within(settings).getByRole("button", { name: "保存" }));
 
     expect(
-      await within(dialog).findByTestId("manage-agents-notice"),
+      await within(settings).findByTestId("manage-agents-notice"),
     ).toHaveTextContent(/已更新 Acme Agent 的项目目录为 .acme2\/skills/);
     const updateCalls = calls.filter(
       (call) => call.command === "update_extra_agent",
@@ -300,20 +362,19 @@ describe("extra agent management", () => {
     });
     renderApp();
     await screen.findByText("alpha");
-    fireEvent.click(screen.getByRole("button", { name: "管理 agent" }));
-    const dialog = screen.getByRole("dialog", { name: /管理 agent/ });
+    const settings = await openExtraAgentSettings();
 
     fireEvent.click(
-      within(dialog).getByRole("button", { name: "编辑 Acme Agent" }),
+      within(settings).getByRole("button", { name: "编辑 Acme Agent" }),
     );
     fireEvent.change(
-      within(dialog).getByLabelText("项目内 skills 目录 Acme Agent"),
+      within(settings).getByLabelText("项目内 skills 目录 Acme Agent"),
       { target: { value: ".acme2/skills" } },
     );
-    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+    fireEvent.click(within(settings).getByRole("button", { name: "保存" }));
 
     expect(
-      await within(dialog).findByTestId("manage-agents-edit-error"),
+      await within(settings).findByTestId("manage-agents-edit-error"),
     ).toHaveTextContent(/app（\/tmp\/app）：仍有 1 个挂载/);
   });
 
@@ -333,15 +394,14 @@ describe("extra agent management", () => {
     });
     renderApp();
     await screen.findByText("alpha");
-    fireEvent.click(screen.getByRole("button", { name: "管理 agent" }));
-    const dialog = screen.getByRole("dialog", { name: /管理 agent/ });
+    const settings = await openExtraAgentSettings();
 
     fireEvent.click(
-      within(dialog).getByRole("button", { name: "删除 Acme Agent" }),
+      within(settings).getByRole("button", { name: "删除 Acme Agent" }),
     );
-    fireEvent.click(within(dialog).getByRole("button", { name: "确认删除" }));
+    fireEvent.click(within(settings).getByRole("button", { name: "确认删除" }));
     expect(
-      await within(dialog).findByTestId("manage-agents-error"),
+      await within(settings).findByTestId("manage-agents-error"),
     ).toHaveTextContent(/gone（\/tmp\/gone）：目录不存在/);
   });
 });

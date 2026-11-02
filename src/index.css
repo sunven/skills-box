@@ -138,7 +138,54 @@
 /* ---------- App shell ---------- */
 
 .settings-page {
+  display: grid;
+  grid-template-columns: 212px minmax(0, 1fr);
   flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.settings-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-right: 1px solid var(--border);
+  padding: 28px 12px;
+}
+
+.settings-menu-title {
+  margin: 0 8px 16px;
+  font-weight: 600;
+}
+
+.settings-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 6px;
+  padding: 10px 12px;
+  color: var(--muted-foreground);
+  text-align: left;
+}
+
+.settings-menu button:hover {
+  background: var(--raised);
+  color: var(--foreground);
+}
+
+.settings-menu button[aria-current="page"] {
+  background: var(--active);
+  color: var(--foreground);
+  font-weight: 500;
+}
+
+.settings-menu button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.settings-panel {
+  min-width: 0;
   min-height: 0;
   overflow-y: auto;
   padding: 36px 24px;
@@ -170,6 +217,10 @@
   font-weight: 600;
 }
 
+.settings-card[hidden] {
+  display: none;
+}
+
 .settings-source {
   border-radius: 6px;
   background: var(--raised);
@@ -189,14 +240,19 @@
 }
 
 .topbar {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   min-height: 52px;
   align-items: center;
-  justify-content: space-between;
   gap: 16px;
   border-bottom: 1px solid var(--border);
   background: var(--background);
-  padding: 0 20px 0 16px;
+  padding: 0 16px;
+}
+
+.topbar-center {
+  min-width: 0;
+  justify-self: center;
 }
 
 .brand {
@@ -236,12 +292,19 @@
 
 .topbar-actions {
   display: flex;
-  flex: none;
+  min-width: 0;
+  max-width: 100%;
+  justify-self: end;
   align-items: center;
   gap: 6px;
 }
 
+.topbar-actions > button {
+  flex: none;
+}
+
 .topbar-stamp {
+  min-width: 0;
   max-width: 15rem;
   overflow: hidden;
   padding-right: 6px;
@@ -477,12 +540,6 @@
   object-fit: contain;
 }
 
-.agent-logo-slot {
-  width: 16px;
-  height: 16px;
-  flex: none;
-}
-
 .agent-logo-fallback {
   display: grid;
   place-items: center;
@@ -510,10 +567,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-.filter-count.update-count {
-  color: var(--accent);
-}
-
 .filter-note {
   padding: 2px 8px;
   color: var(--muted-foreground);
@@ -523,18 +576,86 @@
 /* ---------- Scope switcher ---------- */
 
 .scope-switcher {
+  position: relative;
+  display: flex;
   min-width: 0;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 2px;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  padding: 2px;
+  background: var(--muted);
+  anchor-name: --scope-switcher;
 }
 
-.scope-group-title {
-  margin: 8px 8px 2px;
+.scope-tab {
+  display: inline-flex;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 4px;
+  padding: 0 10px;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: 12.5px;
+  white-space: nowrap;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.scope-tab:hover {
+  background: var(--raised);
+  color: var(--foreground);
+}
+
+.scope-tab[aria-pressed="true"] {
+  background: var(--card);
+  color: var(--foreground);
   font-weight: 500;
-  letter-spacing: 0.02em;
+}
+
+.scope-menu {
+  position: fixed;
+  inset: auto;
+  top: 58px;
+  left: 50%;
+  position-anchor: --scope-switcher;
+  top: calc(anchor(bottom, 52px) + 6px);
+  left: anchor(center, 50%);
+  width: min(320px, calc(100vw - 24px));
+  max-height: calc(100dvh - 120px);
+  overflow-y: auto;
+  margin: 0;
+  transform: translateX(-50%);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 6px;
+  background: var(--card);
+  color: var(--foreground);
+  box-shadow: 0 8px 24px rgb(11 13 15 / 0.12);
+}
+
+.scope-menu .scope-add-button {
+  margin-top: 6px;
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 4px 4px;
+  padding-top: 10px;
+}
+
+.scope-menu .scope-project-path {
+  font-size: 11px;
+}
+
+.scope-feedback {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  z-index: 40;
+  width: min(320px, calc(100vw - 24px));
+  transform: translateX(-50%);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 6px;
+  background: var(--card);
 }
 
 .scope-project {
@@ -733,8 +854,18 @@
 
 .toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+}
+
+.toolbar-select {
+  flex: none;
+}
+
+.toolbar-agent-select {
+  max-width: 220px;
+  text-overflow: ellipsis;
 }
 
 .toolbar-search {
@@ -1757,6 +1888,13 @@
 
 /* ---------- Responsive ---------- */
 
+@media (max-width: 1180px) {
+  .brand-scope,
+  .topbar-stamp {
+    display: none;
+  }
+}
+
 @media (max-width: 1279px) {
   .app-body {
     grid-template-columns: 232px minmax(0, 1fr);
@@ -1875,6 +2013,43 @@
 }
 
 @media (max-width: 640px) {
+  .settings-page {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .settings-menu {
+    flex-direction: row;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    padding: 12px 16px;
+  }
+
+  .settings-menu-title {
+    display: none;
+  }
+
+  .settings-menu button {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .topbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    padding-block: 8px;
+  }
+
+  .topbar-center {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .scope-menu {
+    top: 96px;
+    top: calc(anchor(bottom, 90px) + 6px);
+  }
+
   .anomaly-strip .link {
     display: none;
   }
@@ -1891,6 +2066,45 @@
 }
 
 @media (max-width: 520px) {
+  .settings-panel {
+    padding: 24px 16px;
+  }
+
+  .settings-card {
+    padding: 16px;
+  }
+
+  .extra-agent-row {
+    flex-wrap: wrap;
+  }
+
+  .extra-agent-actions {
+    margin-left: 36px;
+  }
+
+  .topbar > div:first-child {
+    gap: 6px;
+  }
+
+  .topbar .brand {
+    gap: 6px;
+  }
+
+  .topbar .brand-mark {
+    display: none;
+  }
+
+  .topbar .rail-toggle {
+    flex: none;
+  }
+
+  .topbar-actions {
+    gap: 2px;
+  }
+
+  .topbar-actions > button {
+    padding-inline: 6px;
+  }
 
   .toolbar-search {
     width: 100%;
