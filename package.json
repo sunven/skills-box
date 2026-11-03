@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "test": "TZ=Asia/Shanghai vitest run",
     "test:watch": "TZ=Asia/Shanghai vitest",
-    "test:release": "node --test scripts/prepare-release.node-test.mjs",
+    "test:release": "node --test scripts/*.node-test.mjs",
+    "release": "bash scripts/release.sh",
     "tauri": "tauri",
     "updater:keygen": "node scripts/setup-updater-key.mjs",
     "build:signed": "node scripts/build-signed.mjs"

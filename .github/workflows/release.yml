@@ -85,7 +85,7 @@ jobs:
           gh release view "$RELEASE_TAG" --json body --jq .body >release-notes.txt
       - name: Verify signatures, architectures and complete update manifest
         run: |
-          node --test scripts/prepare-release.node-test.mjs
+          node --test scripts/*.node-test.mjs
           node scripts/prepare-release.mjs prepare release-artifacts release-ready release-notes.txt
       - name: Upload validated artifacts and publish stable release
         run: |
