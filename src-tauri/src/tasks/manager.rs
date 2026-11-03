@@ -587,6 +587,32 @@ impl TaskManager {
         }
     }
 
+    /// App replacement already holds the mutation permit. Stop and reap the
+    /// remaining read-only preview processes before handing off to a new app.
+    pub async fn shutdown_for_restart(&self) -> Result<(), AppError> {
+        self.inner.shutting_down.store(true, Ordering::SeqCst);
+        self.cancel_all_tasks();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(6);
+        loop {
+            let notified = self.inner.finished_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if !self
+                .lock_tasks()
+                .values()
+                .any(|entry| entry.state == TaskState::Running)
+            {
+                return Ok(());
+            }
+            tokio::select! {
+                _ = notified => {},
+                _ = tokio::time::sleep_until(deadline) => {
+                    return Err(AppError::app_update_install_failed("应用已安装，但后台任务尚未结束；请再次点击重启。"));
+                }
+            }
+        }
+    }
+
     /// Remove the startup interruption marker after the user acknowledges it.
     pub fn dismiss_interrupted_marker(&self) {
         self.inner.marker.clear();
@@ -612,6 +638,7 @@ impl TaskManager {
         let cancel = CancelToken::new();
         {
             let mut tasks = self.lock_tasks();
+            self.ensure_not_shutting_down()?;
             tasks.insert(
                 task_id.clone(),
                 TaskEntry {

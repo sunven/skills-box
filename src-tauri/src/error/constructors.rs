@@ -4,6 +4,62 @@
 use super::{AppError, ErrorCode};
 
 impl AppError {
+    pub fn app_update_check_failed(error: impl std::fmt::Display) -> Self {
+        Self::new(ErrorCode::AppUpdateCheckFailed, "无法检查应用更新。")
+            .detail(error.to_string())
+            .hint("请检查网络；发布地址尚无完整稳定版更新清单时也会出现此提示。")
+            .retryable(true)
+    }
+
+    pub fn app_update_download_failed(error: impl std::fmt::Display) -> Self {
+        Self::new(ErrorCode::AppUpdateDownloadFailed, "应用更新包下载失败。")
+            .detail(error.to_string())
+            .hint("请检查网络后重试下载。")
+            .retryable(true)
+    }
+
+    pub fn app_update_signature_failed() -> Self {
+        Self::new(
+            ErrorCode::AppUpdateSignatureFailed,
+            "应用更新包签名验证失败，未安装。",
+        )
+        .hint("请重新检查更新或从官方发布页面下载安装包。")
+        .retryable(true)
+    }
+
+    pub fn app_update_install_failed(error: impl std::fmt::Display) -> Self {
+        Self::new(ErrorCode::AppUpdateInstallFailed, "应用更新安装失败。")
+            .detail(error.to_string())
+            .hint("请检查磁盘空间与安装目录权限，或从发布页面手动下载安装。")
+            .retryable(true)
+    }
+
+    pub fn app_update_unavailable() -> Self {
+        Self::new(
+            ErrorCode::AppUpdateUnavailable,
+            "当前没有可安装的应用更新。",
+        )
+        .hint("开发运行不检查真实应用更新；正式版请先检查更新。")
+    }
+
+    pub fn app_update_read_only() -> Self {
+        Self::new(
+            ErrorCode::AppUpdateReadOnly,
+            "应用位于只读目录，无法原地更新。",
+        )
+        .hint("请先将 Skills Box 从 DMG 拖到「应用程序」或其他可写目录，再重新启动并更新。")
+        .retryable(true)
+    }
+
+    pub fn app_update_busy() -> Self {
+        Self::new(
+            ErrorCode::AppUpdateBusy,
+            "应用更新正在处理，或仍有其他写入操作。",
+        )
+        .hint("请等待完成后再次点击；安装与重启期间无法关闭应用或开始新写入。")
+        .retryable(true)
+    }
+
     pub fn discovery_read_failed() -> Self {
         Self::new(
             ErrorCode::DiscoveryReadFailed,

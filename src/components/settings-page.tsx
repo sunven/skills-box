@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, KeyRound, Settings2 } from "lucide-react";
+import { ExternalLink, KeyRound, Settings2, Download } from "lucide-react";
+import type { AppUpdateModel } from "../hooks/use-app-update";
+import { AppUpdateSettings } from "./app-update-settings";
 import {
   asAppError, clearGitHubToken, fallbackError, getGitHubSettings,
   openExternalUrl, saveGitHubToken, testGitHubAuth,
@@ -20,8 +22,12 @@ const sourceLabels: Record<GitHubTokenSource, string> = {
   anonymous: "匿名请求",
 };
 
-export function SettingsPage({ onAgentsChanged }: { onAgentsChanged: () => void }) {
-  const [activeSection, setActiveSection] = useState<"github" | "agents">("github");
+export type SettingsSection = "github" | "agents" | "updates";
+export function SettingsPage({ onAgentsChanged, appUpdate, initialSection = "github" }: {
+  onAgentsChanged: () => void; appUpdate: AppUpdateModel; initialSection?: SettingsSection;
+}) {
+  const [activeSection, setActiveSection] = useState<SettingsSection>(initialSection);
+  useEffect(() => setActiveSection(initialSection), [initialSection]);
   const panelRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
   const settings = useQuery({ queryKey: githubSettingsQueryKey, queryFn: getGitHubSettings });
@@ -84,7 +90,7 @@ export function SettingsPage({ onAgentsChanged }: { onAgentsChanged: () => void 
     onAgentsChanged();
   }
 
-  function selectSection(section: "github" | "agents") {
+  function selectSection(section: SettingsSection) {
     setActiveSection(section);
     if (panelRef.current) panelRef.current.scrollTop = 0;
   }
@@ -101,11 +107,20 @@ export function SettingsPage({ onAgentsChanged }: { onAgentsChanged: () => void 
           aria-controls="extra-agent-settings" onClick={() => selectSection("agents")}>
           <Settings2 className="size-4" aria-hidden="true" />额外 Agent
         </button>
+        <button type="button" aria-current={activeSection === "updates" ? "page" : undefined}
+          aria-controls="app-update-settings" onClick={() => selectSection("updates")}>
+          <Download className="size-4" aria-hidden="true" />应用更新
+        </button>
       </nav>
       <div ref={panelRef} className="settings-panel">
         <div className="settings-content">
           <h1 id="settings-title">设置</h1>
-          <p className="text-muted-foreground">配置 GitHub 认证和额外 Agent，适用于全局和所有项目。</p>
+          <p className="text-muted-foreground">管理应用更新、GitHub 认证和额外 Agent。</p>
+          <section id="app-update-settings" className="settings-card" aria-labelledby="app-update-title" hidden={activeSection !== "updates"}>
+            <h2 id="app-update-title">应用更新</h2>
+            <AppUpdateSettings update={appUpdate} />
+          </section>
+          <fieldset className="contents" disabled={appUpdate.critical}>
           <section id="github-settings" className="settings-card" aria-labelledby="github-settings-title" hidden={activeSection !== "github"}>
             <div className="flex items-center gap-2">
               <KeyRound className="size-4 text-muted-foreground" aria-hidden="true" />
@@ -170,6 +185,7 @@ export function SettingsPage({ onAgentsChanged }: { onAgentsChanged: () => void 
               onChanged={handleAgentsChanged}
             /> : <p className="text-muted-foreground" role="status">正在读取额外 Agent…</p>}
           </section>
+          </fieldset>
         </div>
       </div>
     </main>

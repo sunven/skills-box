@@ -5,6 +5,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import App from "../App";
 import { createQueryClient } from "../lib/query-client";
 import { createFakeBackend } from "../test/fake-backend";
+import { initialAppUpdate } from "../lib/app-update";
 import {
   environment,
   listSkillDir,
@@ -18,6 +19,10 @@ import "../index.css";
 
 createFakeBackend({
   data: {
+    appUpdate: new URLSearchParams(location.search).has("appUpdate") ? initialAppUpdate({
+      enabled: true, phase: "available", lastAttemptAt: Date.now(),
+      candidate: { version: "0.2.0", notes: "## 更新内容\n\n- 新增应用自动检查和安全更新。\n- 改善安装进度与错误恢复。" },
+    }) : initialAppUpdate(),
     discovery: discoveryFixture(),
     projects: { projects: [discoveryProject], lastActiveScope: "global", warnings: [] },
     environment,

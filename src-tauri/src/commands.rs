@@ -13,6 +13,7 @@ use tauri_plugin_opener::OpenerExt;
 
 use crate::AppState;
 use crate::agents::extras::{ExtraAgent, RemoveExtraAgentResult, UserExtraAgent};
+use crate::app_update::Snapshot as AppUpdateSnapshot;
 use crate::attach::AttachResult;
 use crate::content::{self, SkillDirListing, SkillFileContent};
 use crate::detach::DetachResult;
@@ -41,6 +42,7 @@ pub fn save_github_token(
     state: State<'_, AppState>,
     token: String,
 ) -> Result<crate::settings::GitHubSettingsStatus, AppError> {
+    let _write = state.app_updates.configuration_write()?;
     state.settings.save(&token)
 }
 
@@ -48,6 +50,7 @@ pub fn save_github_token(
 pub fn clear_github_token(
     state: State<'_, AppState>,
 ) -> Result<crate::settings::GitHubSettingsStatus, AppError> {
+    let _write = state.app_updates.configuration_write()?;
     state.settings.clear()
 }
 
@@ -114,6 +117,7 @@ pub fn list_projects(state: State<'_, AppState>) -> ProjectList {
 
 #[tauri::command]
 pub fn add_project(state: State<'_, AppState>, root: String) -> Result<ProjectEntry, AppError> {
+    let _write = state.app_updates.configuration_write()?;
     state.projects.add(&root)
 }
 
@@ -142,6 +146,7 @@ pub fn forget_project(
 
 #[tauri::command]
 pub fn set_active_scope(state: State<'_, AppState>, scope: ScopeId) -> Result<(), AppError> {
+    let _write = state.app_updates.configuration_write()?;
     state.projects.set_active_scope(&scope)
 }
 
@@ -391,6 +396,7 @@ pub fn get_active_mutation(state: State<'_, AppState>) -> Option<ActiveMutationI
 /// retained backup snapshots are never deleted.
 #[tauri::command]
 pub fn dismiss_interrupted_mutation(state: State<'_, AppState>) -> Result<(), AppError> {
+    let _write = state.app_updates.configuration_write()?;
     state.tasks.dismiss_interrupted_marker();
     Ok(())
 }
@@ -400,6 +406,8 @@ pub fn dismiss_interrupted_mutation(state: State<'_, AppState>) -> Result<(), Ap
 /// exits. The lock snapshot is retained for the next-startup verification.
 #[tauri::command]
 pub async fn quit_app(app: AppHandle, state: State<'_, AppState>) -> Result<(), AppError> {
+    let _exit_guard = state.app_updates.exit_guard()?;
+    state.app_updates.begin_shutdown();
     state.exiting.store(true, Ordering::SeqCst);
     state.discovery.shutdown_and_wait().await;
     let tasks = state.tasks.clone();
@@ -410,6 +418,21 @@ pub async fn quit_app(app: AppHandle, state: State<'_, AppState>) -> Result<(), 
     }
     app.exit(0);
     Ok(())
+}
+
+#[tauri::command]
+pub fn get_app_update_state(state: State<'_, AppState>) -> AppUpdateSnapshot {
+    state.app_updates.snapshot()
+}
+
+#[tauri::command]
+pub fn check_app_update(state: State<'_, AppState>) -> Result<AppUpdateSnapshot, AppError> {
+    state.app_updates.check()
+}
+
+#[tauri::command]
+pub fn start_app_update(state: State<'_, AppState>) -> Result<AppUpdateSnapshot, AppError> {
+    state.app_updates.update()
 }
 
 /// Serialized update execution. The frontend sends only update-candidate skill
@@ -651,6 +674,7 @@ pub fn acknowledge_discoveries(
     state: State<'_, AppState>,
     ids: Option<Vec<crate::discovery::DiscoveryId>>,
 ) -> Result<(), AppError> {
+    let _write = state.app_updates.configuration_write()?;
     state.discovery.acknowledge(ids)
 }
 #[tauri::command]
@@ -659,6 +683,7 @@ pub fn set_discovery_ignored(
     id: crate::discovery::DiscoveryId,
     ignored: bool,
 ) -> Result<(), AppError> {
+    let _write = state.app_updates.configuration_write()?;
     state.discovery.set_ignored(id, ignored)
 }
 #[tauri::command]
@@ -666,5 +691,6 @@ pub fn invalidate_discovery_source(
     state: State<'_, AppState>,
     source: String,
 ) -> Result<(), AppError> {
+    let _write = state.app_updates.configuration_write()?;
     state.discovery.invalidate(source)
 }

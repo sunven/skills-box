@@ -9,7 +9,10 @@
     "preview": "vite preview",
     "test": "TZ=Asia/Shanghai vitest run",
     "test:watch": "TZ=Asia/Shanghai vitest",
-    "tauri": "tauri"
+    "test:release": "node --test scripts/prepare-release.node-test.mjs",
+    "tauri": "tauri",
+    "updater:keygen": "node scripts/setup-updater-key.mjs",
+    "build:signed": "node scripts/build-signed.mjs"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.5.0",

@@ -20,7 +20,9 @@ import { InterruptedBanner } from "./components/interrupted-banner";
 import { LockErrorScreen } from "./components/lock-error-screen";
 import { ProjectDialogs, type ProjectDialogState } from "./components/project-dialogs";
 import { ScopeSwitcher } from "./components/scope-switcher";
-import { SettingsPage } from "./components/settings-page";
+import { SettingsPage, type SettingsSection } from "./components/settings-page";
+import { AppUpdateReminder } from "./components/app-update-settings";
+import { useAppUpdate } from "./hooks/use-app-update";
 import { SkillListPane } from "./components/skill-list-pane";
 import { UninstallDialog } from "./components/uninstall-dialog";
 import { UpdateDialog } from "./components/update-dialog";
@@ -132,6 +134,8 @@ function App() {
   const [anomaliesOpen, setAnomaliesOpen] = useState(false);
   const [installOpen, setInstallOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("github");
+  const appUpdate = useAppUpdate();
   const [discoveryEntry, setDiscoveryEntry] = useState<{ filter: DiscoveryFilter; source: string } | null>(null);
   const [installSeed, setInstallSeed] = useState<DiscoveryInstallSeed | null>(null);
   const discovery = useDiscovery(scopeReady && !quitting);
@@ -268,7 +272,7 @@ function App() {
   const scopeBlocked =
     scopeUnavailable || scopeLockError !== null || view.scopeError !== null;
   const mutationsEnabled =
-    (report?.mutationsEnabled ?? false) && !scopeBlocked;
+    (report?.mutationsEnabled ?? false) && !scopeBlocked && !appUpdate.critical;
 
   const mutateCheckUpdates = checkUpdates.mutate;
   const runAutoCheck = useCallback(async () => {
@@ -441,12 +445,13 @@ function App() {
 
   return (
     <div className="app-shell text-foreground">
+      {appUpdate.critical ? <p className="notice" role="status">正在安装应用更新并准备重启，暂时无法关闭应用或开始新的写入。</p> : null}
       <AppHeader
         settingsOpen={settingsOpen}
         discoveryOpen={discoveryEntry !== null}
         discoveryCount={discovery.query.data?.unreadCount ?? 0}
         onOpenDiscovery={() => { setSettingsOpen(false); setDiscoveryEntry({ filter: "uninstalled", source: "all" }); }}
-        onOpenSettings={() => { setSettingsOpen(true); setDiscoveryEntry(null); }}
+        onOpenSettings={() => { setSettingsSection("github"); setSettingsOpen(true); setDiscoveryEntry(null); }}
         onReturnToSkills={() => { setSettingsOpen(false); setDiscoveryEntry(null); }}
         report={report}
         isLoading={environment.isPending}
@@ -465,6 +470,7 @@ function App() {
         onToggleFilters={() => setFiltersOpen((open) => !open)}
         scopeSwitcher={settingsOpen || discoveryEntry ? null : (
           <ScopeSwitcher
+            disabled={appUpdate.critical}
             activeScope={scope}
             projects={view.scopeProjects}
             warnings={projects?.warnings ?? EMPTY_WARNINGS}
@@ -480,9 +486,10 @@ function App() {
           />
         )}
       />
-      {settingsOpen ? <SettingsPage onAgentsChanged={handleRecheck} /> : discoveryEntry ? <DiscoveryPage discovery={discovery} scope={scope}
+      {settingsOpen ? <SettingsPage onAgentsChanged={handleRecheck} appUpdate={appUpdate} initialSection={settingsSection} /> : discoveryEntry ? <DiscoveryPage discovery={discovery} scope={scope}
         initialFilter={discoveryEntry.filter} initialSource={discoveryEntry.source}
         projects={projects?.projects ?? EMPTY_PROJECTS} mutationsEnabled={mutationsEnabled}
+        writesDisabled={appUpdate.critical}
         onSelectScope={handleSelectScope} onInstall={(seed) => { setInstallSeed(seed); setInstallOpen(true); }} /> : <>
       {projectWarnings.length > 0 ? (
         <div
@@ -589,7 +596,7 @@ function App() {
                 scope={scope}
                 skill={view.selectedSkill}
                 agents={snapshot?.installTargets ?? EMPTY_INVENTORY_AGENTS}
-                actionsDisabled={scopeBlocked}
+                actionsDisabled={scopeBlocked || appUpdate.critical}
                 checkingUpdates={checkUpdates.isPending}
                 onCheckUpdates={handleCheckUpdates}
                 onClose={handleCloseDetail}
@@ -613,7 +620,7 @@ function App() {
         open={anomaliesOpen}
         onClose={() => setAnomaliesOpen(false)}
       />
-      {view.updateDialog ? (
+      {!appUpdate.critical && view.updateDialog ? (
         <UpdateDialog
           open
           scope={scope}
@@ -622,13 +629,13 @@ function App() {
         />
       ) : null}
       <UninstallDialog
-        open={uninstallSkill !== null}
+        open={!appUpdate.critical && uninstallSkill !== null}
         scope={scope}
         skill={uninstallSkill}
         onClose={() => setUninstallSkill(null)}
       />
       <InstallWizard
-        open={installOpen}
+        open={!appUpdate.critical && installOpen}
         seed={installSeed}
         scope={scope}
         project={activeProject}
@@ -640,14 +647,14 @@ function App() {
         onClose={() => { setInstallOpen(false); setInstallSeed(null); }}
       />
       <ProjectDialogs
-        state={projectDialog}
+        state={appUpdate.critical ? null : projectDialog}
         onClose={() => setProjectDialog(null)}
         onAdded={handleProjectAdded}
         onRelocated={handleProjectRelocated}
         onForgotten={handleProjectForgotten}
       />
       <ExitDialog
-        open={exitRequest !== null}
+        open={!appUpdate.critical && exitRequest !== null}
         info={exitRequest}
         pending={quitting}
         error={exitError}
@@ -659,6 +666,10 @@ function App() {
         }}
         onConfirm={() => void handleConfirmExit()}
       />
+      <AppUpdateReminder update={appUpdate} onView={() => {
+        setSettingsSection("updates"); setSettingsOpen(true); setDiscoveryEntry(null);
+        appUpdate.dismiss();
+      }} />
     </div>
   );
 }

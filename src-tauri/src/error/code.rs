@@ -100,6 +100,13 @@ pub enum ErrorCode {
     UpdateLocalModified,
     UpdateCopyToSymlink,
     UpdateStateCleanupFailed,
+    AppUpdateCheckFailed,
+    AppUpdateDownloadFailed,
+    AppUpdateSignatureFailed,
+    AppUpdateInstallFailed,
+    AppUpdateUnavailable,
+    AppUpdateReadOnly,
+    AppUpdateBusy,
 }
 
 impl ErrorCode {
@@ -199,6 +206,13 @@ impl ErrorCode {
         Self::UpdateLocalModified,
         Self::UpdateCopyToSymlink,
         Self::UpdateStateCleanupFailed,
+        Self::AppUpdateCheckFailed,
+        Self::AppUpdateDownloadFailed,
+        Self::AppUpdateSignatureFailed,
+        Self::AppUpdateInstallFailed,
+        Self::AppUpdateUnavailable,
+        Self::AppUpdateReadOnly,
+        Self::AppUpdateBusy,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -298,6 +312,13 @@ impl ErrorCode {
             Self::UpdateLocalModified => "update.local_modified",
             Self::UpdateCopyToSymlink => "update.copy_to_symlink",
             Self::UpdateStateCleanupFailed => "update.state_cleanup_failed",
+            Self::AppUpdateCheckFailed => "app_update.check_failed",
+            Self::AppUpdateDownloadFailed => "app_update.download_failed",
+            Self::AppUpdateSignatureFailed => "app_update.signature_failed",
+            Self::AppUpdateInstallFailed => "app_update.install_failed",
+            Self::AppUpdateUnavailable => "app_update.unavailable",
+            Self::AppUpdateReadOnly => "app_update.read_only",
+            Self::AppUpdateBusy => "app_update.busy",
         }
     }
 
@@ -332,7 +353,7 @@ mod tests {
 
     #[test]
     fn all_codes_are_unique_and_stable() {
-        assert_eq!(ErrorCode::ALL.len(), 95);
+        assert_eq!(ErrorCode::ALL.len(), 102);
         let values: Vec<&str> = ErrorCode::ALL.iter().map(|code| code.as_str()).collect();
         let unique: HashSet<&str> = values.iter().copied().collect();
         assert_eq!(unique.len(), values.len());
@@ -434,6 +455,13 @@ mod tests {
                 "update.local_modified",
                 "update.copy_to_symlink",
                 "update.state_cleanup_failed",
+                "app_update.check_failed",
+                "app_update.download_failed",
+                "app_update.signature_failed",
+                "app_update.install_failed",
+                "app_update.unavailable",
+                "app_update.read_only",
+                "app_update.busy",
             ]
         );
     }

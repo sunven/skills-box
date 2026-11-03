@@ -61,6 +61,27 @@ token; CLI-owned requests do not receive it and can use their anonymous
 fetch/clone path. Discovery has no manual source subscriptions, system
 notifications, background scans after exit, or automatic installation/update.
 
+## App updates
+
+Open **设置 → 应用更新** to check the current application version, read release
+notes and install a newer stable release. Production builds check one second
+after startup and every six hours while running; development builds do not
+contact the update service. App updates are independent of Skill update checks
+and do not use the configured GitHub token.
+
+Clicking **更新到 …** downloads and verifies the update, then installs and
+restarts. Skill operations can continue during download. If a write is still
+running when the download finishes, the app retains that download for the
+session and asks you to click **安装并重启** when ready. Installation prevents
+new writes and closing/quitting until the restart handoff. No Skill files are
+changed by an App update.
+
+The initial distribution supports macOS Apple Silicon and Intel, with ad-hoc
+application signing. When opening a download for the first time, macOS may
+require approval in Privacy & Security. Move the app from its DMG to Applications
+or another writable directory before updating. See [release setup](docs/releasing.md)
+for signing keys, local signed builds and the complete release workflow.
+
 ## Development
 
 ```bash
@@ -83,5 +104,6 @@ cargo test --test generic_git_sources -- --ignored --nocapture
 - Product spec: `.scratch/global-skill-manager/spec.md`
 - Source discovery spec: `.scratch/skill-discovery/spec.md`
 - Auto update check spec: `.scratch/auto-update-check/spec.md`
+- App update spec: `.scratch/app-update/spec.md`
 - Domain glossary: `GLOSSARY.md`
 - Architecture decision: `docs/adr/0001-cli-mutations-native-reads.md`

@@ -48,3 +48,9 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+tauri-plugin-updater = "2"
+
+[dev-dependencies]
+minisign-verify = "0.3"

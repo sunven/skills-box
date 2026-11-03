@@ -3,6 +3,31 @@
 This file records the final hardening decisions for Skills Box v1. It is the
 reference for release review and for ticket 11 (acceptance).
 
+## Application update boundary (2026-11-03)
+
+App updates use a separate public stable Release and this application's own
+updater signing key. The renderer receives version metadata, progress and
+normalized errors through three typed commands; it never receives update
+handles, private keys or downloaded bytes. Updater and process restart
+permissions are not granted to the renderer. Skill-source tokens are not sent
+to the update service.
+
+Rust verifies download signatures and their signed application versions before
+installation, owns the blocking installation
+worker and retains the shared mutation permit through controlled restart.
+Configuration writes and ordinary exit use an additional read/write gate, so
+they cannot race with application replacement. The updater also shuts down
+and reaps read-only preview work before restarting. Busy installation never
+force-cancels Skill writes. Release signing does not change the existing macOS
+ad-hoc/no-notarization policy.
+
+The committed configuration contains only the public key. Private key and
+password files remain outside the repository with `0600` permissions; the
+local build helper and Actions use them through process environment variables.
+The release workflow verifies both architecture archives, public-key matches
+and versions before making a complete update manifest public. See
+[release setup](releasing.md) for the remaining remote prerequisites.
+
 ## Renderer permissions
 
 - Tauri capabilities expose **only** `core:default` and `dialog:allow-open`

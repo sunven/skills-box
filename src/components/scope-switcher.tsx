@@ -6,6 +6,7 @@ import { GLOBAL_SCOPE } from "../lib/types";
 import type { ScopeProjectView } from "../lib/workspace-view";
 
 interface ScopeSwitcherProps {
+  disabled?: boolean;
   activeScope: ScopeId;
   projects: ScopeProjectView[];
   warnings: string[];
@@ -103,6 +104,7 @@ function ProjectRow({
 
 /** Header scope controls with the registered projects in a native popover. */
 export function ScopeSwitcher({
+  disabled = false,
   activeScope,
   projects,
   warnings,
@@ -123,6 +125,7 @@ export function ScopeSwitcher({
 
   return (
     <section aria-label="作用域" className="scope-switcher">
+      <fieldset className="contents" disabled={disabled}>
       <button
         type="button"
         aria-label="切换到全局"
@@ -207,6 +210,7 @@ export function ScopeSwitcher({
           ))}
         </div>
       ) : null}
+      </fieldset>
     </section>
   );
 }

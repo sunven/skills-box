@@ -1,0 +1,95 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            arch: aarch64
+          - target: x86_64-apple-darwin
+            arch: x86_64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '11.10.0'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: ${{ matrix.target }}
+      - run: node scripts/prepare-release.mjs check-tag
+      - run: pnpm install --frozen-lockfile
+      - name: Build signed macOS application and installer
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: pnpm tauri build --target '${{ matrix.target }}' --bundles app,dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          if-no-files-found: error
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz
+            src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz.sig
+            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+
+  publish:
+    needs: build
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+      - name: Prepare a draft release
+        run: |
+          node scripts/prepare-release.mjs check-tag
+          if gh release view "$RELEASE_TAG" --json isDraft >release-state.json 2>/dev/null; then
+            node -e 'if (!JSON.parse(require("fs").readFileSync("release-state.json")).isDraft) throw Error("Refusing to modify an already published release")'
+          else
+            gh release create "$RELEASE_TAG" --draft --verify-tag --generate-notes --title "Skills Box $RELEASE_TAG"
+          fi
+          gh release view "$RELEASE_TAG" --json body --jq .body >release-notes.txt
+      - name: Verify signatures, architectures and complete update manifest
+        run: |
+          node --test scripts/prepare-release.node-test.mjs
+          node scripts/prepare-release.mjs prepare release-artifacts release-ready release-notes.txt
+      - name: Upload validated artifacts and publish stable release
+        run: |
+          gh release upload "$RELEASE_TAG" release-ready/* --clobber
+          gh release view "$RELEASE_TAG" --json assets >release-assets.json
+          node -e 'const fs=require("fs"); const expected=fs.readdirSync("release-ready"); const assets=JSON.parse(fs.readFileSync("release-assets.json")).assets; for (const name of expected) { const asset=assets.find(a=>a.name===name); if (!asset || asset.size!==fs.statSync("release-ready/"+name).size) throw Error("Missing or incomplete release asset: "+name); }'
+          gh release edit "$RELEASE_TAG" --draft=false --prerelease=false --latest

@@ -31,6 +31,9 @@ import { GLOBAL_SCOPE } from "./types";
 
 /** Every IPC command the frontend may invoke. */
 export const API_COMMANDS = {
+  getAppUpdateState: "get_app_update_state",
+  checkAppUpdate: "check_app_update",
+  startAppUpdate: "start_app_update",
   getDiscoveryState: "get_discovery_state",
   startDiscoveryScan: "start_discovery_scan",
   acknowledgeDiscoveries: "acknowledge_discoveries",

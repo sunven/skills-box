@@ -164,6 +164,14 @@ _Avoid_: last check, last fetch
 Refresh a skill's canonical folder from its source and re-establish its attachments. Manually triggered by the user after an update check; never automatic.
 _Avoid_: auto-update, sync, upgrade
 
+**App update**:
+Replace the Skills Box desktop application itself with a newer release, after the user requests it.
+_Avoid_: skill update, source update
+
+**App update check**:
+The read-only check for a newer Skills Box release, independent of a scope's managed skill versions.
+_Avoid_: update check, skill update check
+
 **Update candidate**:
 A skill whose upstream version fingerprint differs from the one recorded in its lock entry.
 _Avoid_: outdated skill, dirty skill

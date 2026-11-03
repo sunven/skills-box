@@ -38,6 +38,16 @@
     "macOS": {
       "minimumSystemVersion": "12.0",
       "signingIdentity": "-"
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "requireSignedVersion": true,
+      "endpoints": [
+        "https://github.com/sunven/skills-box/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDM0RTNBNzZDMzg2Q0FCMzQKUldRMHEydzRiS2ZqTk9IckttUDczeUkxcFU1VWsrT2lWUHpLSzJqUVNCRWd0dUo0ZFNEYXB4K0UK"
     }
   }
 }

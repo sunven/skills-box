@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod app_update;
 pub mod attach;
 pub mod attachment_target;
 pub mod backup;
@@ -56,6 +57,7 @@ pub struct AppState {
     pub read_model: Arc<ReadModel>,
     pub projects: Arc<ProjectRegistry>,
     pub tasks: TaskManager,
+    pub app_updates: app_update::AppUpdateService,
     pub updates: UpdateService,
     pub project_updates: ProjectUpdateChecks,
     pub settings: Arc<settings::SettingsService>,
@@ -94,6 +96,7 @@ impl AppState {
             github_api.clone(),
         );
         Self {
+            app_updates: app_update::AppUpdateService::new(tasks.clone()),
             read_model,
             discovery,
             projects: Arc::clone(&projects),
@@ -142,6 +145,18 @@ pub fn run() {
         // Folder picker for registering project roots. Only `dialog:allow-open`
         // is exposed to the renderer; no save/message/ask permissions.
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            #[cfg(target_os = "macos")]
+            {
+                app.handle()
+                    .plugin(tauri_plugin_updater::Builder::new().build())?;
+                app.state::<AppState>().app_updates.configure(
+                    Arc::new(app_update::native::NativeDriver(app.handle().clone())),
+                    !cfg!(debug_assertions),
+                );
+            }
+            Ok(())
+        })
         .manage(AppState::new(paths))
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -149,6 +164,10 @@ pub fn run() {
                 if state.exiting.load(Ordering::SeqCst) {
                     return;
                 }
+                let Ok(exit_guard) = state.app_updates.exit_guard() else {
+                    api.prevent_close();
+                    return;
+                };
                 if let Some(active) = state.tasks.active_mutation() {
                     // Protect a half-written skill store: the window stays
                     // open while the frontend confirms the risky exit.
@@ -160,11 +179,13 @@ pub fn run() {
                     // window lifecycle must not leave an invisible scan running.
                     api.prevent_close();
                     state.exiting.store(true, Ordering::SeqCst);
+                    state.app_updates.begin_shutdown();
                     let discovery = state.discovery.clone();
                     let tasks = state.tasks.clone();
                     let app = window.app_handle().clone();
                     discovery.shutdown();
                     tauri::async_runtime::spawn(async move {
+                        let _exit_guard = exit_guard;
                         let _ = tasks.shutdown_mutations().await;
                         discovery.shutdown_and_wait().await;
                         app.exit(0);
@@ -173,6 +194,9 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            commands::get_app_update_state,
+            commands::check_app_update,
+            commands::start_app_update,
             commands::get_environment,
             commands::get_discovery_state,
             commands::start_discovery_scan,
@@ -220,11 +244,20 @@ pub fn run() {
         if let tauri::RunEvent::Exit = event {
             app_handle.state::<AppState>().discovery.shutdown();
         }
-        if let tauri::RunEvent::ExitRequested { api, .. } = event {
+        if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+            // Tauri restart cannot be vetoed. Our native updater has already
+            // retained the installation permit and completed background cleanup.
+            if code == Some(tauri::RESTART_EXIT_CODE) {
+                return;
+            }
             let state = app_handle.state::<AppState>();
             if state.exiting.load(Ordering::SeqCst) {
                 return;
             }
+            let Ok(exit_guard) = state.app_updates.exit_guard() else {
+                api.prevent_exit();
+                return;
+            };
             if let Some(active) = state.tasks.active_mutation() {
                 // Cmd+Q / OS quit: prevent the exit and let the frontend
                 // confirm. A second quit request emits again.
@@ -234,9 +267,13 @@ pub fn run() {
             } else {
                 api.prevent_exit();
                 state.exiting.store(true, Ordering::SeqCst);
+                state.app_updates.begin_shutdown();
                 let discovery = state.discovery.clone();
                 let app = app_handle.clone();
+                let tasks = state.tasks.clone();
                 tauri::async_runtime::spawn(async move {
+                    let _exit_guard = exit_guard;
+                    let _ = tasks.shutdown_mutations().await;
                     discovery.shutdown_and_wait().await;
                     app.exit(0);
                 });

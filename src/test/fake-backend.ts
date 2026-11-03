@@ -1,4 +1,5 @@
 import type { DiscoveryId, DiscoveryState, DiscoveryProgress } from "../lib/discovery";
+import { initialAppUpdate, type AppUpdateSnapshot } from "../lib/app-update";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import type { Channel } from "@tauri-apps/api/core";
 import type { ApiCommand } from "../lib/api";
@@ -44,6 +45,9 @@ type Factory<T> = T | (() => T);
 type MaybePromise<T> = T | Promise<T>;
 
 export interface FakeCommandContract {
+  get_app_update_state: { args: Record<string, never>; result: AppUpdateSnapshot };
+  check_app_update: { args: Record<string, never>; result: AppUpdateSnapshot };
+  start_app_update: { args: Record<string, never>; result: AppUpdateSnapshot };
   get_discovery_state: { args: Record<string, never>; result: DiscoveryState };
   start_discovery_scan: { args: { manual?: boolean }; result: DiscoveryProgress };
   acknowledge_discoveries: { args: { ids: DiscoveryId[] | null }; result: void };
@@ -158,6 +162,7 @@ export type FakeCall = {
 }[ApiCommand];
 
 export interface FakeBackendData {
+  appUpdate: AppUpdateSnapshot;
   discovery: DiscoveryState;
   githubSettings: GitHubSettingsStatus;
   environment: Factory<EnvReport>;
@@ -219,6 +224,12 @@ export interface FakeBackend {
   install(options?: { shouldMockEvents?: boolean }): FakeBackend;
   reset(): void;
   supports(command: ApiCommand): boolean;
+}
+
+const installedBackends = new Set<FakeBackend>();
+export function resetFakeBackends() {
+  for (const backend of installedBackends) backend.reset();
+  installedBackends.clear();
 }
 
 export const FAKE_LOG_PATH =
@@ -285,6 +296,7 @@ export function createFakeBackend(
   options: FakeBackendOptions = {},
 ): FakeBackend {
   const defaultData: FakeBackendData = {
+    appUpdate: initialAppUpdate(),
     discovery: { sources: [], skills: [], unreadCount: 0, progress: { runId: 0, running: false, total: 0, completed: 0 }, warnings: [], error: null },
     githubSettings: { hasSavedToken: false, hasEnvironmentToken: false, effectiveSource: "anonymous" },
     environment: healthyReport(),
@@ -988,6 +1000,25 @@ export function createFakeBackend(
     data = { ...data, discovery: { ...data.discovery, skills, unreadCount: skills.filter((s) => s.unread && !s.ignored).length } };
   };
   const defaultHandlers: FakeHandlers = {
+    get_app_update_state: () => data.appUpdate,
+    check_app_update: () => {
+      data = { ...data, appUpdate: { ...data.appUpdate, revision: data.appUpdate.revision + 1,
+        phase: data.appUpdate.candidate ? "available" : "current", lastAttemptAt: Date.now(), error: null } };
+      return data.appUpdate;
+    },
+    start_app_update: () => {
+      if (!data.appUpdate.candidate) throw { code: "app_update.unavailable", message: "当前没有可安装的应用更新。", retryable: false };
+      data = { ...data, appUpdate: { ...data.appUpdate, revision: data.appUpdate.revision + 1, phase: "downloading", error: null } };
+      if (autoTasks) {
+        for (const [index, phase] of (["verifying", "installing", "restarting"] as const).entries()) {
+          timers.add(window.setTimeout(() => {
+            data = { ...data, appUpdate: { ...data.appUpdate, revision: data.appUpdate.revision + 1,
+              phase, totalBytes: 1048576, downloadedBytes: 1048576 } };
+          }, autoDelay * (index + 1) * 4));
+        }
+      }
+      return data.appUpdate;
+    },
     get_discovery_state: () => data.discovery,
     start_discovery_scan: () => data.discovery.progress,
     acknowledge_discoveries: ({ ids }) => {
@@ -1145,6 +1176,7 @@ export function createFakeBackend(
       ) as MaybePromise<FakeCommandContract[K]["result"]>;
     },
     install({ shouldMockEvents = false } = {}) {
+      installedBackends.add(backend);
       mockIPC(
         (command, payload) => {
           const typed = command as ApiCommand;

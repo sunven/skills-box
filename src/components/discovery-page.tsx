@@ -14,6 +14,7 @@ import { formatEpochDateTime } from "../lib/update-view";
 interface Props {
   discovery: ReturnType<typeof useDiscovery>;
   scope: ScopeId; projects: ProjectEntry[]; mutationsEnabled: boolean;
+  writesDisabled?: boolean;
   onSelectScope: (scope: ScopeId) => void;
   onInstall: (seed: DiscoveryInstallSeed) => void;
   initialFilter: DiscoveryFilter;
@@ -22,7 +23,7 @@ interface Props {
 function SourceAddress({ source }: { source: string }) {
   return <span className="mono discovery-source-address" title={source.startsWith("https://") ? source : `https://github.com/${source}`}>{source}</span>;
 }
-export function DiscoveryPage({ discovery, scope, projects, mutationsEnabled, onSelectScope, onInstall, initialFilter, initialSource }: Props) {
+export function DiscoveryPage({ discovery, scope, projects, mutationsEnabled, writesDisabled = false, onSelectScope, onInstall, initialFilter, initialSource }: Props) {
   const { query, pending, error } = discovery;
   const data = query.data;
   const [filter, setFilter] = useState<DiscoveryFilter>(initialFilter);
@@ -44,10 +45,10 @@ export function DiscoveryPage({ discovery, scope, projects, mutationsEnabled, on
       <div className="discovery-heading">
         <div><h1 id="discovery-title">发现</h1><p className="text-muted-foreground">从已安装来源发现可用 skills。应用运行时每 6 小时检查，上游新增会在这里提醒。</p></div>
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" disabled={pending || data?.progress.running} onClick={() => void discovery.scan()}>
+          <Button variant="outline" size="sm" disabled={writesDisabled || pending || data?.progress.running} onClick={() => void discovery.scan()}>
             <RefreshCw className={data?.progress.running ? "animate-spin" : ""} aria-hidden="true" />立即检查上游
           </Button>
-          <Button variant="ghost" size="sm" disabled={pending || !data?.unreadCount} onClick={() => void discovery.acknowledge()}>全部已读</Button>
+          <Button variant="ghost" size="sm" disabled={writesDisabled || pending || !data?.unreadCount} onClick={() => void discovery.acknowledge()}>全部已读</Button>
         </div>
       </div>
       <div className="discovery-summary" role="status">
@@ -59,7 +60,7 @@ export function DiscoveryPage({ discovery, scope, projects, mutationsEnabled, on
       {data?.warnings.map((warning) => <p key={warning} role="status" className="notice" data-tone="warning">{warning}</p>)}
       <div className="discovery-controls">
         <label className="discovery-scope">安装到
-          <select aria-label="发现目标作用域" value={scope} onChange={(e) => onSelectScope(e.target.value as ScopeId)}>
+          <select aria-label="发现目标作用域" disabled={writesDisabled} value={scope} onChange={(e) => onSelectScope(e.target.value as ScopeId)}>
             <option value={GLOBAL_SCOPE}>全局</option>
             {projects.map((p) => <option key={p.id} value={projectScope(p.id)}>{p.displayName}{p.available ? "" : "（不可用）"}</option>)}
           </select>
@@ -85,14 +86,14 @@ export function DiscoveryPage({ discovery, scope, projects, mutationsEnabled, on
           <p className="text-muted-foreground text-xs">显示 {visible.length} 项</p>
           {query.isPending ? <p role="status">正在读取发现记录…</p> : !data?.sources.length ? <div className="discovery-empty"><p>暂无活跃来源</p><p className="text-muted-foreground">安装一个来自公开 Git 仓库的 skill 后，会自动检查同一来源的其他 skills。</p></div> : visible.length === 0 ? <p className="discovery-empty">没有符合条件的 skill。</p> : null}
           {visible.map((skill) => <article key={discoveryKey(skill.id)} className="discovery-row" data-selected={selected === discoveryKey(skill.id) ? "true" : undefined}>
-            <div className="min-w-0"><button className="discovery-name" onClick={() => { setSelected(discoveryKey(skill.id)); void discovery.acknowledge([skill.id]); }}>{skill.name}</button>{skill.unread ? <span className="discovery-new">新增</span> : null}
+            <div className="min-w-0"><button className="discovery-name" onClick={() => { setSelected(discoveryKey(skill.id)); if (!writesDisabled) void discovery.acknowledge([skill.id]); }}>{skill.name}</button>{skill.unread ? <span className="discovery-new">新增</span> : null}
               <p className="discovery-description">{skill.description || "暂无描述"}</p>
               <div className="discovery-meta"><SourceAddress source={skill.id.source} />{skill.group ? <span>{skill.group}</span> : null}<span>{installationLabels[installationFor(skill, scope)]}</span>
                 {skill.installations.filter((s) => s.scope !== scope && s.status === "installed").map((s) => <span key={s.scope}>{s.label} 已安装</span>)}
               </div>{skill.installIssue ? <p className="text-xs text-destructive">{skill.installIssue}</p> : null}
             </div>
             <div className="discovery-row-actions"><Button size="sm" variant="outline" disabled={!canInstall(skill)} onClick={() => install(skill)} aria-label={`安装 ${skill.name}`}><Download aria-hidden="true" />安装</Button>
-              <Button size="sm" variant="ghost" disabled={pending} onClick={() => void discovery.ignore(skill.id, !skill.ignored)} aria-label={`${skill.ignored ? "恢复" : "忽略"} ${skill.name}`}>{skill.ignored ? "恢复" : "忽略"}</Button></div>
+              <Button size="sm" variant="ghost" disabled={writesDisabled || pending} onClick={() => void discovery.ignore(skill.id, !skill.ignored)} aria-label={`${skill.ignored ? "恢复" : "忽略"} ${skill.name}`}>{skill.ignored ? "恢复" : "忽略"}</Button></div>
           </article>)}
         </section>
         {detail ? <aside className="discovery-detail" aria-label="发现项详情">
