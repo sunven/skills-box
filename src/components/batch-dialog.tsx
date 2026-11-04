@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Loader2, X } from "lucide-react";
+import { AlertTriangle, FolderOpen, Loader2, X } from "lucide-react";
 import { Button } from "./ui/button";
 import { AgentLogo } from "./agent-logo";
 import { MutationProgress } from "./mutation/mutation-progress";
@@ -33,7 +33,9 @@ import type {
   InventoryAgent,
   ScopeId,
   UpdateViewSkill,
+  ProjectEntry,
 } from "../lib/types";
+import { pickProjectFolder } from "../lib/folder-picker";
 
 export interface BatchSelection {
   action: BatchAction;
@@ -43,6 +45,8 @@ interface BatchDialogProps {
   selection: BatchSelection;
   scope: ScopeId;
   agents: InventoryAgent[];
+  projects?: ProjectEntry[];
+  onViewProject?: (scope: ScopeId) => void;
   disabled: boolean;
   onRunningChange: (running: boolean) => void;
   onCompleted: (ids: Set<string>) => void;
@@ -52,14 +56,23 @@ interface BatchDialogProps {
 export function BatchDialog({
   selection,
   scope,
-  agents,
+  agents: sourceAgents,
+  projects = [],
+  onViewProject,
   disabled,
   onRunningChange,
   onCompleted,
   onClose,
 }: BatchDialogProps) {
-  const action = selection.action;
-  const hasAgents = action === "attach" || action === "detach";
+  const canChooseTarget = selection.action === "attach" && scope === "global";
+  const [targetScope, setTargetScope] = useState<"global" | "project">("global");
+  const [projectRoot, setProjectRoot] = useState("");
+  const [projectAgents, setProjectAgents] = useState<InventoryAgent[]>([]);
+  const [picking, setPicking] = useState(false);
+  const action: BatchAction = canChooseTarget && targetScope === "project" ? "copy_to_project" : selection.action;
+  const isCopy = action === "copy_to_project";
+  const agents = isCopy ? projectAgents : sourceAgents;
+  const hasAgents = action === "attach" || action === "detach" || isCopy;
   const [selectedAgents, setSelectedAgents] = useState<Set<string>>(
     () => new Set(),
   );
@@ -122,8 +135,8 @@ export function BatchDialog({
       ),
     [agents],
   );
-  const selectionRef = useRef({ scope, action, skillIds, agentIds, retryKeys });
-  selectionRef.current = { scope, action, skillIds, agentIds, retryKeys };
+  const selectionRef = useRef({ scope, action, skillIds, agentIds, retryKeys, projectRoot });
+  selectionRef.current = { scope, action, skillIds, agentIds, retryKeys, projectRoot };
 
   const applyPreview = useCallback((next: BatchPreview) => {
     if (previewRef.current && previewRef.current.revision !== next.revision) {
@@ -133,6 +146,7 @@ export function BatchDialog({
     }
     previewRef.current = next;
     setPreview(next);
+    if (next.agents) setProjectAgents((current) => JSON.stringify(current) === JSON.stringify(next.agents) ? current : next.agents!);
     setPreviewError(null);
   }, []);
 
@@ -150,14 +164,21 @@ export function BatchDialog({
     setLoading(true);
     setConfirmedDelete(false);
     setConfirmedCopies(false);
-    const { scope, action, skillIds, agentIds, retryKeys } =
+    const { scope, action, skillIds, agentIds, retryKeys, projectRoot } =
       selectionRef.current;
+    if (action === "copy_to_project" && !projectRoot) {
+      setPreview(null);
+      setPreviewError(null);
+      setLoading(false);
+      return;
+    }
     try {
       const next = await previewBatch(scope, {
         action,
         skillIds,
         agentIds,
         targetKeys: retryKeys,
+        projectRoot: action === "copy_to_project" ? projectRoot : undefined,
       });
       if (seq === requestSeq.current && !mutation.stateRef.current.running)
         applyPreview(next);
@@ -172,7 +193,7 @@ export function BatchDialog({
   }, [applyPreview, mutation.stateRef]);
 
   useEffect(() => {
-    if (!hasAgents) return;
+    if (!hasAgents || (isCopy && !projectRoot)) return;
     let disposed = false;
     countsPreviewId.current = null;
     void previewBatch(scope, {
@@ -180,6 +201,7 @@ export function BatchDialog({
       skillIds,
       agentIds: eligibleAgents.map((agent) => agent.id),
       targetKeys: retryKeys,
+      projectRoot: isCopy ? projectRoot : undefined,
     })
       .then((all) => {
         if (disposed) return;
@@ -200,6 +222,8 @@ export function BatchDialog({
     eligibleAgents,
     retryKeys,
     applyAgentCounts,
+    isCopy,
+    projectRoot,
   ]);
 
   useEffect(() => {
@@ -208,7 +232,7 @@ export function BatchDialog({
     return () => {
       requestSeq.current += 1;
     };
-  }, [agentIds, retryKeys, viewingResult, loadPreview, running]);
+  }, [agentIds, action, projectRoot, retryKeys, viewingResult, loadPreview, running]);
 
   // Refresh an open preview without extending the user-selected target set.
   useEffect(() => {
@@ -273,7 +297,7 @@ export function BatchDialog({
   const skipped = preview?.targets.filter((target) => !target.eligible) ?? [];
   const needsCopies = candidates.some((target) => target.deletesCopy);
   const submitDisabled =
-    disabled ||
+    disabled || picking ||
     loading ||
     !!previewError ||
     !preview ||
@@ -348,13 +372,39 @@ export function BatchDialog({
             warnings: result.warnings,
             startedAt: 0,
             finishedAtEpochMs: 0,
-            scope,
+            scope: result.scope ?? scope,
             batch: { action, rows: history },
           }),
           backupPath: result.backupPath,
           logPath: result.logPath,
         }
       : null;
+
+  const resetTargetPreview = () => {
+    requestSeq.current += 1;
+    setSelectedAgents(new Set());
+    setProjectAgents([]);
+    setAgentCounts(new Map());
+    setPreview(null);
+    previewRef.current = null;
+    setPreviewError(null);
+    setChanged(false);
+  };
+
+  const chooseDirectory = async () => {
+    setPicking(true);
+    try {
+      const root = await pickProjectFolder();
+      if (root && root !== projectRoot) {
+        setProjectRoot(root);
+        resetTargetPreview();
+      }
+    } catch (cause) {
+      setPreviewError(asAppError(cause) ?? fallbackError("无法选择项目目录。"));
+    } finally {
+      setPicking(false);
+    }
+  };
 
   return (
     <div
@@ -381,10 +431,11 @@ export function BatchDialog({
               批量{BATCH_ACTION_LABELS[action]}
             </h2>
             <p className="modal-sub">
-              {scope === "global" ? "全局" : "项目"} · 已选{" "}
+              {isCopy ? "全局 → 项目" : scope === "global" ? "全局" : "项目"} · 已选{" "}
               {selection.skills.length} 个技能
               {hasAgents ? ` · ${agentIds.length} 个 Agent` : ""}
             </p>
+            {isCopy && projectRoot ? <p className="mono break-all mt-1 text-xs text-muted-foreground">{preview?.project?.displayName} · {preview?.project?.root ?? projectRoot}</p> : null}
           </div>
           <Button
             ref={closeRef}
@@ -401,6 +452,44 @@ export function BatchDialog({
         <div className="modal-body">
           {!running && !viewingResult ? (
             <>
+              {canChooseTarget ? (
+                <fieldset className="mb-4" disabled={disabled || !!retryKeys || picking}>
+                  <legend className="field-label">挂载位置</legend>
+                  <div className="flex gap-5 mt-2">
+                    {(["global", "project"] as const).map((value) => (
+                      <label key={value} className="flex items-center gap-2 text-sm">
+                        <input type="radio" name="batch-target-scope" checked={targetScope === value}
+                          onChange={() => {
+                            setTargetScope(value);
+                            resetTargetPreview();
+                          }} />
+                        {value === "global" ? "全局" : "项目"}
+                      </label>
+                    ))}
+                  </div>
+                  {isCopy ? (
+                    <div className="mt-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <select className="batch-project-select flex-1 min-w-0" aria-label="选择目标项目"
+                          value={projectRoot} onChange={(event) => {
+                            setProjectRoot(event.target.value);
+                            resetTargetPreview();
+                          }}>
+                          <option value="">选择已有项目</option>
+                          {projects.map((project) => <option key={project.id} value={project.root} disabled={!project.available}>
+                            {project.displayName}{!project.available ? "（不可用）" : ""}
+                          </option>)}
+                          {projectRoot && !projects.some((p) => p.root === projectRoot) ? <option value={projectRoot}>新项目 · {projectRoot.split("/").pop()}</option> : null}
+                        </select>
+                        <Button variant="outline" size="sm" onClick={() => void chooseDirectory()}>
+                          <FolderOpen className="size-4" aria-hidden="true" />{picking ? "正在选择…" : "选择目录"}
+                        </Button>
+                      </div>
+                      <p className="notice mt-3">复制当前内容，项目独立管理。Codex 等共享 Agent 直接读取项目共享目录，无需单独挂载；也可仅复制到项目。</p>
+                    </div>
+                  ) : null}
+                </fieldset>
+              ) : null}
               {hasAgents ? (
                 <fieldset className="batch-agents">
                   <legend className="field-label">选择 Agent</legend>
@@ -469,7 +558,11 @@ export function BatchDialog({
                     <strong>可执行 {candidates.length} 个目标</strong>
                     <span>跳过 {skipped.length} 个目标</span>
                   </div>
-                  {hasAgents && agentIds.length === 0 ? (
+                  {isCopy && preview ? <p className="mt-1 mb-3 text-xs text-muted-foreground">
+                    {candidates.filter((t) => t.operation === "copy").length} 个复制 · {candidates.filter((t) => t.operation === "attach").length} 个挂载
+                  </p> : null}
+                  {isCopy && !projectRoot ? <p className="notice">请先选择项目或项目目录。</p> : null}
+                  {hasAgents && !isCopy && agentIds.length === 0 ? (
                     <p className="notice">请先选择要操作的 Agent。</p>
                   ) : null}
                   {preview && preview.targets.length > 0 ? (
@@ -491,6 +584,9 @@ export function BatchDialog({
                               {target.reason}
                             </p>
                           ) : null}
+                          {isCopy && target.eligible && target.operation === "copy" && target.localModification !== "clean" ? (
+                            <p className="mt-1 text-warning">{target.localModification === "modified" ? "将复制当前本地改动。" : "无法确认本地改动，将复制当前内容。"}项目之后可能提示与上游内容不同。</p>
+                          ) : null}
                           {target.eligible &&
                           action === "uninstall" &&
                           target.localModification !== "clean" ? (
@@ -506,7 +602,7 @@ export function BatchDialog({
                             </p>
                           ) : null}
                           {target.eligible &&
-                          (action === "uninstall" || action === "detach") ? (
+                          (action === "uninstall" || action === "detach" || isCopy) ? (
                             <ul className="mt-1 text-muted-foreground">
                               {target.paths.map((path) => (
                                 <li key={path} className="mono break-all">
@@ -520,7 +616,7 @@ export function BatchDialog({
                     </ul>
                   ) : null}
                   {candidates.length === 0 &&
-                  (!hasAgents || agentIds.length > 0) &&
+                  (!hasAgents || isCopy || agentIds.length > 0) &&
                   !previewError ? (
                     <p className="notice">
                       没有可执行目标，请查看跳过原因或调整选择。
@@ -638,6 +734,9 @@ export function BatchDialog({
           <div className="flex flex-wrap items-center gap-2">
             {viewingResult ? (
               <>
+                {isCopy && result?.scope && result.scope !== "global" && onViewProject ? (
+                  <Button variant="outline" size="sm" onClick={() => onViewProject(result.scope!)}>查看项目</Button>
+                ) : null}
                 {history.some(
                   (row) =>
                     row.status === "failed" || row.status === "not_executed",

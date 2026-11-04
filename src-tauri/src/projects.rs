@@ -186,6 +186,52 @@ impl ProjectRegistry {
         Ok(self.entry(project))
     }
 
+    /// An explicitly selected root can be inspected without changing the
+    /// registry or active Scope. Keep its identity stable across previews.
+    pub(crate) fn preview_root(
+        &self,
+        root: &str,
+        pending: Option<&Project>,
+    ) -> Result<Project, AppError> {
+        let file = self.load_mutable()?;
+        let canonical = self.validate_root(root, &[], None)?;
+        if let Some(project) = file.projects.iter().find(|p| p.root == canonical) {
+            self.lookup_available(project.id)?;
+            return Ok(project.clone());
+        }
+        if let Some(project) = pending.filter(|p| p.root == canonical) {
+            return Ok(project.clone());
+        }
+        let now = (self.clock)();
+        Ok(Project {
+            id: Uuid::new_v4(),
+            display_name: display_name(&canonical),
+            root: canonical,
+            check_revision: Uuid::new_v4().to_string(),
+            added_at: now,
+            last_opened_at: now,
+        })
+    }
+
+    /// Called under the Mutation permit after the preview is confirmed.
+    pub(crate) fn register_preview(&self, pending: &Project) -> Result<Project, AppError> {
+        let _guard = self.lock.lock().unwrap_or_else(|p| p.into_inner());
+        let mut file = self.load_mutable()?;
+        let canonical = self.validate_root(&pending.root.to_string_lossy(), &[], None)?;
+        if let Some(project) = file.projects.iter().find(|p| p.root == canonical) {
+            if project != pending {
+                return Err(AppError::batch_preview_expired());
+            }
+            return Ok(project.clone());
+        }
+        if canonical != pending.root || file.projects.iter().any(|p| p.id == pending.id) {
+            return Err(AppError::batch_preview_expired());
+        }
+        file.projects.push(pending.clone());
+        self.save(&file)?;
+        Ok(pending.clone())
+    }
+
     pub fn relocate(&self, id: &str, root: &str) -> Result<ProjectEntry, AppError> {
         let _guard = self
             .lock

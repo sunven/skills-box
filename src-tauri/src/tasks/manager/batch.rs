@@ -98,6 +98,9 @@ impl TaskManager {
         let layout = self.scope_layout(&original.preview.scope)?;
         let paths = self.inner.paths.clone();
         let fresh = tokio::task::spawn_blocking(move || {
+            if original.copy.is_some() {
+                return crate::tasks::copy_to_project::replan(&paths, &layout, &original);
+            }
             let mut updates = original.updates;
             if original.preview.action == BatchAction::Update {
                 for target in &original.targets {
@@ -155,18 +158,26 @@ impl TaskManager {
         let expected_revision = confirmation.revision;
         let planned = self
             .plan_scoped_mutation(scope, MutationKind::Batch, move |paths, layout| {
-                let fresh = batch::plan(
-                    paths,
-                    layout,
-                    original.request,
-                    original.preview.id,
-                    original.updates,
-                )?;
+                let fresh = if original.copy.is_some() {
+                    crate::tasks::copy_to_project::replan(paths, layout, &original)?
+                } else {
+                    batch::plan(
+                        paths,
+                        layout,
+                        original.request,
+                        original.preview.id,
+                        original.updates,
+                    )?
+                };
                 if fresh.preview.revision != expected_revision {
                     return Err(AppError::batch_preview_expired());
                 }
                 if !fresh.targets.iter().any(|t| t.target.eligible) {
                     return Err(AppError::batch_confirmation_needed());
+                }
+                if let Some(copy) = &fresh.copy {
+                    crate::projects::ProjectRegistry::new(paths.clone())
+                        .register_preview(copy.layout.project.as_ref().expect("project"))?;
                 }
                 Ok(fresh)
             })
@@ -214,6 +225,8 @@ pub(super) async fn run(
     let mut rows = Vec::new();
     let mut warnings = Vec::new();
     let mut skill_results = Vec::new();
+    let mut copied = std::collections::HashSet::new();
+    let mut copy_failed = std::collections::HashSet::new();
     for target in &plan.targets {
         if !target.target.eligible {
             rows.push(row(target, BatchStatus::Skipped, None, None));
@@ -221,6 +234,16 @@ pub(super) async fn run(
         }
         if stopped || ctx.cancel.is_cancelled() {
             rows.push(row(target, BatchStatus::NotExecuted, None, None));
+            continue;
+        }
+        if plan.copy.is_some()
+            && target.target.agent_id.is_some()
+            && copy_failed.contains(&target.target.name)
+        {
+            let mut skipped = row(target, BatchStatus::NotExecuted, None, None);
+            skipped.target.reason = Some("该技能复制未成功，挂载未执行。".into());
+            rows.push(skipped);
+            completed += 1;
             continue;
         }
         let label = target.target.agent_name.as_ref().map_or_else(
@@ -365,6 +388,23 @@ pub(super) async fn run(
                     .map_err(|e| AppError::task_internal("批量挂载", e))
                     .and_then(|r| r)
                 }
+                BatchAction::CopyToProject => {
+                    let plan = plan.clone();
+                    let target = target.clone();
+                    let published = copied.contains(&target.target.name);
+                    tokio::task::spawn_blocking(move || {
+                        crate::tasks::copy_to_project::execute(
+                            &paths,
+                            &plan,
+                            &target,
+                            published,
+                            record.as_ref(),
+                        )
+                    })
+                    .await
+                    .map_err(|e| AppError::task_internal("复制到项目", e))
+                    .and_then(|r| r)
+                }
             },
         };
         let backup = snapshots
@@ -384,11 +424,18 @@ pub(super) async fn run(
                 (status, Some(error))
             }
         };
+        if plan.copy.is_some() && target.target.agent_id.is_none() {
+            if status == BatchStatus::Success {
+                copied.insert(target.target.name.clone());
+            } else {
+                copy_failed.insert(target.target.name.clone());
+            }
+        }
         let skill_status = if status == BatchStatus::Success {
             match plan.preview.action {
                 BatchAction::Update => TaskSkillStatus::Updated,
                 BatchAction::Uninstall | BatchAction::Detach => TaskSkillStatus::Removed,
-                BatchAction::Attach => TaskSkillStatus::Installed,
+                BatchAction::Attach | BatchAction::CopyToProject => TaskSkillStatus::Installed,
             }
         } else if status == BatchStatus::Skipped {
             TaskSkillStatus::Skipped
@@ -461,6 +508,9 @@ async fn check_target(
     plan: &BatchPlan,
     target: &PlannedTarget,
 ) -> Result<(), AppError> {
+    if plan.copy.is_some() {
+        return Ok(());
+    }
     let manager = manager.clone();
     let layout = layout.clone();
     let plan = plan.clone();

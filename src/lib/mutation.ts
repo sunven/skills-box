@@ -57,6 +57,7 @@ export type MutationAction =
   | "uninstall"
   | "attach"
   | "detach"
+  | "copy_to_project"
   | "manage_add"
   | "manage_remove"
   | "project_add"
@@ -127,6 +128,12 @@ const HEADING_LABELS: Record<
     failed: "断开失败",
     cancelled: "断开已取消",
   },
+  copy_to_project: {
+    success: "复制到项目完成",
+    partial: "复制与挂载部分完成",
+    failed: "复制到项目失败",
+    cancelled: "复制到项目已停止",
+  },
   manage_add: {
     success: "已添加 agent",
     partial: "添加部分失败",
@@ -194,7 +201,7 @@ export function normalizeTaskResult(result: TaskResult): MutationResultView {
             row.status === "not_executed" ? ("skipped" as const) : row.status,
           statusLabel:
             row.status === "success"
-              ? BATCH_SUCCESS_LABELS[result.batch!.action]
+              ? row.operation === "attach" ? "已挂载" : BATCH_SUCCESS_LABELS[result.batch!.action]
               : row.status === "failed"
                 ? "失败"
                 : row.status === "skipped"
@@ -203,7 +210,7 @@ export function normalizeTaskResult(result: TaskResult): MutationResultView {
           error: row.error ?? undefined,
           reason:
             row.status === "not_executed"
-              ? "批量操作已停止，此目标尚未执行。"
+              ? (row.reason ?? "批量操作已停止，此目标尚未执行。")
               : (row.reason ?? undefined),
           backupPath: row.backupPath ?? undefined,
         }))
@@ -438,6 +445,14 @@ export function mutationRefreshPlan(
     remove: [],
   });
   switch (action) {
+    case "copy_to_project":
+      return invalidate([
+        projectsQueryKey,
+        inventoryQueryKey(scope),
+        skillQueryPrefix(scope),
+        updateReportQueryKey(scope),
+        updateCheckStatesQueryKey,
+      ]);
     case "install":
       return invalidate([inventoryQueryKey(scope), skillQueryPrefix(scope)]);
     case "update":

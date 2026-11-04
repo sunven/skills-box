@@ -23,6 +23,7 @@ pub enum BatchAction {
     Uninstall,
     Attach,
     Detach,
+    CopyToProject,
 }
 impl BatchAction {
     pub fn label(self) -> &'static str {
@@ -31,10 +32,11 @@ impl BatchAction {
             Self::Uninstall => "卸载",
             Self::Attach => "挂载",
             Self::Detach => "解除挂载",
+            Self::CopyToProject => "复制到项目",
         }
     }
     pub fn has_agents(self) -> bool {
-        matches!(self, Self::Attach | Self::Detach)
+        matches!(self, Self::Attach | Self::Detach | Self::CopyToProject)
     }
 }
 
@@ -47,6 +49,7 @@ pub struct BatchRequest {
     pub agent_ids: Vec<String>,
     /// Restricts a retry to the original failed/unexecuted pairs.
     pub target_keys: Option<Vec<String>>,
+    pub project_root: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -62,6 +65,8 @@ pub struct BatchTarget {
     pub local_modification: LocalModification,
     pub deletes_copy: bool,
     pub paths: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operation: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -72,6 +77,10 @@ pub struct BatchPreview {
     pub scope: ScopeId,
     pub action: BatchAction,
     pub targets: Vec<BatchTarget>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<crate::projects::Project>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agents: Option<Vec<crate::inventory::InventoryAgent>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -116,6 +125,7 @@ pub struct BatchPlan {
     pub targets: Vec<PlannedTarget>,
     pub updates: HashMap<String, UpdateSkillResult>,
     pub created_at: u64,
+    pub copy: Option<super::copy_to_project::CopyPlan>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -134,6 +144,12 @@ pub fn plan(
     id: String,
     updates: HashMap<String, UpdateSkillResult>,
 ) -> Result<BatchPlan, AppError> {
+    if request.action == BatchAction::CopyToProject {
+        return super::copy_to_project::plan(paths, layout, request, id, None);
+    }
+    if request.project_root.is_some() {
+        return Err(AppError::path_invalid("只有复制到项目可以选择目标目录。"));
+    }
     if request.skill_ids.is_empty() || request.skill_ids.len() > 10_000 {
         return Err(AppError::skill_invalid_name("请选择要操作的技能。"));
     }
@@ -208,6 +224,8 @@ pub fn plan(
         scope: layout.scope.clone(),
         action: request.action,
         targets: targets.iter().map(|t| t.target.clone()).collect(),
+        project: None,
+        agents: None,
     };
     Ok(BatchPlan {
         preview,
@@ -217,6 +235,7 @@ pub fn plan(
         targets,
         updates,
         created_at: crate::time::now_ms(),
+        copy: None,
     })
 }
 
@@ -253,6 +272,7 @@ fn preview_target(
                     local_modification: LocalModification::Unknown,
                     deletes_copy: false,
                     paths: Vec::new(),
+                    operation: None,
                 },
             })
         }
@@ -283,6 +303,7 @@ pub fn inspect(
         local_modification: LocalModification::Unknown,
         deletes_copy: false,
         paths: Vec::new(),
+        operation: None,
     };
     let located = layout.locate(paths, name)?;
     let Some(located) = located else {
@@ -411,6 +432,7 @@ pub fn inspect(
             }
             Ok(())
         })(),
+        BatchAction::CopyToProject => unreachable!("copy has its own plan"),
     };
     match eligibility {
         Ok(()) => target.eligible = true,

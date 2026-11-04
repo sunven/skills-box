@@ -131,7 +131,10 @@ impl TaskManager {
 }
 
 impl PlannedMutation<crate::tasks::batch::BatchPlan> {
-    pub(super) fn start_batch(self, sink: EventSink) -> Result<TaskId, AppError> {
+    pub(super) fn start_batch(mut self, sink: EventSink) -> Result<TaskId, AppError> {
+        if let Some(copy) = &self.plan.copy {
+            self.scope.layout = copy.layout.clone();
+        }
         let mut seen = std::collections::HashSet::new();
         let skills = self
             .plan

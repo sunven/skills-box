@@ -128,6 +128,10 @@ _Avoid_: installation, mount
 Create a skill's attachment in one or more agents without reinstalling, keeping the canonical store and lock entry intact. It is the inverse of detach and requires the canonical folder.
 _Avoid_: mount, enable
 
+**Copy to project**:
+Create an independent project skill from a global skill's current content while retaining the original global skill. Its agent attachments use the project's own content; later global changes do not change the project copy.
+_Avoid_: cross-scope attach, global link
+
 **Detach**:
 Remove a skill from one agent while keeping the canonical store and the skill's lock entry intact.
 _Avoid_: uninstall, disable, delete

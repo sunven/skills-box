@@ -738,6 +738,8 @@ function App() {
               : snapshot?.installTargets) ?? EMPTY_INVENTORY_AGENTS
           }
           disabled={scopeBlocked || appUpdate.critical}
+          projects={projects?.projects ?? EMPTY_PROJECTS}
+          onViewProject={(target) => handleSelectScope(target)}
           onRunningChange={handleBatchRunningChange}
           onCompleted={setBatchSucceededIds}
           onClose={() => {

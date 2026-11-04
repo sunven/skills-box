@@ -1,23 +1,26 @@
-import type { AppError, LocalModification, ScopeId } from "./types";
+import type { AppError, InventoryAgent, LocalModification, ProjectEntry, ScopeId } from "./types";
 
-export type BatchAction = "update" | "uninstall" | "attach" | "detach";
+export type BatchAction = "update" | "uninstall" | "attach" | "detach" | "copy_to_project";
 export const BATCH_ACTION_LABELS: Record<BatchAction, string> = {
   update: "更新",
   uninstall: "卸载",
   attach: "挂载到 Agent",
   detach: "解除 Agent 挂载",
+  copy_to_project: "复制到项目",
 };
 export const BATCH_SUCCESS_LABELS: Record<BatchAction, string> = {
   update: "已更新",
   uninstall: "已卸载",
   attach: "已挂载",
   detach: "已解除挂载",
+  copy_to_project: "已复制到项目",
 };
 export interface BatchRequest {
   action: BatchAction;
   skillIds: string[];
   agentIds: string[];
   targetKeys?: string[];
+  projectRoot?: string;
 }
 export interface BatchTarget {
   key: string;
@@ -30,6 +33,7 @@ export interface BatchTarget {
   localModification: LocalModification;
   deletesCopy: boolean;
   paths: string[];
+  operation?: "copy" | "attach";
 }
 export interface BatchPreview {
   id: string;
@@ -37,6 +41,8 @@ export interface BatchPreview {
   scope: ScopeId;
   action: BatchAction;
   targets: BatchTarget[];
+  project?: Omit<ProjectEntry, "available" | "unavailableReason" | "lockError">;
+  agents?: InventoryAgent[];
 }
 export interface BatchConfirmation {
   previewId: string;
@@ -58,6 +64,7 @@ export interface BatchResult {
 export function batchTargetLabel(target: BatchTarget): string {
   return target.agentName
     ? `${target.name} · ${target.agentName}`
+    : target.operation === "copy" ? `${target.name} · 复制到项目`
     : target.name;
 }
 

@@ -33,3 +33,45 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
 }
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Publish a complete directory without ever replacing an existing entry.
+pub(crate) fn rename_directory_new(source: &Path, destination: &Path) -> io::Result<()> {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        let source = CString::new(source.as_os_str().as_bytes())?;
+        let destination = CString::new(destination.as_os_str().as_bytes())?;
+        // SAFETY: both paths are owned, NUL-terminated strings and the call
+        // borrows their pointers only until it returns.
+        let result = unsafe {
+            #[cfg(target_os = "macos")]
+            {
+                libc::renamex_np(source.as_ptr(), destination.as_ptr(), libc::RENAME_EXCL)
+            }
+            #[cfg(target_os = "linux")]
+            {
+                libc::renameat2(
+                    libc::AT_FDCWD,
+                    source.as_ptr(),
+                    libc::AT_FDCWD,
+                    destination.as_ptr(),
+                    libc::RENAME_NOREPLACE,
+                )
+            }
+        };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = (source, destination);
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "此平台无法无覆盖发布目录。",
+        ))
+    }
+}

@@ -2,6 +2,7 @@
 
 pub mod batch;
 pub mod conflicts;
+pub(crate) mod copy_to_project;
 pub mod install;
 pub mod manager;
 pub mod parser;

@@ -35,13 +35,19 @@ the signature and signed version before installing an update. See
 
 - Tauri capabilities expose **only** `core:default` and `dialog:allow-open`
   for the `main` window (`src-tauri/capabilities/default.json`). The dialog
-  plugin is used solely by the project-registration folder picker; no save,
+  plugin is used by project registration and batch project destination selection; no save,
   message or ask dialog is allowed. There is no `shell`, `fs` or `opener`
   permission in the frontend.
 - `add_project` / `relocate_project` accept the folder chosen by that picker.
-  They are the only path inputs: Rust canonicalizes, deduplicates and rejects
+  Batch Copy to project also accepts an explicitly selected `projectRoot` for
+  a bounded read-only preview. These path inputs use the same validation:
+  Rust canonicalizes, deduplicates and rejects
   `/`, the user home and the global canonical store, and the resulting root is
-  the only extra root content reads may reach.
+  the only extra root ordinary content reads may reach. Batch copying validates
+  the pending root without registration or baseline writes, and registers it
+  only after confirmation under the write permit. Project content, links and
+  lock paths stay physically within that root; copies reject absolute, external
+  and broken internal links. New directories are published without replacement.
 - The opener is used only from Rust commands: `open_skill_folder`,
   `open_skill_file`, `reveal_app_data` (server-resolved paths guarded by
   `security::ensure_allowed`) and `open_external_url` (absolute `https://` with

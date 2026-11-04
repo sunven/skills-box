@@ -176,6 +176,7 @@ impl Fixture {
     }
     fn request(action: BatchAction, names: &[&str], agents: &[&str]) -> BatchRequest {
         BatchRequest {
+            project_root: None,
             action,
             skill_ids: names.iter().map(|s| s.to_string()).collect(),
             agent_ids: agents.iter().map(|s| s.to_string()).collect(),
@@ -268,6 +269,418 @@ fn statuses(result: &TaskResult) -> Vec<BatchStatus> {
         .iter()
         .map(|r| r.status)
         .collect()
+}
+
+impl Fixture {
+    fn copy_request(
+        &self,
+        root: &std::path::Path,
+        names: &[&str],
+        agents: &[&str],
+    ) -> BatchRequest {
+        let mut request = Self::request(BatchAction::CopyToProject, names, agents);
+        request.project_root = Some(root.to_string_lossy().into_owned());
+        request
+    }
+    fn project_root(&self) -> std::path::PathBuf {
+        let root = self._tmp.path().join("project");
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+    async fn execute_preview(&self, preview: &BatchPreview) -> TaskResult {
+        let (on_event, mut rx) = sink();
+        self.manager
+            .start_batch(ScopeId::Global, Self::confirmation(preview), on_event)
+            .await
+            .unwrap();
+        finished(&mut rx).await
+    }
+}
+
+#[tokio::test]
+async fn copy_to_project_preview_is_read_only_and_copy_is_independent_and_managed() {
+    let f = Fixture::new();
+    let root = f.project_root();
+    let registry = crate::projects::ProjectRegistry::new(f.paths.clone());
+    let original_lock = fs::read(f.paths.lock_path()).unwrap();
+    let preview = f
+        .preview(f.copy_request(&root, &["alpha", "beta"], &["claude-code"]))
+        .await;
+    assert_eq!(preview.targets.len(), 4);
+    assert!(
+        preview.targets.iter().all(|t| t.eligible),
+        "{:?}",
+        preview.targets
+    );
+    assert!(registry.list().projects.is_empty());
+    assert!(!root.join(".agents").exists());
+    for _ in 0..3 {
+        assert_eq!(
+            f.manager
+                .refresh_batch_preview(preview.id.clone())
+                .await
+                .unwrap()
+                .revision,
+            preview.revision
+        );
+    }
+    let result = f.execute_preview(&preview).await;
+    assert_eq!(
+        statuses(&result),
+        vec![BatchStatus::Success; 4],
+        "{:?}",
+        result.batch
+    );
+    let project = &registry.list().projects[0];
+    assert_eq!(registry.list().last_active_scope, ScopeId::Global);
+    assert_eq!(result.scope, project.project.scope());
+    assert_eq!(fs::read(f.paths.lock_path()).unwrap(), original_lock);
+    let project_lock =
+        crate::project_lock::ProjectLockFile::read(&root.join("skills-lock.json")).unwrap();
+    for name in ["alpha", "beta"] {
+        let canonical = root.join(".agents/skills").join(name);
+        assert!(fs::symlink_metadata(&canonical).unwrap().is_dir());
+        assert_eq!(
+            fs::canonicalize(root.join(".claude/skills").join(name)).unwrap(),
+            fs::canonicalize(&canonical).unwrap()
+        );
+        let entry = project_lock.get(name).unwrap();
+        assert_eq!(entry.source, "vercel-labs/skills");
+        assert_eq!(
+            entry.skill_folder_hash,
+            crate::update::content_hash::folder_hash(&canonical).unwrap()
+        );
+        assert!(
+            BaselineStore::for_scope(&f.paths, &result.scope)
+                .load(name)
+                .unwrap()
+                .verified
+        );
+    }
+    f.edit("alpha");
+    fs::remove_dir_all(f.paths.canonical_skills_dir().join("beta")).unwrap();
+    assert_eq!(
+        fs::read_to_string(root.join(".agents/skills/alpha/SKILL.md")).unwrap(),
+        "# alpha\n"
+    );
+    assert!(root.join(".claude/skills/beta/SKILL.md").exists());
+}
+
+#[tokio::test]
+async fn copy_to_project_zero_agents_copies_local_changes_and_skips_conflicts_on_repeat() {
+    let f = Fixture::new();
+    let root = f.project_root();
+    f.edit("alpha");
+    let request = f.copy_request(&root, &["alpha", "beta"], &[]);
+    let preview = f.preview(request.clone()).await;
+    assert_eq!(
+        preview.targets[0].local_modification,
+        crate::baseline::LocalModification::Modified
+    );
+    assert_eq!(
+        statuses(&f.execute_preview(&preview).await),
+        vec![BatchStatus::Success; 2]
+    );
+    let before = fs::read(root.join("skills-lock.json")).unwrap();
+    fs::write(root.join(".agents/skills/beta/SKILL.md"), "project edit").unwrap();
+    let preview = f
+        .preview(f.copy_request(&root, &["alpha", "beta"], &["claude-code"]))
+        .await;
+    assert_eq!(
+        preview
+            .targets
+            .iter()
+            .map(|t| t.eligible)
+            .collect::<Vec<_>>(),
+        vec![false, true, false, false]
+    );
+    assert_eq!(
+        statuses(&f.execute_preview(&preview).await),
+        vec![
+            BatchStatus::Skipped,
+            BatchStatus::Success,
+            BatchStatus::Skipped,
+            BatchStatus::Skipped
+        ]
+    );
+    assert_eq!(fs::read(root.join("skills-lock.json")).unwrap(), before);
+    assert_eq!(
+        fs::read_to_string(root.join(".agents/skills/beta/SKILL.md")).unwrap(),
+        "project edit"
+    );
+}
+
+#[tokio::test]
+async fn copy_to_project_preserves_unmanaged_destinations_and_rejects_external_links() {
+    let f = Fixture::new();
+    let root = f.project_root();
+    fs::create_dir_all(root.join(".agents/skills/alpha")).unwrap();
+    fs::write(root.join(".agents/skills/alpha/SKILL.md"), "# alpha\n").unwrap();
+    std::os::unix::fs::symlink(
+        "/etc/hosts",
+        f.paths.canonical_skills_dir().join("beta/outside"),
+    )
+    .unwrap();
+    let preview = f
+        .preview(f.copy_request(&root, &["alpha", "beta"], &["claude-code"]))
+        .await;
+    assert!(preview.targets.iter().all(|t| !t.eligible));
+    assert!(!root.join("skills-lock.json").exists());
+    assert!(
+        crate::projects::ProjectRegistry::new(f.paths.clone())
+            .list()
+            .projects
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn copy_to_project_changed_preview_never_registers_or_writes() {
+    let f = Fixture::new();
+    let root = f.project_root();
+    let preview = f.preview(f.copy_request(&root, &["alpha"], &[])).await;
+    f.edit("alpha");
+    let (events, _) = sink();
+    let error = f
+        .manager
+        .start_batch(ScopeId::Global, Fixture::confirmation(&preview), events)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::BatchPreviewExpired);
+    assert!(
+        crate::projects::ProjectRegistry::new(f.paths.clone())
+            .list()
+            .projects
+            .is_empty()
+    );
+    assert!(!root.join(".agents").exists());
+}
+
+#[tokio::test]
+async fn copy_to_project_preserves_internal_relative_links_and_root_link_content() {
+    let f = Fixture::new();
+    let root = f.project_root();
+    let source = f.paths.canonical_skills_dir().join("alpha");
+    std::os::unix::fs::symlink("SKILL.md", source.join("reference.md")).unwrap();
+    let actual = f._tmp.path().join("linked-source");
+    fs::rename(&source, &actual).unwrap();
+    std::os::unix::fs::symlink(&actual, &source).unwrap();
+    let preview = f.preview(f.copy_request(&root, &["alpha"], &[])).await;
+    assert_eq!(
+        statuses(&f.execute_preview(&preview).await),
+        vec![BatchStatus::Success]
+    );
+    let copied = root.join(".agents/skills/alpha");
+    assert!(fs::symlink_metadata(&copied).unwrap().is_dir());
+    assert_eq!(
+        fs::read_link(copied.join("reference.md")).unwrap(),
+        std::path::Path::new("SKILL.md")
+    );
+    fs::remove_dir_all(&actual).unwrap();
+    assert_eq!(
+        fs::read_to_string(copied.join("reference.md")).unwrap(),
+        "# alpha\n"
+    );
+}
+
+#[tokio::test]
+async fn copy_to_project_skips_changed_agent_targets_and_retains_its_copy() {
+    let f = Fixture::new();
+    let root = f.project_root();
+    let preview = f
+        .preview(f.copy_request(&root, &["alpha", "beta"], &["claude-code"]))
+        .await;
+    let occupied = root.join(".claude/skills/alpha");
+    let path = occupied.clone();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let events: EventSink = Arc::new(move |event| {
+        if event.message == "已处理 1 / 4 个目标" {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, "do not overwrite").unwrap();
+        }
+        let _ = tx.send(event);
+    });
+    f.manager
+        .start_batch(ScopeId::Global, Fixture::confirmation(&preview), events)
+        .await
+        .unwrap();
+    let result = finished(&mut rx).await;
+    assert_eq!(
+        statuses(&result),
+        vec![
+            BatchStatus::Success,
+            BatchStatus::Skipped,
+            BatchStatus::Success,
+            BatchStatus::Success
+        ]
+    );
+    assert!(root.join(".agents/skills/alpha/SKILL.md").exists());
+    assert_eq!(fs::read_to_string(&occupied).unwrap(), "do not overwrite");
+    assert_eq!(
+        result.batch.unwrap().rows[1].error.as_ref().unwrap().code,
+        ErrorCode::BatchTargetChanged
+    );
+}
+
+#[tokio::test]
+async fn copy_to_project_retains_copy_when_attach_fails_and_retry_only_attaches() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let f = Fixture::new();
+    let root = f.project_root();
+    let agent_dir = root.join(".claude/skills");
+    fs::create_dir_all(&agent_dir).unwrap();
+    let permissions = fs::metadata(&agent_dir).unwrap().permissions();
+    fs::set_permissions(&agent_dir, fs::Permissions::from_mode(0o555)).unwrap();
+    let probe = agent_dir.join("permission-probe");
+    let writable = fs::write(&probe, "probe").is_ok();
+    fs::set_permissions(&agent_dir, permissions.clone()).unwrap();
+    // A privileged test process can bypass directory permissions.
+    if writable {
+        fs::remove_file(probe).unwrap();
+        return;
+    }
+    let mut request = f.copy_request(&root, &["alpha", "beta"], &["claude-code"]);
+    let preview = f.preview(request.clone()).await;
+    let path = agent_dir.clone();
+    let restore = permissions.clone();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let events: EventSink = Arc::new(move |event| {
+        if event.message == "已处理 1 / 4 个目标" {
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o555)).unwrap();
+        } else if event.message == "已处理 2 / 4 个目标" {
+            fs::set_permissions(&path, restore.clone()).unwrap();
+        }
+        let _ = tx.send(event);
+    });
+    f.manager
+        .start_batch(ScopeId::Global, Fixture::confirmation(&preview), events)
+        .await
+        .unwrap();
+    let result = finished(&mut rx).await;
+    fs::set_permissions(&agent_dir, permissions).unwrap();
+    assert_eq!(
+        statuses(&result),
+        vec![
+            BatchStatus::Success,
+            BatchStatus::Failed,
+            BatchStatus::Success,
+            BatchStatus::Success
+        ]
+    );
+    assert!(root.join(".agents/skills/alpha/SKILL.md").exists());
+    assert!(!agent_dir.join("alpha").exists());
+    assert_eq!(
+        result.batch.unwrap().rows[1].error.as_ref().unwrap().code,
+        ErrorCode::AgentAttachFailed
+    );
+    let lock = fs::read(root.join("skills-lock.json")).unwrap();
+    request.target_keys = Some(vec![preview.targets[1].key.clone()]);
+    let retry = f.preview(request).await;
+    assert_eq!(retry.targets.len(), 1);
+    assert_eq!(retry.targets[0].operation.as_deref(), Some("attach"));
+    assert_eq!(
+        statuses(&f.execute_preview(&retry).await),
+        vec![BatchStatus::Success]
+    );
+    assert_eq!(fs::read(root.join("skills-lock.json")).unwrap(), lock);
+}
+
+#[tokio::test]
+async fn copy_to_project_stop_retains_registration_and_owns_both_scope_writes() {
+    let f = Fixture::new();
+    let root = f.project_root();
+    let preview = f
+        .preview(f.copy_request(&root, &["alpha", "beta"], &["claude-code"]))
+        .await;
+    let manager = f.manager.clone();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let events: EventSink = Arc::new(move |event| {
+        if event.message == "已处理 1 / 4 个目标" {
+            assert!(manager.try_acquire_mutation().is_err());
+            assert!(manager.begin_registry_change().is_err());
+            assert_ne!(manager.active_mutation().unwrap().scope, ScopeId::Global);
+            manager.cancel_task(&event.task_id).unwrap();
+        }
+        let _ = tx.send(event);
+    });
+    f.manager
+        .start_batch(ScopeId::Global, Fixture::confirmation(&preview), events)
+        .await
+        .unwrap();
+    let result = finished(&mut rx).await;
+    assert_eq!(
+        statuses(&result),
+        vec![
+            BatchStatus::Success,
+            BatchStatus::NotExecuted,
+            BatchStatus::NotExecuted,
+            BatchStatus::NotExecuted
+        ]
+    );
+    assert!(root.join(".agents/skills/alpha").exists());
+    assert!(!root.join(".claude/skills/alpha").exists());
+    assert!(!root.join(".agents/skills/beta").exists());
+    let registered = crate::projects::ProjectRegistry::new(f.paths.clone()).list();
+    assert_eq!(registered.projects.len(), 1);
+    assert_eq!(registered.last_active_scope, ScopeId::Global);
+}
+
+#[tokio::test]
+async fn copy_to_project_baseline_failure_restores_records_and_removes_its_copy() {
+    let f = Fixture::new();
+    let root = f.project_root();
+    let preview = f.preview(f.copy_request(&root, &["alpha"], &[])).await;
+    let project = preview.project.as_ref().unwrap();
+    let baselines = BaselineStore::for_scope(&f.paths, &project.scope());
+    fs::create_dir_all(baselines.dir().parent().unwrap()).unwrap();
+    fs::write(baselines.dir(), "block baseline writes").unwrap();
+    let result = f.execute_preview(&preview).await;
+    assert_eq!(statuses(&result), vec![BatchStatus::Failed]);
+    assert!(!root.join(".agents/skills/alpha").exists());
+    assert!(!root.join("skills-lock.json").exists());
+    assert_eq!(
+        crate::projects::ProjectRegistry::new(f.paths.clone())
+            .list()
+            .projects
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn copy_to_project_keeps_readable_unicode_files_without_inventing_a_version() {
+    let f = Fixture::new();
+    let root = f.project_root();
+    fs::write(
+        f.paths.canonical_skills_dir().join("alpha/说明.md"),
+        "中文说明",
+    )
+    .unwrap();
+    let preview = f.preview(f.copy_request(&root, &["alpha"], &[])).await;
+    assert!(preview.targets[0].eligible);
+    assert!(
+        preview.targets[0]
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("更新检查会显示未知")
+    );
+    let result = f.execute_preview(&preview).await;
+    assert_eq!(statuses(&result), vec![BatchStatus::Success]);
+    assert_eq!(
+        fs::read_to_string(root.join(".agents/skills/alpha/说明.md")).unwrap(),
+        "中文说明"
+    );
+    let lock = crate::project_lock::ProjectLockFile::read(&root.join("skills-lock.json")).unwrap();
+    assert_eq!(lock.get("alpha").unwrap().skill_folder_hash, "");
+    assert_eq!(lock.get("alpha").unwrap().source, "vercel-labs/skills");
+    assert!(
+        BaselineStore::for_scope(&f.paths, &result.scope)
+            .load("alpha")
+            .unwrap()
+            .verified
+    );
 }
 
 #[tokio::test]
@@ -821,6 +1234,7 @@ async fn project_attach_can_create_missing_agent_directory_and_keeps_global_skil
         .project;
     let scope = project.scope();
     let request = BatchRequest {
+        project_root: None,
         action: BatchAction::Attach,
         skill_ids: vec![scope.skill_id("alpha")],
         agent_ids: vec!["claude-code".into()],

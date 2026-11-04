@@ -1,5 +1,5 @@
 import { SelectionCheckbox } from "./selection-checkbox";
-import { BATCH_ACTION_LABELS, type BatchAction } from "../lib/batch";
+import { BATCH_ACTION_LABELS } from "../lib/batch";
 import type { BatchSelection } from "./batch-dialog";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { AlertTriangle, Loader2, Search, X } from "lucide-react";
@@ -361,7 +361,7 @@ export function SkillListPane({
         <div className="batch-toolbar" role="toolbar" aria-label="批量操作">
           <strong aria-live="polite">已选 {checkedSkills.length} 个技能</strong>
           <div className="batch-toolbar-actions">
-            {(Object.keys(BATCH_ACTION_LABELS) as BatchAction[]).map(
+            {(["update", "uninstall", "attach", "detach"] as const).map(
               (action) => (
                 <Button
                   key={action}

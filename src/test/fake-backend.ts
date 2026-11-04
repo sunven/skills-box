@@ -400,6 +400,7 @@ export function createFakeBackend(
   let taskCounter = 0;
   const installSources = new Map<string, string>();
   let batchPreviewCounter = 0;
+  const pendingCopyProjects = new Map<string, ProjectEntry>();
   const batchPreviews = new Map<
     string,
     { scope: ScopeId; request: BatchRequest; preview: BatchPreview }
@@ -1105,6 +1106,47 @@ export function createFakeBackend(
     request: BatchRequest,
   ): BatchPreview => {
     const snapshot = snapshotFor(scope);
+    if (request.action === "copy_to_project") {
+      if (scope !== GLOBAL_SCOPE || !request.projectRoot?.startsWith("/")) throw { code: "project.invalid_root", message: "请选择有效的项目目录。", retryable: false } satisfies AppError;
+      const root = request.projectRoot.replace(/\/+$/, "");
+      let project = projectList.projects.find((p) => p.root === root) ?? pendingCopyProjects.get(root);
+      if (!project) {
+        project = fakeProject(root);
+        pendingCopyProjects.set(root, project);
+      }
+      if (!project.available) throw { code: "project.root_unavailable", message: "项目目录不可用。", retryable: false } satisfies AppError;
+      const destination = snapshotFor(projectScope(project.id));
+      const projectAgents = snapshot.installTargets.filter((a) => !a.universal && !a.shared && a.detected &&
+        (a.origin === "catalog" || !!a.projectSkillsDir)).map((a) => ({
+          ...a, globalSkillsDir: `${root}/${a.projectSkillsDir ?? (a.id === "claude-code" ? ".claude/skills" : `.${a.id}/skills`)}`,
+        }));
+      const targets: BatchTarget[] = [];
+      for (const skillId of request.skillIds) {
+        const skill = snapshot.skills.find((s) => s.id === skillId);
+        const existing = destination.skills.find((s) => s.name === skill?.name);
+        const conflict = existing && (existing.source !== skill?.source || existing.description !== skill?.description || existing.localModification === "modified");
+        for (const agentId of [null, ...request.agentIds]) {
+          const key = JSON.stringify([skillId, agentId]);
+          if (request.targetKeys && !request.targetKeys.includes(key)) continue;
+          const agent = projectAgents.find((a) => a.id === agentId);
+          const reason = !skill ? "技能已不存在。"
+            : skill.management !== "managed" || !skill.canonicalPath ? "仅受管且有共享目录的技能可复制。"
+            : conflict ? "项目已有同名技能，内容不同，不覆盖。"
+            : !agentId ? existing ? "项目已有相同内容，复用，不重复复制。" : null
+            : existing?.management === "unmanaged" ? "项目已有未受管技能，无法新增独立挂载。"
+            : !agent ? "Agent 不支持此项目。"
+            : existing?.attachments.some((a) => a.agentId === agentId) ? "已有挂载，不覆盖。" : null;
+          targets.push({
+            key, skillId, name: skill?.name ?? skillId, agentId, agentName: agentId ? agent?.displayName ?? agentId : null,
+            operation: agentId ? "attach" : "copy", eligible: reason === null, reason,
+            localModification: skill?.localModification ?? "unknown", deletesCopy: false,
+            paths: [agentId ? `${agent?.globalSkillsDir}/${skill?.name}` : `${root}/.agents/skills/${skill?.name}`],
+          });
+        }
+      }
+      return { id, scope, action: request.action, project, agents: projectAgents, targets,
+        revision: JSON.stringify({ project, targets, source: request.skillIds.map((id) => snapshot.skills.find((s) => s.id === id)), destination: destination.skills }) };
+    }
     const targets: BatchTarget[] = [];
     const keys = request.targetKeys ? new Set(request.targetKeys) : null;
     for (const skillId of request.skillIds) {
@@ -1193,12 +1235,13 @@ export function createFakeBackend(
     let index = 0;
     let processed = 0;
     const total = preview.targets.filter((target) => target.eligible).length;
+    const failedCopies = new Set<string>();
     const step = () => {
       const run = batchRuns.get(task.taskId);
       if (!run) return;
       while (index < preview.targets.length) {
         const target = preview.targets[index++]!;
-        if (!target.eligible || run.stop) {
+        if (!target.eligible || run.stop || (target.operation === "attach" && failedCopies.has(target.name))) {
           rows.push({
             ...target,
             status: target.eligible ? "not_executed" : "skipped",
@@ -1215,9 +1258,21 @@ export function createFakeBackend(
             uninstallFrom(preview.scope, [target.skillId]);
           else if (preview.action === "attach")
             nativeAttach(target.skillId, target.agentId!, preview.scope);
-          else nativeDetach(target.skillId, target.agentId!, preview.scope);
+          else if (preview.action === "copy_to_project" && preview.project) {
+            const destinationScope = projectScope(preview.project.id);
+            if (target.operation === "copy") {
+              const source = findSkill(target.skillId, GLOBAL_SCOPE);
+              const destination = snapshotFor(destinationScope);
+              setSnapshot({ ...destination, skills: [...destination.skills, {
+                ...source, id: `${destinationScope}/${source.name}`,
+                canonicalPath: `${preview.project.root}/.agents/skills/${source.name}`,
+                attachments: [], localModification: "clean",
+              }] }, destinationScope);
+            } else nativeAttach(`${destinationScope}/${target.name}`, target.agentId!, destinationScope);
+          } else nativeDetach(target.skillId, target.agentId!, preview.scope);
         } catch (cause) {
           failure = cause as AppError;
+          if (target.operation === "copy") failedCopies.add(target.name);
         }
         rows.push({
           ...target,
@@ -1245,7 +1300,7 @@ export function createFakeBackend(
         message: "批量操作已结束。",
         result: {
           action: "batch",
-          scope: preview.scope,
+          scope: preview.project ? projectScope(preview.project.id) : preview.scope,
           overall: run.stop
             ? "cancelled"
             : success.length === rows.length
@@ -1261,7 +1316,7 @@ export function createFakeBackend(
                 row.status === "success"
                   ? preview.action === "update"
                     ? "updated"
-                    : preview.action === "attach"
+                    : preview.action === "attach" || preview.action === "copy_to_project"
                       ? "installed"
                       : "removed"
                   : row.status === "skipped"
@@ -1319,6 +1374,7 @@ export function createFakeBackend(
         };
       }
       const preview = stored.preview;
+      if (!preview.targets.some((t) => t.eligible)) throw { code: "batch.confirmation_needed", message: "没有可执行目标。", retryable: false } satisfies AppError;
       if (
         (preview.action === "uninstall" && !confirmation.confirmedDelete) ||
         (preview.targets.some(
@@ -1333,6 +1389,14 @@ export function createFakeBackend(
         };
       }
       const task = makeTask("start_batch", onEvent);
+      if (preview.project) {
+        if (!projectList.projects.some((p) => p.id === preview.project!.id)) {
+          updateProjectList({ projects: [...projectList.projects, { ...preview.project, available: true }] });
+        }
+        const targetScope = projectScope(preview.project.id);
+        const current = snapshotFor(targetScope);
+        setSnapshot({ ...current, agents: preview.agents ?? [], installTargets: preview.agents ?? [] }, targetScope);
+      }
       batchRuns.set(task.taskId, {
         preview,
         stop: false,
@@ -1634,6 +1698,7 @@ export function createFakeBackend(
     },
     reset() {
       batchPreviews.clear();
+      pendingCopyProjects.clear();
       batchRuns.clear();
       for (const timer of timers) window.clearTimeout(timer);
       timers.clear();

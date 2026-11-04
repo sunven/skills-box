@@ -132,11 +132,35 @@ pub fn resolve_attach(
     agent_id: &str,
     context: TargetContext<'_>,
 ) -> Result<ResolvedAttachment, AppError> {
+    resolve_attach_inner(canonical_dir, located, agents, agent_id, context, true)
+}
+
+/// Copy to project previews an attachment before its canonical folder is
+/// published. All other native Attach gates remain the same.
+pub(crate) fn resolve_copy_attach(
+    canonical_dir: &Path,
+    located: &LocatedSkill,
+    agents: &[AgentDir],
+    agent_id: &str,
+    context: TargetContext<'_>,
+) -> Result<ResolvedAttachment, AppError> {
+    resolve_attach_inner(canonical_dir, located, agents, agent_id, context, false)
+}
+
+fn resolve_attach_inner(
+    canonical_dir: &Path,
+    located: &LocatedSkill,
+    agents: &[AgentDir],
+    agent_id: &str,
+    context: TargetContext<'_>,
+    require_canonical: bool,
+) -> Result<ResolvedAttachment, AppError> {
     let skill_id = located.name.as_str();
     let canonical = managed_canonical(located, skill_id)?;
-    if !fs::metadata(canonical)
-        .map(|metadata| metadata.is_dir())
-        .unwrap_or(false)
+    if require_canonical
+        && !fs::metadata(canonical)
+            .map(|metadata| metadata.is_dir())
+            .unwrap_or(false)
     {
         return Err(AppError::verify_canonical_missing(skill_id, canonical));
     }
