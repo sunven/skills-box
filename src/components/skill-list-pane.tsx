@@ -1,14 +1,22 @@
-import type { ReactNode } from "react";
-import { AlertTriangle, Loader2, Search } from "lucide-react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { AlertTriangle, Loader2, Search, X } from "lucide-react";
 import { AnomalyBanner } from "./anomaly-panel";
 import { ProjectHeader } from "./project-header";
 import { SkillRow } from "./skill-row";
+import {
+  SkillRowMenu,
+  type SkillMenuAction,
+  type SkillMenuTarget,
+} from "./skill-row-menu";
+import { useSkillRowActions } from "../hooks/use-skill-row-actions";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import type {
   AnomalyView,
   AppError,
+  InventoryAgent,
   ProjectEntry,
+  ScopeId,
   UpdateViewSkill,
 } from "../lib/types";
 import {
@@ -22,6 +30,16 @@ import {
 import type { ProjectHeaderView } from "../lib/workspace-view";
 
 interface SkillListPaneProps {
+  scope: ScopeId;
+  checkRevision?: string;
+  actionsDisabled: boolean;
+  checkingUpdates: boolean;
+  checkError: AppError | null;
+  installTargets: InventoryAgent[];
+  onCheckUpdates: (names: string[]) => boolean;
+  onOpenDetail: (name: string, destination: "content" | "attachments") => void;
+  onUpdate: (name: string) => void;
+  onUninstall: (name: string) => void;
   totalSkills: number;
   visibleSkills: UpdateViewSkill[];
   anomalies: AnomalyView;
@@ -75,9 +93,7 @@ function CanvasSummary({
         {candidateCount}
       </span>{" "}
       个可更新 ·{" "}
-      <span className={anomalyCount > 0 ? "anomaly" : "n"}>
-        {anomalyCount}
-      </span>{" "}
+      <span className={anomalyCount > 0 ? "anomaly" : "n"}>{anomalyCount}</span>{" "}
       个异常
     </p>
   );
@@ -106,6 +122,16 @@ function EmptyState({
 }
 
 export function SkillListPane({
+  scope,
+  checkRevision,
+  actionsDisabled,
+  checkingUpdates,
+  checkError,
+  installTargets,
+  onCheckUpdates,
+  onOpenDetail,
+  onUpdate,
+  onUninstall,
   totalSkills,
   visibleSkills,
   anomalies,
@@ -139,6 +165,48 @@ export function SkillListPane({
   onOpenAnomalies,
   onRetry,
 }: SkillListPaneProps) {
+  const [menuTarget, setMenuTarget] = useState<SkillMenuTarget | null>(null);
+  const rowActions = useSkillRowActions({
+    scope,
+    checkRevision,
+    checkingUpdates,
+    checkError,
+    skills: visibleSkills,
+    onCheckUpdates,
+  });
+  const menuSkill = menuTarget
+    ? visibleSkills.find((skill) => skill.id === menuTarget.skillId)
+    : undefined;
+  useEffect(() => {
+    if (menuTarget && (!menuSkill || !menuTarget.anchor.isConnected))
+      setMenuTarget(null);
+  }, [menuTarget, menuSkill]);
+  const openMenu = useCallback(
+    (skill: UpdateViewSkill, anchor: HTMLButtonElement) => {
+      setMenuTarget((current) =>
+        current?.skillId === skill.id ? null : { skillId: skill.id, anchor },
+      );
+    },
+    [],
+  );
+  const closeMenu = useCallback(
+    (restoreFocus = false) => {
+      if (restoreFocus && menuTarget?.anchor.isConnected)
+        menuTarget.anchor.focus({ preventScroll: true });
+      setMenuTarget(null);
+    },
+    [menuTarget],
+  );
+  const handleMenuAction = (
+    skill: UpdateViewSkill,
+    action: SkillMenuAction,
+  ) => {
+    if (action === "content" || action === "attachments")
+      onOpenDetail(skill.name, action);
+    else if (action === "check") rowActions.checkSkill(skill);
+    else onUninstall(skill.name);
+  };
+
   return (
     <section aria-label="Skill 列表" className="canvas">
       {projectHeader ? (
@@ -198,12 +266,15 @@ export function SkillListPane({
         <select
           aria-label="状态筛选"
           value={status}
-          onChange={(event) => onStatusChange(event.target.value as StatusFilter)}
+          onChange={(event) =>
+            onStatusChange(event.target.value as StatusFilter)
+          }
           className="toolbar-select h-9 rounded-md border border-border-strong bg-card px-2 text-[12.5px] text-foreground"
         >
           {STATUS_FILTERS.map((filter) => (
             <option key={filter.value} value={filter.value}>
-              {filter.value === "all" ? "全部状态" : filter.label} ({statusCounts[filter.value]})
+              {filter.value === "all" ? "全部状态" : filter.label} (
+              {statusCounts[filter.value]})
             </option>
           ))}
         </select>
@@ -216,18 +287,60 @@ export function SkillListPane({
           <option value="all">全部 Agent ({totalSkills})</option>
           {agents.map((option) => (
             <option key={option.id} value={option.id}>
-              {option.displayName}{option.shared ? " · 共享" : !option.detected ? " · 未检测" : ""} ({option.count})
+              {option.displayName}
+              {option.shared
+                ? " · 共享"
+                : !option.detected
+                  ? " · 未检测"
+                  : ""}{" "}
+              ({option.count})
             </option>
           ))}
         </select>
         <div className="ml-auto flex items-center gap-3">
-          {availableDiscoveryCount > 0 ? <Button variant="outline" size="sm" className="text-accent"
-            title="查看当前来源在此作用域可安装的 skills" onClick={onOpenAvailableDiscoveries}>可安装 {availableDiscoveryCount}</Button> : null}
+          {availableDiscoveryCount > 0 ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-accent"
+              title="查看当前来源在此作用域可安装的 skills"
+              onClick={onOpenAvailableDiscoveries}
+            >
+              可安装 {availableDiscoveryCount}
+            </Button>
+          ) : null}
           <span className="toolbar-count">{visibleSkills.length} 个</span>
         </div>
       </div>
 
       <AnomalyBanner anomalies={anomalies} onOpen={onOpenAnomalies} />
+
+      {rowActions.notice ? (
+        <div
+          role="alert"
+          className="skill-action-notice notice"
+          data-tone="negative"
+        >
+          <div>
+            <p>
+              {rowActions.notice.name}：{rowActions.notice.error.message}
+            </p>
+            {rowActions.notice.error.detail ? (
+              <p>{rowActions.notice.error.detail}</p>
+            ) : null}
+            {rowActions.notice.error.hint ? (
+              <p>{rowActions.notice.error.hint}</p>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            aria-label="关闭操作提示"
+            onClick={rowActions.dismissNotice}
+          >
+            <X aria-hidden="true" />
+          </button>
+        </div>
+      ) : null}
 
       <div className="list-panel">
         {unavailableProject ? (
@@ -327,6 +440,7 @@ export function SkillListPane({
                 <span className="skill-col-source">来源 / 更新于</span>
                 <span className="skill-col-mounts">Agent 挂载</span>
                 <span>状态</span>
+                <span className="skill-actions-heading">操作</span>
               </div>
             </div>
             <div className="list-scroll" data-testid="skill-list">
@@ -336,12 +450,33 @@ export function SkillListPane({
                   skill={skill}
                   selected={skill.name === selectedName}
                   onSelect={onSelect}
+                  actionsDisabled={actionsDisabled}
+                  openingFolder={rowActions.openingFolders.has(skill.id)}
+                  checking={
+                    rowActions.checkingName === skill.name && checkingUpdates
+                  }
+                  menuOpen={menuSkill?.id === skill.id}
+                  onOpenFolder={rowActions.openFolder}
+                  onOpenMenu={openMenu}
+                  onUpdate={onUpdate}
                 />
               ))}
             </div>
           </>
         )}
       </div>
+      {menuSkill && menuTarget ? (
+        <SkillRowMenu
+          key={menuSkill.id}
+          skill={menuSkill}
+          target={menuTarget}
+          agents={installTargets}
+          actionsDisabled={actionsDisabled}
+          checkingUpdates={checkingUpdates}
+          onAction={handleMenuAction}
+          onClose={closeMenu}
+        />
+      ) : null}
     </section>
   );
 }

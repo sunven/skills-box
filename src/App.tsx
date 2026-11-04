@@ -11,7 +11,7 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { AnomalyDialog } from "./components/anomaly-panel";
 import { AppHeader } from "./components/app-header";
-import { DetailPane } from "./components/detail-pane";
+import { DetailPane, type DetailEntry } from "./components/detail-pane";
 import { EnvironmentBanner } from "./components/environment-banner";
 import { ExitDialog } from "./components/exit-dialog";
 import { FilterSidebar } from "./components/filter-sidebar";
@@ -130,6 +130,7 @@ function App() {
   const [status, setStatus] = useState<StatusFilter>("all");
   const [sort, setSort] = useState<SortKey>("recent");
   const [selectedName, setSelectedName] = useState<string | null>(null);
+  const [detailEntry, setDetailEntry] = useState<DetailEntry | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [anomaliesOpen, setAnomaliesOpen] = useState(false);
   const [installOpen, setInstallOpen] = useState(false);
@@ -319,7 +320,7 @@ function App() {
 
   const handleCheckUpdates = useCallback(
     (skillIds?: string[]) => {
-      mutateCheckUpdates(skillIds);
+      return mutateCheckUpdates(skillIds);
     },
     [mutateCheckUpdates],
   );
@@ -353,6 +354,7 @@ function App() {
     setStatus(defaults.status);
     setSort("recent");
     setSelectedName(null);
+    setDetailEntry(null);
     setFiltersOpen(false);
     setAnomaliesOpen(false);
     setUpdateTarget(null);
@@ -410,10 +412,17 @@ function App() {
 
   const handleSelectSkill = useCallback((name: string) => {
     setSelectedName(name);
+    setDetailEntry(null);
+  }, []);
+
+  const handleOpenSkillDetail = useCallback((name: string, destination: "content" | "attachments") => {
+    setSelectedName(name);
+    setDetailEntry({ destination });
   }, []);
 
   const handleCloseDetail = useCallback(() => {
     setSelectedName(null);
+    setDetailEntry(null);
   }, []);
 
   const handleUpdateSkill = useCallback((name: string) => {
@@ -552,6 +561,17 @@ function App() {
               />
             </div>
             <SkillListPane
+              key={`${scope}:${activeProject?.checkRevision ?? "initial"}`}
+              scope={scope}
+              checkRevision={scope === GLOBAL_SCOPE ? undefined : (activeProject?.checkRevision ?? "initial")}
+              actionsDisabled={scopeBlocked || appUpdate.critical}
+              checkingUpdates={checkUpdates.isPending}
+              checkError={checkUpdates.error}
+              installTargets={snapshot?.installTargets ?? EMPTY_INVENTORY_AGENTS}
+              onCheckUpdates={handleCheckUpdates}
+              onOpenDetail={handleOpenSkillDetail}
+              onUpdate={handleUpdateSkill}
+              onUninstall={handleUninstallSkill}
               totalSkills={view.totalSkills}
               visibleSkills={view.visibleSkills}
               anomalies={view.anomalies}
@@ -595,6 +615,7 @@ function App() {
               <DetailPane
                 scope={scope}
                 skill={view.selectedSkill}
+                entry={detailEntry}
                 agents={snapshot?.installTargets ?? EMPTY_INVENTORY_AGENTS}
                 actionsDisabled={scopeBlocked || appUpdate.critical}
                 checkingUpdates={checkUpdates.isPending}

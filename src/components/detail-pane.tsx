@@ -61,6 +61,7 @@ const NO_AGENTS: InventoryAgent[] = [];
 interface DetailPaneProps {
   scope: ScopeId;
   skill: UpdateViewSkill;
+  entry?: DetailEntry | null;
   agents?: InventoryAgent[];
   /** Unavailable/error scope: every attachment mutation is disabled. */
   actionsDisabled?: boolean;
@@ -72,6 +73,10 @@ interface DetailPaneProps {
 }
 
 type DetailTab = "content" | "actions";
+
+export interface DetailEntry {
+  destination: "actions" | "content" | "attachments";
+}
 
 function MetaRow({
   label,
@@ -243,6 +248,7 @@ function AgentAttachmentRow({
 export const DetailPane = memo(function DetailPane({
   scope,
   skill,
+  entry = null,
   agents = NO_AGENTS,
   actionsDisabled = false,
   checkingUpdates = false,
@@ -254,12 +260,13 @@ export const DetailPane = memo(function DetailPane({
   const skillId = skill.id;
   const query = useSkillDetailQuery(scope, skillId);
   const detail = query.data ?? null;
-  const [tab, setTab] = useState<DetailTab>("actions");
-  const [contentVisited, setContentVisited] = useState(false);
+  const [tab, setTab] = useState<DetailTab>(entry?.destination === "content" ? "content" : "actions");
+  const [contentVisited, setContentVisited] = useState(entry?.destination === "content");
   const [detachTarget, setDetachTarget] = useState<AgentAttachment | null>(null);
   const [detachNotice, setDetachNotice] = useState<DetachResult | null>(null);
   const [attachOpen, setAttachOpen] = useState(false);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const attachmentsRef = useRef<HTMLElement>(null);
   const detailError = asAppError(query.error);
   const detachMutation = useMutation({
     action: "detach",
@@ -273,6 +280,7 @@ export const DetailPane = memo(function DetailPane({
   // rendering avoids an extra commit that would flash the previous skill's
   // tab/dialog state.
   const [activeSkillId, setActiveSkillId] = useState(skillId);
+  const [activeEntry, setActiveEntry] = useState(entry);
   if (activeSkillId !== skillId) {
     setActiveSkillId(skillId);
     setTab("actions");
@@ -280,6 +288,11 @@ export const DetailPane = memo(function DetailPane({
     setDetachTarget(null);
     setDetachNotice(null);
     setAttachOpen(false);
+  }
+  if (activeEntry !== entry) {
+    setActiveEntry(entry);
+    setTab(entry?.destination === "content" ? "content" : "actions");
+    if (entry?.destination === "content") setContentVisited(true);
   }
 
   useEffect(() => {
@@ -291,6 +304,13 @@ export const DetailPane = memo(function DetailPane({
     closeRef.current?.focus({ preventScroll: true });
     return () => previousFocus?.focus({ preventScroll: true });
   }, []);
+
+  useEffect(() => {
+    if (entry?.destination === "attachments") {
+      attachmentsRef.current?.scrollIntoView?.({ block: "start" });
+      attachmentsRef.current?.focus({ preventScroll: true });
+    }
+  }, [entry]);
 
   useEffect(() => {
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
@@ -767,7 +787,7 @@ export const DetailPane = memo(function DetailPane({
               </div>
             ) : null}
 
-            <section className="detail-section">
+            <section ref={attachmentsRef} tabIndex={-1} aria-label="Agent 挂载" className="detail-section">
               <div className="flex items-center justify-between gap-2">
                 <h4 className="detail-section-title">
                   Agent 挂载{" "}
