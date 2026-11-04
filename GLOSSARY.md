@@ -140,6 +140,10 @@ _Avoid_: uninstall, disable, delete
 Remove a skill's canonical folder or link, all agent attachments, and any existing lock entry. Removing a link leaves the folder it points to intact.
 _Avoid_: remove, delete
 
+**Remove from Agents**:
+Remove a Skill's selected Agent attachments while retaining its canonical store, existing Lock entry and Baseline fingerprint. It also supports Unmanaged and Copy-only skills; deleting their last copy requires explicit confirmation and a backup.
+_Avoid_: complete uninstall, detach
+
 **Lock entry**:
 The record that ties a skill name to its source, path, hash, and install/update times.
 _Avoid_: manifest, metadata file
@@ -205,11 +209,11 @@ A serialized operation that changes skills or agent attachments.
 _Avoid_: job, command
 
 **Batch operation**:
-One user-requested Update, Uninstall, Attach, or Detach applied to a selection of Skills within one Scope.
+One user-requested Update, Uninstall, Remove from Agents, Attach, or Detach applied to a selection of Skills within one Scope.
 _Avoid_: cross-scope operation, bulk install
 
 **Batch target**:
-A Skill selected for a Batch operation, paired with one selected Agent when the action is Attach or Detach.
+A Skill selected for a Batch operation, paired with one selected Agent when the action is Attach, Detach or Remove from Agents.
 _Avoid_: install target, selected row
 
 **Mutation session**:

@@ -1152,11 +1152,11 @@ export function createFakeBackend(
     for (const skillId of request.skillIds) {
       const skill = snapshot.skills.find((skill) => skill.id === skillId);
       const agents =
-        request.action === "attach" || request.action === "detach"
+        request.action === "attach" || request.action === "detach" || request.action === "uninstall_agents"
           ? request.agentIds
           : [null];
       for (const agentId of agents) {
-        const agent = (request.action === "detach" ? snapshot.agents : snapshot.installTargets).find(
+        const agent = (request.action === "detach" || request.action === "uninstall_agents" ? snapshot.agents : snapshot.installTargets).find(
           (agent) => agent.id === agentId,
         );
         const mounted = skill?.attachments.find(
@@ -1175,7 +1175,7 @@ export function createFakeBackend(
           paths: [],
         };
         if (!skill) target.reason = "技能已不存在。";
-        else if (skill.management === "unmanaged" && request.action !== "uninstall")
+        else if (skill.management === "unmanaged" && request.action !== "uninstall" && request.action !== "uninstall_agents")
           target.reason = "未受管技能不可执行此操作。";
         else if (request.action === "update") {
           const result = reportFor(scope).skills.find(
@@ -1194,6 +1194,12 @@ export function createFakeBackend(
             skill.canonicalPath,
             ...skill.attachments.map((attachment) => attachment.path),
           ].filter((path): path is string => !!path);
+        } else if (request.action === "uninstall_agents") {
+          target.reason = !agent?.detected ? "Agent 未检测到。"
+            : agent.shared || mounted?.mode === "native" ? "共享目录，无法单独移除。"
+            : !mounted ? "没有对应的 Agent 挂载。" : null;
+          target.deletesCopy = mounted?.mode === "copy";
+          target.paths = mounted ? [mounted.path] : [];
         } else {
           target.reason =
             skill.management === "copy_only" || !skill.canonicalPath
@@ -1214,6 +1220,16 @@ export function createFakeBackend(
         target.eligible = target.reason === null;
         if (!keys || keys.has(target.key)) targets.push(target);
       }
+    }
+    if (request.action === "uninstall_agents") {
+      for (const skill of snapshot.skills) {
+        const copies = targets.filter((t) => t.skillId === skill.id && t.eligible && t.deletesCopy);
+        if (!skill.canonicalPath && copies.length > 0 && skill.attachments.every((a) =>
+          a.mode === "broken" || copies.some((t) => t.agentId === a.agentId))) {
+          copies.forEach((target) => { target.removesLastCopy = true; });
+        }
+      }
+      targets.sort((a, b) => Number(a.deletesCopy) - Number(b.deletesCopy));
     }
     return {
       id,
@@ -1258,6 +1274,12 @@ export function createFakeBackend(
             uninstallFrom(preview.scope, [target.skillId]);
           else if (preview.action === "attach")
             nativeAttach(target.skillId, target.agentId!, preview.scope);
+          else if (preview.action === "uninstall_agents") {
+            nativeDetach(target.skillId, target.agentId!, preview.scope);
+            const snapshot = snapshotFor(preview.scope);
+            setSnapshot({ ...snapshot, skills: snapshot.skills.filter((skill) =>
+              skill.id !== target.skillId || skill.canonicalPath || skill.attachments.some((a) => a.mode !== "broken")) }, preview.scope);
+          }
           else if (preview.action === "copy_to_project" && preview.project) {
             const destinationScope = projectScope(preview.project.id);
             if (target.operation === "copy") {
@@ -1376,7 +1398,7 @@ export function createFakeBackend(
       const preview = stored.preview;
       if (!preview.targets.some((t) => t.eligible)) throw { code: "batch.confirmation_needed", message: "没有可执行目标。", retryable: false } satisfies AppError;
       if (
-        (preview.action === "uninstall" && !confirmation.confirmedDelete) ||
+        ((preview.action === "uninstall" || preview.action === "uninstall_agents") && !confirmation.confirmedDelete) ||
         (preview.targets.some(
           (target) => target.eligible && target.deletesCopy,
         ) &&

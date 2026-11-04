@@ -122,6 +122,19 @@ async function driveContent() {
 window.setTimeout(async () => {
   if (params.has("check")) clickButton("检查更新");
   await pause(400);
+  if (params.has("batchUninstall")) {
+    document.querySelector<HTMLInputElement>('input[aria-label="选择技能 agent-browser"]')?.click();
+    await pause(120);
+    clickButton("批量卸载");
+    await pause(120);
+    if (params.get("batchUninstall") === "all") {
+      document.querySelector<HTMLInputElement>('input[name="batch-uninstall-mode"]:not(:checked)')?.click();
+    } else {
+      document.querySelector<HTMLInputElement>('input[aria-label="选择 Agent Claude Code"]')?.click();
+      document.querySelector<HTMLInputElement>('input[aria-label="选择 Agent Gemini CLI"]')?.click();
+    }
+    return;
+  }
   const rows = document.querySelectorAll<HTMLElement>(
     '[data-testid="skill-row"]',
   );

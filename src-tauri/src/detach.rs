@@ -282,6 +282,25 @@ pub fn find_copy_dependents(
     canonical_dir: &Path,
     target: &Path,
 ) -> Result<Vec<DependentLink>, AppError> {
+    find_dependents(agents, canonical_dir, target, false)
+}
+
+/// Selective removal also protects links to content inside a copy, and cannot
+/// assume an unreadable Agent directory has no dependents.
+pub(crate) fn find_copy_content_dependents(
+    agents: &[AgentDir],
+    canonical_dir: &Path,
+    target: &Path,
+) -> Result<Vec<DependentLink>, AppError> {
+    find_dependents(agents, canonical_dir, target, true)
+}
+
+fn find_dependents(
+    agents: &[AgentDir],
+    canonical_dir: &Path,
+    target: &Path,
+    include_content: bool,
+) -> Result<Vec<DependentLink>, AppError> {
     let target_real = fs::canonicalize(target).map_err(|error| {
         AppError::agent_detach_failed(format!("无法解析 copy 目录 {}：{error}", target.display()))
     })?;
@@ -301,8 +320,15 @@ pub fn find_copy_dependents(
     for (label, root) in roots {
         // Read-only scan: follow a symlinked root because a link inside it can
         // still depend on the copy. Deletion targets are guarded separately.
-        let Ok(metadata) = fs::metadata(&root) else {
-            continue;
+        let metadata = match fs::metadata(&root) {
+            Ok(metadata) => metadata,
+            Err(error) if include_content && error.kind() != std::io::ErrorKind::NotFound => {
+                return Err(AppError::agent_detach_failed(format!(
+                    "无法检查依赖目录 {}：{error}",
+                    root.display()
+                )));
+            }
+            Err(_) => continue,
         };
         if !metadata.is_dir() {
             continue;
@@ -311,10 +337,24 @@ pub fn find_copy_dependents(
         if !seen_roots.insert(root_real) {
             continue;
         }
-        let Ok(entries) = fs::read_dir(&root) else {
-            continue;
+        let entries = match fs::read_dir(&root) {
+            Ok(entries) => entries,
+            Err(error) if include_content => {
+                return Err(AppError::agent_detach_failed(format!(
+                    "无法检查依赖目录 {}：{error}",
+                    root.display()
+                )));
+            }
+            Err(_) => continue,
         };
-        for entry in entries.flatten() {
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) if include_content => {
+                    return Err(AppError::agent_detach_failed(error.to_string()));
+                }
+                Err(_) => continue,
+            };
             let path = entry.path();
             if path == target {
                 continue;
@@ -328,7 +368,9 @@ pub fn find_copy_dependents(
             let Ok(resolved) = fs::canonicalize(&path) else {
                 continue;
             };
-            if resolved == target_real && seen_links.insert(path.clone()) {
+            if (resolved == target_real || (include_content && resolved.starts_with(&target_real)))
+                && seen_links.insert(path.clone())
+            {
                 dependents.push(DependentLink {
                     label: label.clone(),
                     path,

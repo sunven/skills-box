@@ -162,6 +162,7 @@ pub fn plan(
             }
             let agent = agent_id.and_then(|id| agents.iter().find(|a| a.id == id));
             let mut target = BatchTarget {
+                removes_last_copy: None,
                 key,
                 skill_id: skill_id.clone(),
                 name: name.into(),

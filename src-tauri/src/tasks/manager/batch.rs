@@ -146,7 +146,10 @@ impl TaskManager {
         if original.preview.scope != scope || original.preview.revision != confirmation.revision {
             return Err(AppError::batch_preview_expired());
         }
-        if (original.preview.action == BatchAction::Uninstall && !confirmation.confirmed_delete)
+        if (matches!(
+            original.preview.action,
+            BatchAction::Uninstall | BatchAction::UninstallAgents
+        ) && !confirmation.confirmed_delete)
             || (original
                 .targets
                 .iter()
@@ -357,6 +360,23 @@ pub(super) async fn run(
                         Err(e) => Err(e),
                     }
                 }
+                BatchAction::UninstallAgents => {
+                    let layout = layout.clone();
+                    let plan = plan.clone();
+                    let target = target.clone();
+                    tokio::task::spawn_blocking(move || {
+                        crate::tasks::uninstall_agents::execute(
+                            &paths,
+                            &layout,
+                            &target,
+                            record.as_ref(),
+                            &|| verify_target(&paths, &layout, &plan, &target),
+                        )
+                    })
+                    .await
+                    .map_err(|e| AppError::task_internal("按 Agent 移除", e))
+                    .and_then(|r| r)
+                }
                 BatchAction::Attach | BatchAction::Detach => {
                     let layout = layout.clone();
                     let plan = plan.clone();
@@ -434,7 +454,9 @@ pub(super) async fn run(
         let skill_status = if status == BatchStatus::Success {
             match plan.preview.action {
                 BatchAction::Update => TaskSkillStatus::Updated,
-                BatchAction::Uninstall | BatchAction::Detach => TaskSkillStatus::Removed,
+                BatchAction::Uninstall | BatchAction::UninstallAgents | BatchAction::Detach => {
+                    TaskSkillStatus::Removed
+                }
                 BatchAction::Attach | BatchAction::CopyToProject => TaskSkillStatus::Installed,
             }
         } else if status == BatchStatus::Skipped {
@@ -551,6 +573,9 @@ fn verify_target(
     }
     let layout = &current;
     layout.ensure_mutation_ready()?;
+    if plan.preview.action == BatchAction::UninstallAgents {
+        return crate::tasks::uninstall_agents::verify(paths, layout, target);
+    }
     let fresh = batch::inspect(
         paths,
         layout,

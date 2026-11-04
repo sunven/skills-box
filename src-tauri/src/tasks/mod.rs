@@ -11,6 +11,7 @@ mod session;
 pub mod source;
 pub mod summary;
 pub mod uninstall;
+pub(crate) mod uninstall_agents;
 pub mod update;
 
 pub use conflicts::{ConflictInfo, ConflictProvider, InventoryConflictProvider, find_conflicts};

@@ -21,6 +21,7 @@ use crate::update::UpdateSkillResult;
 pub enum BatchAction {
     Update,
     Uninstall,
+    UninstallAgents,
     Attach,
     Detach,
     CopyToProject,
@@ -30,13 +31,17 @@ impl BatchAction {
         match self {
             Self::Update => "更新",
             Self::Uninstall => "卸载",
+            Self::UninstallAgents => "移除",
             Self::Attach => "挂载",
             Self::Detach => "解除挂载",
             Self::CopyToProject => "复制到项目",
         }
     }
     pub fn has_agents(self) -> bool {
-        matches!(self, Self::Attach | Self::Detach | Self::CopyToProject)
+        matches!(
+            self,
+            Self::Attach | Self::Detach | Self::CopyToProject | Self::UninstallAgents
+        )
     }
 }
 
@@ -64,6 +69,8 @@ pub struct BatchTarget {
     pub reason: Option<String>,
     pub local_modification: LocalModification,
     pub deletes_copy: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub removes_last_copy: Option<bool>,
     pub paths: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub operation: Option<String>,
@@ -212,6 +219,9 @@ pub fn plan(
             }
         }
     }
+    if request.action == BatchAction::UninstallAgents {
+        super::uninstall_agents::finalize(paths, layout, &mut targets)?;
+    }
     let revision = digest(&format!(
         "{:?}|{:?}|{:?}",
         layout.root,
@@ -271,6 +281,7 @@ fn preview_target(
                     reason: Some(reason),
                     local_modification: LocalModification::Unknown,
                     deletes_copy: false,
+                    removes_last_copy: None,
                     paths: Vec::new(),
                     operation: None,
                 },
@@ -302,9 +313,13 @@ pub fn inspect(
         reason: None,
         local_modification: LocalModification::Unknown,
         deletes_copy: false,
+        removes_last_copy: None,
         paths: Vec::new(),
         operation: None,
     };
+    if action == BatchAction::UninstallAgents {
+        return super::uninstall_agents::inspect(paths, layout, target);
+    }
     let located = layout.locate(paths, name)?;
     let Some(located) = located else {
         target.reason = Some("技能已不存在。".into());
@@ -433,6 +448,7 @@ pub fn inspect(
             Ok(())
         })(),
         BatchAction::CopyToProject => unreachable!("copy has its own plan"),
+        BatchAction::UninstallAgents => unreachable!("agent removal has its own inspection"),
     };
     match eligibility {
         Ok(()) => target.eligible = true,
@@ -463,7 +479,11 @@ fn ensure_readable(layout: &ScopeLayout, path: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
-fn path_fingerprint(layout: &ScopeLayout, path: &Path, content: bool) -> Result<String, AppError> {
+pub(super) fn path_fingerprint(
+    layout: &ScopeLayout,
+    path: &Path,
+    content: bool,
+) -> Result<String, AppError> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(m) => m,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok("missing".into()),
@@ -570,7 +590,7 @@ fn capture(
     Ok(digest(&value))
 }
 
-fn digest(value: &str) -> String {
+pub(super) fn digest(value: &str) -> String {
     format!("{:x}", Sha256::digest(value.as_bytes()))
 }
 

@@ -65,14 +65,20 @@ export function BatchDialog({
   onClose,
 }: BatchDialogProps) {
   const canChooseTarget = selection.action === "attach" && scope === "global";
+  const canChooseRemoval = selection.action === "uninstall";
+  const [uninstallMode, setUninstallMode] = useState<"agents" | "all">("agents");
   const [targetScope, setTargetScope] = useState<"global" | "project">("global");
   const [projectRoot, setProjectRoot] = useState("");
   const [projectAgents, setProjectAgents] = useState<InventoryAgent[]>([]);
   const [picking, setPicking] = useState(false);
-  const action: BatchAction = canChooseTarget && targetScope === "project" ? "copy_to_project" : selection.action;
+  const action: BatchAction = canChooseRemoval && uninstallMode === "agents" ? "uninstall_agents"
+    : canChooseTarget && targetScope === "project" ? "copy_to_project" : selection.action;
+  const isAgentRemoval = action === "uninstall_agents";
+  const needsDelete = action === "uninstall" || isAgentRemoval;
+  const actionLabel = action === "uninstall" ? "完全卸载" : BATCH_ACTION_LABELS[action];
   const isCopy = action === "copy_to_project";
   const agents = isCopy ? projectAgents : sourceAgents;
-  const hasAgents = action === "attach" || action === "detach" || isCopy;
+  const hasAgents = action === "attach" || action === "detach" || isCopy || isAgentRemoval;
   const [selectedAgents, setSelectedAgents] = useState<Set<string>>(
     () => new Set(),
   );
@@ -131,9 +137,9 @@ export function BatchDialog({
   const eligibleAgents = useMemo(
     () =>
       agents.filter(
-        (agent) => agent.detected && !agent.shared && !agent.universal,
+        (agent) => agent.detected && !agent.shared && (isAgentRemoval || !agent.universal),
       ),
-    [agents],
+    [agents, isAgentRemoval],
   );
   const selectionRef = useRef({ scope, action, skillIds, agentIds, retryKeys, projectRoot });
   selectionRef.current = { scope, action, skillIds, agentIds, retryKeys, projectRoot };
@@ -239,6 +245,7 @@ export function BatchDialog({
     if (!preview || viewingResult || running) return;
     let disposed = false;
     let refreshing = false;
+    const seq = requestSeq.current;
     const refresh = async () => {
       if (refreshing || mutation.stateRef.current.running) return;
       refreshing = true;
@@ -249,12 +256,12 @@ export function BatchDialog({
             ? refreshBatchPreview(countsPreviewId.current).catch(() => null)
             : null,
         ]);
-        if (!disposed && !mutation.stateRef.current.running) {
+        if (!disposed && seq === requestSeq.current && !mutation.stateRef.current.running) {
           applyPreview(next);
           if (counts) applyAgentCounts(counts);
         }
       } catch (cause) {
-        if (!disposed && !mutation.stateRef.current.running) {
+        if (!disposed && seq === requestSeq.current && !mutation.stateRef.current.running) {
           setPreviewError(
             asAppError(cause) ?? fallbackError("预览已失效，请重新预览。"),
           );
@@ -296,13 +303,14 @@ export function BatchDialog({
   const candidates = preview?.targets.filter((target) => target.eligible) ?? [];
   const skipped = preview?.targets.filter((target) => !target.eligible) ?? [];
   const needsCopies = candidates.some((target) => target.deletesCopy);
+  const removesLastCopy = candidates.some((target) => target.removesLastCopy);
   const submitDisabled =
     disabled || picking ||
     loading ||
     !!previewError ||
     !preview ||
     candidates.length === 0 ||
-    (action === "uninstall" && !confirmedDelete) ||
+    (needsDelete && !confirmedDelete) ||
     (needsCopies && !confirmedCopies);
 
   const confirm = async () => {
@@ -380,15 +388,22 @@ export function BatchDialog({
         }
       : null;
 
-  const resetTargetPreview = () => {
+  const invalidatePreview = () => {
     requestSeq.current += 1;
-    setSelectedAgents(new Set());
-    setProjectAgents([]);
-    setAgentCounts(new Map());
     setPreview(null);
     previewRef.current = null;
     setPreviewError(null);
     setChanged(false);
+    setConfirmedDelete(false);
+    setConfirmedCopies(false);
+    setLoading(true);
+  };
+
+  const resetTargetPreview = () => {
+    invalidatePreview();
+    setSelectedAgents(new Set());
+    setProjectAgents([]);
+    setAgentCounts(new Map());
   };
 
   const chooseDirectory = async () => {
@@ -428,7 +443,7 @@ export function BatchDialog({
         <div className="modal-head">
           <div>
             <h2 id="batch-dialog-title" className="modal-title">
-              批量{BATCH_ACTION_LABELS[action]}
+              批量{canChooseRemoval ? "卸载" : BATCH_ACTION_LABELS[action]}
             </h2>
             <p className="modal-sub">
               {isCopy ? "全局 → 项目" : scope === "global" ? "全局" : "项目"} · 已选{" "}
@@ -452,6 +467,23 @@ export function BatchDialog({
         <div className="modal-body">
           {!running && !viewingResult ? (
             <>
+              {canChooseRemoval ? (
+                <fieldset className="mb-4" disabled={disabled || !!retryKeys}>
+                  <legend className="field-label">卸载方式</legend>
+                  <div className="flex flex-wrap gap-5 mt-2">
+                    {(["agents", "all"] as const).map((value) => (
+                      <label key={value} className="flex items-center gap-2 text-sm">
+                        <input type="radio" name="batch-uninstall-mode" checked={uninstallMode === value}
+                          onChange={() => {
+                            invalidatePreview();
+                            setUninstallMode(value);
+                          }} />
+                        {value === "agents" ? "按 Agent 移除" : "完全卸载"}
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+              ) : null}
               {canChooseTarget ? (
                 <fieldset className="mb-4" disabled={disabled || !!retryKeys || picking}>
                   <legend className="field-label">挂载位置</legend>
@@ -495,7 +527,7 @@ export function BatchDialog({
                   <legend className="field-label">选择 Agent</legend>
                   {agents.map((agent) => {
                     const unavailable =
-                      agent.shared || agent.universal || !agent.detected;
+                      agent.shared || (!isAgentRemoval && agent.universal) || !agent.detected;
                     const count = agentCounts.get(agent.id) ?? 0;
                     return (
                       <label
@@ -508,14 +540,15 @@ export function BatchDialog({
                           checked={selectedAgents.has(agent.id)}
                           disabled={unavailable || disabled || !!retryKeys}
                           aria-label={`选择 Agent ${agent.displayName}`}
-                          onChange={() =>
+                          onChange={() => {
+                            invalidatePreview();
                             setSelectedAgents((current) => {
                               const next = new Set(current);
                               if (next.has(agent.id)) next.delete(agent.id);
                               else next.add(agent.id);
                               return next;
-                            })
-                          }
+                            });
+                          }}
                         />
                         <AgentLogo
                           agentId={agent.id}
@@ -524,8 +557,8 @@ export function BatchDialog({
                         <span>{agent.displayName}</span>
                         <span className="ml-auto text-muted-foreground text-xs">
                           {unavailable
-                            ? agent.shared || agent.universal
-                              ? "共享，无法独立操作"
+                            ? agent.shared || (!isAgentRemoval && agent.universal)
+                              ? isAgentRemoval ? "共享目录，无法单独移除" : "共享，无法独立操作"
                               : "未检测到"
                             : `${count} 个技能可操作`}
                         </span>
@@ -588,7 +621,7 @@ export function BatchDialog({
                             <p className="mt-1 text-warning">{target.localModification === "modified" ? "将复制当前本地改动。" : "无法确认本地改动，将复制当前内容。"}项目之后可能提示与上游内容不同。</p>
                           ) : null}
                           {target.eligible &&
-                          action === "uninstall" &&
+                          (action === "uninstall" || (isAgentRemoval && target.deletesCopy)) &&
                           target.localModification !== "clean" ? (
                             <p className="mt-1 text-warning">
                               {target.localModification === "modified"
@@ -598,11 +631,11 @@ export function BatchDialog({
                           ) : null}
                           {target.eligible && target.deletesCopy ? (
                             <p className="mt-1 text-warning">
-                              副本目录会先备份再删除。
+                              {target.removesLastCopy ? "最后一份内容，会先备份再删除。" : "副本目录会先备份再删除。"}
                             </p>
                           ) : null}
                           {target.eligible &&
-                          (action === "uninstall" || action === "detach" || isCopy) ? (
+                          (needsDelete || action === "detach" || isCopy) ? (
                             <ul className="mt-1 text-muted-foreground">
                               {target.paths.map((path) => (
                                 <li key={path} className="mono break-all">
@@ -624,6 +657,16 @@ export function BatchDialog({
                   ) : null}
                 </>
               )}
+              {isAgentRemoval ? (
+                <p className="notice mt-3">
+                  移除所选 Agent 的挂载，保留共享技能本体及已有安装记录。符号链接只删除链接本身；删除前创建备份。
+                </p>
+              ) : null}
+              {removesLastCopy ? (
+                <p role="alert" className="notice mt-3" data-tone="negative">
+                  本次将删除已标记技能的最后一份内容；备份会保留，已有安装记录不会自动清理。
+                </p>
+              ) : null}
               {action === "uninstall" ? (
                 <div className="notice mt-3" data-tone="negative">
                   <AlertTriangle
@@ -641,17 +684,18 @@ export function BatchDialog({
                   仅更新本地干净且有可用更新的技能；写入前再次核对，先备份再更新。已有副本挂载将转为共享目录的符号链接。
                 </p>
               ) : null}
-              {action === "uninstall" ? (
+              {needsDelete ? (
                 <label className="batch-confirm">
                   <input
                     type="checkbox"
-                    aria-label="确认批量卸载"
+                    aria-label={isAgentRemoval ? "确认按 Agent 移除" : "确认批量卸载"}
                     checked={confirmedDelete}
                     disabled={loading || candidates.length === 0}
                     onChange={(e) => setConfirmedDelete(e.target.checked)}
                   />
                   <span>
-                    我确认删除以上全部内容，含已提示的本地改动，并了解不会自动回滚。
+                    {isAgentRemoval ? "我确认移除以上所选 Agent 的挂载，并了解不会自动回滚。"
+                      : "我确认删除以上全部内容，含已提示的本地改动，并了解不会自动回滚。"}
                   </span>
                 </label>
               ) : null}
@@ -664,7 +708,8 @@ export function BatchDialog({
                     disabled={loading}
                     onChange={(e) => setConfirmedCopies(e.target.checked)}
                   />
-                  <span>我确认先备份再删除所列副本挂载目录。</span>
+                  <span>{removesLastCopy ? "我确认先备份再删除所列副本，包括已标记技能的最后一份内容。"
+                    : "我确认先备份再删除所列副本挂载目录。"}</span>
                 </label>
               ) : null}
               <MutationError
@@ -691,7 +736,7 @@ export function BatchDialog({
                     ? null
                     : phase
                 }
-                label="正在卸载"
+                label={`正在${actionLabel}`}
                 message={message}
                 completed={completed}
                 total={total}
@@ -770,10 +815,10 @@ export function BatchDialog({
                 </Button>
                 <Button
                   size="sm"
-                  variant={action === "uninstall" ? "destructive" : "default"}
+                  variant={needsDelete ? "destructive" : "default"}
                   disabled={submitDisabled}
                   onClick={() => void confirm()}
-                >{`确认${BATCH_ACTION_LABELS[action]} (${candidates.length})`}</Button>
+                >{`确认${actionLabel} (${candidates.length})`}</Button>
               </>
             )}
           </div>

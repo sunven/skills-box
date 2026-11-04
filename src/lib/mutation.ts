@@ -55,6 +55,7 @@ export type MutationAction =
   | "install"
   | "update"
   | "uninstall"
+  | "uninstall_agents"
   | "attach"
   | "detach"
   | "copy_to_project"
@@ -115,6 +116,12 @@ const HEADING_LABELS: Record<
     partial: "卸载部分完成",
     failed: "卸载失败",
     cancelled: "卸载已取消",
+  },
+  uninstall_agents: {
+    success: "移除完成",
+    partial: "移除部分完成",
+    failed: "移除失败",
+    cancelled: "移除已停止",
   },
   attach: {
     success: "挂载完成",
@@ -468,6 +475,14 @@ export function mutationRefreshPlan(
         inventoryQueryKey(scope),
         skillQueryPrefix(scope),
         updateReportQueryKey(scope),
+      ]);
+    case "uninstall_agents":
+      return invalidate([
+        inventoryQueryKey(scope),
+        skillQueryPrefix(scope),
+        updateReportQueryKey(scope),
+        skillDirQueryPrefix(scope, skillId),
+        skillFileQueryPrefix(scope, skillId),
       ]);
     case "attach":
     case "detach":

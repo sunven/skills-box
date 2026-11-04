@@ -22,7 +22,7 @@ import {
   makeSkill,
   makeSnapshot,
 } from "./test/inventory-fixtures";
-import type { BatchAction, BatchRow } from "./lib/batch";
+import type { BatchAction, BatchPreview, BatchRow } from "./lib/batch";
 import type { ScopeId, UpdateCheckReport, UpdateCheckState } from "./lib/types";
 
 const PROJECT: ScopeId = "project:11111111-1111-4111-8111-111111111111";
@@ -147,6 +147,106 @@ function finish(
 }
 
 describe("inventory batch operations", () => {
+  it("defaults uninstall to Agent selection and removes only selected attachments", async () => {
+    const backend = setup({ autoTasks: true, data: { snapshot: makeSnapshot({ skills: [
+      makeSkill({ name: "alpha", attachments: [attachment("claude-code"), attachment("gemini-cli")] }),
+      makeSkill({ name: "beta", attachments: [attachment("gemini-cli")] }),
+    ] }) } });
+    await select("alpha");
+    await select("beta");
+    fireEvent.click(screen.getByRole("button", { name: "批量卸载" }));
+    expect(screen.getByRole("radio", { name: "按 Agent 移除" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "选择 Agent Claude Code" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "选择 Agent Codex" })).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: "选择 Agent Gemini CLI" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "确认移除 (0)" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择 Agent Claude Code" }));
+    const button = await screen.findByRole("button", { name: "确认移除 (1)" });
+    expect(button).toBeDisabled();
+    expect(screen.getByText("没有对应的 Agent 挂载。")).toBeInTheDocument();
+    expect(within(screen.getByTestId("batch-dialog")).queryByText("~/.agents/skills/alpha")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("checkbox", { name: "确认按 Agent 移除" }));
+    await confirm("确认移除 (1)");
+    await screen.findByTestId("batch-result");
+    const snapshot = await backend.dispatch("get_inventory", { scope: "global" });
+    expect(snapshot.skills).toHaveLength(2);
+    expect(snapshot.skills[0]!.attachments.map((a) => a.agentId)).toEqual(["gemini-cli"]);
+    expect(snapshot.skills[0]!.canonicalPath).toBe("~/.agents/skills/alpha");
+    expect(backend.callsOf("preview_batch").slice(-1)[0]!.payload.request.action).toBe("uninstall_agents");
+  });
+
+  it("confirms the last unmanaged copy and supports broken and copy-only attachments", async () => {
+    const backend = setup({ autoTasks: true, data: { snapshot: makeSnapshot({ skills: [
+      makeSkill({ name: "alpha", management: "unmanaged", canonicalPath: null,
+        attachments: [attachment("claude-code", "copy", "~/.claude/skills/alpha", false)] }),
+      makeSkill({ name: "beta", management: "copy_only", canonicalPath: null,
+        attachments: [attachment("claude-code", "copy", "~/.claude/skills/beta", false),
+          attachment("gemini-cli", "copy", "~/.gemini/skills/beta", false)] }),
+      makeSkill({ name: "gamma", attachments: [attachment("claude-code", "broken", "~/.claude/skills/gamma", false)] }),
+    ] }) } });
+    for (const name of ["alpha", "beta", "gamma"]) await select(name);
+    fireEvent.click(screen.getByRole("button", { name: "批量卸载" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择 Agent Claude Code" }));
+    await screen.findByRole("button", { name: "确认移除 (3)" });
+    expect(screen.getByText("最后一份内容，会先备份再删除。")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("checkbox", { name: "确认按 Agent 移除" }));
+    expect(screen.getByRole("button", { name: "确认移除 (3)" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("checkbox", { name: "确认删除副本挂载" }));
+    await confirm("确认移除 (3)");
+    await screen.findByTestId("batch-result");
+    const snapshot = await backend.dispatch("get_inventory", { scope: "global" });
+    expect(snapshot.skills.map((s) => s.name)).toEqual(["beta", "gamma"]);
+    expect(snapshot.skills[0]!.attachments.map((a) => a.agentId)).toEqual(["gemini-cli"]);
+  });
+
+  it("clears confirmations when changing Agents or switching uninstall mode", async () => {
+    setup({ data: { snapshot: makeSnapshot({ skills: [makeSkill({ name: "alpha",
+      attachments: [attachment("claude-code", "copy"), attachment("gemini-cli")] })] }) } });
+    await select("alpha");
+    fireEvent.click(screen.getByRole("button", { name: "批量卸载" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择 Agent Claude Code" }));
+    await screen.findByRole("button", { name: "确认移除 (1)" });
+    fireEvent.click(screen.getByRole("checkbox", { name: "确认按 Agent 移除" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "确认删除副本挂载" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择 Agent Gemini CLI" }));
+    await screen.findByRole("button", { name: "确认移除 (2)" });
+    expect(screen.getByRole("checkbox", { name: "确认按 Agent 移除" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "确认删除副本挂载" })).not.toBeChecked();
+    fireEvent.click(screen.getByRole("radio", { name: "完全卸载" }));
+    await screen.findByRole("button", { name: "确认完全卸载 (1)" });
+    expect(screen.queryByRole("checkbox", { name: "选择 Agent Claude Code" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("checkbox", { name: "确认批量卸载" }));
+    fireEvent.click(screen.getByRole("radio", { name: "按 Agent 移除" }));
+    await screen.findByRole("button", { name: "确认移除 (2)" });
+    expect(screen.getByRole("checkbox", { name: "确认按 Agent 移除" })).not.toBeChecked();
+  });
+
+  it("ignores a late Agent preview after switching to complete uninstall", async () => {
+    let release: ((preview: BatchPreview) => void) | undefined;
+    let delayed: BatchPreview | undefined;
+    setup({ data: { snapshot: makeSnapshot({ skills: [makeSkill({ name: "alpha",
+      attachments: [attachment("claude-code")] })] }) }, commands: {
+      preview_batch: async (args, backend) => {
+        const preview = await backend.dispatch("preview_batch", args);
+        if (args.request.action === "uninstall_agents" && args.request.agentIds.length === 1) {
+          delayed = preview;
+          return new Promise<BatchPreview>((resolve) => { release = resolve; });
+        }
+        return preview;
+      },
+    } });
+    await select("alpha");
+    fireEvent.click(screen.getByRole("button", { name: "批量卸载" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择 Agent Claude Code" }));
+    await waitFor(() => expect(release).toBeDefined());
+    fireEvent.click(screen.getByRole("radio", { name: "完全卸载" }));
+    await screen.findByRole("button", { name: "确认完全卸载 (1)" });
+    await act(async () => { release!(delayed!); });
+    expect(screen.getByRole("button", { name: "确认完全卸载 (1)" })).toBeDisabled();
+    expect(within(screen.getByTestId("batch-dialog")).getByText("~/.agents/skills/alpha")).toBeInTheDocument();
+    expect(screen.queryByText("alpha · Claude Code")).not.toBeInTheDocument();
+  });
+
   it("selects all filtered results, prunes hidden selections, retains sorting and clears on Scope switch", async () => {
     setup({
       data: {
@@ -276,7 +376,8 @@ describe("inventory batch operations", () => {
     const backend = setup();
     await select("alpha");
     fireEvent.click(screen.getByRole("button", { name: "批量卸载" }));
-    const button = await screen.findByRole("button", { name: "确认卸载 (1)" });
+    fireEvent.click(screen.getByRole("radio", { name: "完全卸载" }));
+    const button = await screen.findByRole("button", { name: "确认完全卸载 (1)" });
     await waitFor(() =>
       expect(screen.queryByText("正在核对操作目标…")).not.toBeInTheDocument(),
     );
@@ -333,7 +434,8 @@ describe("inventory batch operations", () => {
     await select("gitnexus-cli");
     await select("gitnexus-debugging");
     fireEvent.click(screen.getByRole("button", { name: "批量卸载" }));
-    const button = await screen.findByRole("button", { name: "确认卸载 (2)" });
+    fireEvent.click(screen.getByRole("radio", { name: "完全卸载" }));
+    const button = await screen.findByRole("button", { name: "确认完全卸载 (2)" });
     expect(button).toBeDisabled();
     expect(
       screen.getByText("~/.claude/skills/gitnexus-debugging"),
@@ -343,7 +445,7 @@ describe("inventory batch operations", () => {
     ).toHaveLength(2);
     expect(backend.count("start_batch")).toBe(0);
     fireEvent.click(screen.getByRole("checkbox", { name: "确认批量卸载" }));
-    await confirm("确认卸载 (2)");
+    await confirm("确认完全卸载 (2)");
     await screen.findByTestId("batch-result");
     expect(backend.count("start_batch")).toBe(1);
     expect(
@@ -395,7 +497,8 @@ describe("inventory batch operations", () => {
     await waitFor(() => expect(screen.getAllByText("源路径缺失")).toHaveLength(6));
     fireEvent.click(screen.getByRole("checkbox", { name: "全选当前筛选结果" }));
     fireEvent.click(screen.getByRole("button", { name: "批量卸载" }));
-    const button = await screen.findByRole("button", { name: "确认卸载 (6)" });
+    fireEvent.click(screen.getByRole("radio", { name: "完全卸载" }));
+    const button = await screen.findByRole("button", { name: "确认完全卸载 (6)" });
     expect(button).toBeDisabled();
     for (const name of names) {
       expect(screen.getByText(`~/.codex/skills/${name}`)).toBeInTheDocument();
@@ -404,7 +507,7 @@ describe("inventory batch operations", () => {
     }
     expect(backend.count("start_batch")).toBe(0);
     fireEvent.click(screen.getByRole("checkbox", { name: "确认批量卸载" }));
-    await confirm("确认卸载 (6)");
+    await confirm("确认完全卸载 (6)");
     const result = await screen.findByTestId("batch-result");
     expect(within(result).getAllByText("已卸载")).toHaveLength(6);
     expect(backend.count("start_batch")).toBe(1);
@@ -529,6 +632,7 @@ describe("inventory batch operations", () => {
     });
     await select("alpha");
     fireEvent.click(screen.getByRole("button", { name: "批量卸载" }));
+    fireEvent.click(screen.getByRole("radio", { name: "完全卸载" }));
     await waitFor(() =>
       expect(backend.count("preview_batch")).toBeGreaterThan(0),
     );

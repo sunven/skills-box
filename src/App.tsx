@@ -733,7 +733,7 @@ function App() {
           selection={batchSelection}
           scope={batchSelection.scope}
           agents={
-            (batchSelection.action === "detach"
+            (batchSelection.action === "detach" || batchSelection.action === "uninstall"
               ? snapshot?.agents
               : snapshot?.installTargets) ?? EMPTY_INVENTORY_AGENTS
           }

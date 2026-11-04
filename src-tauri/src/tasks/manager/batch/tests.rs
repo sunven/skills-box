@@ -934,6 +934,137 @@ async fn start_rejects_unconfirmed_deletion_and_changed_preview_without_a_task()
 }
 
 #[tokio::test]
+async fn uninstall_agents_checks_confirmation_and_freezes_selected_paths() {
+    let f = Fixture::new();
+    f.link("alpha", ".claude/skills");
+    let preview = f
+        .preview(Fixture::request(
+            BatchAction::UninstallAgents,
+            &["alpha"],
+            &["claude-code"],
+        ))
+        .await;
+    let mut confirmation = Fixture::confirmation(&preview);
+    confirmation.confirmed_delete = false;
+    assert_eq!(
+        f.manager
+            .start_batch(ScopeId::Global, confirmation, sink().0)
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::BatchConfirmationNeeded
+    );
+    let link = f.paths.home().join(".claude/skills/alpha");
+    fs::remove_file(&link).unwrap();
+    std::os::unix::fs::symlink(f.paths.canonical_skills_dir().join("beta"), &link).unwrap();
+    assert_eq!(
+        f.manager
+            .start_batch(ScopeId::Global, Fixture::confirmation(&preview), sink().0)
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::BatchPreviewExpired
+    );
+    assert!(link.is_symlink());
+}
+
+#[tokio::test]
+async fn uninstall_agents_stops_between_targets_and_retries_only_unfinished_pairs() {
+    let f = Fixture::new();
+    for name in ["alpha", "beta", "gamma"] {
+        f.link(name, ".claude/skills");
+    }
+    let lock = fs::read(f.paths.lock_path()).unwrap();
+    let mut request = Fixture::request(
+        BatchAction::UninstallAgents,
+        &["alpha", "beta", "gamma"],
+        &["claude-code"],
+    );
+    let preview = f.preview(request.clone()).await;
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let manager = f.manager.clone();
+    let out: EventSink = Arc::new(move |event| {
+        if event.message == "已处理 1 / 3 个目标" {
+            assert!(manager.try_acquire_mutation().is_err());
+            manager.cancel_task(&event.task_id).unwrap();
+        }
+        let _ = tx.send(event);
+    });
+    f.manager
+        .start_batch(ScopeId::Global, Fixture::confirmation(&preview), out)
+        .await
+        .unwrap();
+    let result = finished(&mut rx).await;
+    assert_eq!(
+        statuses(&result),
+        [
+            BatchStatus::Success,
+            BatchStatus::NotExecuted,
+            BatchStatus::NotExecuted
+        ]
+    );
+    request.target_keys = Some(
+        result
+            .batch
+            .unwrap()
+            .rows
+            .iter()
+            .filter(|r| r.status == BatchStatus::NotExecuted)
+            .map(|r| r.target.key.clone())
+            .collect(),
+    );
+    let retry = f.preview(request).await;
+    assert_eq!(retry.targets.len(), 2);
+    let result = f.execute_preview(&retry).await;
+    assert_eq!(statuses(&result), [BatchStatus::Success; 2]);
+    assert!(f.executor.calls.lock().unwrap().is_empty());
+    assert_eq!(fs::read(f.paths.lock_path()).unwrap(), lock);
+    for name in ["alpha", "beta", "gamma"] {
+        assert!(f.paths.canonical_skills_dir().join(name).exists());
+        assert!(fs::symlink_metadata(f.paths.home().join(".claude/skills").join(name)).is_err());
+    }
+}
+
+#[tokio::test]
+async fn uninstall_agents_runs_selected_dependency_links_before_last_copy() {
+    let f = Fixture::new();
+    let copy = f.paths.home().join(".claude/skills/alpha");
+    fs::rename(f.paths.canonical_skills_dir().join("alpha"), &copy).unwrap();
+    std::os::unix::fs::symlink(&copy, f.paths.home().join(".workbuddy/skills/alpha")).unwrap();
+    let preview = f
+        .preview(Fixture::request(
+            BatchAction::UninstallAgents,
+            &["alpha"],
+            &["claude-code", "workbuddy"],
+        ))
+        .await;
+    assert_eq!(preview.targets[0].agent_id.as_deref(), Some("workbuddy"));
+    assert_eq!(preview.targets[1].removes_last_copy, Some(true));
+    let mut confirmation = Fixture::confirmation(&preview);
+    confirmation.confirmed_copies = false;
+    assert_eq!(
+        f.manager
+            .start_batch(ScopeId::Global, confirmation, sink().0)
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::BatchConfirmationNeeded
+    );
+    let result = f.execute_preview(&preview).await;
+    assert_eq!(statuses(&result), [BatchStatus::Success; 2]);
+    assert!(
+        result
+            .batch
+            .unwrap()
+            .rows
+            .iter()
+            .all(|r| r.backup_path.is_some())
+    );
+    assert!(!copy.exists());
+    assert!(f.executor.calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn native_batch_owns_writer_permit_and_stops_between_targets() {
     let f = Fixture::new();
     let p = f

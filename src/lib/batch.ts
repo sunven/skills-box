@@ -1,9 +1,10 @@
 import type { AppError, InventoryAgent, LocalModification, ProjectEntry, ScopeId } from "./types";
 
-export type BatchAction = "update" | "uninstall" | "attach" | "detach" | "copy_to_project";
+export type BatchAction = "update" | "uninstall" | "uninstall_agents" | "attach" | "detach" | "copy_to_project";
 export const BATCH_ACTION_LABELS: Record<BatchAction, string> = {
   update: "更新",
   uninstall: "卸载",
+  uninstall_agents: "移除",
   attach: "挂载到 Agent",
   detach: "解除 Agent 挂载",
   copy_to_project: "复制到项目",
@@ -11,6 +12,7 @@ export const BATCH_ACTION_LABELS: Record<BatchAction, string> = {
 export const BATCH_SUCCESS_LABELS: Record<BatchAction, string> = {
   update: "已更新",
   uninstall: "已卸载",
+  uninstall_agents: "已移除",
   attach: "已挂载",
   detach: "已解除挂载",
   copy_to_project: "已复制到项目",
@@ -32,6 +34,7 @@ export interface BatchTarget {
   reason: string | null;
   localModification: LocalModification;
   deletesCopy: boolean;
+  removesLastCopy?: boolean;
   paths: string[];
   operation?: "copy" | "attach";
 }

@@ -1,0 +1,7 @@
+# Remove from Agents preserves skill records
+
+Status: accepted
+
+On 2026-11-04 the user chose two modes in Batch Uninstall: Remove from Agents by default, and an explicit complete Uninstall. Remove from Agents uses native deletion of inventory attachment paths, including Unmanaged skills, Copy-only skills and broken links; it leaves the canonical store, Lock entry and Baseline fingerprint intact. The user explicitly allowed removing the last copy after a warning, confirmation and backup, with no automatic record cleanup. A surviving stale Lock entry is intentional. Standalone Detach keeps its existing eligibility, so this extends ADR-0022 through a separate batch action rather than relaxing Detach.
+
+Shared physical Agent directories cannot be independently removed. An independent directory remains removable even if the CLI catalog marks its Agent universal. Only selected paths belonging to the same Skill can authorize dependent links: the preview places links before copies, and each copy's writer rejects any remaining dependency, including links into its content. A failed earlier link therefore protects its copy. This extends ADR-0023's boundary while retaining ADR-0021's single batch task, fixed targets, stopping, per-target backup, post-backup validation and fresh retry confirmation. No per-Agent CLI remove command is used because it cannot guarantee these deletion boundaries.
