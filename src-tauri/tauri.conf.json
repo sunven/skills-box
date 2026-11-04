@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "skills-box",
+  "productName": "Skills Box",
   "version": "0.1.2",
   "identifier": "com.sunven.skills-box",
   "build": {

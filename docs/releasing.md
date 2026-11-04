@@ -55,8 +55,8 @@ Verify an update archive against the committed public key:
 ```bash
 cd src-tauri
 cargo run --locked --example verify-update -- \
-  target/release/bundle/macos/skills-box.app.tar.gz \
-  target/release/bundle/macos/skills-box.app.tar.gz.sig
+  "target/release/bundle/macos/Skills Box.app.tar.gz" \
+  "target/release/bundle/macos/Skills Box.app.tar.gz.sig"
 ```
 
 ## GitHub prerequisites
