@@ -66,3 +66,25 @@ Date: 2026-11-03
 因此未验收真正的旧版 → 新版下载、替换及重启，也未在 Intel 真机或 macOS 12 上运行。Intel 本机结果是交叉构建和产物检查。浏览器 fake、Rust 测试与本机产物验证均不等同于线上升级。
 
 远程配置与真实升级步骤见 [docs/releasing.md](../../docs/releasing.md)。包含 updater 的第一个版本仍需手动安装，之后才能接受更高稳定版本的应用更新。
+
+## 2026-11-04：严格按照 fanyifanyi 调整自动发布
+
+以上记录对应 2026-11-03 的原双架构草稿发布实现。用户现要求严格按照
+`/Users/sunven/github/fanyifanyi`，当前发布改用参考项目的单 Apple Silicon
+任务和 `tauri-apps/tauri-action@v1` 直接发布流程。官方 Action 负责更新清单，
+原 `prepare-release.mjs` 汇总/生成流程已移除；发布后按参考文件检查清单。
+本地脚本接入参考项目的 `bump-version.sh`、`cliff.toml` 和 CHANGELOG 流程。
+
+本次验证：
+
+- 逐行比较工作流：除仓库名称、main 分支、Node 22 和删除未使用的认证变量外，与参考文件一致。
+- `cliff.toml` 与参考项目一致；真实 git-cliff 成功生成当前版本的 CHANGELOG。
+- `node --test scripts/*.node-test.mjs`：14/14 通过，覆盖真实 Cargo/Git 的发布准备、CHANGELOG 成功/失败/缺少工具及符号链接密钥目录。
+- actionlint 1.7.12、Bash/Node 语法检查、版本一致性及 `git diff --check` 均通过。
+- `pnpm install --frozen-lockfile --ignore-scripts` 通过，依赖锁文件未改变。
+- `pnpm build:signed --target aarch64-apple-darwin --bundles dmg,app` 通过，包含前端生产构建；生成 `.app`、DMG、更新归档和签名，实际二进制为 arm64。
+- 构建报告签名私钥与仓库公钥不匹配；仅比较外部 `.pub` 文件与配置，也确认不一致。未修改既有公钥或轮换密钥，当前更新归档不能记为已通过签名验收。
+- 对实际生成的归档执行 `cargo run --locked --example verify-update`，返回 `UnexpectedKeyId`，确认当前私钥不能生成仓库公钥所信任的更新签名。
+- `gh api repos/sunven/skills-box` 仍返回 HTTP 404，未运行线上工作流或发布 Release。
+
+当前代码与参考发布流程已对齐；有效签名和真实分发需要匹配既有公钥的私钥、对应 Actions Secrets，以及可访问的 GitHub 仓库。

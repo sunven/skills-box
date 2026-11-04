@@ -1,7 +1,7 @@
 # Skills Box — 应用更新
 
 Status: Implemented and locally verified; live delivery awaits GitHub prerequisites
-Date: 2026-11-03
+Date: 2026-11-04
 
 ## 目标
 
@@ -11,7 +11,7 @@ Date: 2026-11-03
 
 - Q1：更新对象是 Skills Box 桌面应用自身。术语使用 **App update / 应用更新**；现有 **Update / Skill 更新** 继续遵循原定义。
 - Q2：自动检查并提醒。用户点击更新后才下载、安装并重启；安装与重启必须与所有 Skill 写入互斥。
-- Q3：首期支持 macOS Apple Silicon 和 Intel，分别生成更新包；Windows/Linux 延后。
+- Q3（2026-11-04 调整）：自动发布严格按照 fanyifanyi 当前实现，仅构建 macOS Apple Silicon；Intel、Windows/Linux 不在自动发布范围。
 - Q4：采用 `sunven/skills-box` GitHub Releases 的稳定渠道，补齐 `v*` 标签触发的构建、签名与更新清单流程；预发布不作为候选，开发模式不自动检查。目标仓库的可访问性尚待落实。
 - Q5：生产启动延迟 1 秒检查，运行期间每 6 小时检查；设置页提供手动检查。失败不连续重试；自动失败只留在设置页，手动失败明确展示。
 - Q6：应用内提醒进入设置页，展示当前版本、新版、更新说明与更新按钮；关闭只屏蔽当前会话的该版本，首期不持久化跳过版本。
@@ -19,7 +19,7 @@ Date: 2026-11-03
 - Q8：公开分发更新包，不依赖用户的 GitHub token；应用更新不复用 Skill 源认证。
 - Q9：下载与 Skill 操作并行；安装前原子获取全局变更许可，忙时保留本次已验签的包，由用户再次点击安装。安装和重启阶段禁止新写操作、关窗和 Cmd+Q，不中断已有任务或自动排队重启。
 - Q10：分阶段显示检查/下载/验签/安装错误并提供恢复入口；不误报最新版，不重复安装已成功的包。只读目录提示先安装到可写目录；首期不提供断点续传、跨重启下载缓存或额外自动回滚。
-- Q11：两种 macOS 架构构建先上传草稿 Release；完整清单、版本、产物与签名验证通过后才发布稳定版。
+- Q11（2026-11-04 调整）：使用 `tauri-apps/tauri-action@v1` 直接构建、签名并发布稳定 Release，自动生成 `latest.json`，发布后按参考实现检查 `darwin-aarch64` 元数据；替代双架构草稿汇总门槛。
 
 ## 设计树
 
@@ -27,11 +27,11 @@ Date: 2026-11-03
   - 自动化边界（Q2，已确认：检查与提醒自动；更新点击后执行）
     - 检查触发与提示（Q5、Q6，已确认）
     - Skill 变更任务让路与失败恢复（Q9、Q10，已确认）
-  - 发布平台（Q3，已确认：macOS 双架构）
+  - 发布平台（Q3，2026-11-04 调整：macOS Apple Silicon）
     - 首期 Apple 签名/公证约定（Q7，已确认：ad-hoc，不公证）
   - 发布渠道与分发（Q4，已确认：GitHub 稳定版）
     - 签名与公开分发（Q7、Q8，已确认）
-    - 双架构发布完整性（Q11，已确认）
+    - 官方 Action 直接发布和清单检查（Q11，2026-11-04 调整）
     - 仓库访问（事实缺口；远程发布前落实）
   - 产品选择与完整设计共同理解已确认；用户已授权并要求继续实现
 
@@ -101,7 +101,7 @@ Q1–Q11 及完整设计共同理解均已由用户确认，用户已授权实�
 
 - `sunven/skills-box` 的公开 GitHub Releases 为分发目标；生产端点为 `https://github.com/sunven/skills-box/releases/latest/download/latest.json`。
 - 只发布稳定版自动更新；预发布不能替换正式版清单。版本标签为稳定 SemVer 的 `v<version>`，并与 package、Cargo、Tauri 版本保持一致。
-- 更新清单同时包含 `darwin-aarch64` 和 `darwin-x86_64`，每项带 HTTPS 下载地址与签名。
+- 更新清单由官方 Action 生成，包含 `darwin-aarch64` 的 HTTPS 下载地址与签名；不再自行生成双架构清单。
 - 使用本项目独立 updater 公钥/私钥。私钥及密码存放在仓库外，工作流通过 `TAURI_SIGNING_PRIVATE_KEY` 和 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 使用；私钥不会写入仓库、日志或产品设置。
 - 配置使用 Tauri 2 的 `plugins.updater` 和 `bundle.createUpdaterArtifacts`，不复制参考项目旧版 `bundle.updater` 脚本。
 - 首期保留 macOS 12.0+、ad-hoc 签名且不公证。Updater 签名独立于 Apple Developer 签名。
@@ -109,9 +109,10 @@ Q1–Q11 及完整设计共同理解均已由用户确认，用户已授权实�
 
 ### 发布门槛（已确认）
 
-- `v*` 标签触发两种 macOS 架构构建；两种构建均生成 `.app` 更新包、签名及便于首次安装的分发包。
-- 构建产物先上传草稿 Release；汇总作业生成/校验完整 `latest.json`。
-- 两种架构、版本一致性、签名、公钥匹配和产物引用校验通过后才发布稳定版；失败不公开不完整候选。
+- `v*` 标签触发单个 macOS Apple Silicon 任务，使用 `tauri-apps/tauri-action@v1` 和 `--target aarch64-apple-darwin --bundles dmg,app`。
+- 按参考实现设置 `releaseDraft: false`、`prerelease: false`、`generateReleaseNotes: true`、`uploadUpdaterJson: true` 和 `retryAttempts: 2`。官方 Action 负责构建、签名、上传及清单生成。
+- 发布后下载 `latest.json` 并检查版本、`darwin-aarch64` URL 与签名；该检查不是发布前草稿门槛。
+- 本地按参考脚本执行更新版本、git-cliff CHANGELOG、提交、附注标签、确认推送；仓库名、分支与 Node/pnpm 版本按本项目适配。
 - 工作流实现与本机验收在本仓库完成。真正上线前需落实可访问 GitHub 仓库和 Actions Secrets；本次设计确认不表示已经发布任何代码或版本。
 
 ## 验收条件
@@ -123,7 +124,7 @@ Q1–Q11 及完整设计共同理解均已由用户确认，用户已授权实�
 - 并发测试覆盖已登记 Skill 任务及未登记的原生写入/规划许可；忙时保留已下载包，用户重试后安装。
 - 安装后台 worker 在调用 future 被丢弃后仍持有许可；安装中关闭、Cmd+Q、确认退出和新写入口均受保护。
 - 已安装状态不重复安装；正常完成业务停机和重启交接，错误可恢复并有手动分发入口。
-- 发布校验覆盖双架构、版本不一致、缺失包/签名、公钥不匹配与稳定版门槛。
+- 本地发布回归覆盖版本一致性、CHANGELOG 成功/失败/工具缺失、附注标签和确认推送；工作流检查官方 Action 参数与发布后的 Apple Silicon 清单。
 - `pnpm test`、`pnpm build`、`cargo test` 通过；本机 release `.app`/签名产物构建与设置界面实际检查完成。
 - 线上两版本升级验收需要真实可访问的分发目标；若尚未发布，验证记录必须明确本机与线上的界限。
 
@@ -133,11 +134,13 @@ Q1–Q11 及完整设计共同理解均已由用户确认，用户已授权实�
 
 1. [原生应用更新生命周期](issues/01-native-app-update.md)
 2. [设置与应用内更新提醒](issues/02-app-update-ui.md)
-3. [签名与双架构发布流程](issues/03-signed-macos-release.md)
+3. [签名与参考项目发布流程](issues/03-signed-macos-release.md)
 4. [完整验证与验收记录](issues/04-verification.md)
 
 架构边界记录于 [ADR 0020](../../docs/adr/0020-native-app-update-lifecycle.md)。
 
 ## 实现与验收结果
 
-用户确认完整设计后已完成原生生命周期、设置与提醒、签名脚本和双架构发布工作流。前端与 Rust 回归通过，Apple Silicon/Intel 实际产物通过签名、签名版本、架构和应用版本校验，完整清单已在本机生成。真实原生应用已完成启动、设置与自动/手动失败反馈检查。GitHub 目标仍不可访问，尚未配置远程 Secrets、发布 Release 或完成线上两版本升级。完整证据与边界见 [verification.md](verification.md)。
+2026-11-03 已完成原生生命周期、设置与提醒、签名脚本和原双架构发布工作流（以下产物检查为历史验收）。前端与 Rust 回归通过，Apple Silicon/Intel 实际产物通过签名、签名版本、架构和应用版本校验，完整清单已在本机生成。真实原生应用已完成启动、设置与自动/手动失败反馈检查。GitHub 目标仍不可访问，尚未配置远程 Secrets、发布 Release 或完成线上两版本升级。完整证据与边界见 [verification.md](verification.md)。
+
+2026-11-04：用户再次要求“严格按照 fanyifanyi 实现”。自动发布现改为与参考项目相同的官方 Action 单架构直接发布流程，删除自行汇总/生成清单的实现，并同步本地版本脚本和 CHANGELOG 流程。此次调整覆盖原 Q3/Q11 发布约定；线上发布仍需可访问的仓库和既有密钥对应的 Actions Secrets。本次本机构建完成，但当前本机私钥与仓库公钥不匹配，真实验签返回 `UnexpectedKeyId`；代码流程对齐不表示已通过实际签名或线上发布验收。

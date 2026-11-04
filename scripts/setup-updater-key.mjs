@@ -1,12 +1,20 @@
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const directory = resolve(process.argv[2] ?? join(homedir(), ".local/share/skills-box/signing"));
+function realDirectory(path) {
+  try { return realpathSync(path); }
+  catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    return join(realDirectory(dirname(path)), basename(path));
+  }
+}
+
+const root = realpathSync(resolve(dirname(fileURLToPath(import.meta.url)), ".."));
+const directory = realDirectory(resolve(process.argv[2] ?? join(homedir(), ".local/share/skills-box/signing")));
 if (directory === root || directory.startsWith(`${root}/`)) throw new Error("Signing keys must be stored outside the repository.");
 process.umask(0o077);
 mkdirSync(directory, { recursive: true, mode: 0o700 });

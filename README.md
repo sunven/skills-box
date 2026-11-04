@@ -76,8 +76,8 @@ session and asks you to click **安装并重启** when ready. Installation preve
 new writes and closing/quitting until the restart handoff. No Skill files are
 changed by an App update.
 
-The initial distribution supports macOS Apple Silicon and Intel, with ad-hoc
-application signing. When opening a download for the first time, macOS may
+Automatic releases follow fanyifanyi and target macOS Apple Silicon, with
+ad-hoc application signing. When opening a download for the first time, macOS may
 require approval in Privacy & Security. Move the app from its DMG to Applications
 or another writable directory before updating. See [release setup](docs/releasing.md)
 for signing keys, local signed builds and the complete release workflow.

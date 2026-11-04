@@ -24,8 +24,11 @@ ad-hoc/no-notarization policy.
 The committed configuration contains only the public key. Private key and
 password files remain outside the repository with `0600` permissions; the
 local build helper and Actions use them through process environment variables.
-The release workflow verifies both architecture archives, public-key matches
-and versions before making a complete update manifest public. See
+Following the reference workflow, the official Tauri action builds and signs
+the Apple Silicon application, publishes the Release and generates its updater
+manifest. A subsequent step checks the published metadata; this is a
+post-publication check, not a draft-release validation gate. Rust still verifies
+the signature and signed version before installing an update. See
 [release setup](releasing.md) for the remaining remote prerequisites.
 
 ## Renderer permissions
