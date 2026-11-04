@@ -26,6 +26,7 @@ pub enum MutationKind {
     Install,
     Update,
     Uninstall,
+    Batch,
 }
 
 impl MutationKind {
@@ -34,6 +35,7 @@ impl MutationKind {
             Self::Install => "安装",
             Self::Update => "更新",
             Self::Uninstall => "卸载",
+            Self::Batch => "批量操作",
         }
     }
 }

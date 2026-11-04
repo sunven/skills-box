@@ -1,0 +1,18 @@
+{
+  "date": "2026-11-04",
+  "pinnedCli": "1.7.4",
+  "temporaryHome": true,
+  "sourcePathMissing": true,
+  "skills": [
+    "faceless-explainer",
+    "hyperframes-creative",
+    "hyperframes-keyframes",
+    "hyperframes-core",
+    "hyperframes-audio",
+    "hyperframes-animation"
+  ],
+  "catalogPathsRemoved": true,
+  "lockEntriesRemoved": true,
+  "unrelatedSkillPreserved": true,
+  "legacyLinksRemainingForNativeCleanup": 6
+}

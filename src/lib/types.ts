@@ -57,7 +57,8 @@ export interface ProjectList {
 
 export type ToolState = "ok" | "missing" | "too_old" | "error" | "not_checked";
 
-export type LockStatus = "ok" | "missing" | "corrupt" | "unsupported" | "unreadable";
+export type LockStatus =
+  "ok" | "missing" | "corrupt" | "unsupported" | "unreadable";
 
 export interface AppError {
   /** Omitted only for client-side fallbacks; backend errors always carry one. */
@@ -118,7 +119,7 @@ export interface EnvReport {
   pinnedCliVersion: string;
 }
 
-export type MutationKind = "install" | "update" | "uninstall";
+export type MutationKind = "install" | "update" | "uninstall" | "batch";
 
 /** Startup verification for a mutation whose process ended before finishing. */
 export interface InterruptedReport {
@@ -149,11 +150,7 @@ export interface ActiveMutationInfo {
 
 export type ManagementState = "managed" | "copy_only" | "unmanaged";
 export type UpdateState =
-  | "current"
-  | "update"
-  | "unknown"
-  | "error"
-  | "path_missing";
+  "current" | "update" | "unknown" | "error" | "path_missing";
 export type AttachmentMode = "link" | "copy" | "native" | "broken";
 export type LocalModification = "clean" | "modified" | "unknown";
 export type AgentOrigin = "catalog" | "builtin" | "user";
@@ -168,16 +165,13 @@ export type TaskPhase =
   | "failed"
   | "cancelled";
 
-export type TaskAction = "preview" | "install" | "update" | "uninstall";
+export type TaskAction =
+  "preview" | "install" | "update" | "uninstall" | "batch";
 
 export type TaskOverall = "success" | "partial" | "failed" | "cancelled";
 
 export type TaskSkillStatus =
-  | "installed"
-  | "updated"
-  | "removed"
-  | "skipped"
-  | "failed";
+  "installed" | "updated" | "removed" | "skipped" | "failed";
 
 export interface TaskSkillResult {
   name: string;
@@ -218,6 +212,7 @@ export interface TaskResult {
   startedAt: number;
   finishedAtEpochMs: number;
   preview?: PreviewSummary;
+  batch?: import("./batch").BatchResult;
 }
 
 export interface TaskEvent {

@@ -28,6 +28,7 @@ use super::source::{SourceSpec, validate_source};
 use super::uninstall as uninstall_task;
 use super::update as update_task;
 
+mod batch;
 mod scoped_mutation;
 
 pub type TaskId = String;
@@ -63,6 +64,7 @@ pub enum TaskAction {
     Install,
     Update,
     Uninstall,
+    Batch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -114,6 +116,8 @@ pub struct TaskResult {
     pub finished_at_epoch_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preview: Option<PreviewSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub batch: Option<super::batch::BatchResult>,
 }
 
 /// Identity of a running task, captured at registration. The session builds
@@ -272,6 +276,7 @@ struct Inner {
     next_id: AtomicU64,
     mutation_slots: Arc<Semaphore>,
     config: TaskManagerConfig,
+    batch_previews: Mutex<HashMap<String, super::batch::BatchPlan>>,
     shutting_down: AtomicBool,
     finished_notify: Notify,
 }
@@ -413,6 +418,7 @@ impl TaskManager {
                 next_id: AtomicU64::new(1),
                 mutation_slots: Arc::new(Semaphore::new(1)),
                 config,
+                batch_previews: Mutex::new(HashMap::new()),
                 shutting_down: AtomicBool::new(false),
                 finished_notify: Notify::new(),
             }),
@@ -1000,6 +1006,7 @@ impl TaskManager {
             started_at: envelope.started_at,
             finished_at_epoch_ms: now_ms(),
             preview: Some(preview),
+            batch: None,
         }
     }
 
@@ -1210,7 +1217,9 @@ impl TaskManager {
             match outcome {
                 // A cancellation that races with the final event keeps the
                 // per-skill results instead of discarding what already ran.
-                FinishOutcome::Completed(mut result, _) if !result.skills.is_empty() => {
+                FinishOutcome::Completed(mut result, _)
+                    if !result.skills.is_empty() || result.batch.is_some() =>
+                {
                     result.overall = TaskOverall::Cancelled;
                     FinishOutcome::Completed(result, "操作已取消。".to_string())
                 }
@@ -1231,13 +1240,32 @@ impl TaskManager {
                 };
                 let error =
                     (result.overall == TaskOverall::Cancelled).then(AppError::task_cancelled);
+                let batch_progress = result.batch.as_ref().map(|batch| {
+                    let total = batch.rows.iter().filter(|r| r.target.eligible).count() as u32;
+                    let completed = batch
+                        .rows
+                        .iter()
+                        .filter(|r| {
+                            r.target.eligible && r.status != super::batch::BatchStatus::NotExecuted
+                        })
+                        .count() as u32;
+                    (completed, total)
+                });
                 let total = result
                     .preview
                     .as_ref()
                     .map(|preview| preview.skills.len().max(1) as u32)
                     .or_else(|| (!result.skills.is_empty()).then_some(result.skills.len() as u32))
                     .unwrap_or(1);
-                TaskEvent::finished(task_id, phase, message, total, total, result, error)
+                TaskEvent::finished(
+                    task_id,
+                    phase,
+                    message,
+                    batch_progress.map_or(total, |p| p.0),
+                    batch_progress.map_or(total, |p| p.1),
+                    result,
+                    error,
+                )
             }
             FinishOutcome::Failed(error) => TaskEvent::finished(
                 task_id,
@@ -1256,6 +1284,7 @@ impl TaskManager {
                     started_at,
                     finished_at_epoch_ms: now_ms(),
                     preview: None,
+                    batch: None,
                 },
                 Some(error),
             ),
@@ -1276,6 +1305,7 @@ impl TaskManager {
                     started_at,
                     finished_at_epoch_ms: now_ms(),
                     preview: None,
+                    batch: None,
                 },
                 Some(AppError::task_cancelled()),
             ),
@@ -2899,6 +2929,7 @@ mod tests {
             started_at: 1_793_163_988_000,
             finished_at_epoch_ms: 1_793_163_989_000,
             preview: None,
+            batch: None,
         };
         let json = serde_json::to_value(&result).unwrap();
         assert_eq!(json["action"], "uninstall");

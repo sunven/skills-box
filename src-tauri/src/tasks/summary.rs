@@ -38,7 +38,7 @@ pub fn message(action: TaskAction, overall: TaskOverall, results: &[TaskSkillRes
         TaskAction::Install => TaskSkillStatus::Installed,
         TaskAction::Update => TaskSkillStatus::Updated,
         TaskAction::Uninstall => TaskSkillStatus::Removed,
-        TaskAction::Preview => TaskSkillStatus::Installed,
+        TaskAction::Preview | TaskAction::Batch => TaskSkillStatus::Installed,
     };
     let (succeeded, unfinished) = counts(results, success);
     let name = results
@@ -70,6 +70,7 @@ pub fn message(action: TaskAction, overall: TaskOverall, results: &[TaskSkillRes
             }
             TaskOverall::Cancelled => "卸载已取消。".to_string(),
         },
+        TaskAction::Batch => "批量操作已结束。".to_string(),
         TaskAction::Preview => match overall {
             TaskOverall::Success => "预览完成。".to_string(),
             TaskOverall::Partial => "预览部分完成。".to_string(),

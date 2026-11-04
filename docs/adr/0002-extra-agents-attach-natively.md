@@ -2,6 +2,8 @@
 
 Status: accepted
 
+[ADR-0023](0023-uninstall-dependency-boundary.md) also represents Codex's existing legacy skills directory through this overlay. That compatibility entry is detected by the skills directory itself and hidden when it is absent.
+
 Agents outside the vendored `skills@1.7.4` catalog — WorkBuddy (`~/.workbuddy/skills`) is the first — follow the same on-disk convention as catalog agents, but the CLI rejects unknown agent ids and has no arbitrary-directory option, so it cannot create their attachments. skills-box therefore defines **extra agents** as its own data (builtin entries shipped with the app plus user-defined entries in the app-data `agents.json`, detected by the parent of their skills directory) and attaches their skills natively: the CLI still installs into the canonical store and links catalog agents, then skills-box creates a symlink from the extra agent's skills directory into `~/.agents/skills/<name>` itself. WorkBuddy indexes symlinked skill folders (verified against its skill-list cache), so no copy mode is needed.
 
 ## Considered options

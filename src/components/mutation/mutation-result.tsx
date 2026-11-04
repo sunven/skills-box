@@ -1,11 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { CheckCircle2 } from "lucide-react";
 import { Button } from "../ui/button";
-import {
-  asAppError,
-  fallbackError,
-  revealAppData,
-} from "../../lib/api";
+import { asAppError, fallbackError, revealAppData } from "../../lib/api";
 import {
   mutationHeading,
   type MutationAction,
@@ -43,10 +39,7 @@ function toneClass(status: MutationRowStatus): string {
   return "ml-auto rounded-sm bg-warning-soft px-1.5 py-0.5 text-[11.5px] font-medium text-warning";
 }
 
-function retryableRow(
-  row: MutationRow,
-  retryMode: MutationRetryMode,
-): boolean {
+function retryableRow(row: MutationRow, retryMode: MutationRetryMode): boolean {
   if (retryMode === "failed") return row.status === "failed";
   if (retryMode === "incomplete") return row.status !== "success";
   return false;
@@ -114,8 +107,12 @@ export function MutationResult({
             className="rounded-md border border-border px-3 py-2.5"
           >
             <div className="flex items-center gap-2">
-              <span className="text-[13px] font-medium">{row.name}</span>
-              <span className={toneClass(row.status)}>{row.statusLabel}</span>
+              <span className="min-w-0 break-words text-[13px] font-medium">
+                {row.name}
+              </span>
+              <span className={`shrink-0 ${toneClass(row.status)}`}>
+                {row.statusLabel}
+              </span>
               {onRetryRow && retryableRow(row, retryMode) ? (
                 <Button
                   variant="ghost"
@@ -134,8 +131,13 @@ export function MutationResult({
                 {row.error.detail ? ` · ${row.error.detail}` : ""}
               </p>
             ) : null}
+            {!row.error && row.reason ? (
+              <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">
+                {row.reason}
+              </p>
+            ) : null}
             {row.backupPath ? (
-              <p className="mono mt-1 text-muted-foreground">
+              <p className="mono mt-1 break-all text-muted-foreground">
                 备份：{row.backupPath}
               </p>
             ) : null}

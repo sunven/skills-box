@@ -1,3 +1,6 @@
+import { SelectionCheckbox } from "./selection-checkbox";
+import { BATCH_ACTION_LABELS, type BatchAction } from "../lib/batch";
+import type { BatchSelection } from "./batch-dialog";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { AlertTriangle, Loader2, Search, X } from "lucide-react";
 import { AnomalyBanner } from "./anomaly-panel";
@@ -33,6 +36,10 @@ interface SkillListPaneProps {
   scope: ScopeId;
   checkRevision?: string;
   actionsDisabled: boolean;
+  batchRunning: boolean;
+  batchMutationsEnabled: boolean;
+  batchSucceededIds: Set<string>;
+  onBatch: (selection: BatchSelection) => void;
   checkingUpdates: boolean;
   checkError: AppError | null;
   installTargets: InventoryAgent[];
@@ -125,6 +132,10 @@ export function SkillListPane({
   scope,
   checkRevision,
   actionsDisabled,
+  batchRunning,
+  batchMutationsEnabled,
+  batchSucceededIds,
+  onBatch,
   checkingUpdates,
   checkError,
   installTargets,
@@ -165,6 +176,35 @@ export function SkillListPane({
   onOpenAnomalies,
   onRetry,
 }: SkillListPaneProps) {
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(() => new Set());
+  const matchingIds = new Set(visibleSkills.map((skill) => skill.id));
+  const checkedSkills = visibleSkills.filter((skill) =>
+    checkedIds.has(skill.id),
+  );
+  useEffect(() => {
+    if (batchRunning) return;
+    const matching = new Set(visibleSkills.map((skill) => skill.id));
+    setCheckedIds((current) => {
+      const next = new Set(
+        [...current].filter(
+          (id) => matching.has(id) && !batchSucceededIds.has(id),
+        ),
+      );
+      return next.size === current.size ? current : next;
+    });
+  }, [visibleSkills, batchRunning, batchSucceededIds]);
+  const toggleSkill = useCallback((id: string) => {
+    setCheckedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+  const toggleAll = () =>
+    setCheckedIds(
+      checkedSkills.length === visibleSkills.length ? new Set() : matchingIds,
+    );
   const [menuTarget, setMenuTarget] = useState<SkillMenuTarget | null>(null);
   const rowActions = useSkillRowActions({
     scope,
@@ -247,12 +287,14 @@ export function SkillListPane({
             value={query}
             onChange={(event) => onQueryChange(event.target.value)}
             aria-label="搜索 skill、来源或描述"
+            disabled={batchRunning}
             placeholder="搜索 skill、来源或描述"
             className="h-9 pl-8 text-[13px]"
           />
         </div>
         <select
           aria-label="排序"
+          disabled={batchRunning}
           value={sort}
           onChange={(event) => onSortChange(event.target.value as SortKey)}
           className="toolbar-select h-9 rounded-md border border-border-strong bg-card px-2 text-[12.5px] text-foreground"
@@ -265,6 +307,7 @@ export function SkillListPane({
         </select>
         <select
           aria-label="状态筛选"
+          disabled={batchRunning}
           value={status}
           onChange={(event) =>
             onStatusChange(event.target.value as StatusFilter)
@@ -280,6 +323,7 @@ export function SkillListPane({
         </select>
         <select
           aria-label="Agent 筛选"
+          disabled={batchRunning}
           value={agent}
           onChange={(event) => onAgentChange(event.target.value)}
           className="toolbar-select toolbar-agent-select h-9 rounded-md border border-border-strong bg-card px-2 text-[12.5px] text-foreground"
@@ -313,6 +357,51 @@ export function SkillListPane({
         </div>
       </div>
 
+      {checkedSkills.length > 0 ? (
+        <div className="batch-toolbar" role="toolbar" aria-label="批量操作">
+          <strong aria-live="polite">已选 {checkedSkills.length} 个技能</strong>
+          <div className="batch-toolbar-actions">
+            {(Object.keys(BATCH_ACTION_LABELS) as BatchAction[]).map(
+              (action) => (
+                <Button
+                  key={action}
+                  variant="outline"
+                  size="sm"
+                  className={
+                    action === "uninstall" ? "text-destructive" : undefined
+                  }
+                  disabled={
+                    actionsDisabled ||
+                    batchRunning ||
+                    ((action === "update" || action === "uninstall") &&
+                      !batchMutationsEnabled)
+                  }
+                  title={
+                    actionsDisabled || batchRunning
+                      ? "当前无法开始写入操作"
+                      : (action === "update" || action === "uninstall") &&
+                          !batchMutationsEnabled
+                        ? "请先配置可用的执行环境"
+                        : undefined
+                  }
+                  onClick={() => onBatch({ action, skills: checkedSkills })}
+                >
+                  批量{BATCH_ACTION_LABELS[action]}
+                </Button>
+              ),
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={batchRunning}
+              onClick={() => setCheckedIds(new Set())}
+            >
+              清空选择
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
       <AnomalyBanner anomalies={anomalies} onOpen={onOpenAnomalies} />
 
       {rowActions.notice ? (
@@ -343,6 +432,33 @@ export function SkillListPane({
       ) : null}
 
       <div className="list-panel">
+        <div className="list-head">
+          <div className="skill-grid">
+            <SelectionCheckbox
+              checked={
+                checkedSkills.length === visibleSkills.length &&
+                visibleSkills.length > 0
+              }
+              mixed={
+                checkedSkills.length > 0 &&
+                checkedSkills.length < visibleSkills.length
+              }
+              disabled={
+                batchRunning ||
+                visibleSkills.length === 0 ||
+                !!error ||
+                !!unavailableProject
+              }
+              label="全选当前筛选结果"
+              onChange={toggleAll}
+            />
+            <span>名称</span>
+            <span className="skill-col-source">来源 / 更新于</span>
+            <span className="skill-col-mounts">Agent 挂载</span>
+            <span>状态</span>
+            <span className="skill-actions-heading">操作</span>
+          </div>
+        </div>
         {unavailableProject ? (
           <EmptyState
             title="项目路径不可用"
@@ -434,21 +550,15 @@ export function SkillListPane({
           />
         ) : (
           <>
-            <div className="list-head">
-              <div className="skill-grid">
-                <span>名称</span>
-                <span className="skill-col-source">来源 / 更新于</span>
-                <span className="skill-col-mounts">Agent 挂载</span>
-                <span>状态</span>
-                <span className="skill-actions-heading">操作</span>
-              </div>
-            </div>
             <div className="list-scroll" data-testid="skill-list">
               {visibleSkills.map((skill) => (
                 <SkillRow
                   key={skill.name}
                   skill={skill}
                   selected={skill.name === selectedName}
+                  checked={checkedIds.has(skill.id)}
+                  selectionDisabled={batchRunning}
+                  onToggle={toggleSkill}
                   onSelect={onSelect}
                   actionsDisabled={actionsDisabled}
                   openingFolder={rowActions.openingFolders.has(skill.id)}

@@ -294,7 +294,7 @@ describe("skill row actions", () => {
       ).toHaveLength(0);
       expect(menu.getByRole("menuitem", { name: /^卸载/ })).toHaveAttribute(
         "aria-disabled",
-        String(management === "unmanaged"),
+        "false",
       );
       expect(screen.queryByRole("button", { name: "更新 alpha" })).toBeNull();
     },

@@ -2441,3 +2441,55 @@
 .app-update-notes ul { list-style: disc; padding-left: 22px; }
 .app-update-notes ol { list-style: decimal; padding-left: 22px; }
 .app-update-notes a { color: var(--primary); text-decoration: underline; }
+
+/* Selection is an independent column alongside the row's detail entry. */
+.list-head .skill-grid {
+  grid-template-columns: 20px var(--skill-columns) 92px;
+}
+.skill-row.skill-grid {
+  grid-template-columns: 20px minmax(0, 1fr) 92px;
+}
+.skill-checkbox {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.skill-checkbox:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 3px;
+}
+.skill-checkbox:disabled { cursor: default; }
+.skill-row[data-checked="true"] { background: var(--accent-soft, #eff5ff); }
+.batch-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 20px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  font-size: 12.5px;
+}
+.batch-toolbar-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.batch-summary { display: flex; flex-wrap: wrap; gap: 16px; padding: 16px 0 10px; font-size: 13px; }
+.batch-summary > span { color: var(--muted-foreground); }
+.batch-preview-list { border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.batch-preview-list > li { padding: 10px 12px; font-size: 12.5px; overflow-wrap: anywhere; }
+.batch-preview-list > li + li { border-top: 1px solid var(--border); }
+.batch-preview-list > li[data-eligible="false"] { background: var(--background); }
+.batch-confirm { display: flex; align-items: flex-start; gap: 9px; margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 12.5px; }
+.batch-confirm input { flex: none; margin-top: 3px; accent-color: var(--accent); }
+.batch-agent { display: flex; align-items: center; gap: 8px; padding: 8px 0; font-size: 12.5px; cursor: pointer; }
+.batch-agent input { accent-color: var(--accent); }
+.batch-agent[data-disabled] { opacity: .65; cursor: default; }
+.batch-foot { flex-wrap: wrap; }
+@media (max-width: 560px) {
+  .batch-toolbar { gap: 8px; }
+  .batch-panel .modal-head, .batch-panel .modal-foot { padding-inline: 14px; }
+  .batch-panel .modal-body { padding-inline: 14px; }
+}

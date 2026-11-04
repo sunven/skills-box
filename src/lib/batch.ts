@@ -1,0 +1,90 @@
+import type { AppError, LocalModification, ScopeId } from "./types";
+
+export type BatchAction = "update" | "uninstall" | "attach" | "detach";
+export const BATCH_ACTION_LABELS: Record<BatchAction, string> = {
+  update: "更新",
+  uninstall: "卸载",
+  attach: "挂载到 Agent",
+  detach: "解除 Agent 挂载",
+};
+export const BATCH_SUCCESS_LABELS: Record<BatchAction, string> = {
+  update: "已更新",
+  uninstall: "已卸载",
+  attach: "已挂载",
+  detach: "已解除挂载",
+};
+export interface BatchRequest {
+  action: BatchAction;
+  skillIds: string[];
+  agentIds: string[];
+  targetKeys?: string[];
+}
+export interface BatchTarget {
+  key: string;
+  skillId: string;
+  name: string;
+  agentId: string | null;
+  agentName: string | null;
+  eligible: boolean;
+  reason: string | null;
+  localModification: LocalModification;
+  deletesCopy: boolean;
+  paths: string[];
+}
+export interface BatchPreview {
+  id: string;
+  revision: string;
+  scope: ScopeId;
+  action: BatchAction;
+  targets: BatchTarget[];
+}
+export interface BatchConfirmation {
+  previewId: string;
+  revision: string;
+  confirmedDelete: boolean;
+  confirmedCopies: boolean;
+}
+export type BatchStatus = "success" | "failed" | "skipped" | "not_executed";
+export interface BatchRow extends BatchTarget {
+  status: BatchStatus;
+  error: AppError | null;
+  backupPath: string | null;
+}
+export interface BatchResult {
+  action: BatchAction;
+  rows: BatchRow[];
+}
+
+export function batchTargetLabel(target: BatchTarget): string {
+  return target.agentName
+    ? `${target.name} · ${target.agentName}`
+    : target.name;
+}
+
+export function completedSkillIds(rows: BatchRow[]): Set<string> {
+  const grouped = new Map<string, BatchRow[]>();
+  for (const row of rows) {
+    if (!row.eligible) continue;
+    const group = grouped.get(row.skillId);
+    if (group) group.push(row);
+    else grouped.set(row.skillId, [row]);
+  }
+  return new Set(
+    [...grouped]
+      .filter(([, group]) => group.every((row) => row.status === "success"))
+      .map(([id]) => id),
+  );
+}
+
+export function mergeBatchRows(
+  previous: BatchRow[],
+  current: BatchRow[],
+): BatchRow[] {
+  const changed = new Map(current.map((row) => [row.key, row]));
+  const result = previous.map((row) => {
+    const next = changed.get(row.key);
+    return next ? { ...next, eligible: row.eligible || next.eligible } : row;
+  });
+  const known = new Set(previous.map((row) => row.key));
+  return result.concat(current.filter((row) => !known.has(row.key)));
+}

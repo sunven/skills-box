@@ -69,7 +69,10 @@ export function ExitDialog({
               退出 Skills Box？
             </h2>
             <p className="modal-sub">
-              {title}。退出会立即终止 skills CLI 的整个进程组。
+              {title}。
+              {info?.kind === "batch"
+                ? "停止后续目标，等待当前目标完成后退出。"
+                : "退出会立即终止 skills CLI 的整个进程组。"}
             </p>
           </div>
           <Button
@@ -87,13 +90,20 @@ export function ExitDialog({
 
         <div className="modal-body">
           <div className="notice" data-tone="negative">
-            <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+            <AlertTriangle
+              className="mt-0.5 size-4 shrink-0"
+              aria-hidden="true"
+            />
             <div>
-              <p className="font-medium">写入可能只完成一部分</p>
+              <p className="font-medium">
+                {info?.kind === "batch"
+                  ? "已完成的操作保留"
+                  : "写入可能只完成一部分"}
+              </p>
               <p className="mt-0.5">
-                应用不会自动回滚；已创建的 lock
-                快照会保留。下次启动会显示中断警告并校验 lock
-                与快照，请根据备份手动确认 skill 状态。
+                {info?.kind === "batch"
+                  ? "当前目标完成后，尚未执行的目标将停止。已完成的操作与备份保留，不自动续跑。"
+                  : "应用不会自动回滚；已创建的 lock 快照会保留。下次启动会显示中断警告并校验 lock 与快照，请根据备份手动确认 skill 状态。"}
               </p>
             </div>
           </div>
@@ -141,7 +151,13 @@ export function ExitDialog({
             disabled={pending}
             onClick={onConfirm}
           >
-            {pending ? "正在退出…" : "确认退出"}
+            {pending
+              ? info?.kind === "batch"
+                ? "等待当前目标完成…"
+                : "正在退出…"
+              : info?.kind === "batch"
+                ? "停止后续并退出"
+                : "确认退出"}
           </Button>
         </div>
       </div>

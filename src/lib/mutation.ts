@@ -1,3 +1,8 @@
+import {
+  batchTargetLabel,
+  BATCH_SUCCESS_LABELS,
+  type BatchResult,
+} from "./batch";
 import { discoveryQueryKey } from "./discovery";
 //! One mutation surface for task state, results and refresh.
 //!
@@ -43,6 +48,7 @@ export const MUTATION_KIND_LABELS: Record<MutationKind, string> = {
   install: "安装",
   update: "更新",
   uninstall: "卸载",
+  batch: "批量操作",
 };
 
 export type MutationAction =
@@ -71,6 +77,7 @@ export interface MutationRow {
   /** Original CLI status; native rows leave it unset. */
   taskStatus?: TaskSkillStatus;
   error?: AppError;
+  reason?: string;
   backupPath?: string;
 }
 
@@ -83,6 +90,7 @@ export interface MutationResultView {
   /** Scope the mutation affected; refresh policy prefers it over options. */
   scope?: ScopeId;
   checkRevision?: string;
+  batch?: BatchResult;
 }
 
 const HEADING_LABELS: Record<
@@ -178,7 +186,28 @@ function normalizedRowStatus(status: TaskSkillStatus): MutationRowStatus {
 export function normalizeTaskResult(result: TaskResult): MutationResultView {
   return {
     outcome: result.overall,
-    rows: result.skills.map((skill) => ({
+    batch: result.batch,
+    rows: result.batch
+      ? result.batch.rows.map((row) => ({
+          name: batchTargetLabel(row),
+          status:
+            row.status === "not_executed" ? ("skipped" as const) : row.status,
+          statusLabel:
+            row.status === "success"
+              ? BATCH_SUCCESS_LABELS[result.batch!.action]
+              : row.status === "failed"
+                ? "失败"
+                : row.status === "skipped"
+                  ? "跳过"
+                  : "未执行",
+          error: row.error ?? undefined,
+          reason:
+            row.status === "not_executed"
+              ? "批量操作已停止，此目标尚未执行。"
+              : (row.reason ?? undefined),
+          backupPath: row.backupPath ?? undefined,
+        }))
+      : result.skills.map((skill) => ({
       name: skill.name,
       status: normalizedRowStatus(skill.status),
       statusLabel: TASK_SKILL_STATUS_LABELS[skill.status],
@@ -509,7 +538,15 @@ export function refreshMutationQueries(
       );
     }
   }
-  if (["install", "uninstall", "project_add", "project_relocate", "project_forget"].includes(options.action)) {
+  if (
+    [
+      "install",
+      "uninstall",
+      "project_add",
+      "project_relocate",
+      "project_forget",
+    ].includes(options.action)
+  ) {
     void queryClient.invalidateQueries({ queryKey: discoveryQueryKey });
   }
   const plan = mutationRefreshPlan(options.action, scope, options.skillId);
@@ -758,7 +795,9 @@ export function useMutation(options: MutationOptions): MutationHandle {
     (companions: readonly MutationHandle[] = []) => {
       const participants = [{ stateRef, canClose, reset }, ...companions];
       if (participants.some((handle) => !handle.canClose())) return false;
-      const active = participants.find((handle) => handle.stateRef.current.running);
+      const active = participants.find(
+        (handle) => handle.stateRef.current.running,
+      );
       const taskId = active?.stateRef.current.taskId;
       if (taskId) {
         void cancelTask(taskId).catch(() => {
@@ -771,9 +810,12 @@ export function useMutation(options: MutationOptions): MutationHandle {
     [canClose, reset],
   );
 
-  const setStartError = useCallback((error: AppError | null) => {
+  const setStartError = useCallback(
+    (error: AppError | null) => {
     dispatch({ type: "startError", error });
-  }, [dispatch]);
+  },
+    [dispatch],
+  );
 
   return {
     state,

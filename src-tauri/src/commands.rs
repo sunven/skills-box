@@ -411,10 +411,16 @@ pub async fn quit_app(app: AppHandle, state: State<'_, AppState>) -> Result<(), 
     state.exiting.store(true, Ordering::SeqCst);
     state.discovery.shutdown_and_wait().await;
     let tasks = state.tasks.clone();
-    let report = tasks.shutdown_mutations().await;
-    if report.timed_out {
-        // The executor already sent SIGKILL; the marker still needs to stay.
-        eprintln!("skills-box: shutdown timed out waiting for a mutation to finish");
+    if tasks
+        .active_mutation()
+        .is_some_and(|task| task.kind == crate::interrupted::MutationKind::Batch)
+    {
+        tasks.shutdown_batch().await;
+    } else {
+        let report = tasks.shutdown_mutations().await;
+        if report.timed_out {
+            eprintln!("skills-box: shutdown timed out waiting for a mutation to finish");
+        }
     }
     app.exit(0);
     Ok(())
@@ -448,6 +454,75 @@ pub async fn start_update(
 ) -> Result<TaskId, AppError> {
     let sink = task_event_sink(on_event);
     state.tasks.start_update(scope, skill_ids, sink).await
+}
+
+/// Resolve the current selected targets into a read-only, server-owned plan.
+#[tauri::command]
+pub async fn preview_batch(
+    state: State<'_, AppState>,
+    scope: ScopeId,
+    request: crate::tasks::batch::BatchRequest,
+) -> Result<crate::tasks::batch::BatchPreview, AppError> {
+    let (updates, checked_records) = if request.action == crate::tasks::batch::BatchAction::Update {
+        let names = request
+            .skill_ids
+            .iter()
+            .map(|id| scope.parse_skill_id(id).map(str::to_string))
+            .collect::<Result<Vec<_>, _>>()?;
+        let records = state.tasks.batch_update_records(scope.clone()).await?;
+        let response = match &scope {
+            ScopeId::Global => UpdateCheckResponse::Applied {
+                scope: scope.clone(),
+                check_revision: None,
+                report: state.updates.check(Some(names)).await?,
+                state: None,
+            },
+            ScopeId::Project(_) => {
+                state
+                    .project_updates
+                    .check(scope.clone(), Some(names), None)
+                    .await?
+            }
+        };
+        let updates = match response {
+            UpdateCheckResponse::Applied { report, .. } => report
+                .skills
+                .into_iter()
+                .map(|r| (r.name.clone(), r))
+                .collect(),
+            UpdateCheckResponse::Invalidated { .. } => {
+                return Err(AppError::batch_preview_expired());
+            }
+        };
+        (updates, Some(records))
+    } else {
+        (std::collections::HashMap::new(), None)
+    };
+    state
+        .tasks
+        .preview_checked_batch(scope, request, updates, checked_records)
+        .await
+}
+
+#[tauri::command]
+pub async fn refresh_batch_preview(
+    state: State<'_, AppState>,
+    preview_id: String,
+) -> Result<crate::tasks::batch::BatchPreview, AppError> {
+    state.tasks.refresh_batch_preview(preview_id).await
+}
+
+#[tauri::command]
+pub async fn start_batch(
+    state: State<'_, AppState>,
+    scope: ScopeId,
+    confirmation: crate::tasks::batch::BatchConfirmation,
+    on_event: Channel<TaskEvent>,
+) -> Result<TaskId, AppError> {
+    state
+        .tasks
+        .start_batch(scope, confirmation, task_event_sink(on_event))
+        .await
 }
 
 /// Native detach from one agent. Runs through the same single-writer slot as

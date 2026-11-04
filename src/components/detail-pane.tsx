@@ -534,7 +534,7 @@ export const DetailPane = memo(function DetailPane({
                   </span>
                 </MetaRow>
               </dl>
-              {management !== "unmanaged" && onUninstall ? (
+              {onUninstall ? (
                 <Button
                   variant="outline"
                   size="sm"
@@ -588,7 +588,7 @@ export const DetailPane = memo(function DetailPane({
 
             {management === "unmanaged" ? (
               <div className="notice" data-tone="warning">
-                未受管：该目录没有 lock 条目，v1 只读展示，不提供更新或卸载。
+                未受管：该目录没有安装记录，无法更新或管理挂载；可先备份再彻底卸载。
               </div>
             ) : null}
             {management === "copy_only" ? (

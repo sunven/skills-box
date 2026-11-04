@@ -231,22 +231,52 @@ afterEach(() => {
 });
 
 describe("uninstall", () => {
-  it("offers uninstall only for managed and copy-only rows", async () => {
+  it("offers uninstall for unmanaged and copy-only rows with the actual deletion scope", async () => {
     currentState = setup();
     await screen.findByText("alpha");
 
     fireEvent.click(row("unmanaged"));
     await waitFor(() => {
-      expect(detail().getByText(/未受管：该目录没有 lock 条目/)).toBeInTheDocument();
+      expect(
+        detail().getByText(/未受管：该目录没有安装记录/),
+      ).toBeInTheDocument();
     });
     fireEvent.click(await screen.findByRole("tab", { name: "操作" }));
+    expect(detail().getByRole("button", { name: "彻底卸载" })).toBeEnabled();
+    const unmanagedDialog = await openUninstall("unmanaged");
     expect(
-      detail().queryByRole("button", { name: "彻底卸载" }),
-    ).toBeNull();
+      within(unmanagedDialog).getByTestId("uninstall-scope"),
+    ).toHaveTextContent("无安装记录");
+    expect(
+      within(unmanagedDialog).getByTestId("uninstall-scope"),
+    ).toHaveTextContent("~/.claude/skills/unmanaged");
+    expect(
+      within(unmanagedDialog).getByTestId("uninstall-command"),
+    ).toHaveTextContent("符号链接只删除链接本身");
+    await confirmUninstall(unmanagedDialog);
+    await waitFor(() =>
+      expect(uninstallCallsOf(currentState!)).toEqual([
+        { skillId: "unmanaged" },
+      ]),
+    );
+    emitOn(
+      currentState,
+      0,
+      taskEvent("completed", {
+        result: uninstallResult("success", "removed", {
+          skills: [{ name: "unmanaged", status: "removed" }],
+        }),
+      }),
+    );
+    fireEvent.click(
+      within(unmanagedDialog).getByRole("button", { name: "完成" }),
+    );
 
     fireEvent.click(row("copy-only"));
     await waitFor(() => {
-      expect(detail().getByText(/仅副本：没有 canonical 目录/)).toBeInTheDocument();
+      expect(
+        detail().getByText(/仅副本：没有 canonical 目录/),
+      ).toBeInTheDocument();
     });
     fireEvent.click(await screen.findByRole("tab", { name: "操作" }));
     await waitFor(() => {

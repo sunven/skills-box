@@ -54,6 +54,7 @@ impl<P> PlannedMutation<P> {
             MutationKind::Install => TaskAction::Install,
             MutationKind::Update => TaskAction::Update,
             MutationKind::Uninstall => TaskAction::Uninstall,
+            MutationKind::Batch => TaskAction::Batch,
         };
         let registered = manager.register_mutation(
             action_kind,
@@ -126,5 +127,34 @@ impl TaskManager {
         })
         .await
         .map_err(join_error)?
+    }
+}
+
+impl PlannedMutation<crate::tasks::batch::BatchPlan> {
+    pub(super) fn start_batch(self, sink: EventSink) -> Result<TaskId, AppError> {
+        let mut seen = std::collections::HashSet::new();
+        let skills = self
+            .plan
+            .targets
+            .iter()
+            .filter(|target| seen.insert(target.target.skill_id.clone()))
+            .map(|target| target.target.name.clone())
+            .collect();
+        let registered = self.manager.register_mutation(
+            TaskAction::Batch,
+            MutationKind::Batch,
+            skills,
+            self.scope.layout.scope.clone(),
+            self.scope.layout.lock_path.to_string_lossy().into_owned(),
+        )?;
+        let ctx = self.manager.session_context(&registered, sink.clone());
+        let id = registered.task_id.clone();
+        tokio::spawn(async move {
+            let _permit = self.scope.permit;
+            let outcome =
+                super::batch::run(self.manager.clone(), self.scope.layout, ctx, self.plan).await;
+            self.manager.finish(&id, &sink, outcome);
+        });
+        Ok(registered.task_id)
     }
 }

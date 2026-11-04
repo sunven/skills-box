@@ -80,6 +80,10 @@ pub struct ExtraAgents {
 }
 
 impl ExtraAgent {
+    pub fn requires_existing_skills_dir(&self) -> bool {
+        self.id == "codex-legacy"
+    }
+
     /// The catalog-shaped definition used by the shared detection and display
     /// helpers. `skills_dir` (project scope) is unused because this app is
     /// global-only.
@@ -96,19 +100,34 @@ impl ExtraAgent {
             shared_global_dir: false,
             show_in_universal_list: false,
             show_in_universal_prompt: false,
-            detect_paths: vec![detect_path(&self.skills_dir)],
+            detect_paths: vec![if self.requires_existing_skills_dir() {
+                // The Codex config directory exists on modern installs too;
+                // expose this compatibility directory only when it exists.
+                self.skills_dir.clone()
+            } else {
+                detect_path(&self.skills_dir)
+            }],
         }
     }
 }
 
 pub fn builtin_extras() -> Vec<ExtraAgent> {
-    vec![ExtraAgent {
-        id: "workbuddy".to_string(),
-        display_name: "WorkBuddy".to_string(),
-        skills_dir: "~/.workbuddy/skills".to_string(),
-        project_skills_dir: None,
-        builtin: true,
-    }]
+    vec![
+        ExtraAgent {
+            id: "workbuddy".to_string(),
+            display_name: "WorkBuddy".to_string(),
+            skills_dir: "~/.workbuddy/skills".to_string(),
+            project_skills_dir: None,
+            builtin: true,
+        },
+        ExtraAgent {
+            id: "codex-legacy".to_string(),
+            display_name: "Codex（旧目录）".to_string(),
+            skills_dir: "~/.codex/skills".to_string(),
+            project_skills_dir: None,
+            builtin: true,
+        },
+    ]
 }
 
 /// Builtin extras plus the valid user entries from `agents.json`.
@@ -799,7 +818,7 @@ mod tests {
         fs::create_dir_all(paths.app_data()).unwrap();
         fs::write(paths.agents_config_path(), "{not json").unwrap();
         let loaded = load(&paths);
-        assert_eq!(loaded.agents.len(), 1);
+        assert_eq!(loaded.agents.len(), builtin_extras().len());
         assert!(
             loaded
                 .warnings

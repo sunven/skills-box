@@ -37,6 +37,16 @@ pub fn attach_agent(
     skill_id: &str,
     agent_id: &str,
 ) -> Result<AttachResult, AppError> {
+    attach_agent_checked(paths, layout, skill_id, agent_id, &|| Ok(()))
+}
+
+pub(crate) fn attach_agent_checked(
+    paths: &AppPaths,
+    layout: &ScopeLayout,
+    skill_id: &str,
+    agent_id: &str,
+    before_write: &dyn Fn() -> Result<(), AppError>,
+) -> Result<AttachResult, AppError> {
     let name = layout.scope.parse_skill_id(skill_id)?.to_string();
     super::tasks::install::validate_skill_name(&name)?;
     // A corrupt lock for this scope blocks every mutation, including attach.
@@ -81,6 +91,7 @@ pub fn attach_agent(
         )));
     }
 
+    before_write()?;
     #[cfg(unix)]
     {
         std::os::unix::fs::symlink(canonical, target).map_err(|error| {

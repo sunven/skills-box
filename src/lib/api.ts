@@ -1,4 +1,9 @@
-import type { DiscoveryId, DiscoveryState, DiscoveryProgress } from "./discovery";
+import type { BatchRequest, BatchPreview, BatchConfirmation } from "./batch";
+import type {
+  DiscoveryId,
+  DiscoveryState,
+  DiscoveryProgress,
+} from "./discovery";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   ActiveMutationInfo,
@@ -66,6 +71,9 @@ export const API_COMMANDS = {
   getUpdateCheckState: "get_update_check_state",
   getUpdateCheckStates: "get_update_check_states",
   startUpdate: "start_update",
+  previewBatch: "preview_batch",
+  refreshBatchPreview: "refresh_batch_preview",
+  startBatch: "start_batch",
   detachAgent: "detach_agent",
   attachAgent: "attach_agent",
   addExtraAgent: "add_extra_agent",
@@ -112,8 +120,14 @@ export function addProject(root: string): Promise<ProjectEntry> {
 }
 
 /** Point an existing project at a new root, keeping its id. */
-export function relocateProject(id: string, root: string): Promise<RelocateProjectResult> {
-  return invoke<RelocateProjectResult>(API_COMMANDS.relocateProject, { id, root });
+export function relocateProject(
+  id: string,
+  root: string,
+): Promise<RelocateProjectResult> {
+  return invoke<RelocateProjectResult>(API_COMMANDS.relocateProject, {
+    id,
+    root,
+  });
 }
 
 /** Remove the registry entry and its check state; never deletes files. */
@@ -446,11 +460,41 @@ export function startDiscoveryScan(manual = false): Promise<DiscoveryProgress> {
   return invoke<DiscoveryProgress>(API_COMMANDS.startDiscoveryScan, { manual });
 }
 export function acknowledgeDiscoveries(ids?: DiscoveryId[]): Promise<void> {
-  return invoke<void>(API_COMMANDS.acknowledgeDiscoveries, { ids: ids ?? null });
+  return invoke<void>(API_COMMANDS.acknowledgeDiscoveries, {
+    ids: ids ?? null,
+  });
 }
-export function setDiscoveryIgnored(id: DiscoveryId, ignored: boolean): Promise<void> {
+export function setDiscoveryIgnored(
+  id: DiscoveryId,
+  ignored: boolean,
+): Promise<void> {
   return invoke<void>(API_COMMANDS.setDiscoveryIgnored, { id, ignored });
 }
 export function invalidateDiscoverySource(source: string): Promise<void> {
   return invoke<void>(API_COMMANDS.invalidateDiscoverySource, { source });
+}
+
+export function previewBatch(
+  scope: ScopeId,
+  request: BatchRequest,
+): Promise<BatchPreview> {
+  return invoke<BatchPreview>(API_COMMANDS.previewBatch, { scope, request });
+}
+
+export function refreshBatchPreview(previewId: string): Promise<BatchPreview> {
+  return invoke<BatchPreview>(API_COMMANDS.refreshBatchPreview, { previewId });
+}
+
+export function startBatch(
+  scope: ScopeId,
+  confirmation: BatchConfirmation,
+  onEvent: (event: TaskEvent) => void,
+): Promise<string> {
+  const channel = new Channel<TaskEvent>();
+  channel.onmessage = onEvent;
+  return invoke<string>(API_COMMANDS.startBatch, {
+    scope,
+    confirmation,
+    onEvent: channel,
+  });
 }

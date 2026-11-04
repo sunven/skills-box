@@ -1,15 +1,16 @@
 //! Uninstall planning and verification.
 //!
-//! Uninstall is the only destructive mutation. It is limited to managed and
-//! copy-only skills (a lock entry exists), backs up the lock, canonical folder,
-//! copy attachments and attachment manifest before touching the disk, and is
-//! executed by the pinned CLI as `skills remove -g -s <name> -y` — never with
+//! Uninstall backs up the lock, canonical folder, copy attachments and
+//! attachment manifest before touching the disk. Managed and copy-only skills
+//! use the pinned CLI as `skills remove -g -s <name> -y` — never with
 //! `-a` (per-agent remove has environment-dependent semantics) and never with
-//! `--all`.
+//! `--all`. Unmanaged skills use native removal of the located paths, because
+//! CLI name normalization and scanning cannot safely address arbitrary folders
+//! and symlinks without an installation record.
 //!
-//! A copy attachment shared with another agent through a symlink would leave
-//! dangling links behind, so planning blocks with `agent.dependency_conflict`
-//! instead of rewriting other agents' attachments.
+//! Links to a copy are safe when they belong to this Skill's uninstall plan.
+//! References outside that plan still block with `agent.dependency_conflict`
+//! instead of leaving dangling links or expanding the deletion scope.
 //!
 //! The CLI exits 0 even when it removes nothing or only partially succeeds.
 //! After it exits, the canonical folder, every physical attachment path and
@@ -44,11 +45,11 @@ use super::session::{
 
 pub const UNINSTALL_TIMEOUT: Duration = INSTALL_TIMEOUT;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UninstallPlan {
     pub name: String,
     pub management: ManagementState,
-    /// Shared canonical folder; `None` for copy-only skills.
+    /// Shared canonical folder; absent when only Agent attachments exist.
     pub canonical: Option<PathBuf>,
     /// Every physical attachment, sorted by agent id and path.
     pub attachments: Vec<AttachmentLocation>,
@@ -56,6 +57,9 @@ pub struct UninstallPlan {
     /// agents are represented by `universal`; copy-only plans have no
     /// `universal` entry because no canonical folder exists.
     pub agent_ids: Vec<String>,
+    /// Physical parent and raw link destination, in canonical/attachment order.
+    /// Native deletion must keep addressing the paths that were backed up.
+    native_path_state: Vec<(PathBuf, Option<PathBuf>)>,
 }
 
 impl UninstallPlan {
@@ -72,8 +76,8 @@ impl UninstallPlan {
 }
 
 /// Resolve an inventory id into an executable uninstall plan. This runs before
-/// a task is registered so unmanaged skills and dependency conflicts reject
-/// synchronously without spawning anything.
+/// a task is registered so invalid paths and dependency conflicts reject
+/// synchronously without spawning anything. A lock entry is optional.
 ///
 /// The CLI command itself is built by [`ScopedCli::uninstall`]:
 /// `npx -y skills@1.7.4 remove [-g] -s <name> -y`.
@@ -90,9 +94,6 @@ pub fn plan_uninstall(
     let Some(located) = layout.locate(paths, name)? else {
         return Err(AppError::skill_not_found(skill_id));
     };
-    if located.management == ManagementState::Unmanaged {
-        return Err(AppError::skill_unmanaged(skill_id));
-    }
 
     let mut attachments = located.attachments;
     attachments.sort_by(|left, right| {
@@ -100,8 +101,14 @@ pub fn plan_uninstall(
             .cmp(&right.agent_id)
             .then_with(|| left.path.cmp(&right.path))
     });
+    let canonical = located.canonical_path;
+    let removal_paths: BTreeSet<&PathBuf> = canonical
+        .iter()
+        .chain(attachments.iter().map(|attachment| &attachment.path))
+        .collect();
     // Reuse the shared ticket-08 scan so detach and uninstall can never
-    // disagree about which symlinks depend on a copy directory.
+    // disagree about which symlinks depend on a copy directory. Uninstall
+    // removes all of this Skill's attachments, unlike one-Agent Detach.
     for copy in attachments
         .iter()
         .filter(|attachment| attachment.mode == AttachmentMode::Copy)
@@ -111,7 +118,10 @@ pub fn plan_uninstall(
             &layout.canonical_dir,
             &copy.path,
         ) {
-            Ok(dependents) => dependents,
+            Ok(dependents) => dependents
+                .into_iter()
+                .filter(|dependent| !removal_paths.contains(&dependent.path))
+                .collect::<Vec<_>>(),
             // An unresolvable copy has nothing to compare against; planning
             // stays permissive and post-uninstall verification still runs.
             Err(_) => continue,
@@ -127,7 +137,6 @@ pub fn plan_uninstall(
         }
     }
 
-    let canonical = located.canonical_path;
     let mut agent_ids: BTreeSet<String> = attachments
         .iter()
         .filter(|attachment| attachment.mode != AttachmentMode::Native)
@@ -137,12 +146,49 @@ pub fn plan_uninstall(
         agent_ids.insert(UNIVERSAL_AGENT_ID.to_string());
     }
 
+    let mut native_path_state = Vec::new();
+    if located.management == ManagementState::Unmanaged {
+        for path in canonical
+            .iter()
+            .chain(attachments.iter().map(|attachment| &attachment.path))
+        {
+            let parent = path
+                .parent()
+                .ok_or_else(|| AppError::path_invalid("卸载目标缺少父目录。"))?;
+            let physical_parent = fs::canonicalize(parent)
+                .map_err(|_| AppError::path_invalid("卸载目标的父目录无法读取。"))?;
+            let metadata = fs::symlink_metadata(path)
+                .map_err(|_| AppError::path_invalid("卸载目标无法读取。"))?;
+            let link = if metadata.file_type().is_symlink() {
+                Some(
+                    fs::read_link(path)
+                        .map_err(|_| AppError::path_invalid("卸载目标的符号链接无法读取。"))?,
+                )
+            } else {
+                None
+            };
+            if let Some(root) = layout.project_root() {
+                // Link attachments are only unlinked; their targets are not
+                // read or deleted. Canonical/copy content is also backed up.
+                let checked = if canonical.as_ref() == Some(path) || link.is_none() {
+                    path.as_path()
+                } else {
+                    parent
+                };
+                crate::project_path::existing(root, checked)
+                    .map_err(|_| AppError::path_invalid("卸载目标超出项目范围或无法读取。"))?;
+            }
+            native_path_state.push((physical_parent, link));
+        }
+    }
+
     Ok(UninstallPlan {
         name: located.name,
         management: located.management,
         canonical,
         attachments,
         agent_ids: agent_ids.into_iter().collect(),
+        native_path_state,
     })
 }
 
@@ -297,11 +343,118 @@ impl UninstallAction {
             timeout,
         }
     }
+
+    fn finish(
+        &self,
+        plan: &UninstallPlan,
+        outcome: Result<(), AppError>,
+        mut warnings: Vec<AppError>,
+        preflight: &Preflight,
+    ) -> Result<UnitOutcome, AppError> {
+        let status = if outcome.is_ok() {
+            TaskSkillStatus::Removed
+        } else {
+            TaskSkillStatus::Failed
+        };
+        let error = outcome.err();
+        if status == TaskSkillStatus::Removed
+            && let Err(clear_error) =
+                BaselineStore::for_scope(&self.paths, &self.layout.scope).clear(&plan.name)
+        {
+            warnings.push(AppError::baseline_clear_failed(clear_error));
+        }
+
+        let backup_display = self.paths.display(&preflight.snapshot);
+        let log = OperationLog::for_scope(&self.paths, &self.layout.scope);
+        let log_result = if status == TaskSkillStatus::Removed {
+            "removed"
+        } else {
+            "failed"
+        };
+        let _ = log.append(&OperationEntry::new(
+            "uninstall",
+            &plan.name,
+            plan.agent_ids.clone(),
+            log_result,
+            Some(backup_display.clone()),
+            error.clone(),
+        ));
+        Ok(UnitOutcome {
+            rows: vec![TaskSkillResult {
+                name: plan.name.clone(),
+                status,
+                error,
+                backup_path: Some(backup_display.clone()),
+            }],
+            warnings,
+            backup_path: backup_display,
+            final_progress: None,
+        })
+    }
 }
 
 impl MutationAction for UninstallAction {
     type Plan = UninstallPlan;
     type Unit = UninstallPlan;
+
+    fn uses_cli(&self, plan: &Self::Plan) -> bool {
+        plan.management != ManagementState::Unmanaged
+    }
+
+    fn before_write(&self, plan: &Self::Unit) -> Result<(), AppError> {
+        let registry = crate::projects::ProjectRegistry::new(self.paths.clone());
+        let layout = crate::scope_layout::ScopeLayout::resolve_detected(
+            &self.paths,
+            &registry,
+            &self.layout.scope,
+        )?;
+        if layout.root != self.layout.root
+            || layout
+                .project
+                .as_ref()
+                .map(|project| &project.check_revision)
+                != self
+                    .layout
+                    .project
+                    .as_ref()
+                    .map(|project| &project.check_revision)
+        {
+            return Err(AppError::batch_target_changed(
+                "项目根目录已变化，请重新确认。",
+            ));
+        }
+        // Dependency protection must also run after backup for CLI plans:
+        // an outside link may have started referencing a planned copy.
+        let current = plan_uninstall(&self.paths, &layout, &layout.scope.skill_id(&plan.name))?;
+        if current != *plan {
+            return Err(AppError::batch_target_changed(
+                "技能安装记录或卸载范围已变化，请重新确认。",
+            ));
+        }
+        Ok(())
+    }
+
+    fn execute_native(
+        &self,
+        plan: &Self::Unit,
+        preflight: &Preflight,
+        reporter: &Reporter,
+    ) -> Result<UnitOutcome, AppError> {
+        reporter.progress(
+            TaskPhase::RunningCli,
+            format!("正在卸载未受管技能 {}…", plan.name),
+            Some(plan.name.as_str()),
+        );
+        let outcome = remove_unmanaged_paths(plan).and_then(|()| {
+            reporter.progress(
+                TaskPhase::Verifying,
+                "正在校验技能目录、Agent 挂载与安装记录…",
+                Some(plan.name.as_str()),
+            );
+            verify_uninstall(&self.layout, plan)
+        });
+        self.finish(plan, outcome, Vec::new(), preflight)
+    }
 
     fn profile(&self, plan: &Self::Plan) -> SessionProfile {
         SessionProfile {
@@ -382,45 +535,7 @@ impl MutationAction for UninstallAction {
         }
         let verification = verify_uninstall(&self.layout, plan);
         let outcome = evaluate_output(&output, verification);
-        let status = if outcome.is_ok() {
-            TaskSkillStatus::Removed
-        } else {
-            TaskSkillStatus::Failed
-        };
-        let error = outcome.err();
-        if status == TaskSkillStatus::Removed
-            && let Err(clear_error) =
-                BaselineStore::for_scope(&self.paths, &self.layout.scope).clear(&plan.name)
-        {
-            warnings.push(AppError::baseline_clear_failed(clear_error));
-        }
-
-        let backup_display = self.paths.display(&preflight.snapshot);
-        let log = OperationLog::for_scope(&self.paths, &self.layout.scope);
-        let log_result = if status == TaskSkillStatus::Removed {
-            "removed"
-        } else {
-            "failed"
-        };
-        let _ = log.append(&OperationEntry::new(
-            "uninstall",
-            &plan.name,
-            plan.agent_ids.clone(),
-            log_result,
-            Some(backup_display.clone()),
-            error.clone(),
-        ));
-        Ok(UnitOutcome {
-            rows: vec![TaskSkillResult {
-                name: plan.name.clone(),
-                status,
-                error,
-                backup_path: Some(backup_display.clone()),
-            }],
-            warnings,
-            backup_path: backup_display,
-            final_progress: None,
-        })
+        self.finish(plan, outcome, warnings, preflight)
     }
 
     fn on_infrastructure_failure(
@@ -457,6 +572,45 @@ impl MutationAction for UninstallAction {
             error,
         );
     }
+}
+
+/// Exact located paths only: unlink a symlink without touching its target and
+/// remove real directories recursively. No name normalization or lock writes.
+fn remove_unmanaged_paths(plan: &UninstallPlan) -> Result<(), AppError> {
+    let mut seen = BTreeSet::new();
+    for path in plan
+        .attachments
+        .iter()
+        .filter(|attachment| attachment.mode != AttachmentMode::Native)
+        .map(|attachment| &attachment.path)
+        .chain(plan.canonical.iter())
+    {
+        if !seen.insert(path) {
+            continue;
+        }
+        let metadata = match fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            // Agent directories can alias the same physical path.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(AppError::verify_failed(format!(
+                    "无法读取卸载目标 {}：{error}",
+                    path.display()
+                )));
+            }
+        };
+        let result = if metadata.file_type().is_symlink() {
+            fs::remove_file(path)
+        } else if metadata.is_dir() {
+            fs::remove_dir_all(path)
+        } else {
+            return Err(AppError::path_invalid("卸载目标既不是目录也不是符号链接。"));
+        };
+        result.map_err(|error| {
+            AppError::verify_failed(format!("无法删除卸载目标 {}：{error}", path.display()))
+        })?;
+    }
+    Ok(())
 }
 
 fn lexists(path: &std::path::Path) -> bool {
@@ -718,11 +872,15 @@ mod tests {
     }
 
     #[test]
-    fn unmanaged_skills_are_rejected() {
+    fn unmanaged_skills_plan_their_physical_paths_without_a_lock_entry() {
         let fixture = Fixture::new();
-        let error = fixture.plan("unmanaged").unwrap_err();
-        assert_eq!(error.code, ErrorCode::SkillUnmanaged);
-        assert!(error.message.contains("不可更新或卸载"), "{error}");
+        let plan = fixture.plan("unmanaged").unwrap();
+        assert_eq!(plan.management, ManagementState::Unmanaged);
+        assert_eq!(
+            plan.canonical,
+            Some(fixture.home.join(".agents/skills/unmanaged"))
+        );
+        assert_eq!(plan.agent_ids, vec!["universal"]);
     }
 
     #[test]
@@ -741,26 +899,50 @@ mod tests {
     }
 
     #[test]
-    fn a_copy_referenced_by_another_agents_symlink_blocks_the_plan() {
+    fn uninstall_includes_links_to_its_own_copy() {
         let fixture = Fixture::new();
-        // Gemini now points at Claude's copy instead of the canonical folder.
         fs::remove_file(fixture.gemini.join("alpha")).unwrap();
         symlink(fixture.claude.join("alpha"), fixture.gemini.join("alpha")).unwrap();
+
+        let plan = fixture
+            .plan("alpha")
+            .expect("the copy and its same-Skill link are both being uninstalled");
+        assert!(plan.attachments.iter().any(|attachment| {
+            attachment.path == fixture.claude.join("alpha")
+                && attachment.mode == AttachmentMode::Copy
+        }));
+        assert!(plan.attachments.iter().any(|attachment| {
+            attachment.path == fixture.gemini.join("alpha")
+                && attachment.mode == AttachmentMode::Link
+        }));
+    }
+
+    #[test]
+    fn a_copy_referenced_by_a_different_skills_symlink_blocks_the_plan() {
+        let fixture = Fixture::new();
+        symlink(
+            fixture.claude.join("alpha"),
+            fixture.gemini.join("different-skill"),
+        )
+        .unwrap();
 
         let error = fixture.plan("alpha").unwrap_err();
         assert_eq!(error.code, ErrorCode::AgentDependencyConflict);
         assert!(error.message.contains("Claude Code"), "{error:?}");
         let detail = error.detail.expect("dependency detail");
         assert!(detail.contains("Gemini CLI"), "{detail}");
-        assert!(detail.contains(".gemini/skills/alpha"), "{detail}");
+        assert!(
+            detail.contains(".gemini/skills/different-skill"),
+            "{detail}"
+        );
     }
 
     #[test]
-    fn cross_agent_dependencies_block_copy_only_skills_too() {
+    fn outside_dependencies_block_copy_only_skills_too() {
         let fixture = Fixture::new();
         symlink(
             fixture.claude.join("copy-only"),
-            fixture.qoder.join("copy-only"),
+            fixture.qoder.join("different-skill"),
         )
         .unwrap();
 
@@ -768,6 +950,61 @@ mod tests {
         assert_eq!(error.code, ErrorCode::AgentDependencyConflict);
         assert!(error.message.contains("Claude Code"), "{error:?}");
         assert!(error.detail.unwrap().contains("Qoder"));
+    }
+
+    #[test]
+    fn outside_copy_dependencies_also_block_unmanaged_uninstall() {
+        let fixture = Fixture::new();
+        remove_lock_key(&fixture.paths, "copy-only");
+        symlink(
+            fixture.claude.join("copy-only"),
+            fixture.qoder.join("different-skill"),
+        )
+        .unwrap();
+        assert_eq!(
+            fixture.plan("copy-only").unwrap_err().code,
+            ErrorCode::AgentDependencyConflict
+        );
+        assert!(fixture.claude.join("copy-only/SKILL.md").is_file());
+    }
+
+    #[test]
+    fn copy_only_and_unmanaged_uninstall_include_their_own_dependent_links() {
+        for unmanaged in [false, true] {
+            let fixture = Fixture::new();
+            if unmanaged {
+                remove_lock_key(&fixture.paths, "copy-only");
+            }
+            symlink(
+                fixture.claude.join("copy-only"),
+                fixture.qoder.join("copy-only"),
+            )
+            .unwrap();
+            let plan = fixture.plan("copy-only").unwrap();
+            assert!(plan.canonical.is_none());
+            assert_eq!(plan.attachments.len(), 2);
+            assert_eq!(
+                plan.management,
+                if unmanaged {
+                    ManagementState::Unmanaged
+                } else {
+                    ManagementState::CopyOnly
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn a_canonical_link_to_the_same_skills_copy_is_inside_uninstall_scope() {
+        let fixture = Fixture::new();
+        symlink(
+            fixture.claude.join("copy-only"),
+            fixture.paths.canonical_skills_dir().join("copy-only"),
+        )
+        .unwrap();
+        let plan = fixture.plan("copy-only").unwrap();
+        assert_eq!(plan.management, ManagementState::Managed);
+        assert!(plan.canonical.unwrap().is_symlink());
     }
 
     #[test]
@@ -1504,25 +1741,148 @@ mod execution_tests {
     }
 
     #[tokio::test]
-    async fn unmanaged_skills_are_rejected_before_a_task_starts() {
-        let fixture = ExecFixture::new();
-        let (sink, mut receiver) = sink();
-        let error = fixture
-            .manager
-            .start_uninstall(crate::scope::ScopeId::Global, "unmanaged".to_string(), sink)
-            .await
-            .unwrap_err();
-        assert_eq!(error.code, ErrorCode::SkillUnmanaged);
-        assert_eq!(fixture.executor.calls().len(), 0);
-        assert!(fixture.backups().is_empty());
-        assert!(receiver.try_recv().is_err(), "no task should be created");
+    async fn unmanaged_uninstall_backs_up_and_preserves_lock_without_cli_runtime() {
+        let fixture = ExecFixture::with_runtime(Arc::new(HangingRuntime));
+        let canonical = fixture.paths.canonical_skills_dir().join("unmanaged");
+        symlink(&canonical, fixture.qoder.join("unmanaged")).unwrap();
+        fs::create_dir_all(fixture.claude.join("unmanaged")).unwrap();
+        fs::write(fixture.claude.join("unmanaged/SKILL.md"), "local copy").unwrap();
+        let lock_before = fs::read(fixture.paths.lock_path()).unwrap();
+        let (_, event) = tokio::time::timeout(
+            Duration::from_secs(5),
+            run_task(&fixture.manager, "unmanaged"),
+        )
+        .await
+        .expect("native uninstall must not resolve CLI runtime");
+        let result = event.result.unwrap();
+        assert_eq!(result.overall, TaskOverall::Success);
+        assert!(!canonical.exists());
+        assert!(!fixture.qoder.join("unmanaged").is_symlink());
+        assert!(!fixture.claude.join("unmanaged").exists());
+        assert!(fixture.executor.calls().is_empty());
+        assert_eq!(fs::read(fixture.paths.lock_path()).unwrap(), lock_before);
+        let backup = fixture.backups().pop().unwrap();
+        assert!(backup.join("canonical/SKILL.md").is_file());
+        assert_eq!(
+            fs::read_to_string(backup.join("attachments/claude-code/SKILL.md")).unwrap(),
+            "local copy"
+        );
+        assert_eq!(fixture.log_lines()[0]["result"], "removed");
+        assert!(fixture.canonical.is_dir());
     }
 
     #[tokio::test]
-    async fn cross_agent_copy_dependencies_block_before_a_task_starts() {
+    async fn unmanaged_canonical_symlink_uninstall_preserves_its_source_and_similar_names() {
         let fixture = ExecFixture::new();
-        fs::remove_file(fixture.gemini.join("alpha")).unwrap();
-        symlink(fixture.claude.join("alpha"), fixture.gemini.join("alpha")).unwrap();
+        let canonical = fixture.paths.canonical_skills_dir().join("unmanaged");
+        let source = fixture.home.join("plugin-source");
+        fs::rename(&canonical, &source).unwrap();
+        let canonical = canonical.with_file_name("unmanaged skill");
+        symlink(&source, &canonical).unwrap();
+        let neighbor = fixture.paths.canonical_skills_dir().join("unmanaged-skill");
+        fs::create_dir_all(&neighbor).unwrap();
+        fs::write(neighbor.join("SKILL.md"), "different skill").unwrap();
+        let (_, event) = run_task(&fixture.manager, "unmanaged skill").await;
+        assert_eq!(event.result.unwrap().overall, TaskOverall::Success);
+        assert!(!canonical.is_symlink());
+        assert!(source.join("SKILL.md").is_file());
+        assert_eq!(
+            fs::read_to_string(neighbor.join("SKILL.md")).unwrap(),
+            "different skill"
+        );
+        assert!(fixture.executor.calls().is_empty());
+        assert!(fixture.backups()[0].join("canonical/SKILL.md").is_file());
+    }
+
+    #[tokio::test]
+    async fn unmanaged_extra_agent_only_copy_uninstalls_without_creating_a_lock() {
+        let fixture = ExecFixture::new();
+        let canonical = fixture.paths.canonical_skills_dir().join("unmanaged");
+        let target = fixture.home.join(".acme/skills/unmanaged");
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::rename(&canonical, &target).unwrap();
+        fs::write(fixture.paths.agents_config_path(), r#"{"version":1,"agents":[{"id":"acme","displayName":"Acme","skillsDir":"~/.acme/skills"}]}"#).unwrap();
+        fs::remove_file(fixture.paths.lock_path()).unwrap();
+        let (_, event) = run_task(&fixture.manager, "unmanaged").await;
+        assert_eq!(event.result.unwrap().overall, TaskOverall::Success);
+        assert!(!target.exists());
+        assert!(!fixture.paths.lock_path().exists());
+        assert!(fixture.executor.calls().is_empty());
+        let backup = &fixture.backups()[0];
+        assert!(backup.join("attachments/acme/SKILL.md").is_file());
+        assert!(backup.join("lock-absent.txt").is_file());
+    }
+
+    #[tokio::test]
+    async fn unmanaged_uninstall_rechecks_adoption_and_link_destination_after_backup() {
+        for adopted in [false, true] {
+            let fixture = ExecFixture::new();
+            let canonical = fixture.paths.canonical_skills_dir().join("unmanaged");
+            let source = fixture.home.join("source");
+            fs::rename(&canonical, &source).unwrap();
+            symlink(&source, &canonical).unwrap();
+            let layout = crate::scope_layout::ScopeLayout::resolve_detected(
+                &fixture.paths,
+                &crate::projects::ProjectRegistry::new(fixture.paths.clone()),
+                &crate::scope::ScopeId::Global,
+            )
+            .unwrap();
+            let plan = super::plan_uninstall(&fixture.paths, &layout, "unmanaged").unwrap();
+            let backup = BackupStore::for_layout(&fixture.paths, &layout)
+                .create(
+                    BackupAction::Uninstall,
+                    &plan.name,
+                    plan.canonical.as_deref(),
+                    &plan.backup_attachments(),
+                    &plan.agent_ids,
+                )
+                .unwrap();
+            if adopted {
+                write_lock(
+                    &fixture.paths,
+                    &["alpha", "copy-only", "other", "unmanaged"],
+                );
+            } else {
+                fs::remove_file(&canonical).unwrap();
+                symlink(&fixture.canonical, &canonical).unwrap();
+            }
+            let action =
+                UninstallAction::new(fixture.paths.clone(), layout, Duration::from_secs(5));
+            assert_eq!(
+                action.before_write(&plan).unwrap_err().code,
+                ErrorCode::BatchTargetChanged
+            );
+            assert!(canonical.is_symlink());
+            assert!(source.join("SKILL.md").is_file());
+            assert!(backup.path.join("canonical/SKILL.md").is_file());
+        }
+    }
+
+    #[tokio::test]
+    async fn unmanaged_uninstall_backup_failure_preserves_files() {
+        let fixture = ExecFixture::new();
+        fs::remove_dir(fixture.paths.backups_dir()).unwrap();
+        fs::write(fixture.paths.backups_dir(), "blocked").unwrap();
+        let (_, event) = run_task(&fixture.manager, "unmanaged").await;
+        assert_eq!(event.error.unwrap().code, ErrorCode::BackupFailed);
+        assert!(
+            fixture
+                .paths
+                .canonical_skills_dir()
+                .join("unmanaged/SKILL.md")
+                .is_file()
+        );
+        assert!(fixture.executor.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn outside_copy_dependencies_block_before_a_task_starts() {
+        let fixture = ExecFixture::new();
+        symlink(
+            fixture.claude.join("alpha"),
+            fixture.gemini.join("different-skill"),
+        )
+        .unwrap();
 
         let (sink, mut receiver) = sink();
         let error = fixture
@@ -1536,6 +1896,106 @@ mod execution_tests {
         assert!(fixture.canonical.is_dir());
         assert!(fixture.claude.join("alpha").is_dir());
         assert!(receiver.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn same_skill_copy_links_uninstall_with_backup_and_no_leftovers() {
+        for unmanaged in [false, true] {
+            let fixture = ExecFixture::new();
+            let codex = fixture.home.join(".codex/skills");
+            fs::create_dir_all(&codex).unwrap();
+            fs::remove_file(fixture.gemini.join("alpha")).unwrap();
+            for dir in [&codex, &fixture.gemini] {
+                symlink("../../.claude/skills/alpha", dir.join("alpha")).unwrap();
+            }
+            if unmanaged {
+                remove_lock_key(&fixture.paths, "alpha");
+            } else {
+                let home = fixture.home.clone();
+                let paths = fixture.paths.clone();
+                let codex_path = codex.join("alpha");
+                fixture
+                    .executor
+                    .push(RemoveResponse::success(SUCCESS, move || {
+                        remove_all_post(home, paths, "alpha")();
+                        // The CLI does not know the Codex compatibility directory;
+                        // native Extra-agent cleanup must remove this broken link.
+                        assert!(codex_path.is_symlink());
+                    }));
+            }
+            let (_, event) = run_task(&fixture.manager, "alpha").await;
+            assert_eq!(event.result.unwrap().overall, TaskOverall::Success);
+            for path in [
+                &fixture.canonical,
+                &fixture.claude.join("alpha"),
+                &fixture.gemini.join("alpha"),
+                &fixture.qoder.join("alpha"),
+                &codex.join("alpha"),
+            ] {
+                assert!(fs::symlink_metadata(path).is_err(), "{}", path.display());
+            }
+            let backup = &fixture.backups()[0];
+            assert!(backup.join("canonical/SKILL.md").is_file());
+            assert!(backup.join("attachments/claude-code/SKILL.md").is_file());
+            let manifest = fs::read_to_string(backup.join(BACKUP_MANIFEST_FILE)).unwrap();
+            assert!(manifest.contains("codex-legacy"));
+            assert!(manifest.contains(".codex/skills/alpha"));
+            assert_eq!(fixture.executor.calls().len(), usize::from(!unmanaged));
+            assert_eq!(fixture.log_lines()[0]["result"], "removed");
+            assert!(
+                fixture
+                    .paths
+                    .canonical_skills_dir()
+                    .join("other/SKILL.md")
+                    .is_file()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn newly_added_outside_copy_links_block_after_backup() {
+        for unmanaged in [false, true] {
+            let fixture = ExecFixture::new();
+            if unmanaged {
+                remove_lock_key(&fixture.paths, "alpha");
+            }
+            let layout = crate::scope_layout::ScopeLayout::resolve_detected(
+                &fixture.paths,
+                &crate::projects::ProjectRegistry::new(fixture.paths.clone()),
+                &crate::scope::ScopeId::Global,
+            )
+            .unwrap();
+            let plan = super::plan_uninstall(&fixture.paths, &layout, "alpha").unwrap();
+            let backup = BackupStore::for_layout(&fixture.paths, &layout)
+                .create(
+                    BackupAction::Uninstall,
+                    &plan.name,
+                    plan.canonical.as_deref(),
+                    &plan.backup_attachments(),
+                    &plan.agent_ids,
+                )
+                .unwrap();
+            symlink(
+                fixture.claude.join("alpha"),
+                fixture.gemini.join("different-skill"),
+            )
+            .unwrap();
+            let action =
+                UninstallAction::new(fixture.paths.clone(), layout, Duration::from_secs(5));
+            assert_eq!(
+                action.before_write(&plan).unwrap_err().code,
+                ErrorCode::AgentDependencyConflict
+            );
+            assert!(fixture.canonical.join("SKILL.md").is_file());
+            assert!(fixture.claude.join("alpha/SKILL.md").is_file());
+            assert!(
+                backup
+                    .path
+                    .join("attachments/claude-code/SKILL.md")
+                    .is_file()
+            );
+            assert!(fixture.executor.calls().is_empty());
+        }
     }
 
     #[tokio::test]
@@ -1935,6 +2395,32 @@ mod project_uninstall_tests {
             }
         };
         (manager, executor, scope, final_event)
+    }
+
+    #[tokio::test]
+    async fn project_unmanaged_uninstall_preserves_global_scope_and_project_lock() {
+        let fixture = ProjectFixture::new();
+        let lock_path = fixture.root.join("skills-lock.json");
+        fs::write(&lock_path, r#"{"version":1,"skills":{}}"#).unwrap();
+        let lock_before = fs::read(&lock_path).unwrap();
+        let (_, executor, scope, event) = run_project_uninstall(&fixture, false).await;
+        let result = event.result.unwrap();
+        assert_eq!(result.overall, TaskOverall::Success);
+        assert_eq!(result.scope, scope);
+        assert!(!fixture.canonical.exists());
+        assert!(!fixture.claude.join("alpha").exists());
+        assert!(!fixture.acme.join("alpha").is_symlink());
+        assert_eq!(fs::read(&lock_path).unwrap(), lock_before);
+        assert!(fixture.global_canonical.is_dir());
+        assert!(fixture.global_qoder_link.is_symlink());
+        assert!(executor.calls.lock().unwrap().is_empty());
+        assert!(
+            fixture
+                .paths
+                .backups_dir()
+                .join(format!("project-{}", scope.project_id().unwrap()))
+                .is_dir()
+        );
     }
 
     #[tokio::test]

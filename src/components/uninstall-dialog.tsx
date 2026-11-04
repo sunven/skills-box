@@ -84,10 +84,13 @@ export function UninstallDialog({
   if (!open || !skill) return null;
 
   const attachments = skill.attachments;
+  const unmanaged = skill.management === "unmanaged";
   const canonicalLabel =
     skill.management === "copy_only"
       ? "无 canonical（仅副本）"
-      : (skill.canonicalPath ?? "canonical 路径未知（可能已缺失）");
+      : unmanaged && !skill.canonicalPath
+        ? "无共享目录（仅 Agent 挂载）"
+        : (skill.canonicalPath ?? "canonical 路径未知（可能已缺失）");
   const showInitial = !running && !result;
   const closeDisabled = !mutation.canClose();
   const removeCommand =
@@ -115,7 +118,9 @@ export function UninstallDialog({
               彻底卸载 · {skill.name}
             </h2>
             <p className="modal-sub" data-testid="uninstall-command">
-              先备份，再执行 {removeCommand}；CLI 退出后会逐项校验。
+              {unmanaged
+                ? "先备份，再删除所列技能目录与 Agent 挂载；符号链接只删除链接本身。"
+                : `先备份，再执行 ${removeCommand}；CLI 退出后会逐项校验。`}
             </p>
           </div>
           <Button
@@ -124,7 +129,7 @@ export function UninstallDialog({
             size="icon"
             aria-label="关闭卸载"
             disabled={closeDisabled}
-            title={closeDisabled ? "卸载进行中，CLI 启动前可取消" : undefined}
+            title={closeDisabled ? "卸载进行中，写入开始前可取消" : undefined}
             onClick={closeDialog}
             className="size-7 shrink-0"
           >
@@ -185,13 +190,19 @@ export function UninstallDialog({
                     <dt className="text-[12px] text-muted-foreground">
                       lock 条目
                     </dt>
-                    <dd className="mono break-all">lock 条目：{skill.name}</dd>
+                    <dd className="mono break-all">
+                      {unmanaged ? "无安装记录" : `lock 条目：${skill.name}`}
+                    </dd>
                   </div>
                   <div>
                     <dt className="text-[12px] text-muted-foreground">
                       本地基线
                     </dt>
-                    <dd>本地基线指纹（baseline）</dd>
+                    <dd>
+                      {unmanaged
+                        ? "本地基线（如有）"
+                        : "本地基线指纹（baseline）"}
+                    </dd>
                   </div>
                 </dl>
               </div>
@@ -211,6 +222,11 @@ export function UninstallDialog({
                     卸载前会创建 lock、canonical、copy 挂载与 manifest
                     的备份；但应用不会自动回滚，也不提供「仅卸载、保留目录」。
                   </p>
+                  {unmanaged ? (
+                    <p className="mt-0.5">
+                      无安装记录，无法确认本地改动；所列目录中的现有内容会被删除。
+                    </p>
+                  ) : null}
                 </div>
               </div>
 
@@ -224,7 +240,7 @@ export function UninstallDialog({
                 />
                 <span>
                   我已了解以上 canonical、所有 agent
-                  挂载、lock 条目与基线都会被删除，且不会自动回滚。
+                  挂载、已有安装记录与基线都会被删除，且不会自动回滚。
                 </span>
               </label>
             </>
@@ -233,7 +249,8 @@ export function UninstallDialog({
           {running ? (
             <>
               <MutationProgress
-                phase={phase}
+                phase={unmanaged && phase === "running_cli" ? null : phase}
+                label="正在卸载"
                 message={message}
                 completed={completed}
                 total={total}
@@ -243,7 +260,9 @@ export function UninstallDialog({
                 onCancel={() => void handleCancelTask()}
               />
               <p className="mt-2 text-[12px] text-muted-foreground">
-                备份完成后、CLI 启动前可取消；CLI 启动后不可取消。
+                {unmanaged
+                  ? "备份完成后、删除开始前可取消；删除开始后不可取消。"
+                  : "备份完成后、CLI 启动前可取消；CLI 启动后不可取消。"}
               </p>
             </>
           ) : null}
@@ -267,7 +286,9 @@ export function UninstallDialog({
         <div className="modal-foot">
           <div className="modal-foot-note">
             {running
-              ? "卸载进行中；CLI 启动后不可取消"
+              ? unmanaged
+                ? "卸载进行中；删除开始后不可取消"
+                : "卸载进行中；CLI 启动后不可取消"
               : "危险操作 · 自动备份 · 不自动回滚"}
           </div>
           <div className="flex items-center gap-2">

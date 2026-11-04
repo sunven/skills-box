@@ -133,7 +133,7 @@ Remove a skill from one agent while keeping the canonical store and the skill's 
 _Avoid_: uninstall, disable, delete
 
 **Uninstall**:
-Remove a skill's canonical folder, all agent attachments, and its lock entry.
+Remove a skill's canonical folder or link, all agent attachments, and any existing lock entry. Removing a link leaves the folder it points to intact.
 _Avoid_: remove, delete
 
 **Lock entry**:
@@ -200,6 +200,14 @@ _Avoid_: cache, state
 A serialized operation that changes skills or agent attachments.
 _Avoid_: job, command
 
+**Batch operation**:
+One user-requested Update, Uninstall, Attach, or Detach applied to a selection of Skills within one Scope.
+_Avoid_: cross-scope operation, bulk install
+
+**Batch target**:
+A Skill selected for a Batch operation, paired with one selected Agent when the action is Attach or Detach.
+_Avoid_: install target, selected row
+
 **Mutation session**:
 One execution of one mutation task, ending in a single outcome. The task is the serialized operation; the session is one run of it.
 _Avoid_: job, runner, transaction
@@ -213,7 +221,7 @@ The typed in-memory implementation of every IPC command shared by App tests and 
 _Avoid_: mock, stub, test server
 
 **Anomaly**:
-A state that does not match the canonical model, such as an orphan folder, broken link, or stale lock entry; v1 surfaces it read-only.
+A state that does not match the canonical model, such as an orphan folder, broken link, or stale lock entry.
 _Avoid_: error, corruption
 
 **Scope**:

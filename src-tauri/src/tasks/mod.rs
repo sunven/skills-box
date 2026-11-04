@@ -1,5 +1,6 @@
 //! Mutation task foundation and install preview.
 
+pub mod batch;
 pub mod conflicts;
 pub mod install;
 pub mod manager;

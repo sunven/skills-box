@@ -1,4 +1,15 @@
-import type { DiscoveryId, DiscoveryState, DiscoveryProgress } from "../lib/discovery";
+import type {
+  BatchRequest,
+  BatchPreview,
+  BatchConfirmation,
+  BatchRow,
+  BatchTarget,
+} from "../lib/batch";
+import type {
+  DiscoveryId,
+  DiscoveryState,
+  DiscoveryProgress,
+} from "../lib/discovery";
 import { initialAppUpdate, type AppUpdateSnapshot } from "../lib/app-update";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import type { Channel } from "@tauri-apps/api/core";
@@ -37,7 +48,11 @@ import type {
   UpdateCheckState,
 } from "../lib/types";
 import { healthyReport } from "./fixtures";
-import { detailForSkill, makeDirListing, makeFileContent } from "./detail-fixtures";
+import {
+  detailForSkill,
+  makeDirListing,
+  makeFileContent,
+} from "./detail-fixtures";
 import { emptySnapshot } from "./inventory-fixtures";
 import { GLOBAL_SCOPE } from "../lib/types";
 
@@ -45,18 +60,52 @@ type Factory<T> = T | (() => T);
 type MaybePromise<T> = T | Promise<T>;
 
 export interface FakeCommandContract {
-  get_app_update_state: { args: Record<string, never>; result: AppUpdateSnapshot };
+  preview_batch: {
+    args: { scope: ScopeId; request: BatchRequest };
+    result: BatchPreview;
+  };
+  refresh_batch_preview: { args: { previewId: string }; result: BatchPreview };
+  start_batch: {
+    args: {
+      scope: ScopeId;
+      confirmation: BatchConfirmation;
+      onEvent: Channel<TaskEvent>;
+    };
+    result: string;
+  };
+  get_app_update_state: {
+    args: Record<string, never>;
+    result: AppUpdateSnapshot;
+  };
   check_app_update: { args: Record<string, never>; result: AppUpdateSnapshot };
   start_app_update: { args: Record<string, never>; result: AppUpdateSnapshot };
   get_discovery_state: { args: Record<string, never>; result: DiscoveryState };
-  start_discovery_scan: { args: { manual?: boolean }; result: DiscoveryProgress };
-  acknowledge_discoveries: { args: { ids: DiscoveryId[] | null }; result: void };
-  set_discovery_ignored: { args: { id: DiscoveryId; ignored: boolean }; result: void };
+  start_discovery_scan: {
+    args: { manual?: boolean };
+    result: DiscoveryProgress;
+  };
+  acknowledge_discoveries: {
+    args: { ids: DiscoveryId[] | null };
+    result: void;
+  };
+  set_discovery_ignored: {
+    args: { id: DiscoveryId; ignored: boolean };
+    result: void;
+  };
   invalidate_discovery_source: { args: { source: string }; result: void };
-  get_github_settings: { args: Record<string, never>; result: GitHubSettingsStatus };
+  get_github_settings: {
+    args: Record<string, never>;
+    result: GitHubSettingsStatus;
+  };
   save_github_token: { args: { token: string }; result: GitHubSettingsStatus };
-  clear_github_token: { args: Record<string, never>; result: GitHubSettingsStatus };
-  test_github_auth: { args: Record<string, never>; result: GitHubAuthTestResult };
+  clear_github_token: {
+    args: Record<string, never>;
+    result: GitHubSettingsStatus;
+  };
+  test_github_auth: {
+    args: Record<string, never>;
+    result: GitHubAuthTestResult;
+  };
   get_environment: { args: { refresh?: boolean }; result: EnvReport };
   list_projects: { args: Record<string, never>; result: ProjectList };
   add_project: { args: { root: string }; result: ProjectEntry };
@@ -74,7 +123,10 @@ export interface FakeCommandContract {
     args: { scope: ScopeId; skillId: string };
     result: SkillDetail;
   };
-  open_skill_folder: { args: { scope: ScopeId; skillId: string }; result: void };
+  open_skill_folder: {
+    args: { scope: ScopeId; skillId: string };
+    result: void;
+  };
   list_skill_dir: {
     args: { scope: ScopeId; skillId: string; path?: string };
     result: SkillDirListing;
@@ -279,10 +331,7 @@ function taskResult(
     action: kind,
     scope,
     overall: "success",
-    skills:
-      kind === "preview"
-        ? []
-        : names.map((name) => ({ name, status })),
+    skills: kind === "preview" ? [] : names.map((name) => ({ name, status })),
     warnings: [],
     backupPath: FAKE_BACKUP,
     logPath: FAKE_LOG_PATH,
@@ -297,8 +346,19 @@ export function createFakeBackend(
 ): FakeBackend {
   const defaultData: FakeBackendData = {
     appUpdate: initialAppUpdate(),
-    discovery: { sources: [], skills: [], unreadCount: 0, progress: { runId: 0, running: false, total: 0, completed: 0 }, warnings: [], error: null },
-    githubSettings: { hasSavedToken: false, hasEnvironmentToken: false, effectiveSource: "anonymous" },
+    discovery: {
+      sources: [],
+      skills: [],
+      unreadCount: 0,
+      progress: { runId: 0, running: false, total: 0, completed: 0 },
+      warnings: [],
+      error: null,
+    },
+    githubSettings: {
+      hasSavedToken: false,
+      hasEnvironmentToken: false,
+      effectiveSource: "anonymous",
+    },
     environment: healthyReport(),
     projects: {
       projects: [],
@@ -339,6 +399,15 @@ export function createFakeBackend(
   const autoTasks = Boolean(options.autoTasks);
   let taskCounter = 0;
   const installSources = new Map<string, string>();
+  let batchPreviewCounter = 0;
+  const batchPreviews = new Map<
+    string,
+    { scope: ScopeId; request: BatchRequest; preview: BatchPreview }
+  >();
+  const batchRuns = new Map<
+    string,
+    { stop: boolean; preview: BatchPreview; startedAt: number }
+  >();
 
   const runCallback = (id: number, payload: unknown) => {
     const internals = (
@@ -361,12 +430,31 @@ export function createFakeBackend(
       channel,
       emit(event) {
         if (!tasks.includes(task)) return;
+        if (
+          event.phase === "completed" ||
+          event.phase === "failed" ||
+          event.phase === "cancelled"
+        )
+          batchRuns.delete(task.taskId);
         if (event.result?.action === "install") {
           const source = installSources.get(task.taskId);
-          const installed = new Set(event.result.skills.filter((s) => s.status === "installed").map((s) => s.name.toLowerCase()));
+          const installed = new Set(
+            event.result.skills
+              .filter((s) => s.status === "installed")
+              .map((s) => s.name.toLowerCase()),
+          );
           const resultScope = event.result.scope ?? GLOBAL_SCOPE;
-          updateDiscovery((s) => s.id.source === source && installed.has(s.id.name) ? { ...s, unread: false,
-            installations: s.installations.map((i) => i.scope === resultScope ? { ...i, status: "installed" } : i) } : s);
+          updateDiscovery((s) =>
+            s.id.source === source && installed.has(s.id.name)
+              ? {
+                  ...s,
+                  unread: false,
+                  installations: s.installations.map((i) =>
+                    i.scope === resultScope ? { ...i, status: "installed" } : i,
+                  ),
+                }
+              : s,
+          );
         }
         const index = channelIndexes.get(channel.id) ?? 0;
         channelIndexes.set(channel.id, index + 1);
@@ -478,10 +566,7 @@ export function createFakeBackend(
         warnings: [],
       }));
     if (added.length === 0) return;
-    setSnapshot(
-      { ...snapshot, skills: [...snapshot.skills, ...added] },
-      scope,
-    );
+    setSnapshot({ ...snapshot, skills: [...snapshot.skills, ...added] }, scope);
   };
 
   /** Apply a completed update to the scope's own inventory snapshot. */
@@ -573,8 +658,7 @@ export function createFakeBackend(
       agentId,
       agentName,
       attachmentPath: attachment.path,
-      canonicalPath:
-        skill.canonicalPath ?? `~/.agents/skills/${skill.name}`,
+      canonicalPath: skill.canonicalPath ?? `~/.agents/skills/${skill.name}`,
       logPath: FAKE_LOG_PATH,
     };
   };
@@ -608,8 +692,7 @@ export function createFakeBackend(
       agentName: attachment.agentName,
       mode: attachment.mode,
       attachmentPath: attachment.path,
-      canonicalPath:
-        skill.canonicalPath ?? `~/.agents/skills/${skill.name}`,
+      canonicalPath: skill.canonicalPath ?? `~/.agents/skills/${skill.name}`,
       backupPath:
         attachment.mode === "copy"
           ? `${FAKE_BACKUP}/1-detach-${skill.name}`
@@ -742,7 +825,9 @@ export function createFakeBackend(
         entry.attachments.some((attachment) => attachment.agentId === agentId),
       )
       .map((entry) => entry.name);
-    const stripAttachments = (snapshot: InventorySnapshot): InventorySnapshot => ({
+    const stripAttachments = (
+      snapshot: InventorySnapshot,
+    ): InventorySnapshot => ({
       ...snapshot,
       agents: snapshot.agents.filter((entry) => entry.id !== agentId),
       installTargets: snapshot.installTargets.filter(
@@ -940,17 +1025,21 @@ export function createFakeBackend(
   const checkStateFor = (scope: ScopeId): UpdateCheckState | null => {
     if (
       scope !== GLOBAL_SCOPE &&
-      !projectList.projects.some((project) => projectScope(project.id) === scope)
+      !projectList.projects.some(
+        (project) => projectScope(project.id) === scope,
+      )
     ) {
       return null;
     }
     const checked = checkedStates.get(scope);
     const scoped = data.updateCheckStates?.[scope];
-    const state = checked ?? (
-      scoped !== undefined
+    const state =
+      checked ??
+      (scoped !== undefined
         ? factoryValue(scoped)
-        : scope === GLOBAL_SCOPE ? factoryValue(data.updateCheckState) : null
-    );
+        : scope === GLOBAL_SCOPE
+          ? factoryValue(data.updateCheckState)
+          : null);
     if (scope !== GLOBAL_SCOPE && state?.checkRevision !== revisionFor(scope)) {
       return null;
     }
@@ -995,26 +1084,315 @@ export function createFakeBackend(
     };
   };
 
-  const updateDiscovery = (transform: (skill: DiscoveryState["skills"][number]) => DiscoveryState["skills"][number]) => {
+  const updateDiscovery = (
+    transform: (
+      skill: DiscoveryState["skills"][number],
+    ) => DiscoveryState["skills"][number],
+  ) => {
     const skills = data.discovery.skills.map(transform);
-    data = { ...data, discovery: { ...data.discovery, skills, unreadCount: skills.filter((s) => s.unread && !s.ignored).length } };
+    data = {
+      ...data,
+      discovery: {
+        ...data.discovery,
+        skills,
+        unreadCount: skills.filter((s) => s.unread && !s.ignored).length,
+      },
+    };
   };
+  const buildBatchPreview = (
+    id: string,
+    scope: ScopeId,
+    request: BatchRequest,
+  ): BatchPreview => {
+    const snapshot = snapshotFor(scope);
+    const targets: BatchTarget[] = [];
+    const keys = request.targetKeys ? new Set(request.targetKeys) : null;
+    for (const skillId of request.skillIds) {
+      const skill = snapshot.skills.find((skill) => skill.id === skillId);
+      const agents =
+        request.action === "attach" || request.action === "detach"
+          ? request.agentIds
+          : [null];
+      for (const agentId of agents) {
+        const agent = (request.action === "detach" ? snapshot.agents : snapshot.installTargets).find(
+          (agent) => agent.id === agentId,
+        );
+        const mounted = skill?.attachments.find(
+          (attachment) => attachment.agentId === agentId,
+        );
+        const target: BatchTarget = {
+          key: JSON.stringify([skillId, agentId]),
+          skillId,
+          name: skill?.name ?? skillId.split("/").slice(-1)[0]!,
+          agentId,
+          agentName: agentId ? (agent?.displayName ?? agentId) : null,
+          eligible: false,
+          reason: null,
+          localModification: skill?.localModification ?? "unknown",
+          deletesCopy: false,
+          paths: [],
+        };
+        if (!skill) target.reason = "技能已不存在。";
+        else if (skill.management === "unmanaged" && request.action !== "uninstall")
+          target.reason = "未受管技能不可执行此操作。";
+        else if (request.action === "update") {
+          const result = reportFor(scope).skills.find(
+            (result) => result.name === skill.name,
+          );
+          target.reason =
+            skill.management === "copy_only"
+              ? "仅副本不可更新。"
+              : skill.localModification !== "clean"
+                ? "本地有改动或无法确认本地改动，请单独确认更新。"
+                : result?.state !== "update"
+                  ? "没有可用更新。"
+                  : null;
+        } else if (request.action === "uninstall") {
+          target.paths = [
+            skill.canonicalPath,
+            ...skill.attachments.map((attachment) => attachment.path),
+          ].filter((path): path is string => !!path);
+        } else {
+          target.reason =
+            skill.management === "copy_only" || !skill.canonicalPath
+              ? "没有共享技能目录。"
+              : !agent?.detected
+                ? "Agent 未检测到。"
+                : agent.shared || agent.universal
+                  ? "共享 Agent 无法独立操作。"
+                  : request.action === "attach" && mounted
+                    ? "已有挂载，不覆盖。"
+                    : request.action === "detach" && !mounted?.detachable
+                      ? "没有可解除的挂载。"
+                      : null;
+          target.deletesCopy =
+            request.action === "detach" && mounted?.mode === "copy";
+          target.paths = mounted ? [mounted.path] : [];
+        }
+        target.eligible = target.reason === null;
+        if (!keys || keys.has(target.key)) targets.push(target);
+      }
+    }
+    return {
+      id,
+      scope,
+      action: request.action,
+      targets,
+      revision: JSON.stringify({
+        targets,
+        root: projectList.projects.find(
+          (project) => projectScope(project.id) === scope,
+        )?.root,
+      }),
+    };
+  };
+
+  const scheduleBatch = (task: FakeTask, preview: BatchPreview) => {
+    if (!autoTasks) return;
+    const rows: BatchRow[] = [];
+    let index = 0;
+    let processed = 0;
+    const total = preview.targets.filter((target) => target.eligible).length;
+    const step = () => {
+      const run = batchRuns.get(task.taskId);
+      if (!run) return;
+      while (index < preview.targets.length) {
+        const target = preview.targets[index++]!;
+        if (!target.eligible || run.stop) {
+          rows.push({
+            ...target,
+            status: target.eligible ? "not_executed" : "skipped",
+            error: null,
+            backupPath: null,
+          });
+          continue;
+        }
+        let failure: AppError | null = null;
+        try {
+          if (preview.action === "update")
+            updateInto(preview.scope, [target.name]);
+          else if (preview.action === "uninstall")
+            uninstallFrom(preview.scope, [target.skillId]);
+          else if (preview.action === "attach")
+            nativeAttach(target.skillId, target.agentId!, preview.scope);
+          else nativeDetach(target.skillId, target.agentId!, preview.scope);
+        } catch (cause) {
+          failure = cause as AppError;
+        }
+        rows.push({
+          ...target,
+          status: failure ? "failed" : "success",
+          error: failure,
+          backupPath: preview.action === "attach" ? null : FAKE_BACKUP,
+        });
+        processed += 1;
+        task.emit({
+          taskId: task.taskId,
+          phase: "verifying",
+          completed: processed,
+          total,
+          message: `已处理 ${processed} / ${total} 个目标`,
+        });
+        timers.add(window.setTimeout(step, autoDelay));
+        return;
+      }
+      const success = rows.filter((row) => row.status === "success");
+      task.emit({
+        taskId: task.taskId,
+        phase: run.stop ? "cancelled" : "completed",
+        completed: processed,
+        total,
+        message: "批量操作已结束。",
+        result: {
+          action: "batch",
+          scope: preview.scope,
+          overall: run.stop
+            ? "cancelled"
+            : success.length === rows.length
+              ? "success"
+              : success.length > 0
+                ? "partial"
+                : "failed",
+          skills: rows
+            .filter((row) => row.eligible && row.status !== "not_executed")
+            .map((row) => ({
+              name: row.name,
+              status:
+                row.status === "success"
+                  ? preview.action === "update"
+                    ? "updated"
+                    : preview.action === "attach"
+                      ? "installed"
+                      : "removed"
+                  : row.status === "skipped"
+                    ? "skipped"
+                    : "failed",
+              error: row.error ?? undefined,
+            })),
+          warnings: [],
+          startedAt: run.startedAt,
+          finishedAtEpochMs: Date.now(),
+          logPath: FAKE_LOG_PATH,
+          backupPath: FAKE_BACKUP,
+          batch: { action: preview.action, rows },
+        },
+      });
+    };
+    timers.add(window.setTimeout(step, autoDelay));
+  };
+
   const defaultHandlers: FakeHandlers = {
+    preview_batch: ({ scope, request }) => {
+      const id = `batch-preview-${++batchPreviewCounter}`;
+      const preview = buildBatchPreview(id, scope, request);
+      batchPreviews.set(id, { scope, request, preview });
+      return preview;
+    },
+    refresh_batch_preview: ({ previewId }) => {
+      const stored = batchPreviews.get(previewId);
+      if (!stored)
+        throw {
+          code: "batch.preview_expired",
+          message: "预览已失效，请重新预览。",
+          retryable: true,
+        };
+      const preview = buildBatchPreview(
+        previewId,
+        stored.scope,
+        stored.request,
+      );
+      batchPreviews.set(previewId, { ...stored, preview });
+      return preview;
+    },
+    start_batch: ({ scope, confirmation, onEvent }) => {
+      const stored = batchPreviews.get(confirmation.previewId);
+      if (
+        !stored ||
+        stored.scope !== scope ||
+        buildBatchPreview(stored.preview.id, scope, stored.request).revision !==
+          confirmation.revision
+      ) {
+        throw {
+          code: "batch.preview_expired",
+          message: "预览已变化，请重新预览并确认。",
+          retryable: true,
+        };
+      }
+      const preview = stored.preview;
+      if (
+        (preview.action === "uninstall" && !confirmation.confirmedDelete) ||
+        (preview.targets.some(
+          (target) => target.eligible && target.deletesCopy,
+        ) &&
+          !confirmation.confirmedCopies)
+      ) {
+        throw {
+          code: "batch.confirmation_needed",
+          message: "请确认删除范围。",
+          retryable: false,
+        };
+      }
+      const task = makeTask("start_batch", onEvent);
+      batchRuns.set(task.taskId, {
+        preview,
+        stop: false,
+        startedAt: Date.now(),
+      });
+      batchPreviews.delete(confirmation.previewId);
+      scheduleBatch(task, preview);
+      return task.taskId;
+    },
     get_app_update_state: () => data.appUpdate,
     check_app_update: () => {
-      data = { ...data, appUpdate: { ...data.appUpdate, revision: data.appUpdate.revision + 1,
-        phase: data.appUpdate.candidate ? "available" : "current", lastAttemptAt: Date.now(), error: null } };
+      data = {
+        ...data,
+        appUpdate: {
+          ...data.appUpdate,
+          revision: data.appUpdate.revision + 1,
+          phase: data.appUpdate.candidate ? "available" : "current",
+          lastAttemptAt: Date.now(),
+          error: null,
+        },
+      };
       return data.appUpdate;
     },
     start_app_update: () => {
-      if (!data.appUpdate.candidate) throw { code: "app_update.unavailable", message: "当前没有可安装的应用更新。", retryable: false };
-      data = { ...data, appUpdate: { ...data.appUpdate, revision: data.appUpdate.revision + 1, phase: "downloading", error: null } };
+      if (!data.appUpdate.candidate)
+        throw {
+          code: "app_update.unavailable",
+          message: "当前没有可安装的应用更新。",
+          retryable: false,
+        };
+      data = {
+        ...data,
+        appUpdate: {
+          ...data.appUpdate,
+          revision: data.appUpdate.revision + 1,
+          phase: "downloading",
+          error: null,
+        },
+      };
       if (autoTasks) {
-        for (const [index, phase] of (["verifying", "installing", "restarting"] as const).entries()) {
-          timers.add(window.setTimeout(() => {
-            data = { ...data, appUpdate: { ...data.appUpdate, revision: data.appUpdate.revision + 1,
-              phase, totalBytes: 1048576, downloadedBytes: 1048576 } };
-          }, autoDelay * (index + 1) * 4));
+        for (const [index, phase] of (
+          ["verifying", "installing", "restarting"] as const
+        ).entries()) {
+          timers.add(
+            window.setTimeout(
+              () => {
+                data = {
+                  ...data,
+                  appUpdate: {
+                    ...data.appUpdate,
+                    revision: data.appUpdate.revision + 1,
+                    phase,
+                    totalBytes: 1048576,
+                    downloadedBytes: 1048576,
+                  },
+                };
+              },
+              autoDelay * (index + 1) * 4,
+            ),
+          );
         }
       }
       return data.appUpdate;
@@ -1022,28 +1400,63 @@ export function createFakeBackend(
     get_discovery_state: () => data.discovery,
     start_discovery_scan: () => data.discovery.progress,
     acknowledge_discoveries: ({ ids }) => {
-      updateDiscovery((s) => !ids || ids.some((id) => id.source === s.id.source && id.name === s.id.name) ? { ...s, unread: false } : s);
+      updateDiscovery((s) =>
+        !ids ||
+        ids.some((id) => id.source === s.id.source && id.name === s.id.name)
+          ? { ...s, unread: false }
+          : s,
+      );
     },
     set_discovery_ignored: ({ id, ignored }) => {
-      updateDiscovery((s) => id.source === s.id.source && id.name === s.id.name ? { ...s, ignored, unread: false } : s);
+      updateDiscovery((s) =>
+        id.source === s.id.source && id.name === s.id.name
+          ? { ...s, ignored, unread: false }
+          : s,
+      );
     },
     invalidate_discovery_source: ({ source }) => {
-      data = { ...data, discovery: { ...data.discovery, sources: data.discovery.sources.map((s) => s.source === source ? { ...s, needsRevalidation: true } : s) } };
+      data = {
+        ...data,
+        discovery: {
+          ...data.discovery,
+          sources: data.discovery.sources.map((s) =>
+            s.source === source ? { ...s, needsRevalidation: true } : s,
+          ),
+        },
+      };
     },
     get_github_settings: () => ({ ...data.githubSettings }),
     save_github_token: () => {
-      data = { ...data, githubSettings: { ...data.githubSettings, hasSavedToken: true, effectiveSource: "settings" } };
+      data = {
+        ...data,
+        githubSettings: {
+          ...data.githubSettings,
+          hasSavedToken: true,
+          effectiveSource: "settings",
+        },
+      };
       return { ...data.githubSettings };
     },
     clear_github_token: () => {
-      data = { ...data, githubSettings: { ...data.githubSettings, hasSavedToken: false,
-        effectiveSource: data.githubSettings.hasEnvironmentToken ? "environment" : "anonymous" } };
+      data = {
+        ...data,
+        githubSettings: {
+          ...data.githubSettings,
+          hasSavedToken: false,
+          effectiveSource: data.githubSettings.hasEnvironmentToken
+            ? "environment"
+            : "anonymous",
+        },
+      };
       return { ...data.githubSettings };
     },
-    test_github_auth: () => ({ source: data.githubSettings.effectiveSource,
+    test_github_auth: () => ({
+      source: data.githubSettings.effectiveSource,
       limit: data.githubSettings.effectiveSource === "anonymous" ? 60 : 5_000,
-      remaining: data.githubSettings.effectiveSource === "anonymous" ? 59 : 4_999,
-      resetAtEpochMs: Date.now() + 3_600_000 }),
+      remaining:
+        data.githubSettings.effectiveSource === "anonymous" ? 59 : 4_999,
+      resetAtEpochMs: Date.now() + 3_600_000,
+    }),
     get_environment: () => factoryValue(data.environment),
     list_projects: () => ({
       ...projectList,
@@ -1067,17 +1480,38 @@ export function createFakeBackend(
       scheduleAutoTask(task, "preview", [], scope);
       return task.taskId;
     },
-    cancel_task: ({ taskId }) => ({
-      taskId,
-      accepted: true,
-      message: "已请求取消",
-    }),
-    get_active_mutation: () => factoryValue(data.activeMutation),
+    cancel_task: ({ taskId }) => {
+      const batch = batchRuns.get(taskId);
+      if (batch) batch.stop = true;
+      return {
+        taskId,
+        accepted: true,
+        message: "已请求取消",
+      };
+    },
+    get_active_mutation: () => {
+      const running = [...batchRuns.entries()][0];
+      return running
+        ? {
+            taskId: running[0],
+            scope: running[1].preview.scope,
+            kind: "batch",
+            skills: running[1].preview.targets.map((target) => target.name),
+            startedAtEpochMs: running[1].startedAt,
+            snapshotPaths: [],
+          }
+        : factoryValue(data.activeMutation);
+    },
     dismiss_interrupted_mutation: () => undefined,
     quit_app: () => undefined,
     start_install: ({ request, scope, onEvent }) => {
       const task = makeTask("start_install", onEvent);
-      installSources.set(task.taskId, request.source.startsWith("https://") ? request.source : request.source.toLowerCase());
+      installSources.set(
+        task.taskId,
+        request.source.startsWith("https://")
+          ? request.source
+          : request.source.toLowerCase(),
+      );
       scheduleAutoTask(task, "install", request.skills, scope);
       return task.taskId;
     },
@@ -1085,7 +1519,9 @@ export function createFakeBackend(
       const revision = scope === GLOBAL_SCOPE ? undefined : revisionFor(scope);
       if (
         scope !== GLOBAL_SCOPE &&
-        (!projectList.projects.some((project) => projectScope(project.id) === scope) ||
+        (!projectList.projects.some(
+          (project) => projectScope(project.id) === scope,
+        ) ||
           (checkRevision !== undefined && checkRevision !== revision))
       ) {
         return {
@@ -1099,8 +1535,11 @@ export function createFakeBackend(
         return {
           report: {
             ...report,
-            skills: report.skills.filter((skill) =>
-              skillIds.includes(skill.name) || skillIds.includes(`${scope}/${skill.name}`)),
+            skills: report.skills.filter(
+              (skill) =>
+                skillIds.includes(skill.name) ||
+                skillIds.includes(`${scope}/${skill.name}`),
+            ),
           },
           scope,
           checkRevision: revision,
@@ -1170,10 +1609,9 @@ export function createFakeBackend(
       command: K,
       args: FakeCommandContract[K]["args"],
     ) {
-      return defaultHandlers[command](
-        args as never,
-        backend,
-      ) as MaybePromise<FakeCommandContract[K]["result"]>;
+      return defaultHandlers[command](args as never, backend) as MaybePromise<
+        FakeCommandContract[K]["result"]
+      >;
     },
     install({ shouldMockEvents = false } = {}) {
       installedBackends.add(backend);
@@ -1185,7 +1623,8 @@ export function createFakeBackend(
           }
           calls.push({
             command: typed,
-            payload: typed === "save_github_token" ? { token: "[redacted]" } : payload,
+            payload:
+              typed === "save_github_token" ? { token: "[redacted]" } : payload,
           } as FakeCall);
           return handlerFor(typed)(payload as never, backend);
         },
@@ -1194,6 +1633,8 @@ export function createFakeBackend(
       return backend;
     },
     reset() {
+      batchPreviews.clear();
+      batchRuns.clear();
       for (const timer of timers) window.clearTimeout(timer);
       timers.clear();
       calls.length = 0;

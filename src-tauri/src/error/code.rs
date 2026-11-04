@@ -76,6 +76,9 @@ pub enum ErrorCode {
     CliInvalidJson,
     CliPartialFailure,
     CliCancelled,
+    BatchPreviewExpired,
+    BatchConfirmationNeeded,
+    BatchTargetChanged,
     TaskBusy,
     TaskNotFound,
     TaskCannotCancel,
@@ -182,6 +185,9 @@ impl ErrorCode {
         Self::CliInvalidJson,
         Self::CliPartialFailure,
         Self::CliCancelled,
+        Self::BatchPreviewExpired,
+        Self::BatchConfirmationNeeded,
+        Self::BatchTargetChanged,
         Self::TaskBusy,
         Self::TaskNotFound,
         Self::TaskCannotCancel,
@@ -288,6 +294,9 @@ impl ErrorCode {
             Self::CliInvalidJson => "cli.invalid_json",
             Self::CliPartialFailure => "cli.partial_failure",
             Self::CliCancelled => "cli.cancelled",
+            Self::BatchPreviewExpired => "batch.preview_expired",
+            Self::BatchConfirmationNeeded => "batch.confirmation_needed",
+            Self::BatchTargetChanged => "batch.target_changed",
             Self::TaskBusy => "task.busy",
             Self::TaskNotFound => "task.not_found",
             Self::TaskCannotCancel => "task.cannot_cancel",
@@ -353,7 +362,7 @@ mod tests {
 
     #[test]
     fn all_codes_are_unique_and_stable() {
-        assert_eq!(ErrorCode::ALL.len(), 102);
+        assert_eq!(ErrorCode::ALL.len(), 105);
         let values: Vec<&str> = ErrorCode::ALL.iter().map(|code| code.as_str()).collect();
         let unique: HashSet<&str> = values.iter().copied().collect();
         assert_eq!(unique.len(), values.len());
@@ -431,6 +440,9 @@ mod tests {
                 "cli.invalid_json",
                 "cli.partial_failure",
                 "cli.cancelled",
+                "batch.preview_expired",
+                "batch.confirmation_needed",
+                "batch.target_changed",
                 "task.busy",
                 "task.not_found",
                 "task.cannot_cancel",

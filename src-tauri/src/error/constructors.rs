@@ -229,9 +229,9 @@ impl AppError {
     pub fn skill_unmanaged(name: &str) -> Self {
         Self::new(
             ErrorCode::SkillUnmanaged,
-            format!("skill「{name}」没有 lock 条目，不可更新或卸载（断开亦不可用）。"),
+            format!("skill「{name}」没有安装记录，不可更新或管理挂载。"),
         )
-        .hint("未受管 skill 只能只读展示或手动处理，请刷新库存确认状态。")
+        .hint("可查看内容或先备份再彻底卸载，请刷新库存确认状态。")
     }
 
     pub fn skill_copy_only(name: &str) -> Self {
@@ -533,6 +533,27 @@ impl AppError {
     /// interrupted CLI row.
     pub fn cli_cancelled() -> Self {
         Self::new(ErrorCode::CliCancelled, "skills CLI 进程已取消。").retryable(true)
+    }
+
+    pub fn batch_preview_expired() -> Self {
+        Self::new(
+            ErrorCode::BatchPreviewExpired,
+            "预览已变化或过期，请重新预览并确认。",
+        )
+        .retryable(true)
+    }
+
+    pub fn batch_confirmation_needed() -> Self {
+        Self::new(ErrorCode::BatchConfirmationNeeded, "请先确认本次删除范围。")
+    }
+
+    pub fn batch_target_changed(detail: impl Into<String>) -> Self {
+        Self::new(
+            ErrorCode::BatchTargetChanged,
+            "目标状态已变化，已跳过；请重新预览。",
+        )
+        .detail(detail)
+        .retryable(true)
     }
 
     pub fn task_busy() -> Self {

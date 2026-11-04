@@ -231,7 +231,10 @@ pub(crate) fn agent_rows(
         .collect();
     if include_undetected_extras {
         for extra in &extra_agents.agents {
-            if agents.iter().any(|agent| agent.id == extra.id) || extra_is_detected(paths, extra) {
+            if extra.requires_existing_skills_dir()
+                || agents.iter().any(|agent| agent.id == extra.id)
+                || extra_is_detected(paths, extra)
+            {
                 continue;
             }
             rows.push(InventoryAgent {
@@ -1112,6 +1115,42 @@ mod tests {
             workbuddy.global_skills_dir.as_deref(),
             Some("~/.workbuddy/skills")
         );
+    }
+
+    #[test]
+    fn codex_legacy_attachments_are_visible_only_when_the_skills_directory_exists() {
+        let fixture = Fixture::new();
+        let legacy = fixture.paths.home().join(".codex/skills");
+        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        let before = read(&fixture.paths).unwrap();
+        assert!(!before.agents.iter().any(|agent| agent.id == "codex-legacy"));
+        assert!(
+            !before
+                .install_targets
+                .iter()
+                .any(|agent| agent.id == "codex-legacy")
+        );
+
+        fs::create_dir_all(&legacy).unwrap();
+        let canonical = fixture.canonical_skill("alpha", "alpha");
+        symlink(&canonical, legacy.join("alpha")).unwrap();
+        let after = read(&fixture.paths).unwrap();
+        let agent = after
+            .agents
+            .iter()
+            .find(|agent| agent.id == "codex-legacy")
+            .unwrap();
+        assert_eq!(agent.display_name, "Codex（旧目录）");
+        assert_eq!(agent.origin, AgentOrigin::Builtin);
+        assert!(agent.detected);
+        assert_eq!(agent.global_skills_dir.as_deref(), Some("~/.codex/skills"));
+        let attachment = skill(&after, "alpha")
+            .attachments
+            .iter()
+            .find(|attachment| attachment.agent_id == "codex-legacy")
+            .unwrap();
+        assert_eq!(attachment.path, "~/.codex/skills/alpha");
+        assert_eq!(attachment.mode, AttachmentMode::Link);
     }
 
     #[test]

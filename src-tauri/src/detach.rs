@@ -51,6 +51,17 @@ pub fn detach_agent(
     skill_id: &str,
     agent_id: &str,
 ) -> Result<DetachResult, AppError> {
+    detach_agent_checked(paths, layout, skill_id, agent_id, &|_| {}, &|| Ok(()))
+}
+
+pub(crate) fn detach_agent_checked(
+    paths: &AppPaths,
+    layout: &ScopeLayout,
+    skill_id: &str,
+    agent_id: &str,
+    record_snapshot: &dyn Fn(&std::path::Path),
+    before_write: &dyn Fn() -> Result<(), AppError>,
+) -> Result<DetachResult, AppError> {
     let name = layout.scope.parse_skill_id(skill_id)?.to_string();
     // Same metacharacter rule as install/update; detach never spawns a shell,
     // but a malicious on-disk folder name must not reach the log or argv paths.
@@ -135,6 +146,7 @@ pub fn detach_agent(
 
     match mode {
         AttachmentMode::Link => {
+            before_write()?;
             if let Err(error) = fs::remove_file(target) {
                 let error = AppError::agent_detach_failed(format!(
                     "无法删除符号链接 {}：{error}",
@@ -194,8 +206,13 @@ pub fn detach_agent(
                     return Err(error);
                 }
             };
+            record_snapshot(&backup.path);
             let backup_display = paths.display(&backup.path);
             result.backup_path = Some(backup_display.clone());
+            if let Err(error) = before_write() {
+                log_failure(&log, skill_id, agent_id, Some(backup_display), &error);
+                return Err(error);
+            }
 
             // Re-lstat immediately before deleting. A path that changed into
             // a symlink must never be followed by remove_dir_all.

@@ -1,3 +1,4 @@
+import { SelectionCheckbox } from "./selection-checkbox";
 import { memo } from "react";
 import {
   ArrowUpCircle,
@@ -75,6 +76,9 @@ function AgentAvatars({ skill }: AgentAvatarsProps) {
 interface SkillRowProps {
   skill: UpdateViewSkill;
   selected: boolean;
+  checked: boolean;
+  selectionDisabled: boolean;
+  onToggle: (id: string) => void;
   onSelect: (name: string) => void;
   actionsDisabled: boolean;
   openingFolder: boolean;
@@ -88,6 +92,9 @@ interface SkillRowProps {
 export const SkillRow = memo(function SkillRow({
   skill,
   selected,
+  checked,
+  selectionDisabled,
+  onToggle,
   onSelect,
   actionsDisabled,
   openingFolder,
@@ -102,7 +109,17 @@ export const SkillRow = memo(function SkillRow({
     skill.attachments.length === 0 && skill.management !== "unmanaged";
 
   return (
-    <div className="skill-row skill-grid" data-selected={selected || undefined}>
+    <div
+      className="skill-row skill-grid"
+      data-selected={selected || undefined}
+      data-checked={checked || undefined}
+    >
+      <SelectionCheckbox
+        checked={checked}
+        disabled={selectionDisabled}
+        label={`选择技能 ${skill.name}`}
+        onChange={() => onToggle(skill.id)}
+      />
       <button
         type="button"
         data-testid="skill-row"

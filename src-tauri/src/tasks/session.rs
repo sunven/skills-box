@@ -175,9 +175,29 @@ pub trait MutationAction: Send + Sync + 'static {
 
     fn profile(&self, plan: &Self::Plan) -> SessionProfile;
 
+    fn uses_cli(&self, _plan: &Self::Plan) -> bool {
+        true
+    }
+
+    /// Native writers share the backup, cancellation seal and result envelope.
+    fn execute_native(
+        &self,
+        _unit: &Self::Unit,
+        _preflight: &Preflight,
+        _reporter: &Reporter,
+    ) -> Result<UnitOutcome, AppError> {
+        Err(AppError::task_internal("原生执行", "未提供原生写入操作"))
+    }
+
     fn begin(&self, plan: &Self::Plan) -> Result<StartOutcome<Self::Unit>, AppError>;
 
     fn preflight(&self, unit: &Self::Unit, reporter: &Reporter) -> Result<Preflight, AppError>;
+
+    /// Revalidate authorization after the snapshot, immediately before invoking
+    /// the writer. Standalone actions keep their existing behavior.
+    fn before_write(&self, _unit: &Self::Unit) -> Result<(), AppError> {
+        Ok(())
+    }
 
     fn command(&self, unit: &Self::Unit, runtime: &CliRuntime, reporter: &Reporter) -> CommandSpec;
 
@@ -247,12 +267,16 @@ pub async fn run<A: MutationAction>(
         return FinishOutcome::Cancelled;
     }
 
-    let runtime = tokio::select! {
-        result = ctx.runtime.cli_runtime() => match result {
-            Ok(runtime) => runtime,
-            Err(error) => return FinishOutcome::Failed(error),
-        },
-        _ = ctx.cancel.cancelled() => return FinishOutcome::Cancelled,
+    let runtime = if action.uses_cli(&plan) {
+        Some(tokio::select! {
+            result = ctx.runtime.cli_runtime() => match result {
+                Ok(runtime) => runtime,
+                Err(error) => return FinishOutcome::Failed(error),
+            },
+            _ = ctx.cancel.cancelled() => return FinishOutcome::Cancelled,
+        })
+    } else {
+        None
     };
     if ctx.cancel.is_cancelled() {
         return FinishOutcome::Cancelled;
@@ -353,51 +377,81 @@ pub async fn run<A: MutationAction>(
             );
         }
 
-        let spec = action.command(unit, &runtime, &reporter);
-        let output = match ctx.executor.run(spec, ctx.cancel.clone()).await {
-            Ok(output) => output,
-            Err(ExecError::Cancelled) => {
-                action.on_cancelled(unit, &preflight, Some(AppError::cli_cancelled()));
-                return cancelled_outcome(
-                    &ctx.envelope,
-                    &profile,
-                    std::mem::take(&mut rows),
-                    std::mem::take(&mut warnings),
-                    &backup_paths,
-                    log_path.clone(),
-                );
-            }
-            Err(error) => {
-                let error = cli::classify_exec_error(cli_action(profile.action), error);
-                match action.on_infrastructure_failure(unit, error, Some(&preflight), &reporter) {
-                    FailureDisposition::TaskFailed(error) => return FinishOutcome::Failed(error),
-                    FailureDisposition::UnitFailed(outcome) => {
-                        let final_progress = outcome.final_progress.clone();
-                        backup_paths.push(outcome.backup_path.clone());
-                        rows.extend(outcome.rows);
-                        warnings.extend(outcome.warnings);
-                        emit_final_progress(
-                            &ctx,
-                            final_progress.as_ref(),
-                            rows.len() as u32,
-                            total,
-                        );
-                        if index + 1 < unit_count {
-                            tokio::task::yield_now().await;
-                        }
-                        continue;
-                    }
+        let hook_action = Arc::clone(&action);
+        let hook_unit = unit.clone();
+        let checked = tokio::task::spawn_blocking(move || hook_action.before_write(&hook_unit))
+            .await
+            .unwrap_or_else(|error| Err(AppError::task_internal("写前校验", error)));
+        if let Err(error) = checked {
+            match action.on_infrastructure_failure(unit, error, Some(&preflight), &reporter) {
+                FailureDisposition::TaskFailed(error) => return FinishOutcome::Failed(error),
+                FailureDisposition::UnitFailed(outcome) => {
+                    backup_paths.push(outcome.backup_path);
+                    rows.extend(outcome.rows);
+                    warnings.extend(outcome.warnings);
+                    continue;
                 }
             }
-        };
+        }
+        let completed = if let Some(runtime) = &runtime {
+            let spec = action.command(unit, runtime, &reporter);
+            let output = match ctx.executor.run(spec, ctx.cancel.clone()).await {
+                Ok(output) => output,
+                Err(ExecError::Cancelled) => {
+                    action.on_cancelled(unit, &preflight, Some(AppError::cli_cancelled()));
+                    return cancelled_outcome(
+                        &ctx.envelope,
+                        &profile,
+                        std::mem::take(&mut rows),
+                        std::mem::take(&mut warnings),
+                        &backup_paths,
+                        log_path.clone(),
+                    );
+                }
+                Err(error) => {
+                    let error = cli::classify_exec_error(cli_action(profile.action), error);
+                    match action.on_infrastructure_failure(unit, error, Some(&preflight), &reporter)
+                    {
+                        FailureDisposition::TaskFailed(error) => {
+                            return FinishOutcome::Failed(error);
+                        }
+                        FailureDisposition::UnitFailed(outcome) => {
+                            let final_progress = outcome.final_progress.clone();
+                            backup_paths.push(outcome.backup_path.clone());
+                            rows.extend(outcome.rows);
+                            warnings.extend(outcome.warnings);
+                            emit_final_progress(
+                                &ctx,
+                                final_progress.as_ref(),
+                                rows.len() as u32,
+                                total,
+                            );
+                            if index + 1 < unit_count {
+                                tokio::task::yield_now().await;
+                            }
+                            continue;
+                        }
+                    }
+                }
+            };
 
-        let completed = {
+            {
+                let hook_action = Arc::clone(&action);
+                let hook_unit = unit.clone();
+                let hook_reporter = reporter.clone();
+                let hook_preflight = preflight.clone();
+                tokio::task::spawn_blocking(move || {
+                    hook_action.complete(&hook_unit, output, &hook_preflight, &hook_reporter)
+                })
+                .await
+            }
+        } else {
             let hook_action = Arc::clone(&action);
             let hook_unit = unit.clone();
             let hook_reporter = reporter.clone();
             let hook_preflight = preflight.clone();
             tokio::task::spawn_blocking(move || {
-                hook_action.complete(&hook_unit, output, &hook_preflight, &hook_reporter)
+                hook_action.execute_native(&hook_unit, &hook_preflight, &hook_reporter)
             })
             .await
         };
@@ -504,6 +558,7 @@ fn build_result(
         started_at: envelope.started_at,
         finished_at_epoch_ms: now_ms(),
         preview: None,
+        batch: None,
     }
 }
 
@@ -533,6 +588,7 @@ fn cli_action(action: TaskAction) -> CliAction {
         TaskAction::Install => CliAction::Install,
         TaskAction::Update => CliAction::Update,
         TaskAction::Uninstall => CliAction::Uninstall,
+        TaskAction::Batch => unreachable!("outer batch tasks do not invoke CLI sessions"),
     }
 }
 

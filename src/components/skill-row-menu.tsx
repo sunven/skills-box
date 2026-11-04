@@ -89,9 +89,7 @@ export function SkillRowMenu({
       action: "uninstall" as const,
       label: "卸载",
       icon: Trash2,
-      reason:
-        scopeReason ??
-        (skill.management === "unmanaged" ? "未受管技能不可卸载" : null),
+      reason: scopeReason,
     },
   ];
 

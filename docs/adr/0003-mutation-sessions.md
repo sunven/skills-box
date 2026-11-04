@@ -2,6 +2,8 @@
 
 Status: accepted
 
+[ADR-0022](0022-unmanaged-uninstall.md) extends the shared protocol with native execution for Unmanaged Uninstall; those plans skip CLI runtime resolution. Standalone Attach and Detach retain their separate lifecycle.
+
 Install, update and uninstall each re-implement the same ordering-sensitive protocol inside `TaskManager`: initial phase, runtime resolution, preflight snapshot/backup, cancellation seal, CLI execution, `ExecError` mapping, verification, baseline/log bookkeeping and one finish outcome. We extract that protocol into a `MutationSession` driven by a crate-private `MutationAction` trait. The session owns the unit loop, runtime resolution, cancellation windows, executor invocation, `ExecError` mapping, snapshot recording and the `TaskResult` envelope; each action owns its plan, units, preflight content, argv, completion (parse, filesystem verification, baseline, operation log), per-unit events and failure/cancel bookkeeping. Install and uninstall are one-unit sessions; update is one unit per update candidate. Hooks are sync; the session wraps `preflight` and `complete` in `spawn_blocking`. Preview and native attach/detach/extra-agent actions stay outside because they do not share the mutation protocol. This is a behavior-preserving refactor: Tauri commands, `TaskEvent` sequences, `TaskResult` shape and the frontend contract do not change.
 
 ## Considered options
