@@ -120,6 +120,50 @@ describe("workspace projection", () => {
     expect(filtered.updateDialog?.initialNames).toEqual(["alpha"]);
   });
 
+  it("counts update anomalies within the selected source after the inventory is cached", () => {
+    const select = createWorkspaceViewSelector();
+    const input: WorkspaceViewInput = {
+      activeScope: GLOBAL_SCOPE,
+      snapshot: sampleSnapshot(),
+      updateReport: report([
+        result("alpha", "path_missing"),
+        result("beta", "error"),
+      ]),
+      filters: filters({ status: "anomaly" }),
+      sort: "recent",
+      selectedName: null,
+      updateMode: null,
+      updateSkillName: null,
+    };
+    const initial = select(input);
+    expect(initial.statusCounts.anomaly).toBe(4);
+
+    const filtered = select({
+      ...input,
+      filters: filters({ source: "acme/skills", status: "anomaly" }),
+    });
+    expect(filtered.skills).toBe(initial.skills);
+    expect(filtered.statusCounts.all).toBe(2);
+    expect(filtered.statusCounts.anomaly).toBe(2);
+    expect(filtered.statusCounts.unmanaged).toBe(0);
+    expect(filtered.visibleSkills.map((skill) => skill.name)).toEqual([
+      "beta", "alpha",
+    ]);
+
+    const searched = select({
+      ...input,
+      filters: filters({
+        source: "acme/skills",
+        query: "beta",
+        agent: "gemini-cli",
+        status: "anomaly",
+      }),
+    });
+    expect(searched.visibleSkills.map((skill) => skill.name)).toEqual(["beta"]);
+    expect(searched.statusCounts).toEqual(filtered.statusCounts);
+    expect(select(input).statusCounts).toBe(initial.statusCounts);
+  });
+
   it("recomputes cached inventory data when a report or snapshot changes", () => {
     const select = createWorkspaceViewSelector();
     const snapshot = sampleSnapshot();

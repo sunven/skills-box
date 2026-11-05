@@ -2482,14 +2482,18 @@
 .batch-preview-list > li { padding: 10px 12px; font-size: 12.5px; overflow-wrap: anywhere; }
 .batch-preview-list > li + li { border-top: 1px solid var(--border); }
 .batch-preview-list > li[data-eligible="false"] { background: var(--background); }
+.batch-command { margin-top: 6px; padding: 8px 10px; border-radius: 4px; background: var(--background); font-family: var(--font-mono); font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .batch-confirm { display: flex; align-items: flex-start; gap: 9px; margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 12.5px; }
 .batch-confirm input { flex: none; margin-top: 3px; accent-color: var(--accent); }
-.batch-agent { display: flex; align-items: center; gap: 8px; padding: 8px 0; font-size: 12.5px; cursor: pointer; }
-.batch-agent input { accent-color: var(--accent); }
+.batch-agents { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 24px; }
+.batch-agents > p { grid-column: 1 / -1; }
+.batch-agent { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 8px 0; font-size: 12.5px; cursor: pointer; }
+.batch-agent input { flex: none; accent-color: var(--accent); }
 .batch-agent[data-disabled] { opacity: .65; cursor: default; }
 .batch-project-select { min-height: 32px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--card); color: var(--foreground); font-size: 13px; }
 .batch-foot { flex-wrap: wrap; }
 @media (max-width: 560px) {
+  .batch-agents { grid-template-columns: minmax(0, 1fr); }
   .batch-toolbar { gap: 8px; }
   .batch-panel .modal-head, .batch-panel .modal-foot { padding-inline: 14px; }
   .batch-panel .modal-body { padding-inline: 14px; }

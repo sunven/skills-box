@@ -127,9 +127,9 @@ window.setTimeout(async () => {
     await pause(120);
     clickButton("批量卸载");
     await pause(120);
-    if (params.get("batchUninstall") === "all") {
-      document.querySelector<HTMLInputElement>('input[name="batch-uninstall-mode"]:not(:checked)')?.click();
-    } else {
+    if (params.get("batchUninstall") !== "all") {
+      document.querySelector<HTMLInputElement>('input[name="batch-uninstall-mode"][value="agents"]')?.click();
+      await pause(120);
       document.querySelector<HTMLInputElement>('input[aria-label="选择 Agent Claude Code"]')?.click();
       document.querySelector<HTMLInputElement>('input[aria-label="选择 Agent Gemini CLI"]')?.click();
     }

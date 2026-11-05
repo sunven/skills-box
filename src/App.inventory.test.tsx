@@ -174,8 +174,8 @@ describe("inventory list", () => {
     fireEvent.click(sidebarButton(/acme\/skills/));
     expect(rowNames()).toEqual(["beta", "alpha"]);
     expect(screen.getByText("2 个")).toBeInTheDocument();
-    // Filter counts remain tied to the full inventory.
-    expect(screen.getByRole("option", { name: "未受管 (1)" })).toBeInTheDocument();
+    // Status counts follow the source; agent counts still describe the inventory.
+    expect(screen.getByRole("option", { name: "未受管 (0)" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Claude Code (4)" })).toBeInTheDocument();
 
     fireEvent.change(screen.getByRole("combobox", { name: "Agent 筛选" }), {
@@ -190,6 +190,38 @@ describe("inventory list", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "清除筛选" }));
     expect(rowNames()).toEqual(["beta", "alpha", "delta", "gamma"]);
+  });
+
+  it("updates anomaly counts when switching sidebar sources with the anomaly filter active", async () => {
+    mockCommands(sampleSnapshot());
+    renderApp();
+    await screen.findByText("beta");
+
+    const status = screen.getByRole("combobox", { name: "状态筛选" });
+    fireEvent.change(status, { target: { value: "anomaly" } });
+    expect(within(status).getByRole("option", { name: "异常 (2)" })).toBeInTheDocument();
+    expect(rowNames()).toEqual(["delta", "gamma"]);
+
+    fireEvent.click(sidebarButton(/other\/repo/));
+    expect(within(status).getByRole("option", { name: "异常 (1)" })).toBeInTheDocument();
+    expect(within(status).getByRole("option", { name: "全部状态 (1)" })).toBeInTheDocument();
+    expect(rowNames()).toEqual(["delta"]);
+
+    fireEvent.click(sidebarButton(/acme\/skills/));
+    expect(within(status).getByRole("option", { name: "异常 (0)" })).toBeInTheDocument();
+    expect(within(status).getByRole("option", { name: "全部状态 (2)" })).toBeInTheDocument();
+    expect(rows()).toHaveLength(0);
+
+    fireEvent.click(sidebarButton(/来源未知/));
+    expect(within(status).getByRole("option", { name: "异常 (1)" })).toBeInTheDocument();
+    expect(within(status).getByRole("option", { name: "未受管 (1)" })).toBeInTheDocument();
+    expect(rowNames()).toEqual(["gamma"]);
+
+    fireEvent.click(sidebarButton(/全部来源/));
+    expect(within(status).getByRole("option", { name: "异常 (2)" })).toBeInTheDocument();
+    expect(within(status).getByRole("option", { name: "全部状态 (4)" })).toBeInTheDocument();
+    expect(status).toHaveValue("anomaly");
+    expect(rowNames()).toEqual(["delta", "gamma"]);
   });
 
   it("shows unmanaged, copy-only and broken-attachment rows under the anomaly filter", async () => {

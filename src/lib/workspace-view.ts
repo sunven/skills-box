@@ -6,6 +6,7 @@ import {
   computeAgentOptions,
   computeSourceOptions,
   computeStatusCounts,
+  filterSkills,
   selectVisibleSkills,
   type InventoryFilters,
   type SortKey,
@@ -188,6 +189,19 @@ function projectWorkspace(
 ): WorkspaceView {
   const { skills, updateSummary, candidateCount } = inventory;
   const visibleSkills = selectVisibleSkills(skills, input.filters, input.sort);
+  // Status options describe the selected source, independently of the active
+  // status, search query and agent filter.
+  const statusCounts =
+    input.filters.source === "all"
+      ? inventory.statusCounts
+      : computeStatusCounts(
+          filterSkills(skills, {
+            query: "",
+            source: input.filters.source,
+            agent: "all",
+            status: "all",
+          }),
+        );
   const discoverySource = input.filters.source.startsWith("https://")
     ? input.filters.source
     : input.filters.source.toLowerCase();
@@ -277,6 +291,7 @@ function projectWorkspace(
     projectHeader,
     scopeError,
     visibleSkills,
+    statusCounts,
     availableDiscoveryCount,
     discoverySource,
     selectedSkill,

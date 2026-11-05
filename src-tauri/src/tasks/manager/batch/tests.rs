@@ -888,7 +888,11 @@ async fn update_skips_modified_unknown_current_and_stale_lock_versions() {
         )
         .await
         .unwrap();
-    assert!(p.targets.iter().all(|t| !t.eligible && t.reason.is_some()));
+    assert!(
+        p.targets
+            .iter()
+            .all(|t| !t.eligible && t.reason.is_some() && t.command.is_none())
+    );
     let mut updates = f.updates();
     updates.get_mut("gamma").unwrap().lock_hash = Some("c".repeat(40));
     let p = f
@@ -1483,6 +1487,11 @@ async fn update_runs_each_clean_candidate_and_does_not_expand_original_skips() {
         ))
         .await;
     assert!(!p.targets[1].eligible);
+    assert_eq!(
+        p.targets[0].command.as_deref(),
+        Some("npx -y skills@1.7.4 add vercel-labs/skills -g -s alpha -a universal -y --json")
+    );
+    assert!(p.targets[1].command.is_none());
     let paths = f.paths.clone();
     let (tx, mut rx) = mpsc::unbounded_channel();
     let out: EventSink = Arc::new(move |event| {
@@ -1509,6 +1518,18 @@ async fn update_runs_each_clean_candidate_and_does_not_expand_original_skips() {
         result.batch
     );
     assert_eq!(f.executor.calls.lock().unwrap().len(), 2);
+    for spec in f.executor.calls.lock().unwrap().iter() {
+        let name = &spec.args.windows(2).find(|args| args[0] == "-s").unwrap()[1];
+        let preview = p
+            .targets
+            .iter()
+            .find(|target| &target.name == name)
+            .unwrap();
+        assert_eq!(
+            preview.command.as_deref(),
+            Some(format!("npx {}", spec.args.join(" ")).as_str())
+        );
+    }
     assert_eq!(
         fs::read_to_string(f.paths.canonical_skills_dir().join("beta/SKILL.md")).unwrap(),
         "# beta\n"

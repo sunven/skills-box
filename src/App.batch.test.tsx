@@ -147,7 +147,24 @@ function finish(
 }
 
 describe("inventory batch operations", () => {
-  it("defaults uninstall to Agent selection and removes only selected attachments", async () => {
+  it("shows complete uninstall first and selects it by default without starting a task", async () => {
+    const backend = setup();
+    await select("alpha");
+    fireEvent.click(screen.getByRole("button", { name: "批量卸载" }));
+
+    const modes = screen.getAllByRole("radio");
+    expect(modes[0]).toHaveAccessibleName("完全卸载");
+    expect(modes[0]).toBeChecked();
+    expect(modes[1]).toHaveAccessibleName("按 Agent 移除");
+    expect(modes[1]).not.toBeChecked();
+    expect(await screen.findByRole("button", { name: "确认完全卸载 (1)" })).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: "确认批量卸载" })).not.toBeChecked();
+    expect(screen.queryByRole("checkbox", { name: "选择 Agent Claude Code" })).not.toBeInTheDocument();
+    expect(backend.callsOf("preview_batch")[0]!.payload.request.action).toBe("uninstall");
+    expect(backend.count("start_batch")).toBe(0);
+  });
+
+  it("switches to Agent selection and removes only selected attachments", async () => {
     const backend = setup({ autoTasks: true, data: { snapshot: makeSnapshot({ skills: [
       makeSkill({ name: "alpha", attachments: [attachment("claude-code"), attachment("gemini-cli")] }),
       makeSkill({ name: "beta", attachments: [attachment("gemini-cli")] }),
@@ -155,6 +172,7 @@ describe("inventory batch operations", () => {
     await select("alpha");
     await select("beta");
     fireEvent.click(screen.getByRole("button", { name: "批量卸载" }));
+    fireEvent.click(screen.getByRole("radio", { name: "按 Agent 移除" }));
     expect(screen.getByRole("radio", { name: "按 Agent 移除" })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: "选择 Agent Claude Code" })).not.toBeChecked();
     expect(screen.getByRole("checkbox", { name: "选择 Agent Codex" })).toBeDisabled();
@@ -186,6 +204,7 @@ describe("inventory batch operations", () => {
     ] }) } });
     for (const name of ["alpha", "beta", "gamma"]) await select(name);
     fireEvent.click(screen.getByRole("button", { name: "批量卸载" }));
+    fireEvent.click(screen.getByRole("radio", { name: "按 Agent 移除" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "选择 Agent Claude Code" }));
     await screen.findByRole("button", { name: "确认移除 (3)" });
     expect(screen.getByText("最后一份内容，会先备份再删除。")).toBeInTheDocument();
@@ -204,6 +223,7 @@ describe("inventory batch operations", () => {
       attachments: [attachment("claude-code", "copy"), attachment("gemini-cli")] })] }) } });
     await select("alpha");
     fireEvent.click(screen.getByRole("button", { name: "批量卸载" }));
+    fireEvent.click(screen.getByRole("radio", { name: "按 Agent 移除" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "选择 Agent Claude Code" }));
     await screen.findByRole("button", { name: "确认移除 (1)" });
     fireEvent.click(screen.getByRole("checkbox", { name: "确认按 Agent 移除" }));
@@ -237,6 +257,7 @@ describe("inventory batch operations", () => {
     } });
     await select("alpha");
     fireEvent.click(screen.getByRole("button", { name: "批量卸载" }));
+    fireEvent.click(screen.getByRole("radio", { name: "按 Agent 移除" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "选择 Agent Claude Code" }));
     await waitFor(() => expect(release).toBeDefined());
     fireEvent.click(screen.getByRole("radio", { name: "完全卸载" }));
@@ -317,6 +338,43 @@ describe("inventory batch operations", () => {
     expect(
       await screen.findByRole("checkbox", { name: "选择技能 alpha" }),
     ).not.toBeChecked();
+  });
+
+  it("shows backend commands for eligible updates before confirmation", async () => {
+    const commands: Record<string, string> = {
+      alpha: "npx -y skills@1.7.4 add 'team/skills#release/v2' -g -s alpha -a claude-code -a universal -y --json",
+      gamma: "npx -y skills@1.7.4 add other/skills -g -s gamma -a universal -y --json",
+    };
+    const backend = setup({
+      data: {
+        snapshot: makeSnapshot({ skills: [
+          makeSkill({ name: "alpha" }),
+          makeSkill({ name: "beta", localModification: "modified" }),
+          makeSkill({ name: "gamma" }),
+        ] }),
+      },
+      commands: {
+        preview_batch: async (args, backend) => {
+          const preview = await backend.dispatch("preview_batch", args);
+          return {
+            ...preview,
+            targets: preview.targets.map((target) => ({
+              ...target,
+              command: target.eligible ? commands[target.name] : undefined,
+            })),
+          };
+        },
+      },
+    });
+    for (const name of ["alpha", "beta", "gamma"]) await select(name);
+    fireEvent.click(screen.getByRole("button", { name: "批量更新" }));
+    await screen.findByRole("button", { name: "确认更新 (2)" });
+
+    const targets = screen.getAllByTestId("batch-target");
+    expect(within(targets[0]!).getByText(commands.alpha!)).toBeInTheDocument();
+    expect(within(targets[1]!).queryByText("将执行的命令")).not.toBeInTheDocument();
+    expect(within(targets[2]!).getByText(commands.gamma!)).toBeInTheDocument();
+    expect(backend.count("start_batch")).toBe(0);
   });
 
   it("previews mixed update eligibility and clears only successful selections", async () => {

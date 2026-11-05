@@ -1189,6 +1189,21 @@ export function createFakeBackend(
                 : result?.state !== "update"
                   ? "没有可用更新。"
                   : null;
+          if (target.reason === null && result) {
+            const quote = (value: string) => /^[a-zA-Z0-9_./:@%+=,-]+$/.test(value)
+              ? value : `'${value.replace(/'/g, "'\\''")}'`;
+            const source = `${result.source ?? skill.source}${result.ref ? `#${result.ref}` : ""}`;
+            const agentIds = [...new Set(skill.attachments.filter((attachment) => {
+              const agent = snapshot.agents.find((agent) => agent.id === attachment.agentId);
+              return agent?.origin === "catalog" && !agent.universal &&
+                (attachment.mode === "link" || attachment.mode === "copy");
+            }).map((attachment) => attachment.agentId))].sort();
+            const args = ["npx", "-y", `skills@${factoryValue(data.environment).pinnedCliVersion}`,
+              "add", source, ...(scope === GLOBAL_SCOPE ? ["-g"] : []), "-s", skill.name,
+              ...[...agentIds, "universal"].flatMap((id) => ["-a", id]), "-y", "--json"];
+            const root = projectList.projects.find((project) => projectScope(project.id) === scope)?.root;
+            target.command = `${root ? `cd ${quote(root)} && ` : ""}${args.map(quote).join(" ")}`;
+          }
         } else if (request.action === "uninstall") {
           target.paths = [
             skill.canonicalPath,

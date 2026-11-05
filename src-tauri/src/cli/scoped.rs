@@ -11,7 +11,7 @@ use crate::paths::AppPaths;
 use crate::process::CommandSpec;
 use crate::scope_layout::ScopeLayout;
 
-use super::CliRuntime;
+use super::{CliRuntime, PINNED_CLI_VERSION};
 
 pub struct ScopedCli<'a> {
     runtime: &'a CliRuntime,
@@ -33,20 +33,39 @@ impl<'a> ScopedCli<'a> {
         agent_ids: &[String],
         timeout: Duration,
     ) -> CommandSpec {
-        let mut args = self.args("add");
-        args.push(source.to_string());
-        self.push_global(&mut args);
-        for name in skills {
-            args.push("-s".to_string());
-            args.push(name.clone());
-        }
-        for id in agent_ids {
-            args.push("-a".to_string());
-            args.push(id.clone());
-        }
-        args.push("-y".to_string());
-        args.push("--json".to_string());
+        let args = install_args(
+            &self.runtime.pinned_version,
+            self.layout.is_global(),
+            source,
+            skills,
+            agent_ids,
+        );
         self.command(args, &self.runtime.cwd, timeout)
+    }
+
+    /// Read-only display of the same pinned arguments used by Install/Update.
+    /// A project command includes its cwd so the displayed line is copyable.
+    pub fn install_preview(
+        layout: &ScopeLayout,
+        source: &str,
+        skills: &[String],
+        agent_ids: &[String],
+    ) -> String {
+        let args = install_args(
+            PINNED_CLI_VERSION,
+            layout.is_global(),
+            source,
+            skills,
+            agent_ids,
+        );
+        let command = std::iter::once("npx".to_string())
+            .chain(args.iter().map(|arg| shell_quote(arg)))
+            .collect::<Vec<_>>()
+            .join(" ");
+        match layout.project_root() {
+            Some(root) => format!("cd {} && {command}", shell_quote(&root.to_string_lossy())),
+            None => command,
+        }
     }
 
     /// Remove the named Skill. Per-agent remove can delete the Canonical store
@@ -94,6 +113,44 @@ impl<'a> ScopedCli<'a> {
             self.runtime.env.clone(),
             timeout,
         )
+    }
+}
+
+fn install_args(
+    version: &str,
+    global: bool,
+    source: &str,
+    skills: &[String],
+    agent_ids: &[String],
+) -> Vec<String> {
+    let mut args = vec![
+        "-y".into(),
+        format!("skills@{version}"),
+        "add".into(),
+        source.into(),
+    ];
+    if global {
+        args.push("-g".into());
+    }
+    for name in skills {
+        args.extend(["-s".into(), name.clone()]);
+    }
+    for id in agent_ids {
+        args.extend(["-a".into(), id.clone()]);
+    }
+    args.extend(["-y".into(), "--json".into()]);
+    args
+}
+
+fn shell_quote(value: &str) -> String {
+    if !value.is_empty()
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "_./:@%+=,-".contains(c))
+    {
+        value.to_string()
+    } else {
+        format!("'{}'", value.replace('\'', "'\\''"))
     }
 }
 
@@ -172,6 +229,53 @@ mod tests {
                 "{forbidden} must never be part of preview"
             );
         }
+    }
+
+    #[test]
+    fn install_preview_preserves_the_execution_arguments_and_project_cwd() {
+        for project in [false, true] {
+            let (_tmp, paths, layout) = fixture(project);
+            let runtime = runtime(&paths);
+            let skills = vec!["alpha".into()];
+            let agents = vec!["claude-code".into(), "universal".into()];
+            let source = "owner/repo#release/v2";
+            let spec = ScopedCli::new(&runtime, &layout).install(
+                source,
+                &skills,
+                &agents,
+                Duration::from_secs(900),
+            );
+            let display = ScopedCli::install_preview(&layout, source, &skills, &agents);
+            let expected = format!(
+                "{}npx -y skills@1.7.4 add 'owner/repo#release/v2'{} -s alpha -a claude-code -a universal -y --json",
+                if project {
+                    format!("cd {} && ", spec.cwd.display())
+                } else {
+                    String::new()
+                },
+                if project { "" } else { " -g" },
+            );
+            assert_eq!(display, expected);
+            assert_eq!(spec.args[3], source);
+            assert_eq!(spec.args.iter().any(|arg| arg == "-g"), !project);
+        }
+    }
+
+    #[test]
+    fn install_preview_quotes_project_paths_with_spaces_and_apostrophes() {
+        let (tmp, _paths, mut layout) = fixture(true);
+        layout.root = tmp.path().join("O'Brien skills");
+        let display = ScopedCli::install_preview(
+            &layout,
+            "owner/repo",
+            &["alpha".into()],
+            &["universal".into()],
+        );
+        assert!(display.starts_with(&format!(
+            "cd '{}/O'\\''Brien skills' && npx ",
+            tmp.path().display()
+        )));
+        assert!(!display.contains(" -g "));
     }
 
     #[test]

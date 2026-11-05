@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 use super::{install, uninstall, update};
 use crate::attachment_target::{self, TargetContext};
 use crate::baseline::{BaselineStore, LocalModification};
+use crate::cli::ScopedCli;
 use crate::error::{AppError, ErrorCode};
 use crate::inventory::{AttachmentMode, LocatedSkill, ManagementState, UpdateState};
 use crate::paths::AppPaths;
@@ -74,6 +75,9 @@ pub struct BatchTarget {
     pub paths: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub operation: Option<String>,
+    /// Display-only; execution rebuilds arguments from the validated plan.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -284,6 +288,7 @@ fn preview_target(
                     removes_last_copy: None,
                     paths: Vec::new(),
                     operation: None,
+                    command: None,
                 },
             })
         }
@@ -316,6 +321,7 @@ pub fn inspect(
         removes_last_copy: None,
         paths: Vec::new(),
         operation: None,
+        command: None,
     };
     if action == BatchAction::UninstallAgents {
         return super::uninstall_agents::inspect(paths, layout, target);
@@ -390,6 +396,14 @@ pub fn inspect(
             if planned.items.first().map(|item| item.source.as_str()) != checked_source.as_deref() {
                 return Err(AppError::batch_target_changed(
                     "来源或版本引用已变化，请重新检查更新。",
+                ));
+            }
+            if let Some(item) = planned.items.first() {
+                target.command = Some(ScopedCli::install_preview(
+                    layout,
+                    &item.source,
+                    std::slice::from_ref(&item.name),
+                    &item.agent_ids,
                 ));
             }
             Ok(())

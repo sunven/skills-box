@@ -66,7 +66,7 @@ export function BatchDialog({
 }: BatchDialogProps) {
   const canChooseTarget = selection.action === "attach" && scope === "global";
   const canChooseRemoval = selection.action === "uninstall";
-  const [uninstallMode, setUninstallMode] = useState<"agents" | "all">("agents");
+  const [uninstallMode, setUninstallMode] = useState<"agents" | "all">("all");
   const [targetScope, setTargetScope] = useState<"global" | "project">("global");
   const [projectRoot, setProjectRoot] = useState("");
   const [projectAgents, setProjectAgents] = useState<InventoryAgent[]>([]);
@@ -471,9 +471,9 @@ export function BatchDialog({
                 <fieldset className="mb-4" disabled={disabled || !!retryKeys}>
                   <legend className="field-label">卸载方式</legend>
                   <div className="flex flex-wrap gap-5 mt-2">
-                    {(["agents", "all"] as const).map((value) => (
+                    {(["all", "agents"] as const).map((value) => (
                       <label key={value} className="flex items-center gap-2 text-sm">
-                        <input type="radio" name="batch-uninstall-mode" checked={uninstallMode === value}
+                        <input type="radio" name="batch-uninstall-mode" value={value} checked={uninstallMode === value}
                           onChange={() => {
                             invalidatePreview();
                             setUninstallMode(value);
@@ -616,6 +616,12 @@ export function BatchDialog({
                             <p className="mt-1 text-muted-foreground">
                               {target.reason}
                             </p>
+                          ) : null}
+                          {target.eligible && target.command ? (
+                            <div className="mt-2">
+                              <p className="text-xs text-muted-foreground">将执行的命令</p>
+                              <pre className="batch-command"><code>{target.command}</code></pre>
+                            </div>
                           ) : null}
                           {isCopy && target.eligible && target.operation === "copy" && target.localModification !== "clean" ? (
                             <p className="mt-1 text-warning">{target.localModification === "modified" ? "将复制当前本地改动。" : "无法确认本地改动，将复制当前内容。"}项目之后可能提示与上游内容不同。</p>

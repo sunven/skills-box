@@ -175,6 +175,7 @@ pub fn plan(
                 deletes_copy: false,
                 paths: vec![paths.display(&layout.canonical_dir.join(name))],
                 operation: Some(if agent_id.is_some() { "attach" } else { "copy" }.into()),
+                command: None,
             };
             let mut fingerprint = String::new();
             if let Ok(skill) = &inspected {
