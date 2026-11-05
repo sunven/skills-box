@@ -6,8 +6,22 @@ coding agents: inventory, discover, install, update, detach, and uninstall.
 Install from public HTTPS Git repositories, including GitHub, GitLab, Gitee,
 CNB and self-hosted services. GitHub also accepts `owner/repo` shorthand.
 For example, enter `https://cnb.cool/cnb/skills/cnb-skill` in the install
-wizard; Skills Box supplies `.git` for the pinned CLI. Installation uses the
+wizard; Skills Box supplies `.git` for `skills@latest`. Installation uses the
 default branch, and update checks work at both global and project scope.
+
+## CLI command display
+
+Source previews, Install, Update, Uninstall and their retries show the backend's
+command before execution. Commands include the actual working directory and
+absolute npx path: `cd <cwd> && <npx> -y skills@latest …`. If the command changes
+before a write, the app refreshes the preview and requires another click.
+Running and completed views retain the actual invocations for the session.
+Native actions and skipped targets have no invented CLI command.
+
+Environment diagnostics show the latest actual version probe; each source's
+discovery scan record shows its latest actual catalog call with a timestamp.
+Cache hits do not create new invocation records. These records are kept only
+in memory and disappear when the application exits.
 
 ## GitHub authentication
 
@@ -55,7 +69,7 @@ history file is reported and preserved; restore it before restarting the app.
 the clicked skill. Choose a Scope and agents and confirm before anything is
 installed. A vanished or ambiguous cached item requires rechecking the source.
 
-Initial discovery and changed source versions use the pinned CLI's read-only
+Initial discovery and changed source versions use the CLI's read-only
 preview and require Node/npx/Git. GitHub version queries use the configured
 token; CLI-owned requests do not receive it and can use their anonymous
 fetch/clone path. Discovery has no manual source subscriptions, system

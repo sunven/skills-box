@@ -191,7 +191,7 @@ mod tests {
         let executor = ScriptedExecutor::new()
             .expect("node", &["--version"], ScriptedResponse::ok("v24.15.0\n"))
             .expect("git", &["--version"], ScriptedResponse::fail(1, "no git"))
-            .expect("npx", &["skills@1.7.4"], ScriptedResponse::timeout())
+            .expect("npx", &["skills@latest"], ScriptedResponse::timeout())
             .expect("zsh", &["-ilc"], ScriptedResponse::spawn_error("boom"));
 
         let node = executor
@@ -209,7 +209,7 @@ mod tests {
 
         let npx = executor
             .run(
-                spec("/fake/bin/npx", &["-y", "skills@1.7.4", "--version"]),
+                spec("/fake/bin/npx", &["-y", "skills@latest", "--version"]),
                 CancelToken::new(),
             )
             .await

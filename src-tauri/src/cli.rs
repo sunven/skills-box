@@ -1,4 +1,4 @@
-//! The pinned skills CLI runtime shared by mutation/preview tasks.
+//! The skills CLI runtime shared by mutation/preview tasks.
 //!
 //! The frontend never supplies an executable, argument list, environment or
 //! working directory. Tasks receive this value from the environment service
@@ -12,11 +12,14 @@ use async_trait::async_trait;
 
 use crate::error::AppError;
 
+pub mod commands;
+pub mod preview;
 mod scoped;
 
 pub use scoped::ScopedCli;
 
-pub const PINNED_CLI_VERSION: &str = "1.7.4";
+/// npm package selector shared by environment probes, execution and previews.
+pub const CLI_VERSION: &str = "latest";
 
 #[derive(Debug, Clone)]
 pub struct CliRuntime {
@@ -29,6 +32,7 @@ pub struct CliRuntime {
     pub home: PathBuf,
     /// Minimal child environment (env_clear allowlist + CI/telemetry flags).
     pub env: BTreeMap<String, String>,
+    /// Requested npm version or tag, rather than the resolved CLI version.
     pub pinned_version: String,
 }
 

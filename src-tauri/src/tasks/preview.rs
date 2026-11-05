@@ -23,6 +23,7 @@ pub async fn source_preview(
     source: &str,
     timeout: Duration,
     cancel: CancelToken,
+    context: Option<crate::cli::commands::CliCommandContext>,
 ) -> Result<(ExecOutput, PreviewParseOutcome), AppError> {
     let runtime = tokio::select! {
         result = runtime.cli_runtime() => result?,
@@ -32,6 +33,7 @@ pub async fn source_preview(
         return Err(AppError::task_cancelled());
     }
     let mut spec = ScopedCli::new(&runtime, layout).preview(paths, source, timeout);
+    spec.cli_context = context;
     // Authentication is confined to the native GitHub API client, including
     // when an injected runtime happens to contain credentials.
     spec.env.remove("GITHUB_TOKEN");

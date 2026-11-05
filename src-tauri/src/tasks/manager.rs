@@ -29,6 +29,7 @@ use super::uninstall as uninstall_task;
 use super::update as update_task;
 
 mod batch;
+mod cli_preview;
 mod scoped_mutation;
 
 pub type TaskId = String;
@@ -729,6 +730,17 @@ impl TaskManager {
         request: InstallRequest,
         on_event: EventSink,
     ) -> Result<TaskId, AppError> {
+        self.start_install_with_preview(scope, request, None, on_event)
+            .await
+    }
+
+    pub async fn start_install_with_preview(
+        &self,
+        scope: crate::scope::ScopeId,
+        request: InstallRequest,
+        preview_id: Option<String>,
+        on_event: EventSink,
+    ) -> Result<TaskId, AppError> {
         let planned = self
             .plan_scoped_mutation(scope, MutationKind::Install, move |paths, layout| {
                 let plan = validate_request(paths, layout, &request)?;
@@ -742,6 +754,7 @@ impl TaskManager {
             })
             .await?;
         let skills = planned.plan().skills.clone();
+        let planned = planned.with_command_preview(preview_id).await?;
         planned.start(skills, on_event, |layout, task_id| {
             install::InstallAction::new(
                 self.inner.paths.clone(),
@@ -888,6 +901,17 @@ impl TaskManager {
         skill_ids: Vec<String>,
         on_event: EventSink,
     ) -> Result<TaskId, AppError> {
+        self.start_update_with_preview(scope, skill_ids, None, on_event)
+            .await
+    }
+
+    pub async fn start_update_with_preview(
+        &self,
+        scope: crate::scope::ScopeId,
+        skill_ids: Vec<String>,
+        preview_id: Option<String>,
+        on_event: EventSink,
+    ) -> Result<TaskId, AppError> {
         self.ensure_not_shutting_down()?;
         let names = install::validate_skill_names(&skill_ids)?;
         let planned = self
@@ -901,6 +925,7 @@ impl TaskManager {
             .iter()
             .map(|item| item.name.clone())
             .collect();
+        let planned = planned.with_command_preview(preview_id).await?;
         planned.start(skills, on_event, |layout, _| {
             update_task::UpdateAction::new(
                 self.inner.paths.clone(),
@@ -920,12 +945,24 @@ impl TaskManager {
         skill_id: String,
         on_event: EventSink,
     ) -> Result<TaskId, AppError> {
+        self.start_uninstall_with_preview(scope, skill_id, None, on_event)
+            .await
+    }
+
+    pub async fn start_uninstall_with_preview(
+        &self,
+        scope: crate::scope::ScopeId,
+        skill_id: String,
+        preview_id: Option<String>,
+        on_event: EventSink,
+    ) -> Result<TaskId, AppError> {
         let planned = self
             .plan_scoped_mutation(scope, MutationKind::Uninstall, move |paths, layout| {
                 uninstall_task::plan_uninstall(paths, layout, &skill_id)
             })
             .await?;
         let skills = vec![planned.plan().name.clone()];
+        let planned = planned.with_command_preview(preview_id).await?;
         planned.start(skills, on_event, |layout, _| {
             uninstall_task::UninstallAction::new(
                 self.inner.paths.clone(),
@@ -971,6 +1008,7 @@ impl TaskManager {
             executor: Arc::clone(&self.inner.executor),
             record_snapshot,
             set_cancellable,
+            expected_commands: None,
         }
     }
 
@@ -1045,6 +1083,10 @@ impl TaskManager {
             &source.normalized,
             self.inner.config.preview_timeout,
             cancel.clone(),
+            Some(crate::cli::commands::CliCommandContext::task(
+                &task_id,
+                layout.scope.clone(),
+            )),
         )
         .await
         {
@@ -1371,7 +1413,7 @@ mod tests {
                         ("CI".to_string(), "true".to_string()),
                         ("DISABLE_TELEMETRY".to_string(), "1".to_string()),
                     ]),
-                    pinned_version: "1.7.4".to_string(),
+                    pinned_version: "latest".to_string(),
                 }),
             }
         }
@@ -1479,7 +1521,7 @@ mod tests {
         let (manager, executor) = manager(
             ScriptedExecutor::new().expect(
                 "npx",
-                &["skills@1.7.4", "add", "owner/repo", "-l", "-g"],
+                &["skills@latest", "add", "owner/repo", "-l", "-g"],
                 ScriptedResponse::ok(SINGLE_CI),
             ),
             HashMap::from([(
@@ -1545,7 +1587,7 @@ mod tests {
         assert_eq!(calls[0].program, PathBuf::from("/node/bin/npx"));
         assert_eq!(
             calls[0].args,
-            vec!["-y", "skills@1.7.4", "add", "owner/repo", "-l", "-g"]
+            vec!["-y", "skills@latest", "add", "owner/repo", "-l", "-g"]
         );
         assert_eq!(calls[0].timeout, Duration::from_secs(60));
         assert_eq!(calls[0].env["CI"], "true");
@@ -2145,7 +2187,7 @@ mod tests {
             calls[0].args,
             vec![
                 "-y",
-                "skills@1.7.4",
+                "skills@latest",
                 "add",
                 "vercel-labs/skills",
                 "-g",

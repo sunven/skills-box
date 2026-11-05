@@ -33,7 +33,7 @@ const okGit: ToolStatus = {
 const okCli: CliStatus = {
   available: true,
   version: "1.7.4",
-  pinnedVersion: "1.7.4",
+  pinnedVersion: "latest",
   status: "ok",
   detail: null,
 };
@@ -58,7 +58,7 @@ export const messages = {
   nodeTooOld: "Node 版本过低（当前 v20.11.0），需要 22.20 或更高版本。",
   npxMissing: "未找到 npx。",
   gitMissing: "未找到 git。",
-  cliMissing: "skills CLI 不可用（npx skills@1.7.4）。",
+  cliMissing: "skills CLI 不可用（npx skills@latest）。",
 };
 
 export function healthyReport(overrides: Partial<EnvReport> = {}): EnvReport {
@@ -83,7 +83,7 @@ export function healthyReport(overrides: Partial<EnvReport> = {}): EnvReport {
     issues: [],
     warnings: [],
     checkedAtEpochMs: 1793163988000,
-    pinnedCliVersion: "1.7.4",
+    pinnedCliVersion: "latest",
     ...overrides,
   };
 }
@@ -120,7 +120,7 @@ export function nodeMissingReport(): EnvReport {
     cli: {
       available: false,
       version: null,
-      pinnedVersion: "1.7.4",
+      pinnedVersion: "latest",
       status: "not_checked",
       detail: "Node 未就绪，未检测 skills CLI",
     },
@@ -151,7 +151,7 @@ export function nodeTooOldReport(): EnvReport {
     cli: {
       available: false,
       version: null,
-      pinnedVersion: "1.7.4",
+      pinnedVersion: "latest",
       status: "not_checked",
       detail: "Node 未就绪，未检测 skills CLI",
     },
@@ -179,7 +179,7 @@ export function npxMissingReport(): EnvReport {
     cli: {
       available: false,
       version: null,
-      pinnedVersion: "1.7.4",
+      pinnedVersion: "latest",
       status: "not_checked",
       detail: "npx 未就绪，未检测 skills CLI",
     },
@@ -221,7 +221,7 @@ export function cliMissingReport(): EnvReport {
     cli: {
       available: false,
       version: null,
-      pinnedVersion: "1.7.4",
+      pinnedVersion: "latest",
       status: "error",
       detail: "network down",
     },
@@ -229,7 +229,7 @@ export function cliMissingReport(): EnvReport {
       issue(
         "env.cli_missing",
         messages.cliMissing,
-        "首次运行需要联网下载 skills@1.7.4，请检查网络后重新检测。",
+        "首次运行需要联网下载 skills@latest，请检查网络后重新检测。",
       ),
     ],
   });

@@ -68,6 +68,10 @@ impl DiscoveryTransport for NativeTransport {
             source,
             crate::timeouts::PREVIEW_TIMEOUT,
             cancel,
+            Some(crate::cli::commands::CliCommandContext::background(
+                "discovery",
+                Some(source.into()),
+            )),
         )
         .await?;
         if !output.success() {
@@ -192,12 +196,13 @@ impl DiscoveryService {
         runtime: Arc<dyn crate::cli::CliRuntimeProvider>,
         tasks: TaskManager,
         api: GitHubApiClient,
+        executor: Arc<dyn crate::process::ProcessExecutor>,
     ) -> Self {
         let transport = Arc::new(NativeTransport {
             versions: SourceArchiveClient::with_api(paths.clone(), api.clone()),
             paths: paths.clone(),
             runtime,
-            executor: Arc::new(crate::process::tokio_executor::TokioExecutor),
+            executor,
         });
         Self::with_transport(
             paths,

@@ -217,7 +217,7 @@ async function confirmUninstall(dialog: HTMLElement) {
   fireEvent.click(confirm);
   expect(uninstallCalls()).toHaveLength(0);
   fireEvent.click(within(dialog).getByLabelText("确认彻底卸载"));
-  expect(confirm).toBeEnabled();
+  await waitFor(() => expect(confirm).toBeEnabled());
   fireEvent.click(confirm);
 }
 
@@ -456,9 +456,9 @@ describe("uninstall", () => {
     expect(alert).toHaveTextContent("请先在相关 agent 中断开");
     expect(uninstallCallsOf(state)).toEqual([{ skillId: "alpha" }]);
     expect(within(dialog).queryByTestId("uninstall-result")).toBeNull();
-    expect(
+    await waitFor(() => expect(
       within(dialog).getByRole("button", { name: "确认卸载" }),
-    ).toBeEnabled();
+    ).toBeEnabled());
   });
 
   it("uninstalls a project skill by its scope-qualified id", async () => {

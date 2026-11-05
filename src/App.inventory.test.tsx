@@ -464,7 +464,7 @@ describe("corrupt lock", () => {
         code: "lock.unsupported_version",
         message: "Skill lock 版本不受支持（v2），需要 v3。",
         detail: "version = 2",
-        hint: "请使用 skills@1.7.4 重建 lock。",
+        hint: "请使用 skills@latest 重建 lock。",
         retryable: false,
       },
     },

@@ -8,7 +8,7 @@
 //! ```
 //!
 //! The test creates a throwaway `HOME` / `XDG_STATE_HOME` and drives the
-//! pinned `npx -y skills@1.7.4` against the small public repository
+//! `npx -y skills@latest` against the small public repository
 //! `mattpocock/skills`:
 //!
 //! install single -> install multiple -> copy install -> re-add (update /
@@ -42,7 +42,7 @@ use skills_box_lib::update::UpdateService;
 /// are real upstream names (hyphenated, lowercase) so the ticket-10
 /// metacharacter rejection is exercised against legitimate input.
 const REPO: &str = "mattpocock/skills";
-const PINNED: &str = "skills@1.7.4";
+const CLI_PACKAGE: &str = "skills@latest";
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// Names used by the sandbox flow. Kept in one place so the non-network test
@@ -211,7 +211,7 @@ impl Sandbox {
         }
         self.sequence += 1;
         let sequence = self.sequence;
-        let mut argv = vec!["-y".to_string(), PINNED.to_string()];
+        let mut argv = vec!["-y".to_string(), CLI_PACKAGE.to_string()];
         argv.extend(args.iter().map(|arg| arg.to_string()));
 
         let display = format!("(cwd {}) npx {}", cwd.display(), argv.join(" "));
@@ -597,19 +597,19 @@ fn assert_installed(rows: &[Value], name: &str, mode: &str, path: &Path) {
 }
 
 #[test]
-#[ignore = "network + real npx skills@1.7.4 sandbox; run explicitly"]
+#[ignore = "network + real npx skills@latest sandbox; run explicitly"]
 fn real_cli_sandbox_install_update_detach_uninstall_and_regression() {
     let mut sbx = Sandbox::new();
     let started = Instant::now();
     sbx.summary_line(&format!(
-        "sandbox real CLI: repo={REPO} pinned={PINNED} home={}",
+        "sandbox real CLI: repo={REPO} package={CLI_PACKAGE} home={}",
         sbx.home.display()
     ));
 
-    // Probe the pinned CLI once so the sandbox npm cache is warm; this also
-    // proves npx resolves the pinned package inside the temp HOME.
+    // Probe the CLI once so the sandbox npm cache is warm; this also
+    // proves npx resolves the latest package inside the temp HOME.
     let version = sbx.cli_retry(&["--version"], "version", 3);
-    assert_eq!(version.stdout.trim(), "1.7.4");
+    assert!(semver::Version::parse(version.stdout.trim()).is_ok());
 
     // Baseline: only the two unmanaged fixtures exist.
     sbx.regress(
@@ -1047,17 +1047,17 @@ fn real_cli_sandbox_install_update_detach_uninstall_and_regression() {
 /// never read because `run_npx` clears the environment and points HOME and
 /// XDG_STATE_HOME inside the sandbox.
 #[test]
-#[ignore = "network + real npx skills@1.7.4 sandbox; run explicitly"]
+#[ignore = "network + real npx skills@latest sandbox; run explicitly"]
 fn real_cli_project_scope_add_and_remove_stay_inside_the_project() {
     let mut sbx = Sandbox::new();
     let started = Instant::now();
     sbx.summary_line(&format!(
-        "sandbox project scope: repo={REPO} pinned={PINNED} home={}",
+        "sandbox project scope: repo={REPO} package={CLI_PACKAGE} home={}",
         sbx.home.display()
     ));
 
     let version = sbx.cli_retry(&["--version"], "project-version", 3);
-    assert_eq!(version.stdout.trim(), "1.7.4");
+    assert!(semver::Version::parse(version.stdout.trim()).is_ok());
 
     let project_raw = sbx.project_root("alpha");
     let other_raw = sbx.project_root("beta");

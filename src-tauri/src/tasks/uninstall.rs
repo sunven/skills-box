@@ -80,7 +80,7 @@ impl UninstallPlan {
 /// synchronously without spawning anything. A lock entry is optional.
 ///
 /// The CLI command itself is built by [`ScopedCli::uninstall`]:
-/// `npx -y skills@1.7.4 remove [-g] -s <name> -y`.
+/// `npx -y skills@latest remove [-g] -s <name> -y`.
 pub fn plan_uninstall(
     paths: &AppPaths,
     layout: &crate::scope_layout::ScopeLayout,
@@ -761,7 +761,7 @@ mod tests {
                 ("CI".to_string(), "true".to_string()),
                 ("DISABLE_TELEMETRY".to_string(), "1".to_string()),
             ]),
-            pinned_version: crate::cli::PINNED_CLI_VERSION.to_string(),
+            pinned_version: crate::cli::CLI_VERSION.to_string(),
         }
     }
 
@@ -802,7 +802,7 @@ mod tests {
         assert_eq!(spec.program, PathBuf::from("/node/bin/npx"));
         assert_eq!(
             spec.args,
-            vec!["-y", "skills@1.7.4", "remove", "-g", "-s", "alpha", "-y"]
+            vec!["-y", "skills@latest", "remove", "-g", "-s", "alpha", "-y"]
         );
         assert_eq!(spec.cwd, PathBuf::from("/app-data/cli-cwd"));
         assert_eq!(spec.env["CI"], "true");
@@ -1206,7 +1206,7 @@ mod execution_tests {
                     ("CI".to_string(), "true".to_string()),
                     ("DISABLE_TELEMETRY".to_string(), "1".to_string()),
                 ]),
-                pinned_version: crate::cli::PINNED_CLI_VERSION.to_string(),
+                pinned_version: crate::cli::CLI_VERSION.to_string(),
             })
         }
     }
@@ -1561,7 +1561,7 @@ mod execution_tests {
         assert_eq!(calls[0].program, PathBuf::from("/node/bin/npx"));
         assert_eq!(
             calls[0].args,
-            vec!["-y", "skills@1.7.4", "remove", "-g", "-s", "alpha", "-y"]
+            vec!["-y", "skills@latest", "remove", "-g", "-s", "alpha", "-y"]
         );
         for forbidden in ["--all", "--copy", "-a", "*", "update", "check"] {
             assert!(
@@ -2088,7 +2088,7 @@ mod execution_tests {
 mod project_uninstall_tests {
     use super::*;
     use crate::baseline::BaselineStore;
-    use crate::cli::{CliRuntime, CliRuntimeProvider, PINNED_CLI_VERSION};
+    use crate::cli::{CLI_VERSION, CliRuntime, CliRuntimeProvider};
     use crate::error::ErrorCode;
     use crate::process::{CancelToken, ExecError, ProcessExecutor};
     use crate::projects::{Project, ProjectRegistry};
@@ -2250,14 +2250,14 @@ mod project_uninstall_tests {
             cwd: PathBuf::from("/app-data/cli-cwd"),
             home: fixture.paths.home().to_path_buf(),
             env: std::collections::BTreeMap::new(),
-            pinned_version: PINNED_CLI_VERSION.to_string(),
+            pinned_version: CLI_VERSION.to_string(),
         };
         let spec =
             ScopedCli::new(&runtime, &fixture.layout()).uninstall("alpha", Duration::from_secs(5));
         assert_eq!(spec.cwd, fixture.root);
         assert_eq!(
             spec.args,
-            vec!["-y", "skills@1.7.4", "remove", "-s", "alpha", "-y"]
+            vec!["-y", "skills@latest", "remove", "-s", "alpha", "-y"]
         );
         for forbidden in ["-g", "-a", "--all", "--copy", "*", "update", "check"] {
             assert!(
@@ -2279,7 +2279,7 @@ mod project_uninstall_tests {
                 cwd: PathBuf::from("/app-data/cli-cwd"),
                 home: PathBuf::from("/tmp/skills-box-home"),
                 env: std::collections::BTreeMap::new(),
-                pinned_version: PINNED_CLI_VERSION.to_string(),
+                pinned_version: CLI_VERSION.to_string(),
             })
         }
     }
@@ -2438,7 +2438,7 @@ mod project_uninstall_tests {
         assert_eq!(calls[0].cwd, fixture.root);
         assert_eq!(
             calls[0].args,
-            vec!["-y", "skills@1.7.4", "remove", "-s", "alpha", "-y"]
+            vec!["-y", "skills@latest", "remove", "-s", "alpha", "-y"]
         );
 
         // Project scope is fully gone, including the extra link.

@@ -84,6 +84,7 @@ impl ToolStatus {
 pub struct CliStatus {
     pub available: bool,
     pub version: Option<String>,
+    /// Requested npm selector; the legacy IPC field name also supports tags.
     pub pinned_version: String,
     pub status: ToolState,
     pub detail: Option<String>,
@@ -109,6 +110,7 @@ pub struct EnvReport {
     pub issues: Vec<AppError>,
     pub warnings: Vec<String>,
     pub checked_at_epoch_ms: u64,
+    /// Requested npm selector, serialized under its existing IPC field name.
     pub pinned_cli_version: String,
 }
 

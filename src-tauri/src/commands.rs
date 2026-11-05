@@ -78,6 +78,20 @@ fn task_event_sink(on_event: Channel<TaskEvent>) -> EventSink {
     })
 }
 
+#[tauri::command]
+pub fn get_cli_commands(state: State<'_, AppState>) -> Vec<crate::cli::commands::CliCommandRecord> {
+    state.cli_commands.records()
+}
+
+#[tauri::command]
+pub async fn preview_cli_commands(
+    state: State<'_, AppState>,
+    scope: ScopeId,
+    request: crate::cli::preview::CliCommandRequest,
+) -> Result<crate::cli::preview::CliCommandPreview, AppError> {
+    state.tasks.preview_cli_commands(scope, request).await
+}
+
 /// Run one read operation under the spec's 30-second hard cap. A stuck local
 /// scan or IPC bridge becomes a retryable `skill.read_timeout` instead of a
 /// spinner that never resolves.
@@ -360,6 +374,7 @@ pub async fn start_install(
     state: State<'_, AppState>,
     scope: ScopeId,
     request: InstallRequest,
+    command_preview_id: Option<String>,
     on_event: Channel<TaskEvent>,
 ) -> Result<TaskId, AppError> {
     // Project install runs in the project root without `-g`.
@@ -374,7 +389,10 @@ pub async fn start_install(
         }
         let _ = on_event.send(event);
     });
-    state.tasks.start_install(scope, request, sink).await
+    state
+        .tasks
+        .start_install_with_preview(scope, request, command_preview_id, sink)
+        .await
 }
 
 #[tauri::command]
@@ -450,10 +468,14 @@ pub async fn start_update(
     state: State<'_, AppState>,
     scope: ScopeId,
     skill_ids: Vec<String>,
+    command_preview_id: Option<String>,
     on_event: Channel<TaskEvent>,
 ) -> Result<TaskId, AppError> {
     let sink = task_event_sink(on_event);
-    state.tasks.start_update(scope, skill_ids, sink).await
+    state
+        .tasks
+        .start_update_with_preview(scope, skill_ids, command_preview_id, sink)
+        .await
 }
 
 /// Resolve the current selected targets into a read-only, server-owned plan.
@@ -591,10 +613,14 @@ pub async fn start_uninstall(
     state: State<'_, AppState>,
     scope: ScopeId,
     skill_id: String,
+    command_preview_id: Option<String>,
     on_event: Channel<TaskEvent>,
 ) -> Result<TaskId, AppError> {
     let sink = task_event_sink(on_event);
-    state.tasks.start_uninstall(scope, skill_id, sink).await
+    state
+        .tasks
+        .start_uninstall_with_preview(scope, skill_id, command_preview_id, sink)
+        .await
 }
 
 /// Open one of the app-data directories (backups / logs / cache / baselines).

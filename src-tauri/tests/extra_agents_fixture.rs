@@ -86,7 +86,7 @@ fn extra_agent_lifecycle_from_install_to_uninstall() {
             cwd: paths.cli_cwd(),
             home: home.clone(),
             env: Default::default(),
-            pinned_version: skills_box_lib::cli::PINNED_CLI_VERSION.to_string(),
+            pinned_version: skills_box_lib::cli::CLI_VERSION.to_string(),
         },
         &layout,
     )

@@ -63,13 +63,24 @@ pub struct AppState {
     pub settings: Arc<settings::SettingsService>,
     pub github_api: update::api::GitHubApiClient,
     pub discovery: discovery::DiscoveryService,
+    pub cli_commands: Arc<cli::commands::CliCommandStore>,
     /// Set by `quit_app` so window/exit events stop preventing the exit.
     pub exiting: AtomicBool,
 }
 
 impl AppState {
     pub fn new(paths: AppPaths) -> Self {
-        let environment = Arc::new(EnvironmentService::from_process(paths.clone()));
+        let cli_commands = Arc::new(cli::commands::CliCommandStore::default());
+        let executor: Arc<dyn process::ProcessExecutor> =
+            Arc::new(cli::commands::ObservedExecutor {
+                executor: Arc::new(TokioExecutor),
+                commands: cli_commands.clone(),
+            });
+        let environment = Arc::new(EnvironmentService::new(env::EnvResolver::new(
+            paths.clone(),
+            executor.clone(),
+            env::EnvResolverConfig::from_process(&paths),
+        )));
         let runtime: Arc<dyn CliRuntimeProvider> = environment.clone();
         let projects = Arc::new(ProjectRegistry::new(paths.clone()));
         let check_states = Arc::new(UpdateCheckStateStore::new(&paths));
@@ -77,7 +88,7 @@ impl AppState {
         let github_api = update::api::GitHubApiClient::new(Arc::clone(&settings));
         let tasks = TaskManager::with_projects(
             runtime.clone(),
-            Arc::new(TokioExecutor),
+            executor.clone(),
             Arc::new(InventoryConflictProvider::new(paths.clone())),
             paths.clone(),
             Arc::clone(&projects),
@@ -94,11 +105,13 @@ impl AppState {
             runtime,
             tasks.clone(),
             github_api.clone(),
+            executor,
         );
         Self {
             app_updates: app_update::AppUpdateService::new(tasks.clone()),
             read_model,
             discovery,
+            cli_commands,
             projects: Arc::clone(&projects),
             updates: UpdateService::new_with_api(
                 paths.clone(),
@@ -146,6 +159,13 @@ pub fn run() {
         // is exposed to the renderer; no save/message/ask permissions.
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            use tauri::Emitter;
+            let handle = app.handle().clone();
+            app.state::<AppState>()
+                .cli_commands
+                .listen(Arc::new(move |record| {
+                    let _ = handle.emit("cli-command", record);
+                }));
             #[cfg(target_os = "macos")]
             {
                 app.handle()
@@ -198,6 +218,8 @@ pub fn run() {
             commands::check_app_update,
             commands::start_app_update,
             commands::get_environment,
+            commands::get_cli_commands,
+            commands::preview_cli_commands,
             commands::get_discovery_state,
             commands::start_discovery_scan,
             commands::acknowledge_discoveries,

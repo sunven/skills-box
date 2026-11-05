@@ -110,7 +110,7 @@ impl EnvResolverConfig {
             search: SearchEnv::from_values(paths.home(), &parent_env),
             node_override: node_override_from_env(&parent_env, cfg!(debug_assertions)),
             parent_env,
-            pinned_cli_version: crate::cli::PINNED_CLI_VERSION.to_string(),
+            pinned_cli_version: crate::cli::CLI_VERSION.to_string(),
             min_node_version: Version::new(22, 20, 0),
             probe_timeout: max,
             login_shell_timeout: crate::timeouts::LOGIN_SHELL_TIMEOUT,
@@ -849,6 +849,11 @@ impl EnvResolver {
             self.config.probe_timeout,
         );
 
+        let mut spec = spec;
+        spec.cli_context = Some(crate::cli::commands::CliCommandContext::background(
+            "environment",
+            None,
+        ));
         let error_status = |detail: String| CliStatus {
             available: false,
             version: None,
@@ -862,7 +867,12 @@ impl EnvResolver {
                 let version = first_nonempty_line(&output.stdout)
                     .map(str::to_string)
                     .unwrap_or_default();
-                if version == pinned {
+                let supported = if pinned == "latest" {
+                    Version::parse(&version).is_ok()
+                } else {
+                    version == pinned
+                };
+                if supported {
                     (
                         CliStatus {
                             available: true,
@@ -1196,7 +1206,7 @@ mod tests {
                 search: self.search.clone(),
                 node_override: None,
                 parent_env: BTreeMap::new(),
-                pinned_cli_version: "1.7.4".to_string(),
+                pinned_cli_version: "latest".to_string(),
                 min_node_version: Version::new(22, 20, 0),
                 probe_timeout: Duration::from_millis(100),
                 login_shell_timeout: Duration::from_millis(50),
@@ -1303,7 +1313,7 @@ mod tests {
                 )
                 .expect(
                     "npx",
-                    &["skills@1.7.4"],
+                    &["skills@latest"],
                     ScriptedResponse::ok(format!("{cli_version}\n")),
                 )
                 .expect(
@@ -1638,7 +1648,7 @@ mod tests {
                 )
                 .expect(
                     "npx",
-                    &["skills@1.7.4"],
+                    &["skills@latest"],
                     ScriptedResponse::fail(1, "network down"),
                 )
                 .expect("npx", &["--version"], ScriptedResponse::ok("11.12.1\n"))
@@ -1662,7 +1672,58 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cli_version_mismatch_maps_to_env_version_unsupported() {
+    async fn latest_cli_accepts_the_resolved_version_without_pinning_execution() {
+        for version in ["1.8.0", "2.0.0"] {
+            let mut fixture = Fixture::new();
+            let node = make_node_bin(&fixture._tmp.path().join("fnm/aliases/default/bin"));
+            let git = make_git(&fixture._tmp.path().join("git-bin"));
+            fixture.search.fnm_bases = vec![fixture._tmp.path().join("fnm")];
+            fixture.search.git_candidates = vec![git.clone()];
+            let executor = Arc::new(standard_executor(
+                &node, "v24.15.0", "11.12.1", version, &git,
+            ));
+            let resolved = fixture
+                .resolver(executor.clone())
+                .resolve_detailed()
+                .await
+                .unwrap();
+
+            assert!(resolved.report.mutations_enabled);
+            assert!(resolved.report.cli.available);
+            assert_eq!(resolved.report.cli.version.as_deref(), Some(version));
+            assert_eq!(resolved.report.cli.pinned_version, "latest");
+            assert_eq!(resolved.cli_runtime.unwrap().pinned_version, "latest");
+            assert!(
+                executor
+                    .calls()
+                    .iter()
+                    .any(|call| call.args == ["-y", "skills@latest", "--version"])
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn latest_cli_rejects_missing_or_invalid_version_output() {
+        for version in ["", "not-a-version"] {
+            let mut fixture = Fixture::new();
+            let node = make_node_bin(&fixture._tmp.path().join("fnm/aliases/default/bin"));
+            let git = make_git(&fixture._tmp.path().join("git-bin"));
+            fixture.search.fnm_bases = vec![fixture._tmp.path().join("fnm")];
+            fixture.search.git_candidates = vec![git.clone()];
+            let executor = Arc::new(standard_executor(
+                &node, "v24.15.0", "11.12.1", version, &git,
+            ));
+            let report = fixture.resolver(executor).resolve().await.unwrap();
+
+            assert_eq!(report.cli.status, ToolState::Error);
+            assert!(!report.cli.available);
+            assert!(!report.mutations_enabled);
+            assert!(issue_codes(&report).contains(&ErrorCode::EnvVersionUnsupported));
+        }
+    }
+
+    #[tokio::test]
+    async fn exact_cli_version_mismatch_maps_to_env_version_unsupported() {
         let mut fixture = Fixture::new();
         let node = make_node_bin(&fixture._tmp.path().join("fnm/aliases/default/bin"));
         let git = make_git(&fixture._tmp.path().join("git-bin"));
@@ -1684,7 +1745,12 @@ mod tests {
                     ScriptedResponse::ok("git version 2.54.0\n"),
                 ),
         );
-        let report = fixture.resolver(executor).resolve().await.unwrap();
+        let mut config = fixture.config();
+        config.pinned_cli_version = "1.7.4".into();
+        let report = EnvResolver::new(fixture.paths.clone(), executor, config)
+            .resolve()
+            .await
+            .unwrap();
 
         assert_eq!(report.cli.status, ToolState::Error);
         assert!(!report.cli.available);
@@ -1831,7 +1897,7 @@ mod tests {
         let cli_call = executor
             .calls()
             .into_iter()
-            .find(|call| call.args.iter().any(|arg| arg.contains("skills@1.7.4")))
+            .find(|call| call.args.iter().any(|arg| arg.contains("skills@latest")))
             .expect("CLI probe must run");
         let node_dir = node.parent().unwrap();
         assert_eq!(cli_call.program, node_dir.join("npx"));
@@ -1925,13 +1991,13 @@ mod tests {
         assert_eq!(runtime.git_dir.as_deref(), git.parent());
         assert_eq!(runtime.cwd, fixture.paths.cli_cwd());
         assert_eq!(runtime.home, fixture.paths.home());
-        assert_eq!(runtime.pinned_version, "1.7.4");
+        assert_eq!(runtime.pinned_version, "latest");
         assert_eq!(runtime.env["CI"], "true");
         assert!(
             runtime.env["PATH"].starts_with(&format!("{}:", node_dir.display())),
             "node bin must lead PATH"
         );
-        assert_eq!(resolved.report.pinned_cli_version, "1.7.4");
+        assert_eq!(resolved.report.pinned_cli_version, "latest");
     }
 
     #[tokio::test]

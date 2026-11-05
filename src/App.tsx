@@ -1,4 +1,5 @@
 import { BatchDialog, type BatchSelection } from "./components/batch-dialog";
+import { useCliCommandSubscription } from "./hooks/use-cli-commands";
 import { DiscoveryPage } from "./components/discovery-page";
 import { useDiscovery } from "./hooks/use-discovery";
 import type { DiscoveryFilter, DiscoveryInstallSeed } from "./lib/discovery";
@@ -89,6 +90,7 @@ const EMPTY_PROJECTS: ProjectEntry[] = [];
 const EMPTY_WARNINGS: string[] = [];
 
 function App() {
+  useCliCommandSubscription();
   const queryClient = useQueryClient();
   const environment = useEnvironmentQuery();
   const recheck = useRecheckEnvironment();

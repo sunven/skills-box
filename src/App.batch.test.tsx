@@ -342,8 +342,8 @@ describe("inventory batch operations", () => {
 
   it("shows backend commands for eligible updates before confirmation", async () => {
     const commands: Record<string, string> = {
-      alpha: "npx -y skills@1.7.4 add 'team/skills#release/v2' -g -s alpha -a claude-code -a universal -y --json",
-      gamma: "npx -y skills@1.7.4 add other/skills -g -s gamma -a universal -y --json",
+      alpha: "npx -y skills@latest add 'team/skills#release/v2' -g -s alpha -a claude-code -a universal -y --json",
+      gamma: "npx -y skills@latest add other/skills -g -s gamma -a universal -y --json",
     };
     const backend = setup({
       data: {

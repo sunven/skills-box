@@ -40,7 +40,7 @@ export function resolveInitialScope(
   return entry?.available ? stored : GLOBAL_SCOPE;
 }
 
-/** The pinned CLI always writes the canonical store under `.agents/skills`. */
+/** The CLI writes the canonical store under `.agents/skills`. */
 export function projectCanonicalPath(root: string): string {
   return `${root.replace(/\/+$/, "")}/.agents/skills`;
 }

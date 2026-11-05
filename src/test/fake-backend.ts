@@ -11,6 +11,7 @@ import type {
   DiscoveryProgress,
 } from "../lib/discovery";
 import { initialAppUpdate, type AppUpdateSnapshot } from "../lib/app-update";
+import { mergeCommandRecord, type CliCommandRecord, type CliCommandRequest, type CliCommandPreview } from "../lib/cli-commands";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import type { Channel } from "@tauri-apps/api/core";
 import type { ApiCommand } from "../lib/api";
@@ -60,6 +61,8 @@ type Factory<T> = T | (() => T);
 type MaybePromise<T> = T | Promise<T>;
 
 export interface FakeCommandContract {
+  get_cli_commands: { args: Record<string, never>; result: CliCommandRecord[] };
+  preview_cli_commands: { args: { scope: ScopeId; request: CliCommandRequest }; result: CliCommandPreview };
   preview_batch: {
     args: { scope: ScopeId; request: BatchRequest };
     result: BatchPreview;
@@ -154,6 +157,7 @@ export interface FakeCommandContract {
   start_install: {
     args: {
       request: InstallRequest;
+      commandPreviewId?: string;
       scope: ScopeId;
       onEvent: Channel<TaskEvent>;
     };
@@ -172,7 +176,7 @@ export interface FakeCommandContract {
     result: Record<string, UpdateCheckState>;
   };
   start_update: {
-    args: { skillIds: string[]; scope: ScopeId; onEvent: Channel<TaskEvent> };
+    args: { skillIds: string[]; scope: ScopeId; onEvent: Channel<TaskEvent>; commandPreviewId?: string };
     result: string;
   };
   detach_agent: {
@@ -193,7 +197,7 @@ export interface FakeCommandContract {
     result: RemoveExtraAgentResult;
   };
   start_uninstall: {
-    args: { skillId: string; scope: ScopeId; onEvent: Channel<TaskEvent> };
+    args: { skillId: string; scope: ScopeId; onEvent: Channel<TaskEvent>; commandPreviewId?: string };
     result: string;
   };
   reveal_app_data: { args: { kind: AppDataKind }; result: void };
@@ -398,6 +402,49 @@ export function createFakeBackend(
       : 80;
   const autoTasks = Boolean(options.autoTasks);
   let taskCounter = 0;
+  let cliRecords: CliCommandRecord[] = [];
+  const taskCommands = new Map<string, { scope: ScopeId; commands: string[] }>();
+  const publishCommand = (record: CliCommandRecord) => {
+    cliRecords = mergeCommandRecord(cliRecords, record);
+    window.dispatchEvent(new CustomEvent("cli-command", { detail: record }));
+  };
+  const quoteCommand = (value: string) => /^[a-zA-Z0-9_./:@%+=,-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
+  const commandFor = (scope: ScopeId, args: string[]) => {
+    const root = projectList.projects.find((project) => projectScope(project.id) === scope)?.root ?? "/Users/sunven/Library/Application Support/com.sunven.skills-box/cli-cwd";
+    const npx = factoryValue(data.environment).npx.path ?? "/usr/local/bin/npx";
+    return `cd ${quoteCommand(root)} && ${[npx, "-y", "skills@latest", ...args].map(quoteCommand).join(" ")}`;
+  };
+  const cliPreview = (scope: ScopeId, request: CliCommandRequest): CliCommandPreview => {
+    const snapshot = snapshotFor(scope);
+    const globalArgs = scope === GLOBAL_SCOPE ? ["-g"] : [];
+    const installArgs = (source: string, names: string[], agents: string[]) => ["add", source, ...globalArgs, ...names.flatMap((name) => ["-s", name]), ...agents.flatMap((id) => ["-a", id]), "-y", "--json"];
+    let entries: CliCommandPreview["entries"];
+    if (request.action === "preview") {
+      const source = request.source.trim();
+      entries = [{ name: source, command: commandFor(scope, ["add", source, "-l", ...globalArgs]), reason: null }];
+    } else if (request.action === "install") {
+      const agents = request.request.agents.filter((id) => { const agent = snapshot.agents.find((agent) => agent.id === id); return id !== "universal" && id !== "codex" && (agent === undefined || agent.origin === "catalog") && !agent?.universal; });
+      entries = [{ name: request.request.skills.join("、"), command: commandFor(scope, installArgs(request.request.source, request.request.skills, [...agents, "universal"])), reason: null }];
+    } else if (request.action === "update") {
+      entries = request.skills.map((name) => {
+        const skill = snapshot.skills.find((skill) => skill.id === name || skill.name === name);
+        const update = reportFor(scope).skills.find((skill) => skill.name === name);
+        const source = `${update?.source ?? skill?.source ?? "acme/skills"}${update?.ref ? `#${update.ref}` : ""}`;
+        const agents = [...new Set((skill?.attachments ?? []).filter((a) => { const agent = snapshot.agents.find((agent) => agent.id === a.agentId); return !agent?.universal && (agent === undefined || agent.origin === "catalog") && (a.mode === "link" || a.mode === "copy"); }).map((a) => a.agentId))].sort();
+        return { name, command: commandFor(scope, installArgs(source, [skill?.name ?? name], [...agents, "universal"])), reason: null };
+      });
+    } else {
+      const skill = snapshot.skills.find((skill) => skill.id === request.skill || skill.name === request.skill);
+      const name = skill?.name ?? request.skill.split("/").slice(-1)[0]!;
+      entries = [{ name, command: skill?.management === "unmanaged" ? null : commandFor(scope, ["remove", ...globalArgs, "-s", name, "-y"]), reason: null }];
+    }
+    return { id: JSON.stringify([scope, request.action, entries]), entries };
+  };
+  const prepareTaskCommands = (scope: ScopeId, request: CliCommandRequest, expected?: string) => {
+    const preview = cliPreview(scope, request);
+    if (expected !== undefined && expected !== preview.id) throw { code: "cli.command_changed", message: "执行命令已变化，请查看刷新后的命令并再次执行。", retryable: true } satisfies AppError;
+    return { scope, commands: preview.entries.flatMap((entry) => entry.command ? [entry.command] : []) };
+  };
   const installSources = new Map<string, string>();
   let batchPreviewCounter = 0;
   const pendingCopyProjects = new Map<string, ProjectEntry>();
@@ -431,6 +478,17 @@ export function createFakeBackend(
       channel,
       emit(event) {
         if (!tasks.includes(task)) return;
+        const invocation = taskCommands.get(task.taskId);
+        if (invocation && (event.phase === "running_cli" || event.phase === "cloning")) {
+          invocation.commands.forEach((command, index) => {
+            if (index !== (event.completed ?? 0)) return;
+            const id = `${task.taskId}:${index}`;
+            if (!cliRecords.some((record) => record.id === id)) publishCommand({ id, command, context: { origin: "task", scope: invocation.scope, taskId: task.taskId, source: null }, status: "running", startedAt: Date.now() });
+          });
+        }
+        if (["completed", "failed", "cancelled"].includes(event.phase)) {
+          cliRecords.filter((record) => record.context.taskId === task.taskId && record.status === "running").forEach((record) => publishCommand({ ...record, status: event.phase === "completed" ? "succeeded" : event.phase === "cancelled" ? "cancelled" : "failed" }));
+        }
         if (
           event.phase === "completed" ||
           event.phase === "failed" ||
@@ -478,7 +536,7 @@ export function createFakeBackend(
       window.setTimeout(() => {
         task.emit({
           taskId: task.taskId,
-          phase: kind === "preview" ? "cloning" : "preparing",
+          phase: kind === "preview" ? "cloning" : "running_cli",
           message: kind === "preview" ? "正在读取仓库…" : "正在准备写入…",
           completed: 0,
           total,
@@ -487,6 +545,9 @@ export function createFakeBackend(
     );
     timers.add(
       window.setTimeout(() => {
+        if (kind === "update") {
+          names.slice(1).forEach((name, index) => task.emit({ taskId: task.taskId, phase: "running_cli", message: `正在更新 ${name}`, skill: name, completed: index + 1, total }));
+        }
         if (kind === "install") installInto(scope, names);
         if (kind === "update") updateInto(scope, names);
         if (kind === "uninstall") uninstallFrom(scope, names);
@@ -1190,21 +1251,10 @@ export function createFakeBackend(
                   ? "没有可用更新。"
                   : null;
           if (target.reason === null && result) {
-            const quote = (value: string) => /^[a-zA-Z0-9_./:@%+=,-]+$/.test(value)
-              ? value : `'${value.replace(/'/g, "'\\''")}'`;
-            const source = `${result.source ?? skill.source}${result.ref ? `#${result.ref}` : ""}`;
-            const agentIds = [...new Set(skill.attachments.filter((attachment) => {
-              const agent = snapshot.agents.find((agent) => agent.id === attachment.agentId);
-              return agent?.origin === "catalog" && !agent.universal &&
-                (attachment.mode === "link" || attachment.mode === "copy");
-            }).map((attachment) => attachment.agentId))].sort();
-            const args = ["npx", "-y", `skills@${factoryValue(data.environment).pinnedCliVersion}`,
-              "add", source, ...(scope === GLOBAL_SCOPE ? ["-g"] : []), "-s", skill.name,
-              ...[...agentIds, "universal"].flatMap((id) => ["-a", id]), "-y", "--json"];
-            const root = projectList.projects.find((project) => projectScope(project.id) === scope)?.root;
-            target.command = `${root ? `cd ${quote(root)} && ` : ""}${args.map(quote).join(" ")}`;
+            target.command = cliPreview(scope, { action: "update", skills: [skill.name] }).entries[0]?.command ?? undefined;
           }
         } else if (request.action === "uninstall") {
+          target.command = cliPreview(scope, { action: "uninstall", skill: skill.id }).entries[0]?.command ?? undefined;
           target.paths = [
             skill.canonicalPath,
             ...skill.attachments.map((attachment) => attachment.path),
@@ -1281,6 +1331,12 @@ export function createFakeBackend(
           });
           continue;
         }
+        const invocation: CliCommandRecord | null = target.command ? {
+          id: `${task.taskId}:${index}`, command: target.command,
+          context: { origin: "task", scope: preview.scope, taskId: task.taskId, source: null },
+          status: "running", startedAt: Date.now(),
+        } : null;
+        if (invocation) publishCommand(invocation);
         let failure: AppError | null = null;
         try {
           if (preview.action === "update")
@@ -1311,6 +1367,7 @@ export function createFakeBackend(
           failure = cause as AppError;
           if (target.operation === "copy") failedCopies.add(target.name);
         }
+        if (invocation) publishCommand({ ...invocation, status: failure ? "failed" : "succeeded" });
         rows.push({
           ...target,
           status: failure ? "failed" : "success",
@@ -1499,7 +1556,20 @@ export function createFakeBackend(
       return data.appUpdate;
     },
     get_discovery_state: () => data.discovery,
-    start_discovery_scan: () => data.discovery.progress,
+    start_discovery_scan: () => {
+      const now = Date.now();
+      const sources = data.discovery.sources.map((source) => {
+        if ((!source.needsRevalidation && source.lastSuccessAt !== null) || (source.pausedUntil !== null && source.pausedUntil > now)) return source;
+        const preview = cliPreview(GLOBAL_SCOPE, { action: "preview", source: source.source });
+        const record: CliCommandRecord = { id: `discovery:${source.source}:${now}`, command: preview.entries[0]!.command!,
+          context: { origin: "discovery", scope: GLOBAL_SCOPE, taskId: null, source: source.source }, status: "running", startedAt: now };
+        publishCommand(record);
+        publishCommand({ ...record, status: source.error ? "failed" : "succeeded" });
+        return { ...source, lastAttemptAt: now, lastSuccessAt: source.error ? source.lastSuccessAt : now, needsRevalidation: Boolean(source.error) };
+      });
+      data = { ...data, discovery: { ...data.discovery, sources } };
+      return data.discovery.progress;
+    },
     acknowledge_discoveries: ({ ids }) => {
       updateDiscovery((s) =>
         !ids ||
@@ -1558,7 +1628,13 @@ export function createFakeBackend(
         data.githubSettings.effectiveSource === "anonymous" ? 59 : 4_999,
       resetAtEpochMs: Date.now() + 3_600_000,
     }),
-    get_environment: () => factoryValue(data.environment),
+    get_cli_commands: () => cliRecords,
+    preview_cli_commands: ({ scope, request }) => cliPreview(scope, request),
+    get_environment: ({ refresh }) => {
+      const report = factoryValue(data.environment);
+      if (report.cli.status !== "not_checked" && (refresh || !cliRecords.some((record) => record.context.origin === "environment"))) publishCommand({ id: `env-${Date.now()}`, command: commandFor(GLOBAL_SCOPE, ["--version"]), context: { origin: "environment", scope: GLOBAL_SCOPE, taskId: null, source: null }, status: report.cli.available ? "succeeded" : "failed", startedAt: Date.now() });
+      return report;
+    },
     list_projects: () => ({
       ...projectList,
       projects: sortProjects(projectList.projects),
@@ -1576,8 +1652,10 @@ export function createFakeBackend(
     read_skill_file: ({ skillId, path }) => data.readFile(skillId, path),
     open_skill_file: () => undefined,
     open_external_url: () => undefined,
-    start_preview: ({ scope, onEvent }) => {
+    start_preview: ({ source, scope, onEvent }) => {
+      const commands = prepareTaskCommands(scope, { action: "preview", source });
       const task = makeTask("start_preview", onEvent);
+      taskCommands.set(task.taskId, commands);
       scheduleAutoTask(task, "preview", [], scope);
       return task.taskId;
     },
@@ -1605,8 +1683,10 @@ export function createFakeBackend(
     },
     dismiss_interrupted_mutation: () => undefined,
     quit_app: () => undefined,
-    start_install: ({ request, scope, onEvent }) => {
+    start_install: ({ request, scope, onEvent, commandPreviewId }) => {
+      const commands = prepareTaskCommands(scope, { action: "install", request }, commandPreviewId);
       const task = makeTask("start_install", onEvent);
+      taskCommands.set(task.taskId, commands);
       installSources.set(
         task.taskId,
         request.source.startsWith("https://")
@@ -1652,8 +1732,10 @@ export function createFakeBackend(
     },
     get_update_check_state: ({ scope }) => checkStateFor(scope),
     get_update_check_states: () => allCheckStates(),
-    start_update: ({ skillIds, scope, onEvent }) => {
+    start_update: ({ skillIds, scope, onEvent, commandPreviewId }) => {
+      const commands = prepareTaskCommands(scope, { action: "update", skills: skillIds }, commandPreviewId);
       const task = makeTask("start_update", onEvent);
+      taskCommands.set(task.taskId, commands);
       scheduleAutoTask(task, "update", skillIds, scope);
       return task.taskId;
     },
@@ -1665,7 +1747,7 @@ export function createFakeBackend(
     update_extra_agent: ({ agentId, projectSkillsDir }) =>
       updateExtra(agentId, projectSkillsDir),
     remove_extra_agent: ({ agentId }) => removeExtra(agentId),
-    start_uninstall: ({ skillId, scope, onEvent }) => {
+    start_uninstall: ({ skillId, scope, onEvent, commandPreviewId }) => {
       // Rust resolves the name with `ScopeId::parse_skill_id`, so a project
       // uninstall must carry the scope-qualified id or it is rejected.
       if (scope !== GLOBAL_SCOPE && !skillId.startsWith(`${scope}/`)) {
@@ -1675,7 +1757,9 @@ export function createFakeBackend(
           retryable: false,
         } satisfies AppError;
       }
+      const commands = prepareTaskCommands(scope, { action: "uninstall", skill: skillId }, commandPreviewId);
       const task = makeTask("start_uninstall", onEvent);
+      taskCommands.set(task.taskId, commands);
       scheduleAutoTask(task, "uninstall", [skillId], scope);
       return task.taskId;
     },
@@ -1734,6 +1818,9 @@ export function createFakeBackend(
       return backend;
     },
     reset() {
+      cliRecords = [];
+      taskCommands.clear();
+      installSources.clear();
       batchPreviews.clear();
       pendingCopyProjects.clear();
       batchRuns.clear();

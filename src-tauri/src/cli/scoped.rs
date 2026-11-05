@@ -1,4 +1,4 @@
-//! The pinned CLI's commands and execution scope.
+//! The CLI's commands and execution scope.
 //!
 //! The same layout used for local backup and verification chooses both cwd
 //! and `-g`. Plans contain semantic operation data, never another execution
@@ -11,7 +11,7 @@ use crate::paths::AppPaths;
 use crate::process::CommandSpec;
 use crate::scope_layout::ScopeLayout;
 
-use super::{CliRuntime, PINNED_CLI_VERSION};
+use super::{CLI_VERSION, CliRuntime};
 
 pub struct ScopedCli<'a> {
     runtime: &'a CliRuntime,
@@ -43,7 +43,7 @@ impl<'a> ScopedCli<'a> {
         self.command(args, &self.runtime.cwd, timeout)
     }
 
-    /// Read-only display of the same pinned arguments used by Install/Update.
+    /// Read-only display of the same arguments used by Install/Update.
     /// A project command includes its cwd so the displayed line is copyable.
     pub fn install_preview(
         layout: &ScopeLayout,
@@ -51,13 +51,7 @@ impl<'a> ScopedCli<'a> {
         skills: &[String],
         agent_ids: &[String],
     ) -> String {
-        let args = install_args(
-            PINNED_CLI_VERSION,
-            layout.is_global(),
-            source,
-            skills,
-            agent_ids,
-        );
+        let args = install_args(CLI_VERSION, layout.is_global(), source, skills, agent_ids);
         let command = std::iter::once("npx".to_string())
             .chain(args.iter().map(|arg| shell_quote(arg)))
             .collect::<Vec<_>>()
@@ -157,7 +151,7 @@ fn shell_quote(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::PINNED_CLI_VERSION;
+    use crate::cli::CLI_VERSION;
     use crate::projects::Project;
     use std::collections::BTreeMap;
     use std::fs;
@@ -176,7 +170,7 @@ mod tests {
                 ("DISABLE_TELEMETRY".to_string(), "1".to_string()),
                 ("PATH".to_string(), "/node/bin:/usr/bin:/bin".to_string()),
             ]),
-            pinned_version: PINNED_CLI_VERSION.to_string(),
+            pinned_version: CLI_VERSION.to_string(),
         }
     }
 
@@ -205,7 +199,7 @@ mod tests {
     }
 
     #[test]
-    fn preview_command_is_pinned_and_read_only() {
+    fn preview_command_uses_latest_and_is_read_only() {
         let (_tmp, paths, layout) = fixture(false);
         let runtime = runtime(&paths);
         let spec = ScopedCli::new(&runtime, &layout).preview(
@@ -216,7 +210,7 @@ mod tests {
         assert_eq!(spec.program, PathBuf::from("/node/bin/npx"));
         assert_eq!(
             spec.args,
-            vec!["-y", "skills@1.7.4", "add", "owner/repo", "-l", "-g"]
+            vec!["-y", "skills@latest", "add", "owner/repo", "-l", "-g"]
         );
         assert_eq!(spec.cwd, paths.cli_cwd());
         assert_eq!(spec.env, runtime.env);
@@ -247,7 +241,7 @@ mod tests {
             );
             let display = ScopedCli::install_preview(&layout, source, &skills, &agents);
             let expected = format!(
-                "{}npx -y skills@1.7.4 add 'owner/repo#release/v2'{} -s alpha -a claude-code -a universal -y --json",
+                "{}npx -y skills@latest add 'owner/repo#release/v2'{} -s alpha -a claude-code -a universal -y --json",
                 if project {
                     format!("cd {} && ", spec.cwd.display())
                 } else {
@@ -289,7 +283,7 @@ mod tests {
         );
         assert_eq!(
             spec.args,
-            vec!["-y", "skills@1.7.4", "add", "owner/repo", "-l"]
+            vec!["-y", "skills@latest", "add", "owner/repo", "-l"]
         );
         assert_eq!(spec.cwd, layout.root);
         assert!(!spec.args.iter().any(|arg| arg == "-g"));

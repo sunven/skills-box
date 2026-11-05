@@ -10,6 +10,7 @@ import {
   toolTone,
 } from "../lib/environment-display";
 import type { EnvReport } from "../lib/types";
+import { ActualCliCommands } from "./cli-command-display";
 
 interface EnvironmentMetricsProps {
   report?: EnvReport;
@@ -84,6 +85,10 @@ export function EnvironmentMetrics({ report }: EnvironmentMetricsProps) {
           <span>{row.label}</span>
         </div>
       ))}
+      <details className="env-cli-command">
+        <summary>CLI 调用记录</summary>
+        <ActualCliCommands origin="environment" />
+      </details>
     </div>
   );
 }

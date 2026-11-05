@@ -24,7 +24,7 @@ impl CliRuntimeProvider for Runtime {
             cwd: self.paths.cli_cwd(),
             home: self.paths.home().into(),
             env: BTreeMap::new(),
-            pinned_version: "1.7.4".into(),
+            pinned_version: "latest".into(),
         })
     }
 }
@@ -1303,6 +1303,7 @@ async fn changes_during_backup_skip_cli_and_native_writers_and_keep_snapshot() {
                 fs::write(&edit_path, "changed after backup").unwrap();
             }),
             set_cancellable: Arc::new(|_| {}),
+            expected_commands: None,
         };
         match session::run(ctx, action, prepared).await {
             FinishOutcome::Completed(result, _) => {
@@ -1489,7 +1490,7 @@ async fn update_runs_each_clean_candidate_and_does_not_expand_original_skips() {
     assert!(!p.targets[1].eligible);
     assert_eq!(
         p.targets[0].command.as_deref(),
-        Some("npx -y skills@1.7.4 add vercel-labs/skills -g -s alpha -a universal -y --json")
+        Some(format!("cd {} && /test/node/npx -y skills@latest add vercel-labs/skills -g -s alpha -a universal -y --json", f.paths.cli_cwd().display()).as_str())
     );
     assert!(p.targets[1].command.is_none());
     let paths = f.paths.clone();
@@ -1527,7 +1528,7 @@ async fn update_runs_each_clean_candidate_and_does_not_expand_original_skips() {
             .unwrap();
         assert_eq!(
             preview.command.as_deref(),
-            Some(format!("npx {}", spec.args.join(" ")).as_str())
+            Some(crate::cli::commands::display_command(spec).as_str())
         );
     }
     assert_eq!(

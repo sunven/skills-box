@@ -27,6 +27,7 @@ export interface MutationResultProps {
   onRetryRow?: (name: string) => void;
   warningsTestId?: string;
   disabled?: boolean;
+  renderRetry?: (names: string[], label: string) => ReactNode;
 }
 
 function toneClass(status: MutationRowStatus): string {
@@ -59,6 +60,7 @@ export function MutationResult({
   onRetryRow,
   warningsTestId,
   disabled = false,
+  renderRetry,
 }: MutationResultProps) {
   const [revealError, setRevealError] = useState<string | null>(null);
   const retryNames = result.rows
@@ -113,7 +115,7 @@ export function MutationResult({
               <span className={`shrink-0 ${toneClass(row.status)}`}>
                 {row.statusLabel}
               </span>
-              {onRetryRow && retryableRow(row, retryMode) ? (
+              {onRetryRow && !renderRetry && retryableRow(row, retryMode) ? (
                 <Button
                   variant="ghost"
                   size="sm"
@@ -141,6 +143,7 @@ export function MutationResult({
                 备份：{row.backupPath}
               </p>
             ) : null}
+            {renderRetry && retryableRow(row, retryMode) ? renderRetry([row.name], "重试") : null}
           </li>
         ))}
       </ul>
@@ -199,7 +202,7 @@ export function MutationResult({
               </Button>
             </>
           ) : null}
-          {onRetry && retryNames.length > 0 ? (
+          {onRetry && !renderRetry && retryNames.length > 0 ? (
             <Button
               variant="ghost"
               size="sm"
@@ -211,6 +214,7 @@ export function MutationResult({
           ) : null}
         </div>
       ) : null}
+      {renderRetry && retryNames.length > 0 ? renderRetry(retryNames, "重试失败项") : null}
       {revealError ? (
         <p className="mt-1.5 text-[12px] text-destructive">{revealError}</p>
       ) : null}

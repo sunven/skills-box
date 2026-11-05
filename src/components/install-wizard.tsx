@@ -1,4 +1,6 @@
 import type { DiscoveryInstallSeed } from "../lib/discovery";
+import { useCliCommandPreview } from "../hooks/use-cli-commands";
+import { ActualCliCommands, CliPreviewStatus, CliRetryControl } from "./cli-command-display";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, PackageOpen, X } from "lucide-react";
 import { Button } from "./ui/button";
@@ -156,6 +158,7 @@ export function InstallWizard({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [manualInput, setManualInput] = useState("");
   const [selectedAgents, setSelectedAgents] = useState<Set<string>>(new Set());
+  const retryAttemptRef = useRef(false);
 
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -358,6 +361,13 @@ export function InstallWizard({
   );
 
   const writingLocked = !installMutation.canClose();
+  const sourceCommandPreview = useCliCommandPreview(scope, open && step === 1 && sourceInput.trim() ? { action: "preview", source: sourceInput.trim() } : null);
+  const installCommandPreview = useCliCommandPreview(scope, open && step === 4 && preview && effectiveNames.length > 0 ? {
+    action: "install", request: { source: preview.source, skills: effectiveNames, agents: Array.from(selectedAgents) },
+  } : null);
+  useEffect(() => {
+    if ((installState.startError ?? installState.error)?.code === "cli.command_changed" && !retryAttemptRef.current) setStep(4);
+  }, [installState.startError, installState.error]);
 
   const handlePreview = () => {
     if (previewRunning || installRunning) return;
@@ -368,6 +378,7 @@ export function InstallWizard({
       );
       return;
     }
+    if (!sourceCommandPreview.data || sourceCommandPreview.isFetching || sourceCommandPreview.isError) return;
     resetPreviewSelection();
     void previewMutation.start(
       taskEventDriver({
@@ -378,11 +389,12 @@ export function InstallWizard({
     );
   };
 
-  const handleStartInstall = (names: string[], retry = false) => {
-    if (seedIssue || !preview || installRunning || previewRunning || names.length === 0) {
+  const handleStartInstall = (names: string[], retry = false, commandPreviewId = installCommandPreview.data?.id) => {
+    if (seedIssue || !preview || !commandPreviewId || installRunning || previewRunning || names.length === 0) {
       return;
     }
     const requestAgents = Array.from(selectedAgents);
+    retryAttemptRef.current = retry;
     lastInstallRef.current = names;
     setStep(5);
     // `retry` is only set by the explicit retry buttons. A plain install
@@ -401,6 +413,7 @@ export function InstallWizard({
             },
             onEvent,
             scope,
+            commandPreviewId,
           ),
       }),
     );
@@ -565,7 +578,7 @@ export function InstallWizard({
                 />
                 <Button
                   onClick={() => void handlePreview()}
-                  disabled={previewRunning || installRunning}
+                  disabled={previewRunning || installRunning || (Boolean(sourceInput.trim()) && (!sourceCommandPreview.data || sourceCommandPreview.isFetching || sourceCommandPreview.isError))}
                   className="shrink-0"
                 >
                   预览仓库
@@ -577,6 +590,8 @@ export function InstallWizard({
 
               <MutationError error={previewState.startError} showCode />
               <MutationError error={previewState.error} />
+              <CliPreviewStatus preview={sourceCommandPreview} />
+              <ActualCliCommands taskId={previewState.taskId} />
 
               {previewRunning ? (
                 <MutationProgress
@@ -602,6 +617,12 @@ export function InstallWizard({
             </>
           ) : null}
 
+          {step > 1 && step < 5 && previewState.taskId ? (
+            <details className="mb-3 text-xs text-muted-foreground">
+              <summary className="cursor-pointer">来源预览调用</summary>
+              <ActualCliCommands taskId={previewState.taskId} />
+            </details>
+          ) : null}
           {step === 2 && preview ? (
             <>
               <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[12.5px]">
@@ -854,6 +875,8 @@ export function InstallWizard({
 
           {step === 4 && preview ? (
             <div data-testid="install-confirm">
+              <MutationError error={installState.startError ?? installState.error} testId="install-start-error" />
+              <CliPreviewStatus preview={installCommandPreview} />
               <dl className="panel-well summary-list">
                 <dt>作用域</dt>
                 <dd>
@@ -907,6 +930,7 @@ export function InstallWizard({
 
           {step === 5 ? (
             <>
+              <ActualCliCommands taskId={installState.taskId} />
               {installRunning ? (
                 <>
                   <MutationProgress
@@ -949,6 +973,7 @@ export function InstallWizard({
                 testId="install-start-error"
               />
               <MutationError error={installState.error} testId="install-error" />
+              {!installResult && (installState.startError || installState.error) && lastInstall && preview ? <CliRetryControl scope={scope} request={{ action: "install", request: { source: preview.source, skills: lastInstall, agents: Array.from(selectedAgents), retry: true } }} label="重试" disabled={installRunning} onExecute={(id) => handleStartInstall(lastInstall, true, id)} /> : null}
 
               {installResult ? (
                 <MutationResult
@@ -963,6 +988,7 @@ export function InstallWizard({
                   onRetryRow={(name) => handleStartInstall([name], true)}
                   warningsTestId="install-warnings"
                   disabled={installRunning}
+                  renderRetry={(names, label) => <CliRetryControl scope={scope} request={{ action: "install", request: { source: preview!.source, skills: names, agents: Array.from(selectedAgents), retry: true } }} label={label} disabled={installRunning} onExecute={(id) => handleStartInstall(names, true, id)} />}
                 />
               ) : null}
             </>
@@ -1007,7 +1033,7 @@ export function InstallWizard({
                 <Button
                   size="sm"
                   onClick={() => void handleStartInstall(effectiveNames)}
-                  disabled={installRunning || effectiveNames.length === 0}
+                  disabled={installRunning || effectiveNames.length === 0 || !installCommandPreview.data || installCommandPreview.isFetching || installCommandPreview.isError}
                 >
                   开始安装
                 </Button>
@@ -1015,17 +1041,6 @@ export function InstallWizard({
             ) : null}
             {step === 5 && !installRunning ? (
               <>
-                {installState.error && lastInstall ? (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() =>
-                      void handleStartInstall(lastInstall, true)
-                    }
-                  >
-                    重试
-                  </Button>
-                ) : null}
                 {installState.error || installCancelled ? (
                   <Button variant="ghost" size="sm" onClick={() => setStep(4)}>
                     返回确认

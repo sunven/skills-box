@@ -1,4 +1,5 @@
 import type { BatchRequest, BatchPreview, BatchConfirmation } from "./batch";
+import type { CliCommandRequest, CliCommandPreview, CliCommandRecord } from "./cli-commands";
 import type {
   DiscoveryId,
   DiscoveryState,
@@ -45,6 +46,8 @@ export const API_COMMANDS = {
   setDiscoveryIgnored: "set_discovery_ignored",
   invalidateDiscoverySource: "invalidate_discovery_source",
   getEnvironment: "get_environment",
+  getCliCommands: "get_cli_commands",
+  previewCliCommands: "preview_cli_commands",
   getGitHubSettings: "get_github_settings",
   saveGitHubToken: "save_github_token",
   clearGitHubToken: "clear_github_token",
@@ -91,6 +94,13 @@ export type ApiCommand = (typeof API_COMMANDS)[keyof typeof API_COMMANDS];
  */
 export function getEnvironment(refresh = false): Promise<EnvReport> {
   return invoke<EnvReport>(API_COMMANDS.getEnvironment, { refresh });
+}
+
+export function getCliCommands(): Promise<CliCommandRecord[]> {
+  return invoke<CliCommandRecord[]>(API_COMMANDS.getCliCommands);
+}
+export function previewCliCommands(scope: ScopeId, request: CliCommandRequest): Promise<CliCommandPreview> {
+  return invoke<CliCommandPreview>(API_COMMANDS.previewCliCommands, { scope, request });
 }
 
 export function getGitHubSettings(): Promise<GitHubSettingsStatus> {
@@ -258,11 +268,13 @@ export function startInstall(
   request: InstallRequest,
   onEvent: (event: TaskEvent) => void,
   scope: ScopeId,
+  commandPreviewId?: string,
 ): Promise<string> {
   const channel = new Channel<TaskEvent>();
   channel.onmessage = onEvent;
   return invoke<string>(API_COMMANDS.startInstall, {
     request,
+    commandPreviewId,
     scope,
     onEvent: channel,
   });
@@ -312,11 +324,13 @@ export function startUpdate(
   skillIds: string[],
   onEvent: (event: TaskEvent) => void,
   scope: ScopeId,
+  commandPreviewId?: string,
 ): Promise<string> {
   const channel = new Channel<TaskEvent>();
   channel.onmessage = onEvent;
   return invoke<string>(API_COMMANDS.startUpdate, {
     skillIds,
+    commandPreviewId,
     scope,
     onEvent: channel,
   });
@@ -394,11 +408,13 @@ export function startUninstall(
   skillId: string,
   onEvent: (event: TaskEvent) => void,
   scope: ScopeId,
+  commandPreviewId?: string,
 ): Promise<string> {
   const channel = new Channel<TaskEvent>();
   channel.onmessage = onEvent;
   return invoke<string>(API_COMMANDS.startUninstall, {
     skillId,
+    commandPreviewId,
     scope,
     onEvent: channel,
   });

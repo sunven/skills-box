@@ -22,6 +22,8 @@ import {
 } from "../lib/inventory-view";
 import { taskEventDriver, useMutation } from "../lib/mutation";
 import type { ScopeId } from "../lib/types";
+import { useCliCommandPreview } from "../hooks/use-cli-commands";
+import { ActualCliCommands, CliPreviewStatus, CliRetryControl } from "./cli-command-display";
 
 interface UpdateDialogProps {
   open: boolean;
@@ -42,6 +44,7 @@ export function UpdateDialog({
   onCloseRef.current = onClose;
 
   const [confirmed, setConfirmed] = useState(false);
+  const [attemptNames, setAttemptNames] = useState<string[] | null>(null);
 
   const mutation = useMutation({
     action: "update",
@@ -74,30 +77,37 @@ export function UpdateDialog({
     singleAffectedAgents,
     copyCandidates,
   } = view;
+  const executionNames = attemptNames ?? initialNames;
+  const commandPreview = useCliCommandPreview(scope, open && !running && !result && executionNames.length > 0 ? { action: "update", skills: executionNames } : null);
   const canStart =
     !running &&
-    initialNames.length > 0 &&
-    (!singleNeedsConfirmation || confirmed);
+    executionNames.length > 0 &&
+    (!singleNeedsConfirmation || confirmed) && !!commandPreview.data && !commandPreview.isFetching && !commandPreview.isError;
 
   const launch = useCallback(
-    (names: string[]) => {
-      if (names.length === 0 || mutation.stateRef.current.running) return;
+    (names: string[], previewId = commandPreview.data?.id) => {
+      if (names.length === 0 || !previewId || mutation.stateRef.current.running) return;
+      setAttemptNames(names);
       void mutation.start(
         taskEventDriver({
           total: names.length,
           message: "正在准备更新…",
-          launch: (onEvent) => startUpdate(names, onEvent, scope),
+          launch: (onEvent) => startUpdate(names, onEvent, scope, previewId),
         }),
       );
     },
-    [mutation.start, mutation.stateRef],
+    [mutation.start, mutation.stateRef, commandPreview.data?.id, scope],
   );
 
   useEffect(() => {
     if (!open) return;
     mutation.reset();
     setConfirmed(false);
+    setAttemptNames(null);
   }, [open, mode, mutation.reset]);
+  useEffect(() => {
+    if ((startError ?? error)?.code === "cli.command_changed") void commandPreview.refetch();
+  }, [startError, error]);
 
   const closeDialog = useCallback(() => {
     if (mutation.requestClose()) onCloseRef.current();
@@ -404,6 +414,8 @@ export function UpdateDialog({
             </div>
           ) : null}
 
+          {showInitial ? <CliPreviewStatus preview={commandPreview} /> : null}
+          <ActualCliCommands taskId={taskId} />
           {running ? (
             <>
               <MutationProgress
@@ -438,6 +450,7 @@ export function UpdateDialog({
               onRetryRow={(name) => launch([name])}
               warningsTestId="update-warnings"
               disabled={running}
+              renderRetry={(names, label) => <CliRetryControl scope={scope} request={{ action: "update", skills: names }} label={label} disabled={running} onExecute={(id) => launch(names, id)} />}
             />
           ) : null}
         </div>
@@ -461,7 +474,7 @@ export function UpdateDialog({
                 </Button>
                 <Button
                   size="sm"
-                  onClick={() => void launch(initialNames)}
+                  onClick={() => void launch(executionNames)}
                   disabled={!canStart}
                   title={
                     singleNeedsConfirmation && !confirmed
@@ -470,8 +483,8 @@ export function UpdateDialog({
                   }
                 >
                   开始更新
-                  {mode === "all" && initialNames.length > 0
-                    ? ` (${initialNames.length})`
+                  {mode === "all" && executionNames.length > 0
+                    ? ` (${executionNames.length})`
                     : ""}                </Button>
               </>
             ) : null}

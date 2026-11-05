@@ -66,6 +66,7 @@ pub struct CommandSpec {
     pub cwd: PathBuf,
     pub env: BTreeMap<String, String>,
     pub timeout: Duration,
+    pub cli_context: Option<crate::cli::commands::CliCommandContext>,
 }
 
 impl CommandSpec {
@@ -82,6 +83,7 @@ impl CommandSpec {
             cwd: cwd.into(),
             env,
             timeout,
+            cli_context: None,
         }
     }
 }

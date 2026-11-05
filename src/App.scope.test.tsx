@@ -664,6 +664,7 @@ describe("scope switcher", () => {
     fireEvent.change(within(wizard).getByLabelText("仓库来源"), {
       target: { value: "acme/skills" },
     });
+    await waitFor(() => expect(within(wizard).getByRole("button", { name: "预览仓库" })).toBeEnabled());
     fireEvent.click(within(wizard).getByRole("button", { name: "预览仓库" }));
     await waitFor(() => {
       expect(backend.callsOf("start_preview")).toHaveLength(1);
@@ -710,6 +711,7 @@ describe("scope switcher", () => {
     expect(within(wizard).getByTestId("install-confirm")).toHaveTextContent(
       PROJECT_CANONICAL,
     );
+    await waitFor(() => expect(within(wizard).getByRole("button", { name: "开始安装" })).toBeEnabled());
     fireEvent.click(within(wizard).getByRole("button", { name: "开始安装" }));
     await waitFor(() => {
       expect(backend.callsOf("start_install")).toHaveLength(1);

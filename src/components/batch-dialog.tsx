@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, FolderOpen, Loader2, X } from "lucide-react";
 import { Button } from "./ui/button";
+import { ActualCliCommands, CliCommandDisplay } from "./cli-command-display";
 import { AgentLogo } from "./agent-logo";
 import { MutationProgress } from "./mutation/mutation-progress";
 import { MutationResult } from "./mutation/mutation-result";
@@ -465,6 +466,7 @@ export function BatchDialog({
           </Button>
         </div>
         <div className="modal-body">
+          <ActualCliCommands taskId={taskId} />
           {!running && !viewingResult ? (
             <>
               {canChooseRemoval ? (
@@ -618,10 +620,7 @@ export function BatchDialog({
                             </p>
                           ) : null}
                           {target.eligible && target.command ? (
-                            <div className="mt-2">
-                              <p className="text-xs text-muted-foreground">将执行的命令</p>
-                              <pre className="batch-command"><code>{target.command}</code></pre>
-                            </div>
+                            <CliCommandDisplay command={target.command} />
                           ) : null}
                           {isCopy && target.eligible && target.operation === "copy" && target.localModification !== "clean" ? (
                             <p className="mt-1 text-warning">{target.localModification === "modified" ? "将复制当前本地改动。" : "无法确认本地改动，将复制当前内容。"}项目之后可能提示与上游内容不同。</p>

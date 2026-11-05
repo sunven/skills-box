@@ -990,7 +990,7 @@ mod tests {
                 ("CI".to_string(), "true".to_string()),
                 ("DISABLE_TELEMETRY".to_string(), "1".to_string()),
             ]),
-            pinned_version: crate::cli::PINNED_CLI_VERSION.to_string(),
+            pinned_version: crate::cli::CLI_VERSION.to_string(),
         }
     }
 
@@ -1110,7 +1110,7 @@ mod tests {
             spec.args,
             vec![
                 "-y",
-                "skills@1.7.4",
+                "skills@latest",
                 "add",
                 "acme/skills",
                 "-g",
@@ -1577,7 +1577,7 @@ mod tests {
             spec.args,
             vec![
                 "-y",
-                "skills@1.7.4",
+                "skills@latest",
                 "add",
                 "acme/skills",
                 "-s",

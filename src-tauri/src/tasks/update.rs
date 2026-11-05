@@ -361,6 +361,10 @@ impl MutationAction for UpdateAction {
     type Plan = UpdatePlan;
     type Unit = UpdateItem;
 
+    fn uses_cli(&self, plan: &Self::Plan) -> bool {
+        !plan.items.is_empty()
+    }
+
     fn profile(&self, plan: &Self::Plan) -> SessionProfile {
         SessionProfile {
             action: TaskAction::Update,
@@ -696,7 +700,7 @@ mod tests {
                 ("CI".to_string(), "true".to_string()),
                 ("DISABLE_TELEMETRY".to_string(), "1".to_string()),
             ]),
-            pinned_version: crate::cli::PINNED_CLI_VERSION.to_string(),
+            pinned_version: crate::cli::CLI_VERSION.to_string(),
         }
     }
 
@@ -741,7 +745,7 @@ mod tests {
             spec.args,
             vec![
                 "-y",
-                "skills@1.7.4",
+                "skills@latest",
                 "add",
                 "acme/skills",
                 "-g",
@@ -828,7 +832,7 @@ mod tests {
             spec.args,
             vec![
                 "-y",
-                "skills@1.7.4",
+                "skills@latest",
                 "add",
                 "acme/skills",
                 "-g",
@@ -924,7 +928,7 @@ mod tests {
     // ------------------------------------------------------------------
 
     use crate::baseline::fingerprint_folder;
-    use crate::cli::{CliRuntime, CliRuntimeProvider, PINNED_CLI_VERSION};
+    use crate::cli::{CLI_VERSION, CliRuntime, CliRuntimeProvider};
     use crate::process::{CancelToken, CommandSpec, ExecError, ExecOutput, ProcessExecutor};
     use crate::tasks::conflicts::{ConflictInfo, ConflictProvider};
     use crate::tasks::manager::{
@@ -949,7 +953,7 @@ mod tests {
                     ("CI".to_string(), "true".to_string()),
                     ("DISABLE_TELEMETRY".to_string(), "1".to_string()),
                 ]),
-                pinned_version: PINNED_CLI_VERSION.to_string(),
+                pinned_version: CLI_VERSION.to_string(),
             })
         }
     }
@@ -1286,7 +1290,7 @@ mod tests {
             calls[0].args,
             vec![
                 "-y",
-                "skills@1.7.4",
+                "skills@latest",
                 "add",
                 "acme/skills",
                 "-g",
@@ -1611,7 +1615,7 @@ mod tests {
 #[cfg(test)]
 mod project_update_tests {
     use super::*;
-    use crate::cli::{CliRuntime, CliRuntimeProvider, PINNED_CLI_VERSION};
+    use crate::cli::{CLI_VERSION, CliRuntime, CliRuntimeProvider};
     use crate::process::{CancelToken, ExecError, ProcessExecutor};
     use crate::projects::{Project, ProjectRegistry};
     use crate::tasks::conflicts::{ConflictInfo, ConflictProvider};
@@ -1747,7 +1751,7 @@ mod project_update_tests {
                 ("CI".to_string(), "true".to_string()),
                 ("DISABLE_TELEMETRY".to_string(), "1".to_string()),
             ]),
-            pinned_version: PINNED_CLI_VERSION.to_string(),
+            pinned_version: CLI_VERSION.to_string(),
         };
         let spec = ScopedCli::new(&runtime, &layout).install(
             &item.source,
@@ -1761,7 +1765,7 @@ mod project_update_tests {
             spec.args,
             vec![
                 "-y",
-                "skills@1.7.4",
+                "skills@latest",
                 "add",
                 "acme/skills",
                 "-s",
@@ -1794,7 +1798,7 @@ mod project_update_tests {
                 cwd: PathBuf::from("/app-data/cli-cwd"),
                 home: PathBuf::from("/tmp/skills-box-home"),
                 env: std::collections::BTreeMap::new(),
-                pinned_version: PINNED_CLI_VERSION.to_string(),
+                pinned_version: CLI_VERSION.to_string(),
             })
         }
     }

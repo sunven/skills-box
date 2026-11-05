@@ -57,9 +57,10 @@ impl TaskManager {
     ) -> Result<BatchPreview, AppError> {
         self.ensure_not_shutting_down()?;
         let layout = self.scope_layout(&scope)?;
+        let command_layout = layout.clone();
         let paths = self.inner.paths.clone();
         let id = uuid::Uuid::new_v4().to_string();
-        let plan =
+        let mut plan =
             tokio::task::spawn_blocking(move || {
                 let plan = batch::plan(&paths, &layout, request, id, updates)?;
                 if let Some(records) = checked_records {
@@ -73,6 +74,7 @@ impl TaskManager {
             })
             .await
             .map_err(|e| AppError::task_internal("批量预览", e))??;
+        self.fill_batch_commands(&command_layout, &mut plan).await?;
         let preview = plan.preview.clone();
         let mut previews = self
             .inner
@@ -96,8 +98,9 @@ impl TaskManager {
     pub async fn refresh_batch_preview(&self, id: String) -> Result<BatchPreview, AppError> {
         let original = self.batch_plan(&id)?;
         let layout = self.scope_layout(&original.preview.scope)?;
+        let command_layout = layout.clone();
         let paths = self.inner.paths.clone();
-        let fresh = tokio::task::spawn_blocking(move || {
+        let mut fresh = tokio::task::spawn_blocking(move || {
             if original.copy.is_some() {
                 return crate::tasks::copy_to_project::replan(&paths, &layout, &original);
             }
@@ -116,6 +119,8 @@ impl TaskManager {
         })
         .await
         .map_err(|e| AppError::task_internal("批量预览", e))??;
+        self.fill_batch_commands(&command_layout, &mut fresh)
+            .await?;
         let preview = fresh.preview.clone();
         self.inner
             .batch_previews
@@ -159,6 +164,12 @@ impl TaskManager {
             return Err(AppError::batch_confirmation_needed());
         }
         let expected_revision = confirmation.revision;
+        let expected_commands = original
+            .preview
+            .targets
+            .iter()
+            .filter_map(|t| t.command.clone())
+            .collect();
         let planned = self
             .plan_scoped_mutation(scope, MutationKind::Batch, move |paths, layout| {
                 let fresh = if original.copy.is_some() {
@@ -185,6 +196,7 @@ impl TaskManager {
                 Ok(fresh)
             })
             .await?;
+        let planned = planned.with_batch_commands(expected_commands).await?;
         let id = planned.start_batch(sink)?;
         self.inner
             .batch_previews
@@ -213,6 +225,62 @@ impl TaskManager {
         // Unlike forced standalone shutdown, the current batch writer and its
         // verification have settled. Do not report a graceful stop as a crash.
         self.inner.marker.clear();
+    }
+}
+
+impl TaskManager {
+    pub(super) async fn fill_batch_commands(
+        &self,
+        layout: &ScopeLayout,
+        plan: &mut BatchPlan,
+    ) -> Result<(), AppError> {
+        if !matches!(
+            plan.preview.action,
+            BatchAction::Update | BatchAction::Uninstall
+        ) {
+            return Ok(());
+        }
+        let needs_cli = plan.targets.iter().any(|t| {
+            t.target.eligible
+                && (plan.preview.action == BatchAction::Update || t.lock_entry.is_some())
+        });
+        let runtime = if needs_cli {
+            Some(self.inner.runtime.cli_runtime().await?)
+        } else {
+            None
+        };
+        for target in &mut plan.targets {
+            target.target.command = None;
+            if !target.target.eligible {
+                continue;
+            }
+            target.target.command = match plan.preview.action {
+                BatchAction::Update => {
+                    let update = update::plan_updates(
+                        &self.inner.paths,
+                        layout,
+                        std::slice::from_ref(&target.target.name),
+                    )?;
+                    crate::cli::preview::update_preview(layout, runtime.as_ref(), &update)
+                        .entries
+                        .into_iter()
+                        .next()
+                        .and_then(|e| e.command)
+                }
+                BatchAction::Uninstall if target.lock_entry.is_some() => {
+                    Some(crate::cli::commands::display_command(
+                        &crate::cli::ScopedCli::new(
+                            runtime.as_ref().expect("uninstall runtime"),
+                            layout,
+                        )
+                        .uninstall(&target.target.name, crate::timeouts::WRITE_TIMEOUT),
+                    ))
+                }
+                _ => None,
+            };
+        }
+        plan.preview.targets = plan.targets.iter().map(|t| t.target.clone()).collect();
+        Ok(())
     }
 }
 
@@ -297,6 +365,7 @@ pub(super) async fn run(
             executor: ctx.executor.clone(),
             record_snapshot: record.clone(),
             set_cancellable: Arc::new(|_| {}),
+            expected_commands: target.target.command.clone().map(|command| vec![command]),
         };
         let checked = check_target(&manager, &layout, &plan, target).await;
         let outcome = match checked {

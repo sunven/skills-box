@@ -595,7 +595,7 @@ async fn native_catalog_uses_actual_read_only_preview_strips_credentials_and_rej
         git_dir: None,
         cwd: f.paths.cli_cwd(),
         home: f.paths.home().to_path_buf(),
-        pinned_version: "1.7.4".into(),
+        pinned_version: "latest".into(),
         env: BTreeMap::from([
             ("GITHUB_TOKEN".into(), "dummy-secret".into()),
             ("GH_TOKEN".into(), "dummy-secret".into()),
@@ -625,12 +625,20 @@ async fn native_catalog_uses_actual_read_only_preview_strips_credentials_and_rej
     ];
     let lock = fs::read(f.paths.lock_path()).unwrap();
     for (response, count) in cases {
+        let expected_status = match &response {
+            ScriptedResponse::Output { code: 0, .. } => "succeeded",
+            _ => "failed",
+        };
         let executor = Arc::new(ScriptedExecutor::new().expect("npx", &["add", "-l"], response));
+        let commands = Arc::new(crate::cli::commands::CliCommandStore::default());
         let native = NativeTransport {
             versions: SourceArchiveClient::with_api(f.paths.clone(), f.service.inner.api.clone()),
             paths: f.paths.clone(),
             runtime: runtime.clone(),
-            executor: executor.clone(),
+            executor: Arc::new(crate::cli::commands::ObservedExecutor {
+                executor: executor.clone(),
+                commands: commands.clone(),
+            }),
         };
         let result = native.preview("acme/skills", CancelToken::new()).await;
         assert_eq!(result.ok().map(|s| s.len()), count);
@@ -638,10 +646,19 @@ async fn native_catalog_uses_actual_read_only_preview_strips_credentials_and_rej
         let spec = &calls[0];
         assert_eq!(
             spec.args,
-            ["-y", "skills@1.7.4", "add", "acme/skills", "-l", "-g"]
+            ["-y", "skills@latest", "add", "acme/skills", "-l", "-g"]
         );
         assert!(!spec.env.contains_key("GITHUB_TOKEN"));
         assert!(!spec.env.contains_key("GH_TOKEN"));
+        let records = commands.records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].command,
+            crate::cli::commands::display_command(spec)
+        );
+        assert_eq!(records[0].context.origin, "discovery");
+        assert_eq!(records[0].context.source.as_deref(), Some("acme/skills"));
+        assert_eq!(records[0].status, expected_status);
         assert_eq!(fs::read(f.paths.lock_path()).unwrap(), lock);
     }
 }

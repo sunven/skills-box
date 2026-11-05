@@ -113,6 +113,7 @@ async function startPreview(
   fireEvent.change(within(dialog).getByLabelText("仓库来源"), {
     target: { value: source },
   });
+  await waitFor(() => expect(within(dialog).getByRole("button", { name: "预览仓库" })).toBeEnabled());
   fireEvent.click(within(dialog).getByRole("button", { name: "预览仓库" }));
   await waitFor(() =>
     expect(
@@ -137,6 +138,7 @@ describe("install wizard steps 1-2", () => {
     fireEvent.change(within(dialog).getByLabelText("仓库来源"), {
       target: { value: "" },
     });
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "预览仓库" })).toBeEnabled());
     fireEvent.click(within(dialog).getByRole("button", { name: "预览仓库" }));
     expect(
       await within(dialog).findByText("请输入公开 HTTPS Git 仓库，或 GitHub owner/repo。"),
@@ -146,6 +148,7 @@ describe("install wizard steps 1-2", () => {
     fireEvent.change(within(dialog).getByLabelText("仓库来源"), {
       target: { value: "owner/repo/sub" },
     });
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "预览仓库" })).toBeEnabled());
     fireEvent.click(within(dialog).getByRole("button", { name: "预览仓库" }));
     const alert = await within(dialog).findByRole("alert");
     expect(alert).toHaveTextContent("不支持网页子目录链接");
@@ -223,9 +226,9 @@ describe("install wizard steps 1-2", () => {
     expect(within(dialog).getByTestId("writing-warning")).toHaveTextContent(
       "写入阶段不可取消",
     );
-    expect(
+    await waitFor(() => expect(
       within(dialog).getByRole("button", { name: "开始安装" }),
-    ).toBeEnabled();
+    ).toBeEnabled());
   });
 
   it("auto-skips selection for a single installable skill but still shows agents and confirm", async () => {

@@ -248,6 +248,7 @@ describe("skill row actions", () => {
       backend.calls.filter((call) => call.command === "start_uninstall"),
     ).toHaveLength(0);
     fireEvent.click(screen.getByRole("checkbox", { name: "确认彻底卸载" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "确认卸载" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "确认卸载" }));
     await waitFor(() =>
       expect(

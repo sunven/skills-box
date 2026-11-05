@@ -199,6 +199,7 @@ async function startPreviewAndReachSkills(
   fireEvent.change(within(dialog).getByLabelText("仓库来源"), {
     target: { value: "https://github.com/acme/skills" },
   });
+  await waitFor(() => expect(within(dialog).getByRole("button", { name: "预览仓库" })).toBeEnabled());
   fireEvent.click(within(dialog).getByRole("button", { name: "预览仓库" }));
   await waitFor(() =>
     expect(
@@ -217,6 +218,7 @@ describe("install wizard steps 3-5", () => {
     fireEvent.change(within(dialog).getByLabelText("仓库来源"), {
       target: { value: "https://cnb.cool/cnb/skills/cnb-skill" },
     });
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "预览仓库" })).toBeEnabled());
     fireEvent.click(within(dialog).getByRole("button", { name: "预览仓库" }));
     await waitFor(() => expect(state.backend.count(API_COMMANDS.startPreview)).toBe(1));
     expect(state.backend.callsOf(API_COMMANDS.startPreview)[0].payload.source)
@@ -227,6 +229,7 @@ describe("install wizard steps 3-5", () => {
     }));
     await within(dialog).findByLabelText("选择 Claude Code");
     fireEvent.click(within(dialog).getByRole("button", { name: "下一步" }));
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "开始安装" })).toBeEnabled());
     fireEvent.click(within(dialog).getByRole("button", { name: "开始安装" }));
     await waitFor(() => expect(state.backend.count(API_COMMANDS.startInstall)).toBe(1));
     expect((state.backend.callsOf(API_COMMANDS.startInstall)[0].payload.request as { source: string }).source)
@@ -277,6 +280,7 @@ describe("install wizard steps 3-5", () => {
       "写入阶段不可取消",
     );
 
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "开始安装" })).toBeEnabled());
     fireEvent.click(within(dialog).getByRole("button", { name: "开始安装" }));
     await waitFor(() =>
       expect(state.backend.count(API_COMMANDS.startInstall)).toBe(1),
@@ -378,6 +382,7 @@ describe("install wizard steps 3-5", () => {
 
     fireEvent.click(within(dialog).getByRole("button", { name: "下一步" }));
     fireEvent.click(within(dialog).getByRole("button", { name: "下一步" }));
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "开始安装" })).toBeEnabled());
     fireEvent.click(within(dialog).getByRole("button", { name: "开始安装" }));
     await waitFor(() =>
       expect(state.backend.count(API_COMMANDS.startInstall)).toBe(1),
@@ -413,6 +418,7 @@ describe("install wizard steps 3-5", () => {
       within(dialog).getByRole("button", { name: "重试失败项" }),
     ).toBeInTheDocument();
 
+    await waitFor(() => expect(within(rows[1]!).getByRole("button", { name: "重试" })).toBeEnabled());
     fireEvent.click(within(rows[1]!).getByRole("button", { name: "重试" }));
     await waitFor(() =>
       expect(state.backend.count(API_COMMANDS.startInstall)).toBe(2),
@@ -455,6 +461,7 @@ describe("install wizard steps 3-5", () => {
     ]);
 
     fireEvent.click(within(dialog).getByRole("button", { name: "下一步" }));
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "开始安装" })).toBeEnabled());
     fireEvent.click(within(dialog).getByRole("button", { name: "开始安装" }));
     await waitFor(() =>
       expect(state.backend.count(API_COMMANDS.startInstall)).toBe(1),
@@ -492,6 +499,7 @@ describe("install wizard steps 3-5", () => {
     ]);
 
     fireEvent.click(within(dialog).getByRole("button", { name: "下一步" }));
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "开始安装" })).toBeEnabled());
     fireEvent.click(within(dialog).getByRole("button", { name: "开始安装" }));
     await waitFor(() =>
       expect(state.backend.count(API_COMMANDS.startInstall)).toBe(1),
@@ -514,6 +522,7 @@ describe("install wizard steps 3-5", () => {
     expect(
       within(dialog).queryByRole("button", { name: "关闭" }),
     ).toBeInTheDocument();
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "重试" })).toBeEnabled());
     fireEvent.click(within(dialog).getByRole("button", { name: "重试" }));
     await waitFor(() =>
       expect(state.backend.count(API_COMMANDS.startInstall)).toBe(2),

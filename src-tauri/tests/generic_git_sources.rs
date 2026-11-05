@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use skills_box_lib::cli::{CliRuntime, CliRuntimeProvider, PINNED_CLI_VERSION};
+use skills_box_lib::cli::{CLI_VERSION, CliRuntime, CliRuntimeProvider};
 use skills_box_lib::env::child_env::{ChildEnvParams, build_child_env};
 use skills_box_lib::error::AppError;
 use skills_box_lib::inventory::UpdateState;
@@ -107,7 +107,7 @@ async fn cnb_preview_install_check_and_update_at_global_and_project_scope() {
         cwd: paths.cli_cwd(),
         home: paths.home().to_path_buf(),
         env,
-        pinned_version: PINNED_CLI_VERSION.into(),
+        pinned_version: CLI_VERSION.into(),
     };
     let manager = TaskManager::with_projects(
         Arc::new(FixedRuntime(runtime)),

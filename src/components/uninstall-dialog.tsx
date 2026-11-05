@@ -9,6 +9,8 @@ import { startUninstall } from "../lib/api";
 import type { ScopeId, UpdateViewSkill } from "../lib/types";
 import { ATTACHMENT_LABELS } from "../lib/inventory-view";
 import { taskEventDriver, useMutation } from "../lib/mutation";
+import { useCliCommandPreview } from "../hooks/use-cli-commands";
+import { ActualCliCommands, CliPreviewStatus } from "./cli-command-display";
 
 interface UninstallDialogProps {
   open: boolean;
@@ -48,23 +50,27 @@ export function UninstallDialog({
     error,
     startError,
   } = mutation.state;
+  const commandPreview = useCliCommandPreview(scope, open && skill && !running && !result ? { action: "uninstall", skill: skill.id } : null);
 
   const launch = useCallback(() => {
-    if (!skill || mutation.stateRef.current.running) return;
+    if (!skill || !commandPreview.data || commandPreview.isFetching || mutation.stateRef.current.running) return;
     void mutation.start(
       taskEventDriver({
         total: 1,
         message: "正在准备卸载…",
-        launch: (onEvent) => startUninstall(skill.id, onEvent, scope),
+        launch: (onEvent) => startUninstall(skill.id, onEvent, scope, commandPreview.data!.id),
       }),
     );
-  }, [skill, mutation.start, mutation.stateRef]);
+  }, [skill, scope, mutation.start, mutation.stateRef, commandPreview.data, commandPreview.isFetching]);
 
   useEffect(() => {
     if (!open) return;
     mutation.reset();
     setConfirmed(false);
   }, [open, skill?.name, mutation.reset]);
+  useEffect(() => {
+    if ((startError ?? error)?.code === "cli.command_changed") void commandPreview.refetch();
+  }, [startError, error]);
 
   const closeDialog = useCallback(() => {
     if (mutation.requestClose()) onCloseRef.current();
@@ -138,6 +144,8 @@ export function UninstallDialog({
         </div>
 
         <div className="modal-body">
+          {showInitial ? <CliPreviewStatus preview={commandPreview} /> : null}
+          <ActualCliCommands taskId={taskId} />
           {showInitial ? (
             <>
               <div
@@ -306,7 +314,7 @@ export function UninstallDialog({
                   variant="destructive"
                   size="sm"
                   onClick={() => void launch()}
-                  disabled={!confirmed}
+                  disabled={!confirmed || !commandPreview.data || commandPreview.isFetching || commandPreview.isError}
                   title={!confirmed ? "请先勾选确认" : undefined}
                 >
                   确认卸载

@@ -34,6 +34,7 @@ pub struct SessionContext {
     pub executor: Arc<dyn ProcessExecutor>,
     pub record_snapshot: Arc<dyn Fn(&Path) + Send + Sync>,
     pub set_cancellable: Arc<dyn Fn(bool) + Send + Sync>,
+    pub expected_commands: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -394,7 +395,16 @@ pub async fn run<A: MutationAction>(
             }
         }
         let completed = if let Some(runtime) = &runtime {
-            let spec = action.command(unit, runtime, &reporter);
+            let mut spec = action.command(unit, runtime, &reporter);
+            if let Some(expected) = &ctx.expected_commands {
+                if !expected.contains(&crate::cli::commands::display_command(&spec)) {
+                    return FinishOutcome::Failed(AppError::cli_command_changed());
+                }
+            }
+            spec.cli_context = Some(crate::cli::commands::CliCommandContext::task(
+                &ctx.task_id,
+                ctx.envelope.scope.clone(),
+            ));
             let output = match ctx.executor.run(spec, ctx.cancel.clone()).await {
                 Ok(output) => output,
                 Err(ExecError::Cancelled) => {
@@ -618,7 +628,7 @@ mod tests {
                 cwd: PathBuf::from("/tmp/skills-box-cwd"),
                 home: PathBuf::from("/tmp/skills-box-home"),
                 env: BTreeMap::new(),
-                pinned_version: "1.7.4".to_string(),
+                pinned_version: "latest".to_string(),
             })
         }
     }
@@ -843,6 +853,7 @@ mod tests {
                 executor,
                 record_snapshot,
                 set_cancellable,
+                expected_commands: None,
             },
             snapshots,
             cancellable,

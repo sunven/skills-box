@@ -361,6 +361,7 @@ describe("update execution", () => {
 
       fireEvent.click(detail().getByRole("button", { name: "更新" }));
       const dialog = screen.getByRole("dialog", { name: "更新 skill · alpha" });
+      await waitFor(() => expect(within(dialog).getByRole("button", { name: "开始更新" })).toBeEnabled());
       fireEvent.click(within(dialog).getByRole("button", { name: "开始更新" }));
       await waitFor(() => expect(updateCalls(state)).toEqual([["alpha"]]));
       updated = true;
@@ -432,6 +433,7 @@ describe("update execution", () => {
     );
     expect(within(dialog).queryByLabelText("确认本地改动")).not.toBeInTheDocument();
 
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "开始更新" })).toBeEnabled());
     fireEvent.click(within(dialog).getByRole("button", { name: "开始更新" }));
     await waitFor(() => expect(updateCalls(state)).toEqual([["alpha"]]));
     expect(updateCalls(state)[0]).toEqual(["alpha"]);
@@ -519,7 +521,7 @@ describe("update execution", () => {
     expect(updateCalls(state)).toHaveLength(0);
 
     fireEvent.click(within(dialog).getByLabelText("确认本地改动"));
-    expect(start).toBeEnabled();
+    await waitFor(() => expect(start).toBeEnabled());
     fireEvent.click(start);
     await waitFor(() =>
       expect(updateCalls(state)).toEqual([["modified-skill"]]),
@@ -554,7 +556,7 @@ describe("update execution", () => {
     const start = within(dialog).getByRole("button", { name: "开始更新" });
     expect(start).toBeDisabled();
     fireEvent.click(within(dialog).getByLabelText("确认本地改动"));
-    expect(start).toBeEnabled();
+    await waitFor(() => expect(start).toBeEnabled());
     expect(updateCalls(state)).toHaveLength(0);
     fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
   });
@@ -577,7 +579,7 @@ describe("update execution", () => {
       "备份",
     );
     const start = within(dialog).getByRole("button", { name: "开始更新" });
-    expect(start).toBeEnabled();
+    await waitFor(() => expect(start).toBeEnabled());
     fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
     expect(updateCalls(state)).toHaveLength(0);
   });
@@ -590,6 +592,7 @@ describe("update execution", () => {
     );
     const dialog = await openSingleUpdate("alpha");
 
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "开始更新" })).toBeEnabled());
     fireEvent.click(within(dialog).getByRole("button", { name: "开始更新" }));
     await waitFor(() => expect(updateCalls(state)).toHaveLength(1));
 
@@ -656,6 +659,7 @@ describe("update execution", () => {
     );
     expect(within(dialog).queryByLabelText("确认本地改动")).not.toBeInTheDocument();
 
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: /开始更新 \(2\)/ })).toBeEnabled());
     fireEvent.click(within(dialog).getByRole("button", { name: /开始更新 \(2\)/ }));
     await waitFor(() =>
       expect(updateCalls(state)).toEqual([["alpha", "copy-mount"]]),
@@ -699,6 +703,7 @@ describe("update execution", () => {
       "/tmp/logs/operations.jsonl",
     );
 
+    await waitFor(() => expect(within(resultRows[1]!).getByRole("button", { name: "重试" }),).toBeEnabled());
     fireEvent.click(
       within(resultRows[1]!).getByRole("button", { name: "重试" }),
     );

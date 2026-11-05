@@ -29,6 +29,7 @@ pub(super) struct PlannedMutation<P> {
     kind: MutationKind,
     scope: ScopeMutation,
     plan: P,
+    expected_commands: Option<Vec<String>>,
 }
 
 impl<P> PlannedMutation<P> {
@@ -64,7 +65,8 @@ impl<P> PlannedMutation<P> {
             self.scope.layout.lock_path.to_string_lossy().into_owned(),
         )?;
         let action = build_action(self.scope.layout, registered.task_id.clone());
-        let ctx = manager.session_context(&registered, on_event.clone());
+        let mut ctx = manager.session_context(&registered, on_event.clone());
+        ctx.expected_commands = self.expected_commands;
         let manager = self.manager;
         let spawned_id = registered.task_id.clone();
         tokio::spawn(async move {
@@ -102,6 +104,7 @@ impl TaskManager {
                 kind,
                 scope,
                 plan,
+                expected_commands: None,
             })
         })
         .await
@@ -130,7 +133,47 @@ impl TaskManager {
     }
 }
 
+impl<P: crate::cli::preview::CommandPlan> PlannedMutation<P> {
+    pub(super) async fn with_command_preview(
+        mut self,
+        id: Option<String>,
+    ) -> Result<Self, AppError> {
+        if let Some(id) = id {
+            let runtime = if self.plan.needs_cli() {
+                Some(self.manager.inner.runtime.cli_runtime().await?)
+            } else {
+                None
+            };
+            let preview = self
+                .plan
+                .command_preview(&self.scope.layout, runtime.as_ref());
+            self.expected_commands = Some(preview.validate(&id)?);
+        }
+        Ok(self)
+    }
+}
+
 impl PlannedMutation<crate::tasks::batch::BatchPlan> {
+    pub(super) async fn with_batch_commands(
+        mut self,
+        expected: Vec<String>,
+    ) -> Result<Self, AppError> {
+        self.manager
+            .fill_batch_commands(&self.scope.layout, &mut self.plan)
+            .await?;
+        let current: Vec<_> = self
+            .plan
+            .preview
+            .targets
+            .iter()
+            .filter_map(|t| t.command.clone())
+            .collect();
+        if current != expected {
+            return Err(AppError::cli_command_changed());
+        }
+        Ok(self)
+    }
+
     pub(super) fn start_batch(mut self, sink: EventSink) -> Result<TaskId, AppError> {
         if let Some(copy) = &self.plan.copy {
             self.scope.layout = copy.layout.clone();

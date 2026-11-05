@@ -1,5 +1,6 @@
 use super::*;
 use crate::baseline::Baseline;
+use crate::cli::{commands::display_command, preview::CliCommandRequest};
 use crate::scope::ScopeId;
 
 const EMPTY_PROJECT_LOCK: &str = r#"{"version":1,"skills":{}}"#;
@@ -155,7 +156,7 @@ async fn project_install_command_verification_backup_and_baseline_share_scope() 
         calls[0].args,
         vec![
             "-y",
-            "skills@1.7.4",
+            "skills@latest",
             "add",
             "vercel-labs/skills",
             "-s",
@@ -250,6 +251,16 @@ async fn preview_uses_selected_scope_and_keeps_its_read_only_lifecycle() {
     );
     let _guard = manager.begin_registry_change().unwrap();
     for scope in [ScopeId::Global, project.scope()] {
+        let preview = manager
+            .preview_cli_commands(
+                scope.clone(),
+                CliCommandRequest::Preview {
+                    source: "owner/repo".into(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(executor.call_count(), if scope.is_global() { 0 } else { 1 });
         let (sink, mut receiver) = sink();
         manager
             .start_preview(scope.clone(), "owner/repo", sink)
@@ -260,19 +271,395 @@ async fn preview_uses_selected_scope_and_keeps_its_read_only_lifecycle() {
             .unwrap();
         assert_eq!(event.phase, TaskPhase::Completed);
         assert_eq!(event.result.unwrap().scope, scope);
+        assert_eq!(
+            preview.entries[0].command.as_deref(),
+            Some(display_command(executor.calls().last().unwrap()).as_str())
+        );
     }
     let calls = executor.calls();
     assert_eq!(calls.len(), 2);
     assert_eq!(calls[0].cwd, paths.cli_cwd());
     assert_eq!(
         calls[0].args,
-        vec!["-y", "skills@1.7.4", "add", "owner/repo", "-l", "-g"]
+        vec!["-y", "skills@latest", "add", "owner/repo", "-l", "-g"]
     );
     assert_eq!(calls[1].cwd, project.root);
     assert_eq!(
         calls[1].args,
-        vec!["-y", "skills@1.7.4", "add", "owner/repo", "-l"]
+        vec!["-y", "skills@latest", "add", "owner/repo", "-l"]
     );
     assert!(manager.active_mutation().is_none());
     assert!(manager.interrupted_report().is_none());
+}
+
+#[tokio::test]
+async fn install_preview_agrees_with_the_guarded_invocation() {
+    let fixture = Fixture::new(true);
+    let request = install_request(&["find-skills"], &["qoder"]);
+    let preview = fixture
+        .manager
+        .preview_cli_commands(
+            fixture.scope.clone(),
+            CliCommandRequest::Install {
+                request: request.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(fixture.executor.calls().is_empty());
+    let (sink, mut receiver) = sink();
+    fixture
+        .manager
+        .start_install_with_preview(fixture.scope.clone(), request, Some(preview.id), sink)
+        .await
+        .unwrap();
+    assert_eq!(final_event(&mut receiver).await.phase, TaskPhase::Completed);
+    assert_eq!(
+        preview.entries[0].command.as_deref(),
+        Some(display_command(&fixture.executor.calls()[0]).as_str())
+    );
+}
+
+#[tokio::test]
+async fn source_or_agent_changes_reject_before_registration_and_release_the_permit() {
+    let fixture = Fixture::new(true);
+    let request = install_request(&["find-skills"], &["qoder"]);
+    let preview = fixture
+        .manager
+        .preview_cli_commands(
+            fixture.scope.clone(),
+            CliCommandRequest::Install {
+                request: request.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    for changed in [
+        InstallRequest {
+            source: "other/skills".into(),
+            ..request.clone()
+        },
+        InstallRequest {
+            agents: Vec::new(),
+            ..request
+        },
+    ] {
+        let (sink, _) = sink();
+        let error = fixture
+            .manager
+            .start_install_with_preview(
+                fixture.scope.clone(),
+                changed,
+                Some(preview.id.clone()),
+                sink,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::CliCommandChanged);
+        assert!(fixture.manager.lock_tasks().is_empty());
+        assert!(fixture.manager.active_mutation().is_none());
+        assert!(fixture.manager.interrupted_report().is_none());
+        assert!(fixture.executor.calls().is_empty());
+        assert!(fixture.manager.begin_registry_change().is_ok());
+    }
+}
+
+struct MutableRuntime(Mutex<CliRuntime>);
+#[async_trait::async_trait]
+impl CliRuntimeProvider for MutableRuntime {
+    async fn cli_runtime(&self) -> Result<CliRuntime, AppError> {
+        Ok(self.0.lock().unwrap().clone())
+    }
+}
+
+#[tokio::test]
+async fn runtime_path_changes_reject_every_mutation_start_before_registration() {
+    let fixture = Fixture::new(true);
+    let runtime = Arc::new(MutableRuntime(Mutex::new(
+        FakeRuntime::ok().result.unwrap(),
+    )));
+    let manager = TaskManager::with_projects(
+        runtime.clone(),
+        fixture.executor.clone(),
+        Arc::new(FakeConflicts::default()),
+        fixture.paths.clone(),
+        Arc::new(ProjectRegistry::new(fixture.paths.clone())),
+        TaskManagerConfig::default(),
+    );
+    let install = install_request(&["find-skills"], &["qoder"]);
+    let requests = [
+        (
+            fixture.scope.clone(),
+            CliCommandRequest::Install {
+                request: install.clone(),
+            },
+        ),
+        (
+            ScopeId::Global,
+            CliCommandRequest::Update {
+                skills: vec!["find-skills".into()],
+            },
+        ),
+        (
+            ScopeId::Global,
+            CliCommandRequest::Uninstall {
+                skill: "find-skills".into(),
+            },
+        ),
+    ];
+    for (scope, request) in requests {
+        runtime.0.lock().unwrap().npx_path = "/node/bin/npx".into();
+        let preview = manager
+            .preview_cli_commands(scope.clone(), request.clone())
+            .await
+            .unwrap();
+        runtime.0.lock().unwrap().npx_path = "/new node/bin/npx".into();
+        let (sink, _) = sink();
+        let result = match request {
+            CliCommandRequest::Install { request } => {
+                manager
+                    .start_install_with_preview(scope, request, Some(preview.id), sink)
+                    .await
+            }
+            CliCommandRequest::Update { skills } => {
+                manager
+                    .start_update_with_preview(scope, skills, Some(preview.id), sink)
+                    .await
+            }
+            CliCommandRequest::Uninstall { skill } => {
+                manager
+                    .start_uninstall_with_preview(scope, skill, Some(preview.id), sink)
+                    .await
+            }
+            _ => unreachable!(),
+        };
+        assert_eq!(result.unwrap_err().code, ErrorCode::CliCommandChanged);
+        assert!(manager.lock_tasks().is_empty());
+        assert!(manager.active_mutation().is_none());
+        assert!(fixture.executor.calls().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn update_preview_lists_skips_without_fabricating_commands() {
+    let fixture = Fixture::new(false);
+    let preview = fixture
+        .manager
+        .preview_cli_commands(
+            ScopeId::Global,
+            CliCommandRequest::Update {
+                skills: vec!["find-skills".into(), "missing".into()],
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(preview.entries.len(), 2);
+    assert!(
+        preview.entries[0]
+            .command
+            .as_ref()
+            .unwrap()
+            .contains("-s find-skills -a qoder -a universal -y --json")
+    );
+    assert_eq!(preview.entries[1].name, "missing");
+    assert!(preview.entries[1].command.is_none());
+    assert!(preview.entries[1].reason.is_some());
+    let (sink, mut receiver) = sink();
+    fixture
+        .manager
+        .start_update_with_preview(
+            ScopeId::Global,
+            vec!["find-skills".into(), "missing".into()],
+            Some(preview.id),
+            sink,
+        )
+        .await
+        .unwrap();
+    final_event(&mut receiver).await;
+    let calls = fixture.executor.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(
+        preview.entries[0].command.as_deref(),
+        Some(display_command(&calls[0]).as_str())
+    );
+}
+
+#[tokio::test]
+async fn unmanaged_uninstall_preview_and_execution_do_not_require_the_cli() {
+    let fixture = Fixture::new(false);
+    write_pre_lock(&fixture.paths, &[]);
+    let manager = TaskManager::with_projects(
+        Arc::new(FakeRuntime::err(AppError::cli_command_changed())),
+        fixture.executor.clone(),
+        Arc::new(FakeConflicts::default()),
+        fixture.paths.clone(),
+        Arc::new(ProjectRegistry::new(fixture.paths.clone())),
+        TaskManagerConfig::default(),
+    );
+    let preview = manager
+        .preview_cli_commands(
+            ScopeId::Global,
+            CliCommandRequest::Uninstall {
+                skill: "find-skills".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(preview.entries.len(), 1);
+    assert!(preview.entries[0].command.is_none());
+    let (sink, mut receiver) = sink();
+    manager
+        .start_uninstall_with_preview(
+            ScopeId::Global,
+            "find-skills".into(),
+            Some(preview.id),
+            sink,
+        )
+        .await
+        .unwrap();
+    assert_eq!(final_event(&mut receiver).await.phase, TaskPhase::Completed);
+    assert!(fixture.executor.calls().is_empty());
+}
+
+#[tokio::test]
+async fn runtime_change_after_registration_still_prevents_the_cli_spawn() {
+    let fixture = Fixture::new(true);
+    let runtime = Arc::new(MutableRuntime(Mutex::new(
+        FakeRuntime::ok().result.unwrap(),
+    )));
+    let manager = TaskManager::with_projects(
+        runtime.clone(),
+        fixture.executor.clone(),
+        Arc::new(FakeConflicts::default()),
+        fixture.paths.clone(),
+        Arc::new(ProjectRegistry::new(fixture.paths.clone())),
+        TaskManagerConfig::default(),
+    );
+    let request = install_request(&["find-skills"], &["qoder"]);
+    let preview = manager
+        .preview_cli_commands(
+            fixture.scope.clone(),
+            CliCommandRequest::Install {
+                request: request.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    let (sender, mut receiver) = unbounded_channel();
+    let sink = Arc::new(move |event: TaskEvent| {
+        if event.phase == TaskPhase::Preparing {
+            runtime.0.lock().unwrap().npx_path = "/changed/npx".into();
+        }
+        sender.send(event).unwrap();
+    });
+    manager
+        .start_install_with_preview(fixture.scope.clone(), request, Some(preview.id), sink)
+        .await
+        .unwrap();
+    let event = final_event(&mut receiver).await;
+    assert_eq!(event.phase, TaskPhase::Failed);
+    assert_eq!(event.error.unwrap().code, ErrorCode::CliCommandChanged);
+    assert!(fixture.executor.calls().is_empty());
+    assert!(manager.active_mutation().is_none());
+}
+
+#[tokio::test]
+async fn skipped_only_update_matches_its_commandless_preview_without_resolving_cli() {
+    let fixture = Fixture::new(false);
+    let manager = TaskManager::with_projects(
+        Arc::new(FakeRuntime::err(AppError::cli_command_changed())),
+        fixture.executor.clone(),
+        Arc::new(FakeConflicts::default()),
+        fixture.paths.clone(),
+        Arc::new(ProjectRegistry::new(fixture.paths.clone())),
+        TaskManagerConfig::default(),
+    );
+    let preview = manager
+        .preview_cli_commands(
+            ScopeId::Global,
+            CliCommandRequest::Update {
+                skills: vec!["missing".into()],
+            },
+        )
+        .await
+        .unwrap();
+    assert!(preview.entries[0].command.is_none());
+    let (sink, mut receiver) = sink();
+    manager
+        .start_update_with_preview(
+            ScopeId::Global,
+            vec!["missing".into()],
+            Some(preview.id),
+            sink,
+        )
+        .await
+        .unwrap();
+    let event = final_event(&mut receiver).await;
+    assert_eq!(event.phase, TaskPhase::Completed);
+    assert_eq!(
+        event.result.unwrap().skills[0].status,
+        TaskSkillStatus::Skipped
+    );
+    assert!(fixture.executor.calls().is_empty());
+}
+
+#[tokio::test]
+async fn batch_rejects_changed_runtime_commands_and_preserves_the_preview_for_refresh() {
+    use crate::tasks::batch::{BatchAction, BatchConfirmation, BatchRequest};
+    let fixture = Fixture::new(false);
+    let runtime = Arc::new(MutableRuntime(Mutex::new(
+        FakeRuntime::ok().result.unwrap(),
+    )));
+    let manager = TaskManager::with_projects(
+        runtime.clone(),
+        fixture.executor.clone(),
+        Arc::new(FakeConflicts::default()),
+        fixture.paths.clone(),
+        Arc::new(ProjectRegistry::new(fixture.paths.clone())),
+        TaskManagerConfig::default(),
+    );
+    let request = BatchRequest {
+        action: BatchAction::Uninstall,
+        skill_ids: vec!["find-skills".into()],
+        agent_ids: vec![],
+        target_keys: None,
+        project_root: None,
+    };
+    let preview = manager
+        .preview_batch(ScopeId::Global, request, HashMap::new())
+        .await
+        .unwrap();
+    assert!(
+        preview.targets[0]
+            .command
+            .as_ref()
+            .unwrap()
+            .starts_with("cd /tmp/skills-box-cwd && /node/bin/npx")
+    );
+    runtime.0.lock().unwrap().cwd = "/tmp/New CLI directory".into();
+    let (sink, _) = sink();
+    let error = manager
+        .start_batch(
+            ScopeId::Global,
+            BatchConfirmation {
+                preview_id: preview.id.clone(),
+                revision: preview.revision.clone(),
+                confirmed_delete: true,
+                confirmed_copies: true,
+            },
+            sink,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::CliCommandChanged);
+    assert!(manager.lock_tasks().is_empty());
+    assert!(fixture.executor.calls().is_empty());
+    let fresh = manager.refresh_batch_preview(preview.id).await.unwrap();
+    assert!(
+        fresh.targets[0]
+            .command
+            .as_ref()
+            .unwrap()
+            .starts_with("cd '/tmp/New CLI directory' && /node/bin/npx")
+    );
 }

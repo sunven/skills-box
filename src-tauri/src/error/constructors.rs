@@ -145,22 +145,23 @@ impl AppError {
     pub fn env_cli_missing(detail: impl Into<String>) -> Self {
         Self::new(
             ErrorCode::EnvCliMissing,
-            "skills CLI 不可用（npx skills@1.7.4）。",
+            "skills CLI 不可用（npx skills@latest）。",
         )
         .detail(detail)
-        .hint("首次运行需要联网下载 skills@1.7.4，请检查网络后重新检测。")
+        .hint("首次运行需要联网下载 skills@latest，请检查网络后重新检测。")
         .retryable(true)
     }
 
-    /// The pinned CLI answered with a different version than `skills@1.7.4`.
-    /// This is an environment incompatibility, not a transient network error.
+    /// The CLI returned an invalid version or did not match an exact selector.
     pub fn env_version_unsupported(expected: &str, actual: &str) -> Self {
         Self::new(
             ErrorCode::EnvVersionUnsupported,
             format!("skills CLI 版本不受支持（期望 {expected}，实际 {actual}）。"),
         )
         .detail(format!("expected = {expected}, actual = {actual}"))
-        .hint("请确认 npx 解析到 skills@1.7.4；本应用固定使用该版本。")
+        .hint(format!(
+            "请检查 npx -y skills@{expected} --version 是否返回有效的版本号，然后重新检测。"
+        ))
         .retryable(true)
     }
 
@@ -176,7 +177,7 @@ impl AppError {
             format!("Skill lock 版本不受支持（v{version}），需要 v3。"),
         )
         .detail(format!("version = {version}"))
-        .hint("请使用 skills@1.7.4 重建 lock，或从备份恢复。")
+        .hint("请使用 skills@latest 重建 lock，或从备份恢复。")
     }
 
     pub fn lock_read_failed(detail: impl Into<String>) -> Self {
@@ -327,7 +328,7 @@ impl AppError {
             format!("项目 Skill lock 版本不受支持（v{version}），需要 v1。"),
         )
         .detail(format!("version = {version}"))
-        .hint("请使用 skills@1.7.4 在项目根重新生成 skills-lock.json。")
+        .hint("请使用 skills@latest 在项目根重新生成 skills-lock.json。")
     }
 
     /// Same `lock.corrupt` family as the global lock so the frontend keeps one
@@ -513,7 +514,7 @@ impl AppError {
             "skills CLI 返回了无法解析的 JSON。",
         )
         .detail(detail)
-        .hint("CLI 输出格式可能已变化；请确认固定使用 skills@1.7.4 后重试。")
+        .hint("CLI 输出格式可能已变化；请检查 skills@latest 的输出与应用是否兼容后重试。")
         .retryable(true)
     }
 
@@ -533,6 +534,14 @@ impl AppError {
     /// interrupted CLI row.
     pub fn cli_cancelled() -> Self {
         Self::new(ErrorCode::CliCancelled, "skills CLI 进程已取消。").retryable(true)
+    }
+
+    pub fn cli_command_changed() -> Self {
+        Self::new(
+            ErrorCode::CliCommandChanged,
+            "执行命令已变化，请查看刷新后的命令并再次执行。",
+        )
+        .retryable(true)
     }
 
     pub fn batch_preview_expired() -> Self {

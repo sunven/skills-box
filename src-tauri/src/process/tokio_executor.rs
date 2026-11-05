@@ -16,7 +16,7 @@ use super::{CancelToken, CommandSpec, ExecError, ExecOutput, ProcessExecutor};
 ///
 /// Accepted values: `slow` (sleeps 30s), `slow:<seconds>`, `fail` (exit 1),
 /// `invalid-json` (non-JSON stdout) and `cancel` (hangs until cancelled).
-/// Only commands that actually invoke the pinned skills CLI are rewritten, so
+/// Only commands that actually invoke the skills CLI are rewritten, so
 /// the fake never affects environment probes (`node --version`, `git`, ...).
 pub fn apply_fake_cli(spec: CommandSpec, raw: Option<&str>, debug: bool) -> CommandSpec {
     let Some((program, args)) = fake_cli_override(&spec, raw, debug) else {
@@ -436,7 +436,7 @@ mod tests {
     fn npx_spec(timeout_ms: u64) -> CommandSpec {
         spec(
             "/fake/bin/npx",
-            &["-y", "skills@1.7.4", "add", "owner/repo", "-l", "-g"],
+            &["-y", "skills@latest", "add", "owner/repo", "-l", "-g"],
             &[],
             timeout_ms,
         )

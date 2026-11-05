@@ -441,7 +441,7 @@ export const environment: EnvReport = {
   cli: {
     available: true,
     version: "1.7.4",
-    pinnedVersion: "1.7.4",
+    pinnedVersion: "latest",
     status: "ok",
     detail: null,
   },
@@ -457,7 +457,7 @@ export const environment: EnvReport = {
   issues: [],
   warnings: [],
   checkedAtEpochMs: NOW - 4 * 60_000,
-  pinnedCliVersion: "1.7.4",
+  pinnedCliVersion: "latest",
   interrupted: null,
 };
 

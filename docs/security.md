@@ -105,6 +105,15 @@ object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'
   source. The app never spawns `skills list`, `skills update`, `skills check`,
   `remove -a`, `remove --all`, `add --all`, `-a '*'` or `--copy`.
 - Mutations are serialized and create a lock snapshot before writing.
+- Command previews accept the same semantic requests as task starts. Rust
+  formats the executable, cwd and argv from the validated execution plan and
+  returns copyable text plus a preview fingerprint. Starts revalidate that
+  fingerprint under the mutation permit, then compare the actual command
+  again before invocation. The renderer cannot submit a command to execute.
+- Session-only `cli-command` events expose command text, context and invocation
+  status, never the child environment or credentials. Environment probes and
+  discovery calls share the same observation boundary. Native operations,
+  cache hits and targets cancelled or skipped before invocation emit no call.
 
 ## GitHub authentication
 
@@ -125,7 +134,7 @@ object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'
 - Authentication is attached per request, solely to `api.github.com`, for
   Trees API, commit lookup, and `/rate_limit`. The Authorization header is
   marked sensitive, API redirects are disabled, and error bodies are redacted.
-  Codeload uses a separate uncredentialed transport; Git and pinned CLI child
+  Codeload uses a separate uncredentialed transport; Git and CLI child
   environments continue to exclude `GITHUB_TOKEN` and `GH_TOKEN`.
 - HTTP 401 reports invalid/expired credentials without retrying another
   token. Authentication tests and settings operations require no new
@@ -138,13 +147,13 @@ in debug builds:
 
 - `SKILLS_BOX_ROOT` redirects app data only (never `HOME`).
 - `SKILLS_BOX_NODE` overrides Node discovery and disables fallback probing.
-- `SKILLS_BOX_FAKE_CLI` rewrites only invocations of the pinned skills CLI
+- `SKILLS_BOX_FAKE_CLI` rewrites only invocations of the skills CLI
   (`slow[:seconds]`, `fail`, `invalid-json`, `cancel`) inside the real
   `TokioExecutor`, preserving timeout and process-group cancellation. Release
   builds compile the check out (`cfg!(debug_assertions)` is false).
 - **`/bin/sh` exception:** the fake-CLI rewrite is the only place a shell is
   spawned (`/bin/sh -c <fixed script>`), and it exists solely in debug builds
-  and only for the pinned `skills@1.7.4` invocation. Node/git probes, every
+  and only for skills CLI invocations such as `skills@latest`. Node/git probes, every
   production mutation and every other command are never shell-wrapped. The
   script text is a fixed constant selected by the env value; no user, source,
   skill name or path is interpolated into it. Release builds cannot reach
@@ -158,7 +167,7 @@ in debug builds:
   records. A retained snapshot is usable only at the same Project revision;
   Forget/Relocate revoke it in memory even if auxiliary persistence fails.
 - Source network/CLI work runs without a Mutation permit. The shared preview
-  seam uses pinned `add <source> -l [-g]` and explicitly removes GitHub token
+  seam uses `skills@latest add <source> -l [-g]` and explicitly removes GitHub token
   variables from subprocess environments. Native tokens stay on the GitHub
   REST origin. No remote file browser or automatic installation is added.
 - `discovery.json` stores catalog/history, scope-source snapshots, and a

@@ -9,6 +9,7 @@ import type { ProjectEntry, ScopeId } from "../lib/types";
 import type { useDiscovery } from "../hooks/use-discovery";
 import { GLOBAL_SCOPE } from "../lib/types";
 import { projectScope } from "../lib/scope";
+import { ActualCliCommands } from "./cli-command-display";
 import { formatEpochDateTime } from "../lib/update-view";
 
 interface Props {
@@ -79,6 +80,7 @@ export function DiscoveryPage({ discovery, scope, projects, mutationsEnabled, wr
           <span>{s.scanning ? "扫描中" : s.pausedUntil ? `限流暂停至 ${formatEpochDateTime(s.pausedUntil)}` : s.error ? "扫描失败，已保留上次目录" : s.lastSuccessAt ? "已检查" : "等待首次扫描"}{s.needsRevalidation && s.lastSuccessAt ? " · 目录待重验" : ""}</span>
           <span className="text-muted-foreground">上次尝试：{s.lastAttemptAt ? formatEpochDateTime(s.lastAttemptAt) : "尚未尝试"} · 上次成功：{s.lastSuccessAt ? formatEpochDateTime(s.lastSuccessAt) : "尚无成功记录"}</span>
           {s.error ? <p className="text-destructive">{s.error}</p> : null}
+          <ActualCliCommands origin="discovery" source={s.source} />
         </div>)}
       </details> : null}
       <div className="discovery-body">
