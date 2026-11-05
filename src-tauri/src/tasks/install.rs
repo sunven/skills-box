@@ -1595,6 +1595,71 @@ mod tests {
     }
 
     #[test]
+    fn project_workbuddy_install_uses_native_attachments_after_canonical_cli_install() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        fs::create_dir_all(home.join(".workbuddy")).unwrap();
+        let root = tmp.path().join("project");
+        fs::create_dir_all(&root).unwrap();
+        let paths = AppPaths::new(&home, tmp.path().join("app-data"));
+        let project = crate::projects::Project {
+            id: uuid::Uuid::new_v4(),
+            root,
+            display_name: "project".to_string(),
+            added_at: 1,
+            last_opened_at: 1,
+            check_revision: "initial".into(),
+        };
+        let layout = crate::scope_layout::ScopeLayout::project(&paths, project);
+        let plan = super::validate_request(
+            &paths,
+            &layout,
+            &request("acme/skills", &["alpha"], &["workbuddy"]),
+        )
+        .unwrap();
+        assert_eq!(plan.targets.len(), 1);
+        assert_eq!(plan.targets[0].id, "workbuddy");
+        assert_eq!(plan.targets[0].display_name, "WorkBuddy");
+        assert_eq!(
+            plan.targets[0].skills_dir,
+            layout.root.join(".workbuddy/skills")
+        );
+        assert!(!plan.targets[0].skills_dir.exists());
+        let spec = ScopedCli::new(&runtime(), &layout).install(
+            &plan.source,
+            &plan.skills,
+            &plan.agent_ids,
+            Duration::from_secs(900),
+        );
+        assert_eq!(spec.cwd, layout.root);
+        assert_eq!(
+            spec.args,
+            vec![
+                "-y",
+                "skills@latest",
+                "add",
+                "acme/skills",
+                "-s",
+                "alpha",
+                "-a",
+                "universal",
+                "-y",
+                "--json",
+            ]
+        );
+        let canonical = layout.canonical_dir.join("alpha");
+        fs::create_dir_all(&canonical).unwrap();
+        fs::write(canonical.join("SKILL.md"), "# alpha\n").unwrap();
+        let errors = super::ensure_extra_attachments(&layout, &plan, &["alpha".to_string()]);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(
+            fs::read_link(layout.root.join(".workbuddy/skills/alpha")).unwrap(),
+            canonical
+        );
+        assert!(!layout.root.join(".codebuddy/skills").exists());
+    }
+
+    #[test]
     fn install_lock_snapshots_are_scope_isolated() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home");

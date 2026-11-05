@@ -163,8 +163,8 @@ impl ScopeLayout {
     ///
     /// Global scope keeps the detected agents exactly as before. Project scope
     /// is globally detected catalog agents mapped to their project directory
-    /// plus every configured extra with a valid `projectSkillsDir`; neither
-    /// directory has to exist yet.
+    /// plus configured extras with a valid `projectSkillsDir`; builtin extras
+    /// must also be detected. Neither directory has to exist yet.
     pub fn install_targets(&self, detected: &[AgentDir]) -> Vec<AgentDir> {
         if self.project.is_none() {
             return self.agents.clone();
@@ -205,6 +205,9 @@ impl ScopeLayout {
         }
 
         for extra in &self.extras.agents {
+            if extra.builtin && !detected.iter().any(|agent| agent.id == extra.id) {
+                continue;
+            }
             let Some(raw) = extra.project_skills_dir.as_deref() else {
                 continue;
             };
@@ -560,6 +563,40 @@ mod tests {
             .filter(|agent| agent.skills_dir == fixture.root.join(".qoder/skills"))
             .count();
         assert_eq!(qoder_dirs, 1);
+    }
+
+    #[test]
+    fn buddy_project_targets_are_independently_eligible_for_detected_agents() {
+        let fixture = Fixture::new();
+        let layout = fixture.layout();
+        for ids in [
+            vec![],
+            vec!["codebuddy"],
+            vec!["workbuddy"],
+            vec!["codebuddy", "workbuddy"],
+        ] {
+            let detected: Vec<AgentDir> = ids
+                .iter()
+                .map(|id| AgentDir {
+                    id: (*id).to_string(),
+                    display_name: (*id).to_string(),
+                    universal: false,
+                    skills_dir: fixture.paths.home().join(format!(".{id}/skills")),
+                })
+                .collect();
+            let targets = layout.install_targets(&detected);
+            for (id, name) in [("codebuddy", "CodeBuddy"), ("workbuddy", "WorkBuddy")] {
+                let target = targets.iter().find(|agent| agent.id == id);
+                assert_eq!(target.is_some(), ids.contains(&id), "{ids:?}");
+                if let Some(target) = target {
+                    assert_eq!(target.display_name, name);
+                    assert_eq!(
+                        target.skills_dir,
+                        fixture.root.join(format!(".{id}/skills"))
+                    );
+                }
+            }
+        }
     }
 
     #[test]

@@ -63,6 +63,7 @@ const agents: InventoryAgent[] = [
     universal: false,
     shared: false,
     globalSkillsDir: "~/.workbuddy/skills",
+    projectSkillsDir: ".workbuddy/skills",
     origin: "builtin",
     detected: true,
   },

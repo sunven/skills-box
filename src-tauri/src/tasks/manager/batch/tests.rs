@@ -1402,6 +1402,125 @@ async fn project_attach_can_create_missing_agent_directory_and_keeps_global_skil
 }
 
 #[tokio::test]
+async fn project_workbuddy_attach_and_detach_preserve_codebuddy_and_global_skills() {
+    let f = Fixture::new();
+    let root = f._tmp.path().join("project");
+    let canonical = root.join(".agents/skills/alpha");
+    fs::create_dir_all(&canonical).unwrap();
+    fs::write(canonical.join("SKILL.md"), "# project alpha\n").unwrap();
+    fs::write(root.join("skills-lock.json"), serde_json::json!({"version":1,"skills":{"alpha":{"source":"vercel-labs/skills","sourceType":"github","sourceUrl":"https://github.com/vercel-labs/skills.git","skillPath":"skills/alpha/SKILL.md","computedHash":"a".repeat(40)}}}).to_string()).unwrap();
+    let root = fs::canonicalize(root).unwrap();
+    fs::create_dir_all(root.join(".codebuddy/skills")).unwrap();
+    std::os::unix::fs::symlink(&canonical, root.join(".codebuddy/skills/alpha")).unwrap();
+    for dir in [".codebuddy/skills", ".workbuddy/skills"] {
+        fs::create_dir_all(f.paths.home().join(dir)).unwrap();
+        std::os::unix::fs::symlink(
+            f.paths.canonical_skills_dir().join("alpha"),
+            f.paths.home().join(dir).join("alpha"),
+        )
+        .unwrap();
+    }
+    let scope = f
+        .manager
+        .inner
+        .projects
+        .add(root.to_str().unwrap())
+        .unwrap()
+        .project
+        .scope();
+    let global_lock = fs::read(f.paths.lock_path()).unwrap();
+    let model = crate::read_model::ReadModel::with_projects(
+        f.paths.clone(),
+        f.manager.inner.projects.clone(),
+    );
+    let snapshot = model.snapshot(&scope).unwrap();
+    assert!(
+        snapshot
+            .install_targets
+            .iter()
+            .any(|agent| agent.id == "workbuddy" && agent.display_name == "WorkBuddy")
+    );
+
+    for action in [BatchAction::Attach, BatchAction::Detach] {
+        let preview = f
+            .manager
+            .preview_batch(
+                scope.clone(),
+                BatchRequest {
+                    project_root: None,
+                    action,
+                    skill_ids: vec![scope.skill_id("alpha")],
+                    agent_ids: vec!["workbuddy".into()],
+                    target_keys: None,
+                },
+                HashMap::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(preview.targets.len(), 1);
+        assert!(
+            preview.targets[0].eligible,
+            "{:?}",
+            preview.targets[0].reason
+        );
+        assert_eq!(preview.targets[0].agent_name.as_deref(), Some("WorkBuddy"));
+        assert_eq!(
+            preview.targets[0].paths,
+            vec![
+                root.join(".workbuddy/skills/alpha")
+                    .to_string_lossy()
+                    .into_owned()
+            ]
+        );
+        let (out, mut rx) = sink();
+        f.manager
+            .start_batch(scope.clone(), Fixture::confirmation(&preview), out)
+            .await
+            .unwrap();
+        assert_eq!(statuses(&finished(&mut rx).await), [BatchStatus::Success]);
+        if action == BatchAction::Attach {
+            assert_eq!(
+                fs::canonicalize(root.join(".workbuddy/skills/alpha")).unwrap(),
+                fs::canonicalize(&canonical).unwrap()
+            );
+            let attached = model.snapshot(&scope).unwrap();
+            assert_eq!(attached.skills[0].attachments.len(), 2);
+            assert!(
+                attached.skills[0]
+                    .attachments
+                    .iter()
+                    .any(|attachment| attachment.agent_id == "workbuddy")
+            );
+        } else {
+            assert!(!root.join(".workbuddy/skills/alpha").exists());
+            let detached = model.snapshot(&scope).unwrap();
+            assert_eq!(detached.skills[0].attachments.len(), 1);
+            assert_eq!(detached.skills[0].attachments[0].agent_id, "codebuddy");
+        }
+        assert_eq!(
+            fs::canonicalize(root.join(".codebuddy/skills/alpha")).unwrap(),
+            fs::canonicalize(&canonical).unwrap()
+        );
+    }
+    assert!(f.executor.calls.lock().unwrap().is_empty());
+    for dir in [".codebuddy/skills", ".workbuddy/skills"] {
+        assert_eq!(
+            fs::canonicalize(f.paths.home().join(dir).join("alpha")).unwrap(),
+            fs::canonicalize(f.paths.canonical_skills_dir().join("alpha")).unwrap()
+        );
+    }
+    assert_eq!(fs::read(f.paths.lock_path()).unwrap(), global_lock);
+    assert_eq!(
+        fs::read_to_string(f.paths.canonical_skills_dir().join("alpha/SKILL.md")).unwrap(),
+        "# alpha\n"
+    );
+    assert_eq!(
+        fs::read_to_string(canonical.join("SKILL.md")).unwrap(),
+        "# project alpha\n"
+    );
+}
+
+#[tokio::test]
 async fn copy_detach_requires_confirmation_and_detects_edits_after_backup() {
     let f = Fixture::new();
     let copy = f.paths.home().join(".claude/skills/alpha");

@@ -6,7 +6,7 @@ import { createQueryClient } from "./lib/query-client";
 import { pickProjectFolder } from "./lib/folder-picker";
 import { createFakeBackend, type FakeBackendOptions } from "./test/fake-backend";
 import { makeSkill, makeSnapshot } from "./test/inventory-fixtures";
-import type { ProjectEntry, ScopeId } from "./lib/types";
+import type { InventoryAgent, ProjectEntry, ScopeId } from "./lib/types";
 
 vi.mock("./lib/folder-picker", () => ({ pickProjectFolder: vi.fn() }));
 const project: ProjectEntry = {
@@ -94,6 +94,48 @@ describe("Copy to project from global batch attach", () => {
     await screen.findByTestId("batch-result");
     expect(backend.count("add_project")).toBe(0);
     expect(backend.callsOf("preview_batch").some((call) => call.payload.request.projectRoot === "/tmp/another-project" && call.payload.request.agentIds.length === 0)).toBe(true);
+  });
+
+  it.each([false, true])("offers independent project targets with CodeBuddy detected: %s", async (codebuddyDetected) => {
+    const workbuddy: InventoryAgent = {
+      id: "workbuddy", displayName: "WorkBuddy", universal: false, shared: false,
+      globalSkillsDir: "~/.workbuddy/skills", projectSkillsDir: ".workbuddy/skills",
+      origin: "builtin", detected: true,
+    };
+    const codebuddy: InventoryAgent = {
+      id: "codebuddy", displayName: "CodeBuddy", universal: false, shared: false,
+      globalSkillsDir: "~/.codebuddy/skills", origin: "catalog", detected: true,
+    };
+    const agents = codebuddyDetected ? [codebuddy, workbuddy] : [workbuddy];
+    const backend = setup({ data: { snapshot: makeSnapshot({ agents, skills: [makeSkill({ name: "alpha" })] }) } });
+    await openProjectCopy();
+    await chooseExistingProject();
+    const dialog = within(screen.getByTestId("batch-dialog"));
+    const target = dialog.getByRole("checkbox", { name: "选择 Agent WorkBuddy" });
+    expect(dialog.queryByRole("checkbox", { name: "选择 Agent CodeBuddy / WorkBuddy" })).not.toBeInTheDocument();
+    if (codebuddyDetected) {
+      fireEvent.click(dialog.getByRole("checkbox", { name: "选择 Agent CodeBuddy" }));
+    } else {
+      expect(dialog.queryByRole("checkbox", { name: "选择 Agent CodeBuddy" })).not.toBeInTheDocument();
+    }
+    fireEvent.click(target);
+    const count = codebuddyDetected ? 3 : 2;
+    await waitFor(() => expect(screen.getByRole("button", { name: `确认复制到项目 (${count})` })).toBeEnabled());
+    expect(dialog.getByText("/tmp/project/.workbuddy/skills/alpha")).toBeInTheDocument();
+    if (codebuddyDetected) expect(dialog.getByText("/tmp/project/.codebuddy/skills/alpha")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: `确认复制到项目 (${count})` }));
+    await screen.findByTestId("batch-result");
+    const copied = await backend.dispatch("get_inventory", { scope: PROJECT });
+    expect(copied.skills[0]?.attachments).toHaveLength(count - 1);
+    expect(copied.skills[0]?.attachments).toEqual(expect.arrayContaining([expect.objectContaining({
+      agentId: "workbuddy", agentName: "WorkBuddy", path: "/tmp/project/.workbuddy/skills/alpha",
+    })]));
+    if (codebuddyDetected) {
+      expect(copied.skills[0]?.attachments).toEqual(expect.arrayContaining([expect.objectContaining({
+        agentId: "codebuddy", agentName: "CodeBuddy", path: "/tmp/project/.codebuddy/skills/alpha",
+      })]));
+    }
+    expect((await backend.dispatch("get_inventory", { scope: "global" })).agents).toEqual(agents);
   });
 
   it("reuses existing identical managed content and skips different content without changing project records", async () => {

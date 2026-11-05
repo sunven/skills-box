@@ -85,8 +85,7 @@ impl ExtraAgent {
     }
 
     /// The catalog-shaped definition used by the shared detection and display
-    /// helpers. `skills_dir` (project scope) is unused because this app is
-    /// global-only.
+    /// helpers. Project directories are resolved separately through ScopeLayout.
     pub fn definition(&self) -> AgentDefinition {
         AgentDefinition {
             id: self.id.clone(),
@@ -117,7 +116,7 @@ pub fn builtin_extras() -> Vec<ExtraAgent> {
             id: "workbuddy".to_string(),
             display_name: "WorkBuddy".to_string(),
             skills_dir: "~/.workbuddy/skills".to_string(),
-            project_skills_dir: None,
+            project_skills_dir: Some(".workbuddy/skills".to_string()),
             builtin: true,
         },
         ExtraAgent {
@@ -732,6 +731,10 @@ mod tests {
             .find(|agent| agent.id == "workbuddy")
             .unwrap();
         assert!(workbuddy.builtin);
+        assert_eq!(
+            workbuddy.project_skills_dir.as_deref(),
+            Some(".workbuddy/skills")
+        );
         let definition = workbuddy.definition();
         assert_eq!(definition.detect_paths, vec!["~/.workbuddy"]);
         assert_eq!(

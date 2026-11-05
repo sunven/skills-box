@@ -6,6 +6,17 @@ Status: accepted
 
 Agents outside the vendored `skills@1.7.4` catalog — WorkBuddy (`~/.workbuddy/skills`) is the first — follow the same on-disk convention as catalog agents, but the CLI rejects unknown agent ids and has no arbitrary-directory option, so it cannot create their attachments. skills-box therefore defines **extra agents** as its own data (builtin entries shipped with the app plus user-defined entries in the app-data `agents.json`, detected by the parent of their skills directory) and attaches their skills natively: the CLI still installs into the canonical store and links catalog agents, then skills-box creates a symlink from the extra agent's skills directory into `~/.agents/skills/<name>` itself. WorkBuddy indexes symlinked skill folders (verified against its skill-list cache), so no copy mode is needed.
 
+WorkBuddy's desktop host scans `.workbuddy/skills` in Project scope. Its bundled
+CodeBuddy CLI falls back to `.codebuddy/skills` when neither an explicit project
+directory override nor product layout configuration selects another path.
+After verifying the desktop host reader, the user selected independent Project
+directories on 2026-11-05: WorkBuddy uses `.workbuddy/skills`, while CodeBuddy
+uses `.codebuddy/skills`. Each Agent keeps its own target identity, label and
+attachment. Detected WorkBuddy is an eligible Install or Attach target before
+its project directory exists. WorkBuddy attachments are native, including
+after a CLI Install into the canonical store. Global directories are
+`~/.workbuddy/skills` and `~/.codebuddy/skills`, respectively.
+
 ## Considered options
 
 - **Upstream each agent to vercel-labs/skills**: rejected as the only path because the catalog is a static list and PR timing is outside our control; it remains a fine supplement.

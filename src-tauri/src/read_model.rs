@@ -783,6 +783,123 @@ mod tests {
     }
 
     #[test]
+    fn workbuddy_project_targets_are_visible_before_the_project_directory_exists() {
+        let fixture = Fixture::new();
+        fs::create_dir_all(fixture.paths.home().join(".workbuddy")).unwrap();
+        let root = fixture._tmp.path().join("project");
+        fs::create_dir_all(&root).unwrap();
+        let root = fs::canonicalize(root).unwrap();
+        let registry = Arc::new(ProjectRegistry::new(fixture.paths.clone()));
+        let scope = registry
+            .add(root.to_str().unwrap())
+            .unwrap()
+            .project
+            .scope();
+        let model = ReadModel::with_projects(fixture.paths.clone(), registry);
+
+        let snapshot = model.snapshot(&scope).unwrap();
+        let workbuddy = snapshot
+            .install_targets
+            .iter()
+            .find(|agent| agent.id == "workbuddy")
+            .expect("installed WorkBuddy must be offered for project Attach");
+        assert_eq!(workbuddy.display_name, "WorkBuddy");
+        assert!(workbuddy.detected);
+        assert_eq!(
+            workbuddy.origin,
+            crate::agents::extras::AgentOrigin::Builtin
+        );
+        assert_eq!(
+            workbuddy.global_skills_dir.as_deref(),
+            Some(root.join(".workbuddy/skills").to_str().unwrap())
+        );
+        assert!(!root.join(".codebuddy/skills").exists());
+        assert!(!root.join(".workbuddy/skills").exists());
+        assert!(
+            !snapshot
+                .install_targets
+                .iter()
+                .any(|agent| agent.id == "codebuddy")
+        );
+
+        let global = model.snapshot(&ScopeId::global()).unwrap();
+        let workbuddy = global
+            .install_targets
+            .iter()
+            .find(|agent| agent.id == "workbuddy")
+            .unwrap();
+        assert_eq!(
+            workbuddy.global_skills_dir.as_deref(),
+            Some("~/.workbuddy/skills")
+        );
+    }
+
+    #[test]
+    fn codebuddy_and_workbuddy_have_separate_project_targets_and_attachments() {
+        let fixture = Fixture::new();
+        for name in [".workbuddy", ".codebuddy"] {
+            fs::create_dir_all(fixture.paths.home().join(name)).unwrap();
+        }
+        let root = fixture._tmp.path().join("project");
+        let canonical = root.join(".agents/skills/alpha");
+        fs::create_dir_all(&canonical).unwrap();
+        fs::write(
+            canonical.join("SKILL.md"),
+            "---\nname: alpha\ndescription: Alpha\n---\n",
+        )
+        .unwrap();
+        for name in [".codebuddy", ".workbuddy"] {
+            fs::create_dir_all(root.join(name).join("skills")).unwrap();
+            symlink(&canonical, root.join(name).join("skills/alpha")).unwrap();
+        }
+        let root = fs::canonicalize(root).unwrap();
+        let registry = Arc::new(ProjectRegistry::new(fixture.paths.clone()));
+        let scope = registry
+            .add(root.to_str().unwrap())
+            .unwrap()
+            .project
+            .scope();
+        let model = ReadModel::with_projects(fixture.paths.clone(), registry);
+
+        let snapshot = model.snapshot(&scope).unwrap();
+        for agents in [&snapshot.install_targets, &snapshot.agents] {
+            for (id, name) in [("codebuddy", "CodeBuddy"), ("workbuddy", "WorkBuddy")] {
+                let agent = agents.iter().find(|agent| agent.id == id).unwrap();
+                assert_eq!(agent.display_name, name);
+                assert_eq!(
+                    agent.global_skills_dir.as_deref(),
+                    root.join(format!(".{id}/skills")).to_str()
+                );
+            }
+        }
+        assert_eq!(snapshot.skills.len(), 1);
+        assert_eq!(snapshot.skills[0].attachments.len(), 2);
+        for (id, name) in [("codebuddy", "CodeBuddy"), ("workbuddy", "WorkBuddy")] {
+            let attachment = snapshot.skills[0]
+                .attachments
+                .iter()
+                .find(|attachment| attachment.agent_id == id)
+                .unwrap();
+            assert_eq!(attachment.agent_name, name);
+            assert_eq!(
+                attachment.path,
+                root.join(format!(".{id}/skills/alpha")).to_string_lossy()
+            );
+        }
+
+        let global = model.snapshot(&ScopeId::global()).unwrap();
+        for (id, name) in [("codebuddy", "CodeBuddy"), ("workbuddy", "WorkBuddy")] {
+            let agent = global
+                .install_targets
+                .iter()
+                .find(|agent| agent.id == id)
+                .unwrap();
+            assert_eq!(agent.display_name, name);
+            assert_eq!(agent.global_skills_dir, Some(format!("~/.{id}/skills")));
+        }
+    }
+
+    #[test]
     fn project_cache_is_per_scope_and_fingerprint_driven() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home");
