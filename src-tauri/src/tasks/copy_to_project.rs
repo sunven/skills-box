@@ -176,6 +176,8 @@ pub fn plan(
                 paths: vec![paths.display(&layout.canonical_dir.join(name))],
                 operation: Some(if agent_id.is_some() { "attach" } else { "copy" }.into()),
                 command: None,
+                source: None,
+                reference: None,
             };
             let mut fingerprint = String::new();
             if let Ok(skill) = &inspected {
@@ -240,6 +242,7 @@ pub fn plan(
         targets,
         updates: HashMap::new(),
         created_at: crate::time::now_ms(),
+        stale: None,
         copy: Some(CopyPlan {
             layout,
             root_identity,

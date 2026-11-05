@@ -1,6 +1,7 @@
 //! Strict read-only model for `~/.agents/.skill-lock.json` (v3).
 //!
-//! The GUI never writes the lock. A missing lock is a normal fresh-machine
+//! Native stale-record cleanup is the bounded writer described in ADR-0027.
+//! Other mutations delegate Lock writes to the CLI. A missing lock is a normal fresh-machine
 //! state and yields an empty entry set; malformed JSON, a missing `skills`
 //! object, malformed entries, or a version other than 3 are rejected with
 //! `lock.*` errors so the UI can refuse mutations instead of silently showing

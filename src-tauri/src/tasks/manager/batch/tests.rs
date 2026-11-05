@@ -33,13 +33,35 @@ struct Executor {
     paths: AppPaths,
     calls: Mutex<Vec<CommandSpec>>,
     failures: Mutex<HashSet<String>>,
+    missing_skill_files: Mutex<HashSet<String>>,
     pause: Mutex<Option<String>>,
+    preview_names: Mutex<Vec<String>>,
     entered: Notify,
     release: Notify,
 }
 #[async_trait::async_trait]
 impl ProcessExecutor for Executor {
     async fn run(&self, spec: CommandSpec, cancel: CancelToken) -> Result<ExecOutput, ExecError> {
+        if spec.args.iter().any(|a| a == "-l") {
+            self.calls.lock().unwrap().push(spec);
+            let stdout = format!(
+                "◇  Available Skills\n{}\n└  Use --skill",
+                self.preview_names
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|name| format!("│    {name}\n│      description"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+            return Ok(ExecOutput {
+                stdout,
+                stderr: String::new(),
+                code: Some(0),
+                signal: None,
+                duration: Duration::ZERO,
+            });
+        }
         let name = spec.args.windows(2).find(|a| a[0] == "-s").unwrap()[1].clone();
         self.calls.lock().unwrap().push(spec.clone());
         let pause = self.pause.lock().unwrap().as_deref() == Some(&name);
@@ -85,11 +107,32 @@ impl ProcessExecutor for Executor {
                 }
                 lock["skills"].as_object_mut().unwrap().remove(&name);
             } else {
-                fs::write(
-                    canonical.join(&name).join("SKILL.md"),
-                    format!("# {name} updated\n"),
-                )
-                .unwrap();
+                let restoring = !canonical.join(&name).exists();
+                fs::create_dir_all(canonical.join(&name)).unwrap();
+                if restoring {
+                    lock["skills"][&name]["skillPath"] = format!("moved/{name}/SKILL.md").into();
+                }
+                for args in spec.args.windows(2).filter(|a| a[0] == "-a") {
+                    if args[1] == "claude-code" {
+                        let dir = if global {
+                            self.paths.home().join(".claude/skills")
+                        } else {
+                            spec.cwd.join(".claude/skills")
+                        };
+                        fs::create_dir_all(&dir).unwrap();
+                        if fs::symlink_metadata(dir.join(&name)).is_err() {
+                            std::os::unix::fs::symlink(canonical.join(&name), dir.join(&name))
+                                .unwrap();
+                        }
+                    }
+                }
+                if !self.missing_skill_files.lock().unwrap().contains(&name) {
+                    fs::write(
+                        canonical.join(&name).join("SKILL.md"),
+                        format!("# {name} updated\n"),
+                    )
+                    .unwrap();
+                }
                 lock["skills"][&name][if global {
                     "skillFolderHash"
                 } else {
@@ -154,7 +197,9 @@ impl Fixture {
             paths: paths.clone(),
             calls: Mutex::new(Vec::new()),
             failures: Mutex::new(HashSet::new()),
+            missing_skill_files: Mutex::new(HashSet::new()),
             pause: Mutex::new(None),
+            preview_names: Mutex::new(vec!["alpha".into(), "beta".into(), "gamma".into()]),
             entered: Notify::new(),
             release: Notify::new(),
         });
@@ -269,6 +314,384 @@ fn statuses(result: &TaskResult) -> Vec<BatchStatus> {
         .iter()
         .map(|r| r.status)
         .collect()
+}
+
+impl Fixture {
+    fn make_stale(&self, names: &[&str]) {
+        for name in names {
+            fs::remove_dir_all(self.paths.canonical_skills_dir().join(name)).unwrap();
+        }
+    }
+}
+
+struct MissingRuntime;
+#[async_trait::async_trait]
+impl CliRuntimeProvider for MissingRuntime {
+    async fn cli_runtime(&self) -> Result<CliRuntime, AppError> {
+        Err(AppError::env_node_missing("test: no Node"))
+    }
+}
+
+#[tokio::test]
+async fn stale_cleanup_is_one_native_batch_without_node_and_keeps_unselected_records() {
+    let f = Fixture::new();
+    f.make_stale(&["alpha", "beta"]);
+    let manager = TaskManager::new(
+        Arc::new(MissingRuntime),
+        f.executor.clone(),
+        Arc::new(InventoryConflictProvider::new(f.paths.clone())),
+        f.paths.clone(),
+        TaskManagerConfig::default(),
+    );
+    let p = manager
+        .preview_batch(
+            ScopeId::Global,
+            Fixture::request(BatchAction::CleanRecords, &["alpha", "beta"], &[]),
+            HashMap::new(),
+        )
+        .await
+        .unwrap();
+    assert!(p.targets.iter().all(|t| t.eligible));
+    let (out, mut rx) = sink();
+    manager
+        .start_batch(ScopeId::Global, Fixture::confirmation(&p), out)
+        .await
+        .unwrap();
+    let result = finished(&mut rx).await;
+    assert_eq!(
+        statuses(&result),
+        [BatchStatus::Success, BatchStatus::Success]
+    );
+    let lock = crate::lock::LockFile::read(&f.paths.lock_path()).unwrap();
+    assert_eq!(lock.len(), 1);
+    assert!(lock.contains("gamma"));
+    assert!(f.executor.calls.lock().unwrap().is_empty());
+    assert!(
+        result
+            .batch
+            .unwrap()
+            .rows
+            .iter()
+            .all(|r| r.backup_path.is_some())
+    );
+}
+
+#[tokio::test]
+async fn restore_matches_same_name_at_moved_path_and_keeps_canonical_only_default() {
+    let f = Fixture::new();
+    f.make_stale(&["alpha", "beta"]);
+    let mut raw: serde_json::Value =
+        serde_json::from_slice(&fs::read(f.paths.lock_path()).unwrap()).unwrap();
+    raw["skills"]["alpha"]["ref"] = "release/stable".into();
+    fs::write(f.paths.lock_path(), raw.to_string()).unwrap();
+    let p = f
+        .preview(Fixture::request(
+            BatchAction::Restore,
+            &["alpha", "beta"],
+            &[],
+        ))
+        .await;
+    assert!(p.targets.iter().all(|t| t.eligible));
+    assert!(
+        p.targets[0]
+            .command
+            .as_ref()
+            .unwrap()
+            .contains("#release/stable")
+    );
+    let result = f.execute_preview(&p).await;
+    assert_eq!(
+        statuses(&result),
+        [BatchStatus::Success, BatchStatus::Success]
+    );
+    assert!(
+        f.paths
+            .canonical_skills_dir()
+            .join("alpha/SKILL.md")
+            .is_file()
+    );
+    assert!(!f.paths.home().join(".claude/skills/alpha").exists());
+    assert_eq!(
+        crate::lock::LockFile::read(&f.paths.lock_path())
+            .unwrap()
+            .get("alpha")
+            .unwrap()
+            .skill_path
+            .as_deref(),
+        Some("moved/alpha/SKILL.md")
+    );
+    let calls = f.executor.calls.lock().unwrap();
+    assert!(
+        calls
+            .iter()
+            .filter(|c| c.args.iter().any(|a| a == "-s"))
+            .all(|c| c
+                .args
+                .windows(2)
+                .filter(|a| a[0] == "-a")
+                .map(|a| a[1].as_str())
+                .collect::<Vec<_>>()
+                == ["universal"])
+    );
+}
+
+#[tokio::test]
+async fn restore_selected_agent_and_stop_wait_for_current_writer() {
+    let f = Fixture::new();
+    f.make_stale(&["alpha", "beta"]);
+    *f.executor.pause.lock().unwrap() = Some("alpha".into());
+    let p = f
+        .preview(Fixture::request(
+            BatchAction::Restore,
+            &["alpha", "beta"],
+            &["claude-code"],
+        ))
+        .await;
+    let (out, mut rx) = sink();
+    let id = f
+        .manager
+        .start_batch(ScopeId::Global, Fixture::confirmation(&p), out)
+        .await
+        .unwrap();
+    f.executor.entered.notified().await;
+    assert!(f.manager.try_acquire_mutation().is_err());
+    f.manager.cancel_task(&id).unwrap();
+    f.executor.release.notify_one();
+    let result = finished(&mut rx).await;
+    assert_eq!(
+        statuses(&result),
+        [BatchStatus::Success, BatchStatus::NotExecuted]
+    );
+    assert!(f.paths.home().join(".claude/skills/alpha").is_symlink());
+    assert!(!f.paths.canonical_skills_dir().join("beta").exists());
+}
+
+#[tokio::test]
+async fn restore_missing_ambiguous_and_occupied_names_never_start_writes() {
+    let f = Fixture::new();
+    f.make_stale(&["alpha"]);
+    let original = fs::read(f.paths.lock_path()).unwrap();
+    for names in [vec!["renamed".into()], vec!["alpha".into(), "alpha".into()]] {
+        *f.executor.preview_names.lock().unwrap() = names;
+        let p = f
+            .preview(Fixture::request(BatchAction::Restore, &["alpha"], &[]))
+            .await;
+        assert!(!p.targets[0].eligible);
+        assert!(
+            f.manager
+                .start_batch(ScopeId::Global, Fixture::confirmation(&p), sink().0)
+                .await
+                .is_err()
+        );
+        assert_eq!(fs::read(f.paths.lock_path()).unwrap(), original);
+    }
+    fs::write(
+        f.paths.canonical_skills_dir().join("alpha"),
+        b"existing file",
+    )
+    .unwrap();
+    let p = f
+        .preview(Fixture::request(BatchAction::Restore, &["alpha"], &[]))
+        .await;
+    assert!(!p.targets[0].eligible);
+    assert!(
+        f.executor
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|c| c.args.iter().any(|a| a == "-l"))
+    );
+}
+
+#[tokio::test]
+async fn cleanup_isolates_global_and_two_project_locks_and_baselines() {
+    let f = Fixture::new();
+    f.make_stale(&["alpha"]);
+    let original = fs::read(f.paths.lock_path()).unwrap();
+    let mut projects = Vec::new();
+    for name in ["one", "two"] {
+        let root = f._tmp.path().join(name);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("skills-lock.json"),serde_json::json!({"version":1,"future":42,"skills":{"alpha":{"source":"vercel-labs/skills","sourceType":"github","computedHash":"abc","future":true}}}).to_string()).unwrap();
+        projects.push(
+            f.manager
+                .inner
+                .projects
+                .add(root.to_str().unwrap())
+                .unwrap()
+                .project,
+        );
+    }
+    let second = fs::read(projects[1].root.join("skills-lock.json")).unwrap();
+    let scope = projects[0].scope();
+    let p = f
+        .manager
+        .preview_batch(
+            scope.clone(),
+            BatchRequest {
+                skill_ids: vec![scope.skill_id("alpha")],
+                ..Fixture::request(BatchAction::CleanRecords, &[], &[])
+            },
+            HashMap::new(),
+        )
+        .await
+        .unwrap();
+    let (out, mut rx) = sink();
+    f.manager
+        .start_batch(scope.clone(), Fixture::confirmation(&p), out)
+        .await
+        .unwrap();
+    assert_eq!(statuses(&finished(&mut rx).await), [BatchStatus::Success]);
+    assert_eq!(fs::read(f.paths.lock_path()).unwrap(), original);
+    assert_eq!(
+        fs::read(projects[1].root.join("skills-lock.json")).unwrap(),
+        second
+    );
+    let cleaned: serde_json::Value =
+        serde_json::from_slice(&fs::read(projects[0].root.join("skills-lock.json")).unwrap())
+            .unwrap();
+    assert_eq!(cleaned["future"], 42);
+    assert!(cleaned["skills"].as_object().unwrap().is_empty());
+    assert!(
+        BaselineStore::new(&f.paths)
+            .baseline_path("alpha")
+            .is_file()
+    );
+}
+
+#[tokio::test]
+async fn restore_rejects_incomplete_cli_writes_retains_backups_and_continues_other_targets() {
+    let f = Fixture::new();
+    f.make_stale(&["alpha", "beta"]);
+    let baseline = BaselineStore::new(&f.paths).baseline_path("alpha");
+    let original_baseline = fs::read(&baseline).unwrap();
+    f.executor
+        .missing_skill_files
+        .lock()
+        .unwrap()
+        .insert("alpha".into());
+    let preview = f
+        .preview(Fixture::request(
+            BatchAction::Restore,
+            &["alpha", "beta"],
+            &[],
+        ))
+        .await;
+    let result = f.execute_preview(&preview).await;
+    assert_eq!(
+        statuses(&result),
+        [BatchStatus::Failed, BatchStatus::Success]
+    );
+    let rows = result.batch.unwrap().rows;
+    assert!(rows[0].backup_path.is_some());
+    assert!(
+        rows[0]
+            .error
+            .as_ref()
+            .unwrap()
+            .detail
+            .as_ref()
+            .unwrap()
+            .contains("实际状态：共享目录存在；安装记录保留")
+    );
+    assert_eq!(fs::read(baseline).unwrap(), original_baseline);
+    assert!(f.paths.canonical_skills_dir().join("alpha").is_dir());
+    assert!(
+        f.paths
+            .canonical_skills_dir()
+            .join("beta/SKILL.md")
+            .is_file()
+    );
+    let retry = f
+        .preview(BatchRequest {
+            target_keys: Some(vec![rows[0].target.key.clone()]),
+            ..Fixture::request(BatchAction::Restore, &["alpha", "beta"], &[])
+        })
+        .await;
+    assert_eq!(retry.targets.len(), 1);
+    assert_eq!(retry.targets[0].name, "alpha");
+    assert!(
+        !retry.targets[0].eligible,
+        "partial files must not be overwritten on retry"
+    );
+}
+
+#[tokio::test]
+async fn project_restore_uses_its_own_lock_baseline_and_selected_agent() {
+    let f = Fixture::new();
+    let global_lock = fs::read(f.paths.lock_path()).unwrap();
+    let global_skill = fs::read(f.paths.canonical_skills_dir().join("alpha/SKILL.md")).unwrap();
+    let global_baseline = fs::read(BaselineStore::new(&f.paths).baseline_path("alpha")).unwrap();
+    let mut projects = Vec::new();
+    for name in ["restore-one", "restore-two"] {
+        let root = f._tmp.path().join(name);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("skills-lock.json"), serde_json::json!({"version":1,"skills":{"alpha":{"source":"vercel-labs/skills","sourceType":"github","computedHash":"old"}}}).to_string()).unwrap();
+        projects.push(
+            f.manager
+                .inner
+                .projects
+                .add(root.to_str().unwrap())
+                .unwrap()
+                .project,
+        );
+    }
+    let other_lock = fs::read(projects[1].root.join("skills-lock.json")).unwrap();
+    let scope = projects[0].scope();
+    let preview = f
+        .manager
+        .preview_batch(
+            scope.clone(),
+            BatchRequest {
+                skill_ids: vec![scope.skill_id("alpha")],
+                ..Fixture::request(BatchAction::Restore, &[], &["claude-code"])
+            },
+            HashMap::new(),
+        )
+        .await
+        .unwrap();
+    assert!(preview.targets[0].eligible, "{:?}", preview.targets[0]);
+    let (out, mut rx) = sink();
+    f.manager
+        .start_batch(scope.clone(), Fixture::confirmation(&preview), out)
+        .await
+        .unwrap();
+    assert_eq!(statuses(&finished(&mut rx).await), [BatchStatus::Success]);
+    assert!(
+        projects[0]
+            .root
+            .join(".agents/skills/alpha/SKILL.md")
+            .is_file()
+    );
+    assert!(projects[0].root.join(".claude/skills/alpha").is_symlink());
+    assert!(
+        BaselineStore::for_scope(&f.paths, &scope)
+            .baseline_path("alpha")
+            .is_file()
+    );
+    assert_eq!(fs::read(f.paths.lock_path()).unwrap(), global_lock);
+    assert_eq!(
+        fs::read(f.paths.canonical_skills_dir().join("alpha/SKILL.md")).unwrap(),
+        global_skill
+    );
+    assert_eq!(
+        fs::read(BaselineStore::new(&f.paths).baseline_path("alpha")).unwrap(),
+        global_baseline
+    );
+    assert_eq!(
+        fs::read(projects[1].root.join("skills-lock.json")).unwrap(),
+        other_lock
+    );
+    assert!(!projects[1].root.join(".agents").exists());
+    assert!(
+        f.executor
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|call| !call.args.iter().any(|arg| arg == "-g"))
+    );
 }
 
 impl Fixture {

@@ -1,4 +1,5 @@
 import {
+  staleRecordsQueryKey,
   batchTargetLabel,
   BATCH_SUCCESS_LABELS,
   type BatchResult,
@@ -19,7 +20,7 @@ import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { asAppError, cancelTask, fallbackError } from "./api";
 import { TASK_SKILL_STATUS_LABELS } from "./task-labels";
 import { inventoryQueryKey } from "../hooks/use-inventory";
-import { projectsQueryKey } from "./scope";
+import { projectForScope, projectsQueryKey } from "./scope";
 import { skillQueryKey, skillQueryPrefix } from "../hooks/use-skill-detail";
 import {
   skillDirQueryPrefix,
@@ -40,6 +41,7 @@ import type {
   TaskResult,
   TaskSkillStatus,
   UpdateCheckReport,
+  ProjectList,
 } from "./types";
 import { updateCheckLifecycle } from "./update-check-lifecycle";
 import { markSkillsCurrent, updateReportQueryKey } from "./update-view";
@@ -58,6 +60,8 @@ export type MutationAction =
   | "uninstall_agents"
   | "attach"
   | "detach"
+  | "clean_records"
+  | "restore"
   | "copy_to_project"
   | "manage_add"
   | "manage_remove"
@@ -99,6 +103,8 @@ const HEADING_LABELS: Record<
   MutationAction,
   Record<MutationOutcome, string>
 > = {
+  clean_records: { success: "记录清理完成", partial: "记录部分清理", failed: "记录清理失败", cancelled: "记录清理已停止" },
+  restore: { success: "技能恢复完成", partial: "技能部分恢复", failed: "技能恢复失败", cancelled: "技能恢复已停止" },
   install: {
     success: "安装完成",
     partial: "安装部分失败",
@@ -452,6 +458,9 @@ export function mutationRefreshPlan(
     remove: [],
   });
   switch (action) {
+    case "clean_records":
+    case "restore":
+      return invalidate([inventoryQueryKey(scope), skillQueryPrefix(scope), staleRecordsQueryKey(scope)]);
     case "copy_to_project":
       return invalidate([
         projectsQueryKey,
@@ -571,6 +580,8 @@ export function refreshMutationQueries(
   if (
     [
       "install",
+      "clean_records",
+      "restore",
       "uninstall",
       "project_add",
       "project_relocate",
@@ -578,6 +589,15 @@ export function refreshMutationQueries(
     ].includes(options.action)
   ) {
     void queryClient.invalidateQueries({ queryKey: discoveryQueryKey });
+  }
+  if (result?.batch && (options.action === "clean_records" || options.action === "restore")) {
+    const rows = result.batch.rows.filter((r) => r.status === "success");
+    const names = new Set(rows.map((r) => r.name));
+    queryClient.setQueryData<UpdateCheckReport>(updateReportQueryKey(scope), (previous) => previous ? { ...previous, skills: previous.skills.filter((s) => !names.has(s.name)) } : previous);
+    if (options.action === "restore" && rows.length) {
+      const project = projectForScope(queryClient.getQueryData<ProjectList>(projectsQueryKey), scope);
+      updateCheckLifecycle(queryClient).start(scope, scope === "global" ? undefined : project?.checkRevision ?? "initial", rows.map((r) => r.skillId));
+    }
   }
   const plan = mutationRefreshPlan(options.action, scope, options.skillId);
   for (const queryKey of plan.invalidate) {

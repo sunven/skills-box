@@ -26,6 +26,8 @@ pub enum BatchAction {
     Attach,
     Detach,
     CopyToProject,
+    CleanRecords,
+    Restore,
 }
 impl BatchAction {
     pub fn label(self) -> &'static str {
@@ -36,6 +38,8 @@ impl BatchAction {
             Self::Attach => "挂载",
             Self::Detach => "解除挂载",
             Self::CopyToProject => "复制到项目",
+            Self::CleanRecords => "清理记录",
+            Self::Restore => "恢复技能",
         }
     }
     pub fn has_agents(self) -> bool {
@@ -78,6 +82,8 @@ pub struct BatchTarget {
     /// Display-only; execution rebuilds arguments from the validated plan.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    pub source: Option<String>,
+    pub reference: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -137,6 +143,7 @@ pub struct BatchPlan {
     pub updates: HashMap<String, UpdateSkillResult>,
     pub created_at: u64,
     pub copy: Option<super::copy_to_project::CopyPlan>,
+    pub stale: Option<super::stale_records::StalePlan>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -186,7 +193,37 @@ pub fn plan(
         .as_ref()
         .map(|keys| keys.iter().cloned().collect::<HashSet<_>>());
     let mut targets = Vec::new();
+    let is_stale = matches!(
+        request.action,
+        BatchAction::CleanRecords | BatchAction::Restore
+    );
+    let mut installs = HashMap::new();
+    let expected = if is_stale {
+        Some(super::stale_records::read_lock(layout)?)
+    } else {
+        None
+    };
     for (skill_id, name) in names {
+        if is_stale {
+            let (target, install) = super::stale_records::inspect(
+                paths,
+                layout,
+                request.action,
+                &skill_id,
+                &name,
+                agent_ids,
+            )?;
+            if keys
+                .as_ref()
+                .is_none_or(|keys| keys.contains(&target.target.key))
+            {
+                if let Some(install) = install {
+                    installs.insert(name, install);
+                }
+                targets.push(target);
+            }
+            continue;
+        }
         if request.action.has_agents() {
             for agent_id in agent_ids {
                 let target = preview_target(
@@ -241,7 +278,7 @@ pub fn plan(
         project: None,
         agents: None,
     };
-    Ok(BatchPlan {
+    let mut plan = BatchPlan {
         preview,
         request,
         root: layout.root.clone(),
@@ -250,7 +287,16 @@ pub fn plan(
         updates,
         created_at: crate::time::now_ms(),
         copy: None,
-    })
+        stale: expected.map(|expected| super::stale_records::StalePlan {
+            expected,
+            installs,
+            source_checked: false,
+        }),
+    };
+    if is_stale {
+        super::stale_records::revision(&mut plan);
+    }
+    Ok(plan)
 }
 
 fn preview_target(
@@ -289,6 +335,8 @@ fn preview_target(
                     paths: Vec::new(),
                     operation: None,
                     command: None,
+                    source: None,
+                    reference: None,
                 },
             })
         }
@@ -322,6 +370,8 @@ pub fn inspect(
         paths: Vec::new(),
         operation: None,
         command: None,
+        source: None,
+        reference: None,
     };
     if action == BatchAction::UninstallAgents {
         return super::uninstall_agents::inspect(paths, layout, target);
@@ -461,6 +511,9 @@ pub fn inspect(
             }
             Ok(())
         })(),
+        BatchAction::CleanRecords | BatchAction::Restore => {
+            unreachable!("stale records have their own inspection")
+        }
         BatchAction::CopyToProject => unreachable!("copy has its own plan"),
         BatchAction::UninstallAgents => unreachable!("agent removal has its own inspection"),
     };

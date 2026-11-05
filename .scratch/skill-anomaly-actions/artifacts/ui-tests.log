@@ -1,0 +1,11 @@
+
+ RUN  v5.0.5 /Users/sunven/github/skills-box
+
+
+ Test Files  38 passed (38)
+      Tests  328 passed (328)
+   Start at  19:44:00
+   Duration  7.22s (tests 54%, environment 25%, import 9%, setup 7%, transform 5%)
+
+    Isolate  38 workers spawned · ~482ms startup each (spawn + environment, per file)
+             at least ~1.55s faster with isolate: false — reuses workers across files instead of one per file

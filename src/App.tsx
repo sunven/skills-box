@@ -12,6 +12,7 @@ import {
   useState,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { StaleRecordsDialog } from "./components/stale-records-dialog";
 import { AnomalyDialog } from "./components/anomaly-panel";
 import { AppHeader } from "./components/app-header";
 import { DetailPane, type DetailEntry } from "./components/detail-pane";
@@ -100,6 +101,7 @@ function App() {
   const [batchSelection, setBatchSelection] = useState<
     (BatchSelection & { scope: ScopeId }) | null
   >(null);
+  const [staleRecordsOpen, setStaleRecordsOpen] = useState(false);
   const [batchRunning, setBatchRunning] = useState(false);
   const batchRunningRef = useRef(false);
   const [batchSucceededIds, setBatchSucceededIds] = useState<Set<string>>(
@@ -392,6 +394,7 @@ function App() {
     setDetailEntry(null);
     setFiltersOpen(false);
     setAnomaliesOpen(false);
+    setStaleRecordsOpen(false);
     setUpdateTarget(null);
     setUninstallSkill(null);
     setBatchSelection(null);
@@ -719,8 +722,13 @@ function App() {
       <AnomalyDialog
         anomalies={view.anomalies}
         open={anomaliesOpen}
+        disabled={scopeBlocked || appUpdate.critical || batchRunning}
+        onProcessStale={() => { setAnomaliesOpen(false); setStaleRecordsOpen(true); }}
         onClose={() => setAnomaliesOpen(false)}
       />
+      {staleRecordsOpen ? <StaleRecordsDialog scope={scope} scopeLabel={activeProject?.displayName ?? "全局"} disabled={scopeBlocked || appUpdate.critical || batchRunning}
+        onClose={() => setStaleRecordsOpen(false)}
+        onSelect={(selection) => { setStaleRecordsOpen(false); setBatchSucceededIds(new Set()); setBatchSelection({ ...selection, scope }); }} /> : null}
       {!appUpdate.critical && view.updateDialog ? (
         <UpdateDialog
           open
@@ -734,6 +742,7 @@ function App() {
           key={`${batchSelection.scope}:${batchSelection.action}`}
           selection={batchSelection}
           scope={batchSelection.scope}
+          scopeLabel={activeProject?.displayName ?? "全局"}
           agents={
             (batchSelection.action === "detach" || batchSelection.action === "uninstall"
               ? snapshot?.agents

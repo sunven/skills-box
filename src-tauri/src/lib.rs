@@ -244,6 +244,7 @@ pub fn run() {
             commands::start_preview,
             commands::start_install,
             commands::start_update,
+            commands::list_stale_records,
             commands::preview_batch,
             commands::refresh_batch_preview,
             commands::start_batch,

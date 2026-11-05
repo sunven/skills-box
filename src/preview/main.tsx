@@ -26,7 +26,14 @@ createFakeBackend({
     discovery: discoveryFixture(),
     projects: { projects: [discoveryProject], lastActiveScope: "global", warnings: [] },
     environment,
-    snapshot,
+    snapshot: new URLSearchParams(location.search).has("staleRecords") ? {
+      ...snapshot, skills: snapshot.skills.filter((s) => s.name !== "caveman"), anomalies: { ...snapshot.anomalies, total: snapshot.anomalies.total + 20,
+        stale: { count: 21, examples: ["caveman", "design-an-interface", "diagnose"] } },
+    } : snapshot,
+    staleRecords: new URLSearchParams(location.search).has("staleRecords") ? { global: Array.from({ length: 21 }, (_, i) => {
+      const name = ["caveman", "design-an-interface", "diagnose"][i] ?? `missing-skill-${i + 1}`;
+      return { id: name, name, source: "mattpocock/skills", reference: null, cleanReason: null, restoreReason: null };
+    }) } : undefined,
     detail: (skillId) => skillDetail(skillId),
     listDir: listSkillDir,
     readFile: readSkillFile,

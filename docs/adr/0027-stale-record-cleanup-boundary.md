@@ -1,0 +1,9 @@
+# Stale record cleanup owns a limited native Lock writer
+
+Status: accepted
+
+Stale lock entries have no Skill files to uninstall, yet still reserve names in the Scope Lock. The user accepted an explicit Clean stale records action that removes selected records and their Baseline fingerprints while retaining Skill files, Agent attachments and Discovery history; Restore skill instead reinstalls a missing Skill from its recorded Source. Using `skills remove` for record-only cleanup would give a filesystem mutation command authority beyond this action's confirmed record scope.
+
+We therefore adopt a bounded exception to ADR-0001: native cleanup may delete only confirmed Stale lock entry keys from the current Global v3 or Project v1 Lock. It validates complete absence within that Scope, preserves raw JSON fields outside those keys, backs up the original Lock and affected baselines, rechecks the current document and project identity before each write, and publishes by atomic replacement. A general native Lock editor and treating an incomplete inventory scan as proof of absence were rejected. Install, Update and existing Managed Uninstall keep the CLI; Restore uses the CLI with dedicated stale-only authorization instead of the broader install retry bypass.
+
+Single-item and batch cleanup or restoration share ADR-0021's registered task, writer permit, fixed Scope, per-target verification and stopping between targets. Completed writes remain committed; failures retain backups and report the observed state. This preserves ADR-0025's deliberate retention of records after Remove from Agents: cleanup is a separate user-selected action, never an automatic consequence of removing the last copy. Application serialization and document rechecks detect observed external changes but do not promise a transaction with unrelated CLI processes.

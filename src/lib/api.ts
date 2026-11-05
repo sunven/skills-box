@@ -1,4 +1,4 @@
-import type { BatchRequest, BatchPreview, BatchConfirmation } from "./batch";
+import type { BatchRequest, BatchPreview, BatchConfirmation, StaleRecord } from "./batch";
 import type { CliCommandRequest, CliCommandPreview, CliCommandRecord } from "./cli-commands";
 import type {
   DiscoveryId,
@@ -74,6 +74,7 @@ export const API_COMMANDS = {
   getUpdateCheckState: "get_update_check_state",
   getUpdateCheckStates: "get_update_check_states",
   startUpdate: "start_update",
+  listStaleRecords: "list_stale_records",
   previewBatch: "preview_batch",
   refreshBatchPreview: "refresh_batch_preview",
   startBatch: "start_batch",
@@ -513,4 +514,8 @@ export function startBatch(
     confirmation,
     onEvent: channel,
   });
+}
+
+export function listStaleRecords(scope: ScopeId): Promise<StaleRecord[]> {
+  return invoke<StaleRecord[]>(API_COMMANDS.listStaleRecords, { scope });
 }

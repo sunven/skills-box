@@ -1,0 +1,21 @@
+   Compiling skills-box v0.1.2 (/Users/sunven/github/skills-box/src-tauri)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.11s
+     Running unittests src/lib.rs (src-tauri/target/debug/deps/skills_box_lib-1d93bbcb8075e1ef)
+
+running 1 test
+
+thread 'tasks::manager::batch::tests::restore_rejects_incomplete_cli_writes_retains_backups_and_continues_other_targets' (1707794) panicked at src/tasks/manager/batch/tests.rs:572:5:
+assertion `left == right` failed
+  left: [Success, Success]
+ right: [Failed, Success]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test tasks::manager::batch::tests::restore_rejects_incomplete_cli_writes_retains_backups_and_continues_other_targets ... FAILED
+
+failures:
+
+failures:
+    tasks::manager::batch::tests::restore_rejects_incomplete_cli_writes_retains_backups_and_continues_other_targets
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 636 filtered out; finished in 0.06s
+
+error: test failed, to rerun pass `--lib`

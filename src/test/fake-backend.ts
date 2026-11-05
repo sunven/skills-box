@@ -1,4 +1,5 @@
 import type {
+  StaleRecord,
   BatchRequest,
   BatchPreview,
   BatchConfirmation,
@@ -61,6 +62,7 @@ type Factory<T> = T | (() => T);
 type MaybePromise<T> = T | Promise<T>;
 
 export interface FakeCommandContract {
+  list_stale_records: { args: { scope: ScopeId }; result: StaleRecord[] };
   get_cli_commands: { args: Record<string, never>; result: CliCommandRecord[] };
   preview_cli_commands: { args: { scope: ScopeId; request: CliCommandRequest }; result: CliCommandPreview };
   preview_batch: {
@@ -218,6 +220,7 @@ export type FakeCall = {
 }[ApiCommand];
 
 export interface FakeBackendData {
+  staleRecords?: Partial<Record<ScopeId, StaleRecord[]>>;
   appUpdate: AppUpdateSnapshot;
   discovery: DiscoveryState;
   githubSettings: GitHubSettingsStatus;
@@ -446,6 +449,7 @@ export function createFakeBackend(
     return { scope, commands: preview.entries.flatMap((entry) => entry.command ? [entry.command] : []) };
   };
   const installSources = new Map<string, string>();
+  const refreshedDiscoverySources = new Set<string>();
   let batchPreviewCounter = 0;
   const pendingCopyProjects = new Map<string, ProjectEntry>();
   const batchPreviews = new Map<
@@ -1161,12 +1165,67 @@ export function createFakeBackend(
       },
     };
   };
+  const recordsFor = (scope: ScopeId): StaleRecord[] => {
+    const configured = data.staleRecords?.[scope];
+    if (configured) return configured;
+    const group = snapshotFor(scope).anomalies.stale;
+    return Array.from({ length: group.count }, (_, index) => {
+      const name = group.examples[index] ?? `missing-skill-${index + 1}`;
+      return { id: scope === GLOBAL_SCOPE ? name : `${scope}/${name}`, name, source: "acme/skills", reference: null, cleanReason: null, restoreReason: null };
+    });
+  };
+  const removeRecord = (scope: ScopeId, id: string) => {
+    const records = recordsFor(scope).filter((r) => r.id !== id);
+    data = { ...data, staleRecords: { ...data.staleRecords, [scope]: records } };
+    const snapshot = snapshotFor(scope);
+    const prior = snapshot.anomalies.stale.count;
+    setSnapshot({ ...snapshot, anomalies: { ...snapshot.anomalies,
+      total: snapshot.anomalies.total - prior + records.length,
+      stale: { count: records.length, examples: records.slice(0, 3).map((r) => r.name) },
+    } }, scope);
+  };
+  const refreshRecordDiscovery = (scope: ScopeId, source: string, name: string, restored: boolean) => {
+    refreshedDiscoverySources.add(source);
+    updateDiscovery((skill) => skill.id.source === source && skill.id.name === name.toLowerCase()
+      ? { ...skill, installations: skill.installations.map((installation) => installation.scope === scope
+        ? { ...installation, status: restored ? "installed" : "notInstalled" } : installation) }
+      : skill);
+  };
+  const discoveryState = (): DiscoveryState => {
+    if (refreshedDiscoverySources.size === 0) return data.discovery;
+    const scopes = [GLOBAL_SCOPE, ...projectList.projects.map((project) => projectScope(project.id))];
+    const active = (source: string) => !refreshedDiscoverySources.has(source) || scopes.some((scope) =>
+      snapshotFor(scope).skills.some((skill) => skill.management === "managed" && skill.source === source)
+      || recordsFor(scope).some((record) => record.source === source));
+    const skills = data.discovery.skills.filter((skill) => active(skill.id.source));
+    // Keep dormant source catalogs and read/ignore decisions in data.discovery.
+    return { ...data.discovery, skills, sources: data.discovery.sources.filter((source) => active(source.source)),
+      unreadCount: skills.filter((skill) => skill.unread && !skill.ignored).length };
+  };
   const buildBatchPreview = (
     id: string,
     scope: ScopeId,
     request: BatchRequest,
   ): BatchPreview => {
     const snapshot = snapshotFor(scope);
+    if (request.action === "clean_records" || request.action === "restore") {
+      if (scope !== GLOBAL_SCOPE && !projectList.projects.some((p) => projectScope(p.id) === scope && p.available)) throw { code: "project.root_unavailable", message: "项目不可用。", retryable: true } satisfies AppError;
+      const targets = request.skillIds.map((skillId): BatchTarget => {
+        const record = recordsFor(scope).find((r) => r.id === skillId);
+        const name = record?.name ?? skillId.split("/").pop()!;
+        const selected = request.agentIds.map((id) => snapshot.installTargets.find((a) => a.id === id));
+        const reason = !record ? "安装记录已不存在。" : snapshot.skills.some((s) => s.name === name) ? "同名技能已有文件或挂载。"
+          : request.action === "clean_records" ? record.cleanReason
+          : record.restoreReason ?? (!factoryValue(data.environment).mutationsEnabled ? "恢复需要可用的 Node、npx 和 Git。" : selected.some((a) => !a?.detected || a.shared || a.universal) ? "所选 Agent 不可用。" : null);
+        return { key: JSON.stringify([skillId, null]), skillId, name, agentId: null, agentName: null,
+          eligible: !reason, reason, localModification: "unknown", deletesCopy: false, source: record?.source, reference: record?.reference,
+          paths: request.action === "clean_records" ? [scope === GLOBAL_SCOPE ? "~/.agents/.skill-lock.json" : `${canonicalRootFor(scope)}/../../skills-lock.json`, `app-data/baselines/${scope}/${name}.json`]
+            : [`${canonicalRootFor(scope)}/${name}`, ...selected.filter((a) => a).map((a) => `${a!.globalSkillsDir}/${name}`)],
+          command: request.action === "restore" && record && !reason ? `npx skills@latest add ${record.source}${record.reference ? `#${record.reference}` : ""} --skill ${name} -a ${[...request.agentIds, "universal"].join(" ")} --json -y${scope === GLOBAL_SCOPE ? " -g" : ""}` : undefined,
+        };
+      }).filter((t) => !request.targetKeys || request.targetKeys.includes(t.key));
+      return { id, scope, action: request.action, targets, revision: JSON.stringify({ targets, records: recordsFor(scope), agents: request.agentIds }) };
+    }
     if (request.action === "copy_to_project") {
       if (scope !== GLOBAL_SCOPE || !request.projectRoot?.startsWith("/")) throw { code: "project.invalid_root", message: "请选择有效的项目目录。", retryable: false } satisfies AppError;
       const root = request.projectRoot.replace(/\/+$/, "");
@@ -1339,7 +1398,17 @@ export function createFakeBackend(
         if (invocation) publishCommand(invocation);
         let failure: AppError | null = null;
         try {
-          if (preview.action === "update")
+          if (preview.action === "clean_records" || preview.action === "restore") {
+            if (!recordsFor(preview.scope).some((r) => r.id === target.skillId) || snapshotFor(preview.scope).skills.some((s) => s.name === target.name)) throw { code: "batch.target_changed", message: "记录或目录已变化，请重新预览。", retryable: true } satisfies AppError;
+            if (preview.action === "restore") {
+              installInto(preview.scope, [target.name]);
+              const installed = snapshotFor(preview.scope);
+              setSnapshot({ ...installed, skills: installed.skills.map((s) => s.name === target.name ? { ...s, source: target.source ?? null } : s) }, preview.scope);
+              for (const agent of installed.installTargets) if (!agent.shared && !agent.universal && target.paths.includes(`${agent.globalSkillsDir}/${target.name}`)) nativeAttach(target.skillId, agent.id, preview.scope);
+            }
+            removeRecord(preview.scope, target.skillId);
+            refreshRecordDiscovery(preview.scope, target.source ?? "", target.name, preview.action === "restore");
+          } else if (preview.action === "update")
             updateInto(preview.scope, [target.name]);
           else if (preview.action === "uninstall")
             uninstallFrom(preview.scope, [target.skillId]);
@@ -1410,7 +1479,7 @@ export function createFakeBackend(
                 row.status === "success"
                   ? preview.action === "update"
                     ? "updated"
-                    : preview.action === "attach" || preview.action === "copy_to_project"
+                    : preview.action === "restore" || preview.action === "attach" || preview.action === "copy_to_project"
                       ? "installed"
                       : "removed"
                   : row.status === "skipped"
@@ -1431,6 +1500,7 @@ export function createFakeBackend(
   };
 
   const defaultHandlers: FakeHandlers = {
+    list_stale_records: ({ scope }) => recordsFor(scope),
     preview_batch: ({ scope, request }) => {
       const id = `batch-preview-${++batchPreviewCounter}`;
       const preview = buildBatchPreview(id, scope, request);
@@ -1555,10 +1625,12 @@ export function createFakeBackend(
       }
       return data.appUpdate;
     },
-    get_discovery_state: () => data.discovery,
+    get_discovery_state: () => discoveryState(),
     start_discovery_scan: () => {
       const now = Date.now();
+      const activeSources = new Set(discoveryState().sources.map((source) => source.source));
       const sources = data.discovery.sources.map((source) => {
+        if (!activeSources.has(source.source)) return source;
         if ((!source.needsRevalidation && source.lastSuccessAt !== null) || (source.pausedUntil !== null && source.pausedUntil > now)) return source;
         const preview = cliPreview(GLOBAL_SCOPE, { action: "preview", source: source.source });
         const record: CliCommandRecord = { id: `discovery:${source.source}:${now}`, command: preview.entries[0]!.command!,
@@ -1821,6 +1893,7 @@ export function createFakeBackend(
       cliRecords = [];
       taskCommands.clear();
       installSources.clear();
+      refreshedDiscoverySources.clear();
       batchPreviews.clear();
       pendingCopyProjects.clear();
       batchRuns.clear();

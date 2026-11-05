@@ -57,8 +57,16 @@ A managed skill with no canonical folder; its files exist only as agent copies.
 _Avoid_: legacy skill, detached skill
 
 **Stale lock entry**:
-A lock entry with no corresponding skill folder anywhere.
+A lock entry with no corresponding skill folder anywhere within its Scope.
 _Avoid_: ghost, orphan
+
+**Clean stale records**:
+Remove Stale lock entries and their Baseline fingerprints while retaining Skill files, Agent attachments and Discovery history. The Chinese UI labels it 「清理记录」.
+_Avoid_: uninstall, repair
+
+**Restore skill**:
+Reinstall a missing Skill from the Source recorded in its Lock entry. The Chinese UI labels it 「恢复技能」.
+_Avoid_: repair, backup restore
 
 **Source**:
 The upstream origin a skill is installed from; accepts public Git repositories over HTTPS.
@@ -71,6 +79,10 @@ _Avoid_: subscription, watched repository
 **Source catalog**:
 The latest successfully observed set of skills available from a Discovery source, shared across Global and Project scopes.
 _Avoid_: inventory, lock file
+
+**Discovery history**:
+The Source catalog and recorded read and ignore decisions retained for a Discovery source, including while that source is inactive.
+_Avoid_: cache, installation history
 
 **Discovered skill**:
 A skill observed in a Source catalog, identified by its source and case-insensitive name. A change to its source path alone does not change its identity.
@@ -103,10 +115,6 @@ _Avoid_: uninstalled skill, update candidate
 **Ignored discovery**:
 A Discovered skill the user has excluded from ordinary discovery listings and reminders across all Scopes. Restoring it makes it visible as acknowledged.
 _Avoid_: uninstalled skill, deleted skill
-
-**Discovery history**:
-A source's record of previously observed Discovered skills and the user's decisions about their reminders, retained while the source is inactive.
-_Avoid_: source catalog, lock file
 
 **Install target**:
 The selected agents plus the canonical store that an install writes to.
@@ -209,11 +217,11 @@ A serialized operation that changes skills or agent attachments.
 _Avoid_: job, command
 
 **Batch operation**:
-One user-requested Update, Uninstall, Remove from Agents, Attach, or Detach applied to a selection of Skills within one Scope.
+One user-requested Update, Uninstall, Remove from Agents, Attach, Detach, Clean stale records, or Restore skill applied to selected Skills or Stale lock entries within one Scope.
 _Avoid_: cross-scope operation, bulk install
 
 **Batch target**:
-A Skill selected for a Batch operation, paired with one selected Agent when the action is Attach, Detach or Remove from Agents.
+A Skill or Stale lock entry selected for a Batch operation, paired with one selected Agent when the action is Attach, Detach or Remove from Agents.
 _Avoid_: install target, selected row
 
 **Mutation session**:

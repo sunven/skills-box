@@ -21,6 +21,98 @@ use crate::tasks::{uninstall, update};
 use crate::update::UpdateSkillResult;
 
 impl TaskManager {
+    async fn prepare_restoration(
+        &self,
+        layout: &ScopeLayout,
+        plan: &mut BatchPlan,
+    ) -> Result<(), AppError> {
+        if plan.stale.as_ref().is_some_and(|s| s.source_checked) {
+            return Ok(());
+        }
+        use crate::tasks::parser::PreviewParseOutcome;
+        let mut sources = HashMap::new();
+        let runtime = self.inner.runtime.cli_runtime().await;
+        for target in &mut plan.targets {
+            if !target.target.eligible {
+                continue;
+            }
+            let install = &plan.stale.as_ref().unwrap().installs[&target.target.name];
+            let result = if let Err(error) = &runtime {
+                Err(error.clone())
+            } else {
+                if !sources.contains_key(&install.source) {
+                    let result = crate::tasks::preview::source_preview(
+                        self.inner.runtime.as_ref(),
+                        self.inner.executor.as_ref(),
+                        &self.inner.paths,
+                        layout,
+                        &install.source,
+                        crate::timeouts::PREVIEW_TIMEOUT,
+                        CancelToken::new(),
+                        None,
+                    )
+                    .await
+                    .and_then(|(output, parsed)| {
+                        if !output.success() {
+                            return Err(AppError::skill_install_failed("来源", output.stderr));
+                        }
+                        match parsed {
+                            PreviewParseOutcome::Skills(skills) => Ok(skills),
+                            PreviewParseOutcome::NoSkills => Ok(Vec::new()),
+                            PreviewParseOutcome::Failed { raw } => {
+                                Err(AppError::cli_invalid_json(raw))
+                            }
+                        }
+                    });
+                    sources.insert(install.source.clone(), result);
+                }
+                sources[&install.source].clone().and_then(|skills| {
+                    let matches = skills
+                        .iter()
+                        .filter(|s| s.name.eq_ignore_ascii_case(&target.target.name))
+                        .collect::<Vec<_>>();
+                    if matches.len() != 1 || matches[0].name != target.target.name {
+                        return Err(AppError::skill_not_in_source(
+                            &target.target.name,
+                            "原来源中找不到唯一的同名技能；可能已改名、删除或存在歧义。",
+                        ));
+                    }
+                    Ok(())
+                })
+            };
+            match result {
+                Ok(()) => {
+                    target.target.command = Some(crate::cli::commands::display_command(
+                        &crate::cli::ScopedCli::new(runtime.as_ref().unwrap(), layout).install(
+                            &install.source,
+                            &install.skills,
+                            &install.agent_ids,
+                            self.inner.config.install_timeout,
+                        ),
+                    ))
+                }
+                Err(error) => {
+                    target.target.eligible = false;
+                    target.target.reason = Some(error.detail.unwrap_or(error.message));
+                }
+            }
+        }
+        plan.stale.as_mut().unwrap().source_checked = true;
+        crate::tasks::stale_records::revision(plan);
+        Ok(())
+    }
+
+    pub async fn stale_records(
+        &self,
+        scope: ScopeId,
+    ) -> Result<Vec<crate::tasks::stale_records::StaleRecord>, AppError> {
+        let layout = self.scope_layout(&scope)?;
+        let paths = self.inner.paths.clone();
+        tokio::task::spawn_blocking(move || crate::tasks::stale_records::list(&paths, &layout))
+            .await
+            .map_err(|e| AppError::task_internal("失效记录清单", e))?
+    }
+
     pub async fn preview_batch(
         &self,
         scope: ScopeId,
@@ -101,6 +193,9 @@ impl TaskManager {
         let command_layout = layout.clone();
         let paths = self.inner.paths.clone();
         let mut fresh = tokio::task::spawn_blocking(move || {
+            if original.stale.is_some() {
+                return crate::tasks::stale_records::replan(&paths, &layout, &original);
+            }
             if original.copy.is_some() {
                 return crate::tasks::copy_to_project::replan(&paths, &layout, &original);
             }
@@ -172,7 +267,9 @@ impl TaskManager {
             .collect();
         let planned = self
             .plan_scoped_mutation(scope, MutationKind::Batch, move |paths, layout| {
-                let fresh = if original.copy.is_some() {
+                let fresh = if original.stale.is_some() {
+                    crate::tasks::stale_records::replan(paths, layout, &original)?
+                } else if original.copy.is_some() {
                     crate::tasks::copy_to_project::replan(paths, layout, &original)?
                 } else {
                     batch::plan(
@@ -234,6 +331,9 @@ impl TaskManager {
         layout: &ScopeLayout,
         plan: &mut BatchPlan,
     ) -> Result<(), AppError> {
+        if plan.preview.action == BatchAction::Restore {
+            return self.prepare_restoration(layout, plan).await;
+        }
         if !matches!(
             plan.preview.action,
             BatchAction::Update | BatchAction::Uninstall
@@ -288,7 +388,7 @@ pub(super) async fn run(
     manager: TaskManager,
     layout: ScopeLayout,
     ctx: session::SessionContext,
-    plan: BatchPlan,
+    mut plan: BatchPlan,
 ) -> FinishOutcome {
     let total = plan.targets.iter().filter(|t| t.target.eligible).count() as u32;
     let mut completed = 0;
@@ -298,7 +398,7 @@ pub(super) async fn run(
     let mut skill_results = Vec::new();
     let mut copied = std::collections::HashSet::new();
     let mut copy_failed = std::collections::HashSet::new();
-    for target in &plan.targets {
+    for target in &plan.targets.clone() {
         if !target.target.eligible {
             rows.push(row(target, BatchStatus::Skipped, None, None));
             continue;
@@ -328,6 +428,7 @@ pub(super) async fn run(
             completed,
             total,
         ));
+        let observed = Arc::new(Mutex::new(None));
         let snapshots = Arc::new(Mutex::new(Vec::<String>::new()));
         let snapshot_copy = snapshots.clone();
         let record_snapshot = ctx.record_snapshot.clone();
@@ -354,7 +455,9 @@ pub(super) async fn run(
             // Stopping the batch cannot abort a target's write/verification.
             cancel: CancelToken::new(),
             envelope: TaskEnvelope {
-                action: if plan.preview.action == BatchAction::Update {
+                action: if plan.preview.action == BatchAction::Restore {
+                    TaskAction::Install
+                } else if plan.preview.action == BatchAction::Update {
                     TaskAction::Update
                 } else {
                     TaskAction::Uninstall
@@ -477,6 +580,46 @@ pub(super) async fn run(
                     .map_err(|e| AppError::task_internal("批量挂载", e))
                     .and_then(|r| r)
                 }
+                BatchAction::CleanRecords => {
+                    let write_layout = layout.clone();
+                    let write_plan = plan.clone();
+                    let write_target = target.clone();
+                    let result = tokio::task::spawn_blocking(move || {
+                        crate::tasks::stale_records::clean(
+                            &paths,
+                            &write_layout,
+                            &write_plan,
+                            &write_target,
+                            record.as_ref(),
+                            &|| verify_target(&paths, &write_layout, &write_plan, &write_target),
+                        )
+                    })
+                    .await
+                    .map_err(|e| AppError::task_internal("清理记录", e))
+                    .and_then(|r| r);
+                    result.map(|w| warnings.extend(w))
+                }
+                BatchAction::Restore => {
+                    let install =
+                        plan.stale.as_ref().unwrap().installs[&target.target.name].clone();
+                    let action = crate::tasks::stale_records::RestoreAction {
+                        inner: crate::tasks::install::InstallAction::new(
+                            paths.clone(),
+                            layout.clone(),
+                            manager.inner.config.install_timeout,
+                            ctx.task_id.to_string(),
+                        ),
+                        paths,
+                        layout: layout.clone(),
+                        plan: plan.clone(),
+                        target: target.clone(),
+                        observed: observed.clone(),
+                    };
+                    unit_outcome(
+                        session::run(inner_ctx, action, install).await,
+                        &mut warnings,
+                    )
+                }
                 BatchAction::CopyToProject => {
                     let plan = plan.clone();
                     let target = target.clone();
@@ -501,9 +644,16 @@ pub(super) async fn run(
             .unwrap_or_else(|p| p.into_inner())
             .last()
             .cloned();
-        let (status, error) = match outcome {
+        let (mut status, mut error) = match outcome {
             Ok(()) => (BatchStatus::Success, None),
-            Err(error) => {
+            Err(mut error) => {
+                if plan.preview.action == BatchAction::Restore {
+                    error.detail = Some(format!(
+                        "{}\n{}",
+                        error.detail.unwrap_or_default(),
+                        crate::tasks::stale_records::observed_state(&layout, &target.target.name)
+                    ));
+                }
                 stopped = batch::stops_batch(&error);
                 let status = if error.code == ErrorCode::BatchTargetChanged {
                     BatchStatus::Skipped
@@ -513,6 +663,23 @@ pub(super) async fn run(
                 (status, Some(error))
             }
         };
+        if plan.stale.is_some() {
+            let observed = observed.lock().unwrap_or_else(|p| p.into_inner()).clone();
+            match crate::tasks::stale_records::advance(
+                &layout,
+                &plan,
+                &target.target.name,
+                status == BatchStatus::Success,
+                observed,
+            ) {
+                Ok(bytes) => plan.stale.as_mut().unwrap().expected = bytes,
+                Err(e) => {
+                    stopped = true;
+                    status = BatchStatus::Failed;
+                    error = Some(e);
+                }
+            }
+        }
         if plan.copy.is_some() && target.target.agent_id.is_none() {
             if status == BatchStatus::Success {
                 copied.insert(target.target.name.clone());
@@ -523,10 +690,13 @@ pub(super) async fn run(
         let skill_status = if status == BatchStatus::Success {
             match plan.preview.action {
                 BatchAction::Update => TaskSkillStatus::Updated,
-                BatchAction::Uninstall | BatchAction::UninstallAgents | BatchAction::Detach => {
-                    TaskSkillStatus::Removed
+                BatchAction::CleanRecords
+                | BatchAction::Uninstall
+                | BatchAction::UninstallAgents
+                | BatchAction::Detach => TaskSkillStatus::Removed,
+                BatchAction::Restore | BatchAction::Attach | BatchAction::CopyToProject => {
+                    TaskSkillStatus::Installed
                 }
-                BatchAction::Attach | BatchAction::CopyToProject => TaskSkillStatus::Installed,
             }
         } else if status == BatchStatus::Skipped {
             TaskSkillStatus::Skipped
@@ -622,7 +792,7 @@ async fn check_target(
     .map_err(|e| AppError::task_internal("批量校验", e))?
 }
 
-fn verify_target(
+pub(crate) fn verify_target(
     paths: &crate::paths::AppPaths,
     layout: &ScopeLayout,
     plan: &BatchPlan,
@@ -642,6 +812,9 @@ fn verify_target(
     }
     let layout = &current;
     layout.ensure_mutation_ready()?;
+    if plan.stale.is_some() {
+        return crate::tasks::stale_records::verify(paths, layout, plan, target);
+    }
     if plan.preview.action == BatchAction::UninstallAgents {
         return crate::tasks::uninstall_agents::verify(paths, layout, target);
     }

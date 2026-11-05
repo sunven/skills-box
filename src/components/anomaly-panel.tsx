@@ -16,7 +16,7 @@ export function AnomalyBanner({ anomalies, onOpen }: AnomalyBannerProps) {
       type="button"
       onClick={onOpen}
       className="anomaly-strip"
-      aria-label={`只读提示：异常 ${anomalies.total}`}
+      aria-label={`异常提示：异常 ${anomalies.total}`}
     >
       <AlertTriangle
         className="size-3.5 shrink-0 self-start"
@@ -33,7 +33,7 @@ export function AnomalyBanner({ anomalies, onOpen }: AnomalyBannerProps) {
           {anomalies.checkFailed.count} 个检查失败
         </span>
       </span>
-      <span className="link">查看只读提示</span>
+      <span className="link">查看异常提示</span>
     </button>
   );
 }
@@ -42,6 +42,8 @@ interface AnomalyDialogProps {
   anomalies: AnomalyView;
   open: boolean;
   onClose: () => void;
+  onProcessStale?: () => void;
+  disabled?: boolean;
 }
 
 const CATEGORIES: Array<{
@@ -66,7 +68,7 @@ const CATEGORIES: Array<{
   {
     key: "unmanaged",
     label: "未受管",
-    description: "磁盘上有目录但没有 lock 条目；v1 只读展示，不提供更新或卸载。",
+    description: "磁盘上有目录但没有安装记录；可以挂载或卸载，不能检查更新。",
   },
   {
     key: "broken",
@@ -134,7 +136,7 @@ function CategoryCard({
   );
 }
 
-export function AnomalyDialog({ anomalies, open, onClose }: AnomalyDialogProps) {
+export function AnomalyDialog({ anomalies, open, onClose, onProcessStale, disabled }: AnomalyDialogProps) {
   const closeRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
@@ -170,10 +172,10 @@ export function AnomalyDialog({ anomalies, open, onClose }: AnomalyDialogProps) 
                 className="size-4 text-warning"
                 aria-hidden="true"
               />
-              异常与只读提示
+              异常提示
             </h2>
             <p className="modal-sub">
-              v1 只展示异常，不提供一键修复。所有操作都不会使用 remove --all。
+              失效安装记录可清理或恢复；其他异常展示各自原因。
             </p>
           </div>
           <Button
@@ -191,17 +193,20 @@ export function AnomalyDialog({ anomalies, open, onClose }: AnomalyDialogProps) 
         <div className="modal-body">
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             {CATEGORIES.map((category) => (
+              <div key={category.key}>
               <CategoryCard
                 key={category.key}
                 label={category.label}
                 description={category.description}
                 group={anomalies[category.key]}
               />
+              {category.key === "stale" && anomalies.stale.count > 0 && onProcessStale ? <Button variant="outline" size="sm" className="mt-2" disabled={disabled} onClick={onProcessStale}>处理</Button> : null}
+              </div>
             ))}
           </div>
 
           <p className="mt-3 rounded-md bg-raised px-3 py-2 text-[12px] text-muted-foreground">
-            建议：操作前备份 ~/.agents/.skill-lock.json；逐名操作，不使用批量删除。
+            清理或恢复先预览再确认，执行前自动备份；已完成的操作保留。
           </p>
         </div>
       </div>

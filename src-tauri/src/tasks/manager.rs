@@ -28,7 +28,7 @@ use super::source::{SourceSpec, validate_source};
 use super::uninstall as uninstall_task;
 use super::update as update_task;
 
-mod batch;
+pub(crate) mod batch;
 mod cli_preview;
 mod scoped_mutation;
 

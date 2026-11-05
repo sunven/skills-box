@@ -1,0 +1,10 @@
+   Compiling skills-box v0.1.2 (/Users/sunven/github/skills-box/src-tauri)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.83s
+     Running tests/stale_restore_real_cli.rs (src-tauri/target/debug/deps/stale_restore_real_cli-dcb6bbe16f6cb5e6)
+
+running 1 test
+Resolved skills@latest version: 1.7.6
+Verified skills@latest restoration, original source/name, canonical-only, retained unrelated lock entry, and original Lock backup.
+test stale_restore_real_cli ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 46.71s

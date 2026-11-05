@@ -40,11 +40,12 @@ import { pickProjectFolder } from "../lib/folder-picker";
 
 export interface BatchSelection {
   action: BatchAction;
-  skills: UpdateViewSkill[];
+  skills: Pick<UpdateViewSkill, "id">[];
 }
 interface BatchDialogProps {
   selection: BatchSelection;
   scope: ScopeId;
+  scopeLabel?: string;
   agents: InventoryAgent[];
   projects?: ProjectEntry[];
   onViewProject?: (scope: ScopeId) => void;
@@ -57,6 +58,7 @@ interface BatchDialogProps {
 export function BatchDialog({
   selection,
   scope,
+  scopeLabel,
   agents: sourceAgents,
   projects = [],
   onViewProject,
@@ -78,8 +80,10 @@ export function BatchDialog({
   const needsDelete = action === "uninstall" || isAgentRemoval;
   const actionLabel = action === "uninstall" ? "完全卸载" : BATCH_ACTION_LABELS[action];
   const isCopy = action === "copy_to_project";
+  const isRestore = action === "restore";
+  const isClean = action === "clean_records";
   const agents = isCopy ? projectAgents : sourceAgents;
-  const hasAgents = action === "attach" || action === "detach" || isCopy || isAgentRemoval;
+  const hasAgents = action === "attach" || action === "detach" || isCopy || isAgentRemoval || isRestore;
   const [selectedAgents, setSelectedAgents] = useState<Set<string>>(
     () => new Set(),
   );
@@ -200,7 +204,7 @@ export function BatchDialog({
   }, [applyPreview, mutation.stateRef]);
 
   useEffect(() => {
-    if (!hasAgents || (isCopy && !projectRoot)) return;
+    if (!hasAgents || isRestore || (isCopy && !projectRoot)) return;
     let disposed = false;
     countsPreviewId.current = null;
     void previewBatch(scope, {
@@ -225,6 +229,7 @@ export function BatchDialog({
     scope,
     action,
     hasAgents,
+    isRestore,
     skillIds,
     eligibleAgents,
     retryKeys,
@@ -447,8 +452,8 @@ export function BatchDialog({
               批量{canChooseRemoval ? "卸载" : BATCH_ACTION_LABELS[action]}
             </h2>
             <p className="modal-sub">
-              {isCopy ? "全局 → 项目" : scope === "global" ? "全局" : "项目"} · 已选{" "}
-              {selection.skills.length} 个技能
+              {isCopy ? "全局 → 项目" : scopeLabel ?? (scope === "global" ? "全局" : "项目")} · 已选{" "}
+              {selection.skills.length} {isClean ? "条记录" : "个技能"}
               {hasAgents ? ` · ${agentIds.length} 个 Agent` : ""}
             </p>
             {isCopy && projectRoot ? <p className="mono break-all mt-1 text-xs text-muted-foreground">{preview?.project?.displayName} · {preview?.project?.root ?? projectRoot}</p> : null}
@@ -465,10 +470,12 @@ export function BatchDialog({
             <X className="size-4" aria-hidden="true" />
           </Button>
         </div>
-        <div className="modal-body">
+        <div className="modal-body" tabIndex={0}>
           <ActualCliCommands taskId={taskId} />
           {!running && !viewingResult ? (
             <>
+              {isClean ? <p className="notice mb-4">仅清理所列安装记录和对应基线，保留技能文件、挂载与发现历史。执行前备份，不自动回滚。</p> : null}
+              {isRestore ? <p className="notice mb-4">按原来源的指定分支或标签恢复同名技能；未记录 ref 时使用默认分支。默认只恢复共享目录，可选择 Agent 追加挂载。执行前备份，不自动回滚。</p> : null}
               {canChooseRemoval ? (
                 <fieldset className="mb-4" disabled={disabled || !!retryKeys}>
                   <legend className="field-label">卸载方式</legend>
@@ -562,7 +569,7 @@ export function BatchDialog({
                             ? agent.shared || (!isAgentRemoval && agent.universal)
                               ? isAgentRemoval ? "共享目录，无法单独移除" : "共享，无法独立操作"
                               : "未检测到"
-                            : `${count} 个技能可操作`}
+                            : isRestore ? "追加挂载" : `${count} 个技能可操作`}
                         </span>
                       </label>
                     );
@@ -597,7 +604,7 @@ export function BatchDialog({
                     {candidates.filter((t) => t.operation === "copy").length} 个复制 · {candidates.filter((t) => t.operation === "attach").length} 个挂载
                   </p> : null}
                   {isCopy && !projectRoot ? <p className="notice">请先选择项目或项目目录。</p> : null}
-                  {hasAgents && !isCopy && agentIds.length === 0 ? (
+                  {hasAgents && !isCopy && !isRestore && agentIds.length === 0 ? (
                     <p className="notice">请先选择要操作的 Agent。</p>
                   ) : null}
                   {preview && preview.targets.length > 0 ? (
@@ -614,6 +621,7 @@ export function BatchDialog({
                               {target.eligible ? "可执行" : "跳过"}
                             </span>
                           </div>
+                          {isRestore ? <p className="mt-1 text-muted-foreground break-all">{target.source} · {target.reference ?? "默认分支"}</p> : null}
                           {target.reason ? (
                             <p className="mt-1 text-muted-foreground">
                               {target.reason}
@@ -640,7 +648,7 @@ export function BatchDialog({
                             </p>
                           ) : null}
                           {target.eligible &&
-                          (needsDelete || action === "detach" || isCopy) ? (
+                          (needsDelete || action === "detach" || isCopy || isClean || isRestore) ? (
                             <ul className="mt-1 text-muted-foreground">
                               {target.paths.map((path) => (
                                 <li key={path} className="mono break-all">
@@ -654,7 +662,7 @@ export function BatchDialog({
                     </ul>
                   ) : null}
                   {candidates.length === 0 &&
-                  (!hasAgents || isCopy || agentIds.length > 0) &&
+                  (!hasAgents || isCopy || isRestore || agentIds.length > 0) &&
                   !previewError ? (
                     <p className="notice">
                       没有可执行目标，请查看跳过原因或调整选择。
@@ -823,7 +831,7 @@ export function BatchDialog({
                   variant={needsDelete ? "destructive" : "default"}
                   disabled={submitDisabled}
                   onClick={() => void confirm()}
-                >{`确认${actionLabel} (${candidates.length})`}</Button>
+                >{isClean ? `清理 ${candidates.length} 条记录` : isRestore ? `恢复 ${candidates.length} 个技能` : `确认${actionLabel} (${candidates.length})`}</Button>
               </>
             )}
           </div>

@@ -478,6 +478,14 @@ pub async fn start_update(
         .await
 }
 
+#[tauri::command]
+pub async fn list_stale_records(
+    state: State<'_, AppState>,
+    scope: ScopeId,
+) -> Result<Vec<crate::tasks::stale_records::StaleRecord>, AppError> {
+    state.tasks.stale_records(scope).await
+}
+
 /// Resolve the current selected targets into a read-only, server-owned plan.
 #[tauri::command]
 pub async fn preview_batch(

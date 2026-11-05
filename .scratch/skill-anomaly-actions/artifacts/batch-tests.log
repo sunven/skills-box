@@ -1,0 +1,99 @@
+   Compiling skills-box v0.1.2 (/Users/sunven/github/skills-box/src-tauri)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.89s
+     Running unittests src/lib.rs (src-tauri/target/debug/deps/skills_box_lib-1d93bbcb8075e1ef)
+
+running 38 tests
+test tasks::manager::batch::tests::copy_to_project_preserves_unmanaged_destinations_and_rejects_external_links ... ok
+test tasks::manager::batch::tests::copy_detach_requires_confirmation_and_detects_edits_after_backup ... ok
+test tasks::manager::batch::tests::copy_to_project_changed_preview_never_registers_or_writes ... ok
+test tasks::manager::batch::tests::changed_source_or_skill_path_invalidates_cached_update_evidence ... ok
+test tasks::manager::batch::tests::copy_to_project_baseline_failure_restores_records_and_removes_its_copy ... ok
+test tasks::manager::batch::tests::changes_during_backup_skip_cli_and_native_writers_and_keep_snapshot ... ok
+test tasks::manager::batch::tests::copy_to_project_preserves_internal_relative_links_and_root_link_content ... ok
+test tasks::manager::batch::tests::copy_to_project_keeps_readable_unicode_files_without_inventing_a_version ... ok
+test tasks::manager::batch::tests::changed_later_content_is_skipped_without_deleting_it ... ok
+test tasks::manager::batch::tests::preview_is_read_only_and_explains_existing_unmanaged_and_shared_targets ... ok
+test tasks::manager::batch::tests::native_batch_owns_writer_permit_and_stops_between_targets ... ok
+test tasks::manager::batch::tests::copy_to_project_stop_retains_registration_and_owns_both_scope_writes ... ok
+test tasks::manager::batch::tests::multiple_agents_use_confirmed_order_and_other_targets_do_not_invalidate_fingerprints ... ok
+test tasks::manager::batch::tests::cleanup_isolates_global_and_two_project_locks_and_baselines ... ok
+test tasks::manager::batch::tests::copy_to_project_skips_changed_agent_targets_and_retains_its_copy ... ok
+test tasks::manager::batch::tests::project_attach_can_create_missing_agent_directory_and_keeps_global_skill_unchanged ... ok
+test tasks::manager::batch::tests::copy_to_project_zero_agents_copies_local_changes_and_skips_conflicts_on_repeat ... ok
+test tasks::manager::batch::tests::copy_to_project_preview_is_read_only_and_copy_is_independent_and_managed ... ok
+test tasks::manager::batch::tests::restore_missing_ambiguous_and_occupied_names_never_start_writes ... ok
+test tasks::manager::batch::tests::ordinary_target_failure_continues_and_backup_failure_preserves_prior_results ... ok
+test tasks::manager::batch::tests::project_workbuddy_attach_and_detach_preserve_codebuddy_and_global_skills ... ok
+test tasks::manager::batch::tests::selecting_an_outside_copy_dependency_does_not_expand_uninstall_authorization ... ok
+test tasks::manager::batch::tests::copy_to_project_retains_copy_when_attach_fails_and_retry_only_attaches ... ok
+test tasks::manager::batch::tests::project_restore_uses_its_own_lock_baseline_and_selected_agent ... ok
+test tasks::manager::batch::tests::retry_restricts_execution_to_requested_pairs_and_cannot_cross_scope ... ok
+test tasks::manager::batch::tests::start_rejects_unconfirmed_deletion_and_changed_preview_without_a_task ... ok
+test tasks::manager::batch::tests::uninstall_agents_checks_confirmation_and_freezes_selected_paths ... ok
+test tasks::manager::batch::tests::restore_selected_agent_and_stop_wait_for_current_writer ... ok
+test tasks::manager::batch::tests::stop_and_exit_wait_for_active_writer_then_leave_later_targets_unexecuted ... ok
+test tasks::manager::batch::tests::update_skips_modified_unknown_current_and_stale_lock_versions ... ok
+test tasks::manager::batch::tests::uninstall_agents_runs_selected_dependency_links_before_last_copy ... ok
+test tasks::manager::batch::tests::update_runs_each_clean_candidate_and_does_not_expand_original_skips ... ok
+test tasks::manager::batch::tests::uninstall_mixes_managed_and_unmanaged_targets_without_cli_for_unmanaged ... ok
+test tasks::manager::batch::tests::restore_rejects_incomplete_cli_writes_retains_backups_and_continues_other_targets ... ok
+test tasks::manager::batch::tests::restore_matches_same_name_at_moved_path_and_keeps_canonical_only_default ... ok
+test tasks::manager::batch::tests::uninstall_agents_stops_between_targets_and_retries_only_unfinished_pairs ... ok
+test tasks::manager::batch::tests::source_path_missing_skills_with_copy_links_uninstall_in_one_batch ... ok
+test tasks::manager::batch::tests::stale_cleanup_is_one_native_batch_without_node_and_keeps_unselected_records ... ok
+
+test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 599 filtered out; finished in 0.24s
+
+     Running unittests src/main.rs (src-tauri/target/debug/deps/skills_box-8bc6095247985330)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/extra_agents_fixture.rs (src-tauri/target/debug/deps/extra_agents_fixture-e428c26726449426)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/generic_git_sources.rs (src-tauri/target/debug/deps/generic_git_sources-7a0a2d36f499e50f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/performance_fixture.rs (src-tauri/target/debug/deps/performance_fixture-3b0a2f287dba369e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/project_check_lifecycle.rs (src-tauri/target/debug/deps/project_check_lifecycle-bf53d7adfd296c8d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/project_read_model.rs (src-tauri/target/debug/deps/project_read_model-aaa4aa1d44523886)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.00s
+
+     Running tests/sandbox_real_cli.rs (src-tauri/target/debug/deps/sandbox_real_cli-29a3b23724ed63be)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/security_audit.rs (src-tauri/target/debug/deps/security_audit-e8589a451c1dfb3f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+     Running tests/stale_restore_real_cli.rs (src-tauri/target/debug/deps/stale_restore_real_cli-dcb6bbe16f6cb5e6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s

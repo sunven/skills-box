@@ -38,6 +38,8 @@ pub const BACKUP_MANIFEST_VERSION: u32 = 1;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BackupAction {
+    CleanRecords,
+    Restore,
     Install,
     Update,
     Uninstall,
@@ -47,6 +49,8 @@ pub enum BackupAction {
 impl BackupAction {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::CleanRecords => "clean-records",
+            Self::Restore => "restore",
             Self::Install => "install",
             Self::Update => "update",
             Self::Uninstall => "uninstall",

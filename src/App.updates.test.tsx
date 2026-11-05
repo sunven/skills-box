@@ -485,7 +485,7 @@ describe("manual update checking", () => {
     expect(banner).toHaveTextContent("1 个检查失败");
     fireEvent.click(banner);
 
-    const dialog = screen.getByRole("dialog", { name: "异常与只读提示" });
+    const dialog = screen.getByRole("dialog", { name: "异常提示" });
     expect(within(dialog).getByText("源路径缺失")).toBeInTheDocument();
     expect(within(dialog).getByText("检查失败")).toBeInTheDocument();
     expect(
@@ -498,7 +498,7 @@ describe("manual update checking", () => {
 
     fireEvent.keyDown(document, { key: "Escape" });
     expect(
-      screen.queryByRole("dialog", { name: "异常与只读提示" }),
+      screen.queryByRole("dialog", { name: "异常提示" }),
     ).not.toBeInTheDocument();
 
     expect(screen.getByRole("option", { name: "异常 (2)" })).toBeInTheDocument();

@@ -425,7 +425,7 @@ describe("anomaly banner and modal", () => {
 
     banner.focus();
     fireEvent.click(banner);
-    const dialog = screen.getByRole("dialog", { name: "异常与只读提示" });
+    const dialog = screen.getByRole("dialog", { name: "异常提示" });
     expect(within(dialog).getByText("失效 lock 条目")).toBeInTheDocument();
     expect(within(dialog).getByText("未受管")).toBeInTheDocument();
     expect(within(dialog).getByText("断链")).toBeInTheDocument();
@@ -435,12 +435,12 @@ describe("anomaly banner and modal", () => {
       within(dialog).getByText("delta · Claude Code"),
     ).toBeInTheDocument();
     expect(
-      within(dialog).getByText(/不提供一键修复/),
+      within(dialog).getByText(/先预览再确认/),
     ).toBeInTheDocument();
 
     fireEvent.keyDown(document, { key: "Escape" });
     expect(
-      screen.queryByRole("dialog", { name: "异常与只读提示" }),
+      screen.queryByRole("dialog", { name: "异常提示" }),
     ).not.toBeInTheDocument();
     expect(document.activeElement).toBe(banner);
   });
