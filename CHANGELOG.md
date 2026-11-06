@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.3] - 2026-11-06
+
+### Bug Fixes
+
+- Use Skills Box as the application name
+
+### Features
+
+- Add common actions to skill list rows
+- Add skill multi-select and batch operations
+- Copy global skills to a project from batch attach
+- Select agents for batch skill removal
+- Preview batch update commands and refine batch controls
+- Display actual skills CLI commands and use latest version
+- Support independent WorkBuddy project skills
+- Clean stale records and restore missing skills
+
 ## [0.1.2] - 2026-11-04
 
 ### Miscellaneous Tasks
