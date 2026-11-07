@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { AlertTriangle, FolderOpen, Loader2, X } from "lucide-react";
 import { Button } from "./ui/button";
 import { ActualCliCommands, CliCommandDisplay } from "./cli-command-display";
@@ -7,30 +7,14 @@ import { MutationProgress } from "./mutation/mutation-progress";
 import { MutationResult } from "./mutation/mutation-result";
 import { MutationError } from "./mutation/mutation-error";
 import { useModalFocus } from "../hooks/use-modal-focus";
-import {
-  asAppError,
-  fallbackError,
-  previewBatch,
-  refreshBatchPreview,
-  startBatch,
-} from "../lib/api";
-import {
-  taskEventDriver,
-  useMutation,
-  normalizeTaskResult,
-  type MutationResultView,
-} from "../lib/mutation";
+import { useBatchOperation } from "../hooks/use-batch-operation";
+import { asAppError, fallbackError } from "../lib/api";
 import {
   BATCH_ACTION_LABELS,
   batchTargetLabel,
-  completedSkillIds,
-  mergeBatchRows,
   type BatchAction,
-  type BatchPreview,
-  type BatchRow,
 } from "../lib/batch";
 import type {
-  AppError,
   InventoryAgent,
   ScopeId,
   UpdateViewSkill,
@@ -72,344 +56,37 @@ export function BatchDialog({
   const [uninstallMode, setUninstallMode] = useState<"agents" | "all">("all");
   const [targetScope, setTargetScope] = useState<"global" | "project">("global");
   const [projectRoot, setProjectRoot] = useState("");
-  const [projectAgents, setProjectAgents] = useState<InventoryAgent[]>([]);
   const [picking, setPicking] = useState(false);
   const action: BatchAction = canChooseRemoval && uninstallMode === "agents" ? "uninstall_agents"
     : canChooseTarget && targetScope === "project" ? "copy_to_project" : selection.action;
   const isAgentRemoval = action === "uninstall_agents";
-  const needsDelete = action === "uninstall" || isAgentRemoval;
   const actionLabel = action === "uninstall" ? "完全卸载" : BATCH_ACTION_LABELS[action];
   const isCopy = action === "copy_to_project";
   const isRestore = action === "restore";
   const isClean = action === "clean_records";
-  const agents = isCopy ? projectAgents : sourceAgents;
   const hasAgents = action === "attach" || action === "detach" || isCopy || isAgentRemoval || isRestore;
   const [selectedAgents, setSelectedAgents] = useState<Set<string>>(
     () => new Set(),
   );
-  const [preview, setPreview] = useState<BatchPreview | null>(null);
-  const [agentCounts, setAgentCounts] = useState<Map<string, number>>(
-    () => new Map(),
-  );
-  const [loading, setLoading] = useState(true);
-  const [previewError, setPreviewError] = useState<AppError | null>(null);
-  const [changed, setChanged] = useState(false);
-  const [confirmedDelete, setConfirmedDelete] = useState(false);
-  const [confirmedCopies, setConfirmedCopies] = useState(false);
-  const resetConfirmations = useCallback(() => {
-    setConfirmedDelete(false);
-    setConfirmedCopies(false);
-  }, []);
-  const [retryKeys, setRetryKeys] = useState<string[] | undefined>();
-  const [history, setHistory] = useState<BatchRow[]>([]);
-  const [viewingResult, setViewingResult] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
-  const requestSeq = useRef(0);
-  const previewRef = useRef(preview);
-  const countsPreviewId = useRef<string | null>(null);
-  previewRef.current = preview;
-  const mutation = useMutation({
-    action,
-    scope,
-    fallbackFailure: "批量操作未完成。",
-    fallbackStart: "无法开始批量操作，请重新预览。",
+  const skillIds = useMemo(() => selection.skills.map((skill) => skill.id), [selection]);
+  const operation = useBatchOperation({
+    scope, action, skillIds, selectedAgents, sourceAgents, projectRoot,
+    disabled: disabled || picking, onRunningChange, onCompleted,
   });
   const {
-    running,
-    phase,
-    message,
-    completed,
-    total,
-    taskId,
-    cancelling,
-    result,
-    startError,
-    error,
-  } = mutation.state;
-  const skillIds = useMemo(
-    () => selection.skills.map((skill) => skill.id),
-    [selection],
-  );
-  const agentIds = useMemo(
-    () => [
-      ...agents
-        .filter((agent) => selectedAgents.has(agent.id))
-        .map((agent) => agent.id),
-      // Removed Agents remain explicit targets in a new retry preview.
-      ...[...selectedAgents].filter(
-        (id) => !agents.some((agent) => agent.id === id),
-      ),
-    ],
-    [agents, selectedAgents],
-  );
-  const eligibleAgents = useMemo(
-    () =>
-      agents.filter(
-        (agent) => agent.detected && !agent.shared && (isAgentRemoval || !agent.universal),
-      ),
-    [agents, isAgentRemoval],
-  );
-  const selectionRef = useRef({ scope, action, skillIds, agentIds, retryKeys, projectRoot });
-  selectionRef.current = { scope, action, skillIds, agentIds, retryKeys, projectRoot };
-
-  const applyPreview = useCallback((next: BatchPreview) => {
-    if (previewRef.current && previewRef.current.revision !== next.revision) {
-      resetConfirmations();
-      setChanged(true);
-    }
-    previewRef.current = next;
-    setPreview(next);
-    if (next.agents) setProjectAgents((current) => JSON.stringify(current) === JSON.stringify(next.agents) ? current : next.agents!);
-    setPreviewError(null);
-  }, [resetConfirmations]);
-
-  const applyAgentCounts = useCallback((next: BatchPreview) => {
-    const counts = new Map<string, number>();
-    for (const target of next.targets) {
-      if (target.eligible && target.agentId)
-        counts.set(target.agentId, (counts.get(target.agentId) ?? 0) + 1);
-    }
-    setAgentCounts(counts);
-  }, []);
-
-  const loadPreview = useCallback(async () => {
-    const seq = ++requestSeq.current;
-    setLoading(true);
-    resetConfirmations();
-    const { scope, action, skillIds, agentIds, retryKeys, projectRoot } =
-      selectionRef.current;
-    if (action === "copy_to_project" && !projectRoot) {
-      setPreview(null);
-      setPreviewError(null);
-      setLoading(false);
-      return;
-    }
-    try {
-      const next = await previewBatch(scope, {
-        action,
-        skillIds,
-        agentIds,
-        targetKeys: retryKeys,
-        projectRoot: action === "copy_to_project" ? projectRoot : undefined,
-      });
-      if (seq === requestSeq.current && !mutation.stateRef.current.running)
-        applyPreview(next);
-    } catch (cause) {
-      if (seq === requestSeq.current) {
-        setPreview(null);
-        setPreviewError(asAppError(cause) ?? fallbackError("无法预览操作。"));
-      }
-    } finally {
-      if (seq === requestSeq.current) setLoading(false);
-    }
-  }, [applyPreview, mutation.stateRef, resetConfirmations]);
-
-  useEffect(() => {
-    if (!hasAgents || isRestore || (isCopy && !projectRoot)) return;
-    let disposed = false;
-    countsPreviewId.current = null;
-    void previewBatch(scope, {
-      action,
-      skillIds,
-      agentIds: eligibleAgents.map((agent) => agent.id),
-      targetKeys: retryKeys,
-      projectRoot: isCopy ? projectRoot : undefined,
-    })
-      .then((all) => {
-        if (disposed) return;
-        countsPreviewId.current = all.id;
-        applyAgentCounts(all);
-      })
-      .catch(() => {
-        /* Selected agents get an authoritative preview below. */
-      });
-    return () => {
-      disposed = true;
-    };
-  }, [
-    scope,
-    action,
-    hasAgents,
-    isRestore,
-    skillIds,
-    eligibleAgents,
-    retryKeys,
-    applyAgentCounts,
-    isCopy,
-    projectRoot,
-  ]);
-
-  useEffect(() => {
-    if (viewingResult || running) return;
-    void loadPreview();
-    return () => {
-      requestSeq.current += 1;
-    };
-  }, [agentIds, action, projectRoot, retryKeys, viewingResult, loadPreview, running]);
-
-  // Refresh an open preview without extending the user-selected target set.
-  useEffect(() => {
-    if (!preview || viewingResult || running) return;
-    let disposed = false;
-    let refreshing = false;
-    const seq = requestSeq.current;
-    const refresh = async () => {
-      if (refreshing || mutation.stateRef.current.running) return;
-      refreshing = true;
-      try {
-        const [next, counts] = await Promise.all([
-          refreshBatchPreview(preview.id),
-          countsPreviewId.current
-            ? refreshBatchPreview(countsPreviewId.current).catch(() => null)
-            : null,
-        ]);
-        if (!disposed && seq === requestSeq.current && !mutation.stateRef.current.running) {
-          applyPreview(next);
-          if (counts) applyAgentCounts(counts);
-        }
-      } catch (cause) {
-        if (!disposed && seq === requestSeq.current && !mutation.stateRef.current.running) {
-          setPreviewError(
-            asAppError(cause) ?? fallbackError("预览已失效，请重新预览。"),
-          );
-          resetConfirmations();
-        }
-      } finally {
-        refreshing = false;
-      }
-    };
-    const timer = window.setInterval(() => void refresh(), 2000);
-    return () => {
-      disposed = true;
-      window.clearInterval(timer);
-    };
-  }, [
-    preview?.id,
-    viewingResult,
-    running,
-    applyPreview,
-    applyAgentCounts,
-    mutation.stateRef,
-    resetConfirmations,
-  ]);
+    preview, agents, agentIds, agentCounts, loading, previewError, changed,
+    confirmedDelete, confirmedCopies, needsDelete, needsCopies, removesLastCopy,
+    candidates, skipped, submitDisabled, viewingResult, retrying,
+    hasHistory, successfulTargets, canRetry, result: combinedResult,
+  } = operation;
+  const { running, phase, message, completed, total, taskId, cancelling, result, startError, error } = operation.task;
 
   useModalFocus({
-    open: true,
-    panelRef,
-    initialFocusRef: closeRef,
-    onClose,
-    canClose: () => !mutation.stateRef.current.running,
+    open: true, panelRef, initialFocusRef: closeRef, onClose,
+    canClose: operation.canClose,
   });
-  useEffect(
-    () => () => {
-      requestSeq.current += 1;
-    },
-    [],
-  );
-
-  const candidates = preview?.targets.filter((target) => target.eligible) ?? [];
-  const skipped = preview?.targets.filter((target) => !target.eligible) ?? [];
-  const needsCopies = candidates.some((target) => target.deletesCopy);
-  const removesLastCopy = candidates.some((target) => target.removesLastCopy);
-  const submitDisabled =
-    disabled || picking ||
-    loading ||
-    !!previewError ||
-    !preview ||
-    candidates.length === 0 ||
-    (needsDelete && !confirmedDelete) ||
-    (needsCopies && !confirmedCopies);
-
-  const confirm = async () => {
-    if (submitDisabled || !preview || mutation.stateRef.current.running) return;
-    requestSeq.current += 1;
-    onRunningChange(true);
-    setChanged(false);
-    const outcome = await mutation.start(
-      taskEventDriver({
-        total: candidates.length,
-        message: "正在准备批量操作…",
-        launch: (onEvent) =>
-          startBatch(
-            scope,
-            {
-              previewId: preview.id,
-              revision: preview.revision,
-              confirmedDelete,
-              confirmedCopies,
-            },
-            onEvent,
-          ),
-      }),
-    );
-    onRunningChange(false);
-    if (outcome?.batch) {
-      const merged = mergeBatchRows(history, outcome.batch.rows);
-      setHistory(merged);
-      setViewingResult(true);
-      onCompleted(completedSkillIds(merged));
-    } else {
-      resetConfirmations();
-      await loadPreview();
-    }
-  };
-
-  const retry = () => {
-    const unfinished = history.filter(
-      (row) => row.status === "failed" || row.status === "not_executed",
-    );
-    if (unfinished.length === 0) return;
-    setRetryKeys(unfinished.map((row) => row.key));
-    setViewingResult(false);
-    mutation.reset();
-    setPreview(null);
-    previewRef.current = null;
-    setChanged(false);
-    resetConfirmations();
-  };
-
-  const combinedResult: MutationResultView | null =
-    viewingResult && result
-      ? {
-          ...normalizeTaskResult({
-            action: "batch",
-            overall:
-              result.outcome === "cancelled"
-                ? "cancelled"
-                : history.every((row) => row.status === "success")
-                  ? "success"
-                  : history.some((row) => row.status === "success")
-                    ? "partial"
-                    : "failed",
-            skills: [],
-            warnings: result.warnings,
-            startedAt: 0,
-            finishedAtEpochMs: 0,
-            scope: result.scope ?? scope,
-            batch: { action, rows: history },
-          }),
-          backupPath: result.backupPath,
-          logPath: result.logPath,
-        }
-      : null;
-
-  const invalidatePreview = () => {
-    requestSeq.current += 1;
-    setPreview(null);
-    previewRef.current = null;
-    setPreviewError(null);
-    setChanged(false);
-    resetConfirmations();
-    setLoading(true);
-  };
-
-  const resetTargetPreview = () => {
-    invalidatePreview();
-    setSelectedAgents(new Set());
-    setProjectAgents([]);
-    setAgentCounts(new Map());
-  };
 
   const chooseDirectory = async () => {
     setPicking(true);
@@ -417,10 +94,10 @@ export function BatchDialog({
       const root = await pickProjectFolder();
       if (root && root !== projectRoot) {
         setProjectRoot(root);
-        resetTargetPreview();
+        setSelectedAgents(new Set());
       }
     } catch (cause) {
-      setPreviewError(asAppError(cause) ?? fallbackError("无法选择项目目录。"));
+      operation.reportSelectionError(asAppError(cause) ?? fallbackError("无法选择项目目录。"));
     } finally {
       setPicking(false);
     }
@@ -432,7 +109,7 @@ export function BatchDialog({
       onMouseDown={(event) => {
         if (
           event.target === event.currentTarget &&
-          !mutation.stateRef.current.running
+          operation.canClose()
         )
           onClose();
       }}
@@ -476,14 +153,13 @@ export function BatchDialog({
               {isClean ? <p className="notice mb-4">仅清理所列安装记录和对应基线，保留技能文件、挂载与发现历史。执行前备份，不自动回滚。</p> : null}
               {isRestore ? <p className="notice mb-4">按原来源的指定分支或标签恢复同名技能；未记录 ref 时使用默认分支。默认只恢复共享目录，可选择 Agent 追加挂载。执行前备份，不自动回滚。</p> : null}
               {canChooseRemoval ? (
-                <fieldset className="mb-4" disabled={disabled || !!retryKeys}>
+                <fieldset className="mb-4" disabled={disabled || retrying}>
                   <legend className="field-label">卸载方式</legend>
                   <div className="flex flex-wrap gap-5 mt-2">
                     {(["all", "agents"] as const).map((value) => (
                       <label key={value} className="flex items-center gap-2 text-sm">
                         <input type="radio" name="batch-uninstall-mode" value={value} checked={uninstallMode === value}
                           onChange={() => {
-                            invalidatePreview();
                             setUninstallMode(value);
                           }} />
                         {value === "agents" ? "按 Agent 移除" : "完全卸载"}
@@ -493,7 +169,7 @@ export function BatchDialog({
                 </fieldset>
               ) : null}
               {canChooseTarget ? (
-                <fieldset className="mb-4" disabled={disabled || !!retryKeys || picking}>
+                <fieldset className="mb-4" disabled={disabled || retrying || picking}>
                   <legend className="field-label">挂载位置</legend>
                   <div className="flex gap-5 mt-2">
                     {(["global", "project"] as const).map((value) => (
@@ -501,7 +177,7 @@ export function BatchDialog({
                         <input type="radio" name="batch-target-scope" checked={targetScope === value}
                           onChange={() => {
                             setTargetScope(value);
-                            resetTargetPreview();
+                            setSelectedAgents(new Set());
                           }} />
                         {value === "global" ? "全局" : "项目"}
                       </label>
@@ -513,7 +189,7 @@ export function BatchDialog({
                         <select className="batch-project-select flex-1 min-w-0" aria-label="选择目标项目"
                           value={projectRoot} onChange={(event) => {
                             setProjectRoot(event.target.value);
-                            resetTargetPreview();
+                            setSelectedAgents(new Set());
                           }}>
                           <option value="">选择已有项目</option>
                           {projects.map((project) => <option key={project.id} value={project.root} disabled={!project.available}>
@@ -546,10 +222,9 @@ export function BatchDialog({
                         <input
                           type="checkbox"
                           checked={selectedAgents.has(agent.id)}
-                          disabled={unavailable || disabled || !!retryKeys}
+                          disabled={unavailable || disabled || retrying}
                           aria-label={`选择 Agent ${agent.displayName}`}
                           onChange={() => {
-                            invalidatePreview();
                             setSelectedAgents((current) => {
                               const next = new Set(current);
                               if (next.has(agent.id)) next.delete(agent.id);
@@ -703,7 +378,7 @@ export function BatchDialog({
                     aria-label={isAgentRemoval ? "确认按 Agent 移除" : "确认批量卸载"}
                     checked={confirmedDelete}
                     disabled={loading || candidates.length === 0}
-                    onChange={(e) => setConfirmedDelete(e.target.checked)}
+                    onChange={(e) => operation.confirmDeletion(e.target.checked)}
                   />
                   <span>
                     {isAgentRemoval ? "我确认移除以上所选 Agent 的挂载，并了解不会自动回滚。"
@@ -718,7 +393,7 @@ export function BatchDialog({
                     aria-label="确认删除副本挂载"
                     checked={confirmedCopies}
                     disabled={loading}
-                    onChange={(e) => setConfirmedCopies(e.target.checked)}
+                    onChange={(e) => operation.confirmCopies(e.target.checked)}
                   />
                   <span>{removesLastCopy ? "我确认先备份再删除所列副本，包括已标记技能的最后一份内容。"
                     : "我确认先备份再删除所列副本挂载目录。"}</span>
@@ -732,7 +407,7 @@ export function BatchDialog({
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => void loadPreview()}
+                  onClick={() => void operation.reload()}
                   disabled={loading}
                 >
                   重新预览
@@ -755,7 +430,7 @@ export function BatchDialog({
                 cancelling={cancelling}
                 canCancel={!!taskId && !cancelling}
                 cancelLabel="停止后续操作"
-                onCancel={() => void mutation.cancel()}
+                onCancel={() => void operation.cancel()}
               />
               <p className="mt-2 text-xs text-muted-foreground">
                 当前目标完成后停止后续操作，已完成结果保留。
@@ -773,9 +448,9 @@ export function BatchDialog({
               copy="已完成的操作保留，不自动回滚。"
             />
           ) : null}
-          {history.length > 0 && !viewingResult && !running ? (
+          {hasHistory && !viewingResult && !running ? (
             <p className="mt-3 text-xs text-muted-foreground">
-              此前 {history.filter((row) => row.status === "success").length}{" "}
+              此前 {successfulTargets}{" "}
               个成功目标已保留，本次仅重试未完成目标。
             </p>
           ) : null}
@@ -784,7 +459,7 @@ export function BatchDialog({
           <span className="modal-foot-note">
             {running
               ? "按目标串行执行"
-              : retryKeys
+              : retrying
                 ? "重新核对重试目标"
                 : "先预览，再确认"}
           </span>
@@ -794,15 +469,12 @@ export function BatchDialog({
                 {isCopy && result?.scope && result.scope !== "global" && onViewProject ? (
                   <Button variant="outline" size="sm" onClick={() => onViewProject(result.scope!)}>查看项目</Button>
                 ) : null}
-                {history.some(
-                  (row) =>
-                    row.status === "failed" || row.status === "not_executed",
-                ) ? (
+                {canRetry ? (
                   <Button
                     variant="outline"
                     size="sm"
                     disabled={disabled}
-                    onClick={retry}
+                    onClick={operation.retry}
                   >
                     重试失败及未执行项
                   </Button>
@@ -816,7 +488,7 @@ export function BatchDialog({
                 variant="outline"
                 size="sm"
                 disabled={!taskId || cancelling}
-                onClick={() => void mutation.cancel()}
+                onClick={() => void operation.cancel()}
               >
                 {cancelling ? "等待当前目标完成…" : "停止后续操作"}
               </Button>
@@ -829,7 +501,7 @@ export function BatchDialog({
                   size="sm"
                   variant={needsDelete ? "destructive" : "default"}
                   disabled={submitDisabled}
-                  onClick={() => void confirm()}
+                  onClick={() => void operation.confirm()}
                 >{isClean ? `清理 ${candidates.length} 条记录` : isRestore ? `恢复 ${candidates.length} 个技能` : `确认${actionLabel} (${candidates.length})`}</Button>
               </>
             )}

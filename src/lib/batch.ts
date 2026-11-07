@@ -79,34 +79,6 @@ export function batchTargetLabel(target: BatchTarget): string {
     : target.name;
 }
 
-export function completedSkillIds(rows: BatchRow[]): Set<string> {
-  const grouped = new Map<string, BatchRow[]>();
-  for (const row of rows) {
-    if (!row.eligible) continue;
-    const group = grouped.get(row.skillId);
-    if (group) group.push(row);
-    else grouped.set(row.skillId, [row]);
-  }
-  return new Set(
-    [...grouped]
-      .filter(([, group]) => group.every((row) => row.status === "success"))
-      .map(([id]) => id),
-  );
-}
-
-export function mergeBatchRows(
-  previous: BatchRow[],
-  current: BatchRow[],
-): BatchRow[] {
-  const changed = new Map(current.map((row) => [row.key, row]));
-  const result = previous.map((row) => {
-    const next = changed.get(row.key);
-    return next ? { ...next, eligible: row.eligible || next.eligible } : row;
-  });
-  const known = new Set(previous.map((row) => row.key));
-  return result.concat(current.filter((row) => !known.has(row.key)));
-}
-
 export interface StaleRecord {
   id: string;
   name: string;
