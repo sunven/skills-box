@@ -7,6 +7,7 @@
 
 pub mod api;
 pub mod archive;
+mod attempt;
 pub mod cache;
 mod content_check;
 pub mod content_hash;
@@ -19,7 +20,6 @@ pub mod state;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use futures::StreamExt;
 use serde::Serialize;
 
 use crate::error::AppError;
@@ -29,6 +29,7 @@ use crate::paths::AppPaths;
 use archive::{
     ArchiveClient, ArchiveLimits, CommitArchiveCache, SourceArchiveClient, SourceArchives,
 };
+use attempt::{GroupExecutor, GroupOutcome, PreparedCheck, PreparedSource, SchedulingLimits};
 use cache::{CachedSourceTree, UpdateCache, is_fresh};
 use github::{GitHubTreeClient, RemoteTree, ReqwestGitHubClient};
 use state::{UpdateCheckState, UpdateCheckStateStore};
@@ -227,108 +228,48 @@ impl UpdateService {
         let full_check = skill_ids.is_none();
         let now = self.clock.now_epoch_ms();
         let selected = skill_ids.map(|ids| ids.into_iter().collect::<BTreeSet<_>>());
-        if selected.as_ref().is_some_and(BTreeSet::is_empty) {
-            return Ok(UpdateCheckReport {
-                skills: Vec::new(),
-                sources: Vec::new(),
-                checked_at_epoch_ms: now,
-                last_success_at_epoch_ms: None,
-                skipped_source_count: 0,
-                cached_source_count: 0,
-                warnings: Vec::new(),
-            });
-        }
-
-        let (mut skill_results, groups) = self.collect_targets(&lock, selected.as_ref());
-        let mut cached_groups = Vec::new();
-        let mut network_groups = Vec::new();
-        for group in groups.into_values() {
-            let cached = if group.is_content() {
-                None
-            } else {
-                self.cache.load(&group.source, group.reference.as_deref())
-            };
-            match cached {
-                Some(cached)
-                    if is_fresh(cached.fetched_at_epoch_ms, now, self.config.cache_ttl_ms) =>
-                {
-                    cached_groups.push((group, cached));
+        let (skills, groups) = self.collect_targets(&lock, selected.as_ref());
+        let sources = groups
+            .into_values()
+            .map(|group| {
+                let cached = if group.is_content() {
+                    None
+                } else {
+                    self.cache.load(&group.source, group.reference.as_deref())
+                };
+                match cached {
+                    Some(cached)
+                        if is_fresh(cached.fetched_at_epoch_ms, now, self.config.cache_ttl_ms) =>
+                    {
+                        PreparedSource::Ready(Box::new(self.cached_outcome(group, &cached)))
+                    }
+                    cached => PreparedSource::Pending((group, cached)),
                 }
-                cached => network_groups.push((group, cached)),
-            }
-        }
-
-        let mut source_results = Vec::new();
-        let mut warnings = Vec::new();
-
-        for (group, cached) in cached_groups {
-            let outcome = self.cached_outcome(group, &cached);
-            warnings.extend(outcome.warnings);
-            source_results.push(outcome.source);
-            skill_results.extend(outcome.skills);
-        }
-
-        let max_sources = self.config.max_sources;
-        let mut to_check = Vec::new();
-        let mut skipped = Vec::new();
-        for (index, group) in network_groups.into_iter().enumerate() {
-            if index < max_sources {
-                to_check.push(group);
-            } else {
-                skipped.push(group);
-            }
-        }
-
-        for (group, cached) in skipped {
-            let outcome = self.skipped_outcome(group, cached.as_ref());
-            warnings.extend(outcome.warnings);
-            source_results.push(outcome.source);
-            skill_results.extend(outcome.skills);
-        }
-
-        let outcomes = self.run_network(to_check).await;
-        for outcome in outcomes {
-            warnings.extend(outcome.warnings);
-            source_results.push(outcome.source);
-            skill_results.extend(outcome.skills);
-        }
-
-        skill_results.sort_by(|left, right| left.name.cmp(&right.name));
-        source_results.sort_by(|left, right| {
-            left.source
-                .to_ascii_lowercase()
-                .cmp(&right.source.to_ascii_lowercase())
-                .then_with(|| left.reference.cmp(&right.reference))
-        });
-
-        let skipped_source_count = source_results
-            .iter()
-            .filter(|source| source.status == UpdateSourceStatus::Skipped)
-            .count();
-        if skipped_source_count > 0 {
-            warnings.push(format!(
-                "本次检查达到来源上限（{max_sources} 个），有 {skipped_source_count} 个来源尚未检查。"
-            ));
-        }
-        let cached_source_count = source_results
-            .iter()
-            .filter(|source| source.status == UpdateSourceStatus::Cached)
-            .count();
-        let last_success_at_epoch_ms = source_results
-            .iter()
-            .filter_map(|source| source.last_success_at_epoch_ms)
-            .max();
-        warnings.dedup();
-
-        let mut report = UpdateCheckReport {
-            skills: skill_results,
-            sources: source_results,
-            checked_at_epoch_ms: now,
-            last_success_at_epoch_ms,
-            skipped_source_count,
-            cached_source_count,
-            warnings,
-        };
+            })
+            .collect();
+        let mut report = attempt::run(
+            PreparedCheck {
+                checked_at_epoch_ms: now,
+                skills,
+                sources,
+            },
+            SchedulingLimits {
+                max_sources: self.config.max_sources,
+                concurrency: self.config.concurrency,
+                deadline_ms: self.config.deadline_ms,
+            },
+            GlobalGroupExecutor {
+                service: self,
+                archives: SourceArchives::new(
+                    Arc::clone(&self.archive_client),
+                    self.archive_cache.clone(),
+                    Arc::clone(&self.clock),
+                    self.config.cache_ttl_ms,
+                    ArchiveLimits::default(),
+                ),
+            },
+        )
+        .await;
         if full_check {
             let state = UpdateCheckState::from_report(&report);
             if let Err(error) = self.state.store(&crate::scope::ScopeId::Global, &state) {
@@ -377,60 +318,6 @@ impl UpdateService {
             }
         }
         (base_results, groups)
-    }
-
-    async fn run_network(
-        &self,
-        groups: Vec<(Group, Option<CachedSourceTree>)>,
-    ) -> Vec<GroupOutcome> {
-        if groups.is_empty() {
-            return Vec::new();
-        }
-        let archives = SourceArchives::new(
-            Arc::clone(&self.archive_client),
-            self.archive_cache.clone(),
-            Arc::clone(&self.clock),
-            self.config.cache_ttl_ms,
-            ArchiveLimits::default(),
-        );
-        let pending: BTreeMap<GroupKey, (Group, Option<CachedSourceTree>)> = groups
-            .iter()
-            .cloned()
-            .map(|(group, cached)| (group.key(), (group, cached)))
-            .collect();
-        let mut completed = BTreeSet::new();
-        let mut outcomes = Vec::new();
-        let deadline = tokio::time::Instant::now()
-            + std::time::Duration::from_millis(self.config.deadline_ms.max(1));
-        let concurrency = self.config.concurrency.max(1);
-        let mut stream = futures::stream::iter(groups.into_iter().map(|(group, cached)| {
-            let key = group.key();
-            let archives = &archives;
-            async move {
-                (
-                    key,
-                    if group.is_content() {
-                        self.content_outcome(group, archives).await
-                    } else {
-                        self.network_outcome(group, cached).await
-                    },
-                )
-            }
-        }))
-        .buffer_unordered(concurrency);
-
-        while let Ok(Some((key, outcome))) = tokio::time::timeout_at(deadline, stream.next()).await
-        {
-            completed.insert(key);
-            outcomes.push(outcome);
-        }
-
-        for (key, (group, cached)) in pending {
-            if !completed.contains(&key) {
-                outcomes.push(self.timeout_outcome(group, cached.as_ref()));
-            }
-        }
-        outcomes
     }
 
     async fn content_outcome(&self, group: Group, archives: &SourceArchives) -> GroupOutcome {
@@ -626,11 +513,13 @@ impl UpdateService {
         }
     }
 
-    fn skipped_outcome(&self, group: Group, cached: Option<&CachedSourceTree>) -> GroupOutcome {
-        let note = format!(
-            "本次检查达到来源上限（{} 个），该来源尚未检查。",
-            self.config.max_sources
-        );
+    fn skipped_outcome(
+        &self,
+        group: Group,
+        cached: Option<&CachedSourceTree>,
+        max_sources: usize,
+    ) -> GroupOutcome {
+        let note = format!("本次检查达到来源上限（{max_sources} 个），该来源尚未检查。");
         let last_success_at_epoch_ms = cached.map(|cached| cached.fetched_at_epoch_ms);
         let skills = group
             .targets
@@ -735,13 +624,6 @@ impl Group {
             .first()
             .is_some_and(|target| content_hash::is_content_hash(&target.lock_hash))
     }
-
-    fn key(&self) -> GroupKey {
-        GroupKey {
-            source: crate::tasks::source::source_identity(&self.source),
-            reference: self.reference.clone(),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -753,10 +635,35 @@ struct Target {
     lock_hash: String,
 }
 
-struct GroupOutcome {
-    source: UpdateSourceResult,
-    skills: Vec<UpdateSkillResult>,
-    warnings: Vec<String>,
+struct GlobalGroupExecutor<'a> {
+    service: &'a UpdateService,
+    archives: SourceArchives,
+}
+
+#[async_trait::async_trait]
+impl GroupExecutor for GlobalGroupExecutor<'_> {
+    type Group = (Group, Option<CachedSourceTree>);
+
+    async fn check(&self, (group, cached): &Self::Group) -> GroupOutcome {
+        if group.is_content() {
+            self.service
+                .content_outcome(group.clone(), &self.archives)
+                .await
+        } else {
+            self.service
+                .network_outcome(group.clone(), cached.clone())
+                .await
+        }
+    }
+
+    fn skipped(&self, (group, cached): &Self::Group, max_sources: usize) -> GroupOutcome {
+        self.service
+            .skipped_outcome(group.clone(), cached.as_ref(), max_sources)
+    }
+
+    fn timed_out(&self, (group, cached): &Self::Group) -> GroupOutcome {
+        self.service.timeout_outcome(group.clone(), cached.as_ref())
+    }
 }
 
 struct Evaluation {
@@ -1609,6 +1516,92 @@ mod tests {
         assert_eq!(
             third.skills[0].last_success_at_epoch_ms,
             Some(1_000_000 + UPDATE_CHECK_CACHE_TTL_MS)
+        );
+    }
+
+    #[tokio::test]
+    async fn fresh_tree_cache_does_not_consume_the_source_budget() {
+        let fixture = Fixture::new();
+        fixture.write_entries(&[
+            LockSpec::github(
+                "alpha",
+                "a/skills",
+                None,
+                "skills/alpha/SKILL.md",
+                ALPHA_TREE,
+            ),
+            LockSpec::github(
+                "beta",
+                "b/skills",
+                None,
+                "skills/alpha/SKILL.md",
+                ALPHA_TREE,
+            ),
+            LockSpec::github(
+                "gamma",
+                "c/skills",
+                None,
+                "skills/alpha/SKILL.md",
+                ALPHA_TREE,
+            ),
+        ]);
+        let clock = Arc::new(TestClock::new(1_000));
+        let client = Arc::new(
+            FakeGitHub::default()
+                .with_tree("a/skills", None, fixture_tree())
+                .with_tree("b/skills", None, fixture_tree()),
+        );
+        let mut service = fixture.service(
+            Arc::clone(&client),
+            Arc::clone(&clock),
+            UpdateCheckConfig {
+                cache_ttl_ms: 1_000,
+                ..UpdateCheckConfig::default()
+            },
+        );
+        service.check(Some(vec!["alpha".into()])).await.unwrap();
+        service
+            .cache
+            .store("b/skills", None, &fixture_tree(), 0)
+            .unwrap();
+        client.reset_calls();
+        clock.set(1_100);
+        service.config.max_sources = 0;
+
+        let report = service.check(None).await.unwrap();
+        assert!(client.calls().is_empty());
+        assert_eq!(report.checked_at_epoch_ms, 1_100);
+        assert_eq!(report.cached_source_count, 1);
+        assert_eq!(report.skipped_source_count, 2);
+        assert_eq!(report.last_success_at_epoch_ms, Some(1_000));
+        assert_eq!(state_of(&report, "alpha"), UpdateState::Current);
+        assert_eq!(
+            result_of(&report, "alpha").last_success_at_epoch_ms,
+            Some(1_000)
+        );
+        assert_eq!(
+            source_of(&report, "b/skills").status,
+            UpdateSourceStatus::Skipped
+        );
+        assert_eq!(
+            result_of(&report, "beta").previous_state,
+            Some(UpdateState::Current)
+        );
+        assert_eq!(result_of(&report, "beta").last_success_at_epoch_ms, Some(0));
+        assert_eq!(result_of(&report, "gamma").previous_state, None);
+
+        service.config.max_sources = 1;
+        let report = service.check(None).await.unwrap();
+        assert_eq!(client.calls(), vec![("b/skills".to_string(), None)]);
+        assert_eq!(report.cached_source_count, 1);
+        assert_eq!(report.skipped_source_count, 1);
+        assert_eq!(
+            source_of(&report, "b/skills").status,
+            UpdateSourceStatus::Ok
+        );
+        assert_eq!(
+            source_of(&report, "c/skills").status,
+            UpdateSourceStatus::Skipped
         );
     }
 

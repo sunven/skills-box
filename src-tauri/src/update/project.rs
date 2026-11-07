@@ -13,9 +13,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use futures::StreamExt;
-
 use super::archive::{ArchiveClient, ArchiveLimits, CommitArchiveCache, SourceArchives};
+use super::attempt::{
+    self, GroupExecutor, GroupOutcome, PreparedCheck, PreparedSource, SchedulingLimits,
+};
 use super::content_check::{ContentTarget as ProjectTarget, evaluate_target};
 use super::content_hash;
 use super::{
@@ -105,140 +106,32 @@ impl ProjectUpdateService {
                     .collect::<Result<BTreeSet<_>, AppError>>()
             })
             .transpose()?;
-        if selected.as_ref().is_some_and(BTreeSet::is_empty) {
-            return Ok(UpdateCheckReport {
-                skills: Vec::new(),
-                sources: Vec::new(),
-                checked_at_epoch_ms: now,
-                last_success_at_epoch_ms: None,
-                skipped_source_count: 0,
-                cached_source_count: 0,
-                warnings: Vec::new(),
-            });
-        }
-
-        let (mut skill_results, groups) = collect_targets(&lock, selected.as_ref());
+        let (skills, groups) = collect_targets(&lock, selected.as_ref());
         // Freshness is commit-keyed and the commit is only known after a
-        // network lookup, so the cache is consulted inside each group.
-        let max_sources = self.config.max_sources;
-        let mut to_check = Vec::new();
-        let mut skipped = Vec::new();
-        for (index, group) in groups.into_values().enumerate() {
-            if index < max_sources {
-                to_check.push(group);
-            } else {
-                skipped.push(group);
-            }
-        }
-
-        let mut source_results = Vec::new();
-        let mut warnings = Vec::new();
-        for group in skipped {
-            let note = format!("本次检查达到来源上限（{max_sources} 个），该来源尚未检查。");
-            let skills: Vec<UpdateSkillResult> = group
-                .targets
-                .iter()
-                .map(|target| pending_result(target, UpdateState::Unknown, note.clone()))
-                .collect();
-            source_results.push(UpdateSourceResult {
-                source: group.source,
-                reference: group.reference,
-                status: UpdateSourceStatus::Skipped,
-                skill_count: group.targets.len(),
-                cached: false,
-                truncated: false,
-                last_success_at_epoch_ms: None,
-                error: None,
-                note: Some(note),
-            });
-            skill_results.extend(skills);
-        }
-
-        let outcomes = self.run_groups(to_check).await;
-        for outcome in outcomes {
-            warnings.extend(outcome.warnings);
-            source_results.push(outcome.source);
-            skill_results.extend(outcome.skills);
-        }
-
-        skill_results.sort_by(|left, right| left.name.cmp(&right.name));
-        source_results.sort_by(|left, right| {
-            left.source
-                .to_ascii_lowercase()
-                .cmp(&right.source.to_ascii_lowercase())
-                .then_with(|| left.reference.cmp(&right.reference))
-        });
-
-        let skipped_source_count = source_results
-            .iter()
-            .filter(|source| source.status == UpdateSourceStatus::Skipped)
-            .count();
-        if skipped_source_count > 0 {
-            warnings.push(format!(
-                "本次检查达到来源上限（{max_sources} 个），有 {skipped_source_count} 个来源尚未检查。"
-            ));
-        }
-        let cached_source_count = source_results
-            .iter()
-            .filter(|source| source.status == UpdateSourceStatus::Cached)
-            .count();
-        let last_success_at_epoch_ms = source_results
-            .iter()
-            .filter_map(|source| source.last_success_at_epoch_ms)
-            .max();
-        warnings.dedup();
-
-        let report = UpdateCheckReport {
-            skills: skill_results,
-            sources: source_results,
-            checked_at_epoch_ms: now,
-            last_success_at_epoch_ms,
-            skipped_source_count,
-            cached_source_count,
-            warnings,
-        };
-        Ok(report)
-    }
-
-    async fn run_groups(&self, groups: Vec<Group>) -> Vec<GroupOutcome> {
-        if groups.is_empty() {
-            return Vec::new();
-        }
-        let archives = SourceArchives::new(
-            Arc::clone(&self.client),
-            self.cache.clone(),
-            Arc::clone(&self.clock),
-            self.config.cache_ttl_ms,
-            self.config.limits,
-        );
-        let pending: BTreeMap<GroupKey, Group> = groups
-            .iter()
-            .cloned()
-            .map(|group| (group.key(), group))
-            .collect();
-        let mut completed = BTreeSet::new();
-        let mut outcomes = Vec::new();
-        let deadline = tokio::time::Instant::now()
-            + std::time::Duration::from_millis(self.config.deadline_ms.max(1));
-        let concurrency = self.config.concurrency.max(1);
-        let mut stream = futures::stream::iter(groups.into_iter().map(|group| {
-            let key = group.key();
-            let archives = &archives;
-            async move { (key, self.group_outcome(group, archives).await) }
-        }))
-        .buffer_unordered(concurrency);
-
-        while let Ok(Some((key, outcome))) = tokio::time::timeout_at(deadline, stream.next()).await
-        {
-            completed.insert(key);
-            outcomes.push(outcome);
-        }
-        for (key, group) in pending {
-            if !completed.contains(&key) {
-                outcomes.push(self.timeout_outcome(group));
-            }
-        }
-        outcomes
+        // network lookup, so every group still needs a source-budget slot.
+        Ok(attempt::run(
+            PreparedCheck {
+                checked_at_epoch_ms: now,
+                skills,
+                sources: groups.into_values().map(PreparedSource::Pending).collect(),
+            },
+            SchedulingLimits {
+                max_sources: self.config.max_sources,
+                concurrency: self.config.concurrency,
+                deadline_ms: self.config.deadline_ms,
+            },
+            ProjectGroupExecutor {
+                service: self,
+                archives: SourceArchives::new(
+                    Arc::clone(&self.client),
+                    self.cache.clone(),
+                    Arc::clone(&self.clock),
+                    self.config.cache_ttl_ms,
+                    self.config.limits,
+                ),
+            },
+        )
+        .await)
     }
 
     async fn group_outcome(&self, group: Group, archives: &SourceArchives) -> GroupOutcome {
@@ -364,19 +257,47 @@ struct Group {
     targets: Vec<ProjectTarget>,
 }
 
-impl Group {
-    fn key(&self) -> GroupKey {
-        GroupKey {
-            source: crate::tasks::source::source_identity(&self.source),
-            reference: self.reference.clone(),
-        }
-    }
+struct ProjectGroupExecutor<'a> {
+    service: &'a ProjectUpdateService,
+    archives: SourceArchives,
 }
 
-struct GroupOutcome {
-    source: UpdateSourceResult,
-    skills: Vec<UpdateSkillResult>,
-    warnings: Vec<String>,
+#[async_trait::async_trait]
+impl GroupExecutor for ProjectGroupExecutor<'_> {
+    type Group = Group;
+
+    async fn check(&self, group: &Group) -> GroupOutcome {
+        self.service
+            .group_outcome(group.clone(), &self.archives)
+            .await
+    }
+
+    fn skipped(&self, group: &Group, max_sources: usize) -> GroupOutcome {
+        let note = format!("本次检查达到来源上限（{max_sources} 个），该来源尚未检查。");
+        GroupOutcome {
+            source: UpdateSourceResult {
+                source: group.source.clone(),
+                reference: group.reference.clone(),
+                status: UpdateSourceStatus::Skipped,
+                skill_count: group.targets.len(),
+                cached: false,
+                truncated: false,
+                last_success_at_epoch_ms: None,
+                error: None,
+                note: Some(note.clone()),
+            },
+            skills: group
+                .targets
+                .iter()
+                .map(|target| pending_result(target, UpdateState::Unknown, note.clone()))
+                .collect(),
+            warnings: Vec::new(),
+        }
+    }
+
+    fn timed_out(&self, group: &Group) -> GroupOutcome {
+        self.service.timeout_outcome(group.clone())
+    }
 }
 
 fn collect_targets(
@@ -953,6 +874,54 @@ mod tests {
         assert_eq!(report.skills[0].state, UpdateState::Current);
         // Timestamps come from the cache entry, not the check time.
         assert_eq!(report.skills[0].last_success_at_epoch_ms, Some(900));
+    }
+
+    #[tokio::test]
+    async fn cached_archives_still_consume_the_source_budget() {
+        let root = project_root();
+        write_lock(
+            root.path(),
+            serde_json::json!({
+                "alpha": entry("acme/skills", "github", "alpha/SKILL.md", ALPHA_HASH),
+            }),
+        );
+        let client = FakeArchiveClient::default().with_group(
+            "acme/skills",
+            Some("main"),
+            COMMIT_A,
+            scoped_archive(),
+        );
+        let commits = Arc::clone(&client.commit_calls);
+        let downloads = Arc::clone(&client.download_calls);
+        let (mut service, _tmp) = service(
+            client,
+            Arc::new(TestClock::new(1_000)),
+            ProjectCheckConfig {
+                max_sources: 0,
+                ..ProjectCheckConfig::default()
+            },
+        );
+        service
+            .cache
+            .store(COMMIT_A, &scoped_archive(), 900)
+            .unwrap();
+
+        let report = service.check(&layout(root.path()), None).await.unwrap();
+        assert_eq!(commits.load(Ordering::SeqCst), 0);
+        assert_eq!(downloads.load(Ordering::SeqCst), 0);
+        assert_eq!(report.skipped_source_count, 1);
+        assert_eq!(report.cached_source_count, 0);
+        assert_eq!(report.skills[0].state, UpdateState::Unknown);
+        assert_eq!(report.last_success_at_epoch_ms, None);
+
+        service.config.max_sources = 1;
+        let report = service.check(&layout(root.path()), None).await.unwrap();
+        assert_eq!(commits.load(Ordering::SeqCst), 1);
+        assert_eq!(downloads.load(Ordering::SeqCst), 0);
+        assert_eq!(report.skipped_source_count, 0);
+        assert_eq!(report.cached_source_count, 1);
+        assert_eq!(report.skills[0].state, UpdateState::Current);
+        assert_eq!(report.last_success_at_epoch_ms, Some(900));
     }
 
     #[tokio::test]
