@@ -1,12 +1,11 @@
 //! One registered task owns every target, including native attachment writes.
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 
 use super::{
     EventSink, FinishOutcome, TaskAction, TaskEnvelope, TaskEvent, TaskId, TaskManager,
-    TaskOverall, TaskPhase, TaskResult, TaskSkillResult, TaskSkillStatus,
+    TaskOverall, TaskPhase, TaskResult, TaskSkillResult,
 };
-use crate::error::{AppError, ErrorCode};
+use crate::error::AppError;
 use crate::interrupted::MutationKind;
 use crate::logs::OperationLog;
 use crate::process::CancelToken;
@@ -16,8 +15,11 @@ use crate::tasks::batch::{
     self, BatchAction, BatchConfirmation, BatchPlan, BatchPreview, BatchRequest, BatchResult,
     BatchRow, BatchStatus, PlannedTarget,
 };
-use crate::tasks::session::{self, MutationAction};
-use crate::tasks::{uninstall, update};
+use crate::tasks::batch_execution::{
+    BatchExecution, Continuation, TargetCompletion, TargetExecutor,
+};
+use crate::tasks::session;
+use crate::tasks::update;
 use crate::update::UpdateSkillResult;
 
 impl TaskManager {
@@ -387,346 +389,114 @@ pub(super) async fn run(
     manager: TaskManager,
     layout: ScopeLayout,
     ctx: session::SessionContext,
-    mut plan: BatchPlan,
+    plan: BatchPlan,
 ) -> FinishOutcome {
-    let total = plan.targets.iter().filter(|t| t.target.eligible).count() as u32;
+    let targets = plan.targets.clone();
+    let action = plan.preview.action;
+    let log_path = manager
+        .inner
+        .paths
+        .display(OperationLog::for_scope(&manager.inner.paths, &layout.scope).path());
+    let mut execution = BatchExecution::new(
+        manager.inner.paths.clone(),
+        manager.inner.projects.clone(),
+        layout,
+        ctx.clone(),
+        manager.inner.config.install_timeout,
+        plan,
+    );
+    run_targets(
+        BatchRun {
+            task_id: ctx.task_id,
+            sink: ctx.sink,
+            cancel: ctx.cancel,
+            envelope: ctx.envelope,
+            action,
+            targets,
+            log_path,
+        },
+        &mut execution,
+    )
+    .await
+}
+
+struct BatchRun {
+    task_id: String,
+    sink: EventSink,
+    cancel: CancelToken,
+    envelope: TaskEnvelope,
+    action: BatchAction,
+    targets: Vec<PlannedTarget>,
+    log_path: String,
+}
+
+async fn run_targets(run: BatchRun, execution: &mut impl TargetExecutor) -> FinishOutcome {
+    let BatchRun {
+        task_id,
+        sink,
+        cancel,
+        envelope,
+        action,
+        targets,
+        log_path,
+    } = run;
+    let total = targets.iter().filter(|t| t.target.eligible).count() as u32;
     let mut completed = 0;
     let mut stopped = false;
     let mut rows = Vec::new();
     let mut warnings = Vec::new();
     let mut skill_results = Vec::new();
-    let mut copied = std::collections::HashSet::new();
-    let mut copy_failed = std::collections::HashSet::new();
-    for target in &plan.targets.clone() {
-        if !target.target.eligible {
-            rows.push(row(target, BatchStatus::Skipped, None, None));
-            continue;
-        }
-        if stopped || ctx.cancel.is_cancelled() {
-            rows.push(row(target, BatchStatus::NotExecuted, None, None));
-            continue;
-        }
-        if plan.copy.is_some()
-            && target.target.agent_id.is_some()
-            && copy_failed.contains(&target.target.name)
-        {
-            let mut skipped = row(target, BatchStatus::NotExecuted, None, None);
-            skipped.target.reason = Some("该技能复制未成功，挂载未执行。".into());
-            rows.push(skipped);
-            completed += 1;
-            continue;
-        }
-        let label = target.target.agent_name.as_ref().map_or_else(
-            || target.target.name.clone(),
-            |agent| format!("{} · {agent}", target.target.name),
-        );
-        (ctx.sink)(TaskEvent::progress(
-            &ctx.task_id,
-            TaskPhase::Preparing,
-            format!("正在{} {label}…", plan.preview.action.label()),
-            completed,
-            total,
-        ));
-        let observed = Arc::new(Mutex::new(None));
-        let snapshots = Arc::new(Mutex::new(Vec::<String>::new()));
-        let snapshot_copy = snapshots.clone();
-        let record_snapshot = ctx.record_snapshot.clone();
-        let paths = manager.inner.paths.clone();
-        let paths_for_snapshot = paths.clone();
-        let record = Arc::new(move |path: &std::path::Path| {
-            record_snapshot(path);
-            snapshot_copy
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .push(paths_for_snapshot.display(path));
-        });
-        let outer_sink = ctx.sink.clone();
-        let skill_label = label.clone();
-        let inner_sink: EventSink = Arc::new(move |mut event| {
-            event.completed = Some(completed);
-            event.total = Some(total);
-            event.message = format!("{skill_label} · {}", event.message);
-            outer_sink(event);
-        });
-        let inner_ctx = session::SessionContext {
-            task_id: ctx.task_id.clone(),
-            sink: inner_sink,
-            // Stopping the batch cannot abort a target's write/verification.
-            cancel: CancelToken::new(),
-            envelope: TaskEnvelope {
-                action: if plan.preview.action == BatchAction::Restore {
-                    TaskAction::Install
-                } else if plan.preview.action == BatchAction::Update {
-                    TaskAction::Update
-                } else {
-                    TaskAction::Uninstall
-                },
-                ..ctx.envelope.clone()
-            },
-            runtime: ctx.runtime.clone(),
-            executor: ctx.executor.clone(),
-            record_snapshot: record.clone(),
-            set_cancellable: Arc::new(|_| {}),
-            expected_commands: target.target.command.clone().map(|command| vec![command]),
-        };
-        let checked = check_target(&manager, &layout, &plan, target).await;
-        let outcome = match checked {
-            Err(error) => Err(error),
-            Ok(()) => match plan.preview.action {
-                BatchAction::Update => {
-                    let action = CheckedAction {
-                        inner: update::UpdateAction::new(
-                            paths.clone(),
-                            layout.clone(),
-                            manager.inner.config.install_timeout,
-                        ),
-                        paths: paths.clone(),
-                        layout: layout.clone(),
-                        plan: plan.clone(),
-                        target: target.clone(),
-                    };
-                    let plan_paths = paths.clone();
-                    let plan_layout = layout.clone();
-                    let name = target.target.name.clone();
-                    let prepared = tokio::task::spawn_blocking(move || {
-                        update::plan_updates(&plan_paths, &plan_layout, &[name])
-                    })
-                    .await
-                    .map_err(|e| AppError::task_internal("批量更新计划", e))
-                    .and_then(|r| r);
-                    match prepared {
-                        Ok(prepared) => unit_outcome(
-                            session::run(inner_ctx, action, prepared).await,
-                            &mut warnings,
-                        ),
-                        Err(e) => Err(e),
-                    }
-                }
-                BatchAction::Uninstall => {
-                    let action = CheckedAction {
-                        inner: uninstall::UninstallAction::new(
-                            paths.clone(),
-                            layout.clone(),
-                            manager.inner.config.install_timeout,
-                        ),
-                        paths: paths.clone(),
-                        layout: layout.clone(),
-                        plan: plan.clone(),
-                        target: target.clone(),
-                    };
-                    let plan_paths = paths.clone();
-                    let plan_layout = layout.clone();
-                    let skill_id = target.target.skill_id.clone();
-                    let prepared = tokio::task::spawn_blocking(move || {
-                        uninstall::plan_uninstall(&plan_paths, &plan_layout, &skill_id)
-                    })
-                    .await
-                    .map_err(|e| AppError::task_internal("批量卸载计划", e))
-                    .and_then(|r| r);
-                    match prepared {
-                        Ok(prepared) => unit_outcome(
-                            session::run(inner_ctx, action, prepared).await,
-                            &mut warnings,
-                        ),
-                        Err(e) => Err(e),
-                    }
-                }
-                BatchAction::UninstallAgents => {
-                    let layout = layout.clone();
-                    let plan = plan.clone();
-                    let target = target.clone();
-                    tokio::task::spawn_blocking(move || {
-                        crate::tasks::uninstall_agents::execute(
-                            &paths,
-                            &layout,
-                            &target,
-                            record.as_ref(),
-                            &|| verify_target(&paths, &layout, &plan, &target),
-                        )
-                    })
-                    .await
-                    .map_err(|e| AppError::task_internal("按 Agent 移除", e))
-                    .and_then(|r| r)
-                }
-                BatchAction::Attach | BatchAction::Detach => {
-                    let layout = layout.clone();
-                    let plan = plan.clone();
-                    let target = target.clone();
-                    tokio::task::spawn_blocking(move || {
-                        verify_target(&paths, &layout, &plan, &target)?;
-                        let agent = target.target.agent_id.as_deref().expect("agent target");
-                        if plan.preview.action == BatchAction::Attach {
-                            crate::attach::attach_agent_checked(
-                                &paths,
-                                &layout,
-                                &target.target.skill_id,
-                                agent,
-                                &|| verify_target(&paths, &layout, &plan, &target),
-                            )?;
-                        } else {
-                            crate::detach::detach_agent_checked(
-                                &paths,
-                                &layout,
-                                &target.target.skill_id,
-                                agent,
-                                record.as_ref(),
-                                &|| verify_target(&paths, &layout, &plan, &target),
-                            )?;
-                        }
-                        Ok(())
-                    })
-                    .await
-                    .map_err(|e| AppError::task_internal("批量挂载", e))
-                    .and_then(|r| r)
-                }
-                BatchAction::CleanRecords => {
-                    let write_layout = layout.clone();
-                    let write_plan = plan.clone();
-                    let write_target = target.clone();
-                    let result = tokio::task::spawn_blocking(move || {
-                        crate::tasks::stale_records::clean(
-                            &paths,
-                            &write_layout,
-                            &write_plan,
-                            &write_target,
-                            record.as_ref(),
-                            &|| verify_target(&paths, &write_layout, &write_plan, &write_target),
-                        )
-                    })
-                    .await
-                    .map_err(|e| AppError::task_internal("清理记录", e))
-                    .and_then(|r| r);
-                    result.map(|w| warnings.extend(w))
-                }
-                BatchAction::Restore => {
-                    let install =
-                        plan.stale.as_ref().unwrap().installs[&target.target.name].clone();
-                    let action = crate::tasks::stale_records::RestoreAction {
-                        inner: crate::tasks::install::InstallAction::new(
-                            paths.clone(),
-                            layout.clone(),
-                            manager.inner.config.install_timeout,
-                            ctx.task_id.to_string(),
-                        ),
-                        paths,
-                        layout: layout.clone(),
-                        plan: plan.clone(),
-                        target: target.clone(),
-                        observed: observed.clone(),
-                    };
-                    unit_outcome(
-                        session::run(inner_ctx, action, install).await,
-                        &mut warnings,
-                    )
-                }
-                BatchAction::CopyToProject => {
-                    let plan = plan.clone();
-                    let target = target.clone();
-                    let published = copied.contains(&target.target.name);
-                    tokio::task::spawn_blocking(move || {
-                        crate::tasks::copy_to_project::execute(
-                            &paths,
-                            &plan,
-                            &target,
-                            published,
-                            record.as_ref(),
-                        )
-                    })
-                    .await
-                    .map_err(|e| AppError::task_internal("复制到项目", e))
-                    .and_then(|r| r)
-                }
-            },
-        };
-        let backup = snapshots
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .last()
-            .cloned();
-        let (mut status, mut error) = match outcome {
-            Ok(()) => (BatchStatus::Success, None),
-            Err(mut error) => {
-                if plan.preview.action == BatchAction::Restore {
-                    error.detail = Some(format!(
-                        "{}\n{}",
-                        error.detail.unwrap_or_default(),
-                        crate::tasks::stale_records::observed_state(&layout, &target.target.name)
-                    ));
-                }
-                stopped = batch::stops_batch(&error);
-                let status = if error.code == ErrorCode::BatchTargetChanged {
-                    BatchStatus::Skipped
-                } else {
-                    BatchStatus::Failed
-                };
-                (status, Some(error))
-            }
-        };
-        if plan.stale.is_some() {
-            let observed = observed.lock().unwrap_or_else(|p| p.into_inner()).clone();
-            match crate::tasks::stale_records::advance(
-                &layout,
-                &plan,
-                &target.target.name,
-                status == BatchStatus::Success,
-                observed,
-            ) {
-                Ok(bytes) => {
-                    if let Some(stale) = plan.stale.as_mut() {
-                        stale.expected = bytes;
-                    }
-                }
-                Err(e) => {
-                    stopped = true;
-                    status = BatchStatus::Failed;
-                    error = Some(e);
-                }
-            }
-        }
-        if plan.copy.is_some() && target.target.agent_id.is_none() {
-            if status == BatchStatus::Success {
-                copied.insert(target.target.name.clone());
-            } else {
-                copy_failed.insert(target.target.name.clone());
-            }
-        }
-        let skill_status = if status == BatchStatus::Success {
-            match plan.preview.action {
-                BatchAction::Update => TaskSkillStatus::Updated,
-                BatchAction::CleanRecords
-                | BatchAction::Uninstall
-                | BatchAction::UninstallAgents
-                | BatchAction::Detach => TaskSkillStatus::Removed,
-                BatchAction::Restore | BatchAction::Attach | BatchAction::CopyToProject => {
-                    TaskSkillStatus::Installed
-                }
-            }
-        } else if status == BatchStatus::Skipped {
-            TaskSkillStatus::Skipped
+    for target in &targets {
+        let pending_status = if !target.target.eligible {
+            Some(BatchStatus::Skipped)
+        } else if stopped || cancel.is_cancelled() {
+            Some(BatchStatus::NotExecuted)
         } else {
-            TaskSkillStatus::Failed
+            None
         };
-        skill_results.push(TaskSkillResult {
-            name: target.target.name.clone(),
-            status: skill_status,
-            error: error.clone(),
-            backup_path: backup.clone(),
-        });
-        rows.push(row(target, status, error, backup));
+        if let Some(status) = pending_status {
+            rows.push(BatchRow {
+                target: target.target.clone(),
+                status,
+                error: None,
+                backup_path: None,
+            });
+            continue;
+        }
+        let outcome = execution.execute(target, completed, total).await;
         completed += 1;
-        (ctx.sink)(TaskEvent::progress(
-            &ctx.task_id,
-            TaskPhase::Verifying,
-            format!("已处理 {completed} / {total} 个目标"),
-            completed,
-            total,
-        ));
+        let row = outcome.row;
+        match outcome.completion {
+            TargetCompletion::DependencyBlocked => rows.push(row),
+            TargetCompletion::Attempted {
+                skill_status,
+                warnings: target_warnings,
+                continuation,
+            } => {
+                stopped = continuation == Continuation::Stop;
+                warnings.extend(target_warnings);
+                skill_results.push(TaskSkillResult {
+                    name: row.target.name.clone(),
+                    status: skill_status,
+                    error: row.error.clone(),
+                    backup_path: row.backup_path.clone(),
+                });
+                rows.push(row);
+                (sink)(TaskEvent::progress(
+                    &task_id,
+                    TaskPhase::Verifying,
+                    format!("已处理 {completed} / {total} 个目标"),
+                    completed,
+                    total,
+                ));
+            }
+        }
     }
     let succeeded = rows
         .iter()
         .filter(|r| r.status == BatchStatus::Success)
         .count();
-    let overall = if ctx.cancel.is_cancelled() {
+    let overall = if cancel.is_cancelled() {
         TaskOverall::Cancelled
     } else if succeeded == rows.len() {
         TaskOverall::Success
@@ -738,213 +508,25 @@ pub(super) async fn run(
     let backup_path = rows.iter().rev().find_map(|r| r.backup_path.clone());
     let result = TaskResult {
         action: TaskAction::Batch,
-        scope: ctx.envelope.scope.clone(),
+        scope: envelope.scope.clone(),
         overall,
         skills: skill_results,
         warnings,
         backup_path,
-        log_path: Some(
-            manager
-                .inner
-                .paths
-                .display(OperationLog::for_scope(&manager.inner.paths, &layout.scope).path()),
-        ),
-        started_at: ctx.envelope.started_at,
+        log_path: Some(log_path),
+        started_at: envelope.started_at,
         finished_at_epoch_ms: crate::time::now_ms(),
         preview: None,
-        batch: Some(BatchResult {
-            action: plan.preview.action,
-            rows,
-        }),
+        batch: Some(BatchResult { action, rows }),
     };
     FinishOutcome::Completed(
         result,
-        format!(
-            "批量{}已结束，{succeeded} 个目标成功。",
-            plan.preview.action.label()
-        ),
+        format!("批量{}已结束，{succeeded} 个目标成功。", action.label()),
     )
-}
-
-async fn check_target(
-    manager: &TaskManager,
-    layout: &ScopeLayout,
-    plan: &BatchPlan,
-    target: &PlannedTarget,
-) -> Result<(), AppError> {
-    if plan.copy.is_some() {
-        return Ok(());
-    }
-    let manager = manager.clone();
-    let layout = layout.clone();
-    let plan = plan.clone();
-    let target = target.clone();
-    tokio::task::spawn_blocking(move || {
-        let current = manager.scope_layout(&layout.scope)?;
-        if current.root != plan.root
-            || current.project.as_ref().map(|p| &p.check_revision) != plan.project_revision.as_ref()
-        {
-            return Err(AppError::project_root_unavailable(
-                "项目",
-                "项目根目录已变化。",
-            ));
-        }
-        verify_target(&manager.inner.paths, &current, &plan, &target)
-    })
-    .await
-    .map_err(|e| AppError::task_internal("批量校验", e))?
-}
-
-pub(crate) fn verify_target(
-    paths: &crate::paths::AppPaths,
-    layout: &ScopeLayout,
-    plan: &BatchPlan,
-    target: &PlannedTarget,
-) -> Result<(), AppError> {
-    // Re-detect directories/configuration even after backup. The original
-    // layout alone would miss an Agent that appeared while a writer prepared.
-    let registry = crate::projects::ProjectRegistry::new(paths.clone());
-    let current = ScopeLayout::resolve_detected(paths, &registry, &layout.scope)?;
-    if current.root != plan.root
-        || current.project.as_ref().map(|p| &p.check_revision) != plan.project_revision.as_ref()
-    {
-        return Err(AppError::project_root_unavailable(
-            "项目",
-            "项目根目录已变化。",
-        ));
-    }
-    let layout = &current;
-    layout.ensure_mutation_ready()?;
-    if plan.stale.is_some() {
-        return crate::tasks::stale_records::verify(paths, layout, plan, target);
-    }
-    if plan.preview.action == BatchAction::UninstallAgents {
-        return crate::tasks::uninstall_agents::verify(paths, layout, target);
-    }
-    let fresh = batch::inspect(
-        paths,
-        layout,
-        plan.preview.action,
-        &target.target.skill_id,
-        &target.target.name,
-        target.target.agent_id.as_deref(),
-        &plan.updates,
-    )?;
-    if !fresh.target.eligible || fresh.fingerprint != target.fingerprint {
-        return Err(AppError::batch_target_changed(
-            fresh
-                .target
-                .reason
-                .unwrap_or_else(|| "内容或挂载范围与确认时不同。".into()),
-        ));
-    }
-    Ok(())
-}
-
-fn row(
-    target: &PlannedTarget,
-    status: BatchStatus,
-    error: Option<AppError>,
-    backup_path: Option<String>,
-) -> BatchRow {
-    BatchRow {
-        target: target.target.clone(),
-        status,
-        error,
-        backup_path,
-    }
-}
-
-fn unit_outcome(outcome: FinishOutcome, warnings: &mut Vec<AppError>) -> Result<(), AppError> {
-    match outcome {
-        FinishOutcome::Completed(result, _) => {
-            warnings.extend(result.warnings);
-            if result.overall == TaskOverall::Success {
-                Ok(())
-            } else {
-                Err(result
-                    .skills
-                    .into_iter()
-                    .find_map(|r| r.error)
-                    .unwrap_or_else(|| AppError::verify_failed("目标未完成。")))
-            }
-        }
-        FinishOutcome::Failed(error) => Err(error),
-        FinishOutcome::Cancelled => Err(AppError::task_cancelled()),
-    }
-}
-
-/// The session resolves the runtime before preflight. Check again there so
-/// an edit made while runtime resolution was pending cannot be overwritten.
-struct CheckedAction<A> {
-    inner: A,
-    paths: crate::paths::AppPaths,
-    layout: ScopeLayout,
-    plan: BatchPlan,
-    target: PlannedTarget,
-}
-impl<A: MutationAction> MutationAction for CheckedAction<A> {
-    type Plan = A::Plan;
-    type Unit = A::Unit;
-    fn profile(&self, p: &Self::Plan) -> session::SessionProfile {
-        self.inner.profile(p)
-    }
-    fn uses_cli(&self, p: &Self::Plan) -> bool {
-        self.inner.uses_cli(p)
-    }
-    fn execute_native(
-        &self,
-        u: &Self::Unit,
-        p: &session::Preflight,
-        r: &session::Reporter,
-    ) -> Result<session::UnitOutcome, AppError> {
-        self.inner.execute_native(u, p, r)
-    }
-    fn begin(&self, p: &Self::Plan) -> Result<session::StartOutcome<Self::Unit>, AppError> {
-        self.inner.begin(p)
-    }
-    fn preflight(
-        &self,
-        u: &Self::Unit,
-        r: &session::Reporter,
-    ) -> Result<session::Preflight, AppError> {
-        verify_target(&self.paths, &self.layout, &self.plan, &self.target)?;
-        self.inner.preflight(u, r)
-    }
-    fn before_write(&self, u: &Self::Unit) -> Result<(), AppError> {
-        verify_target(&self.paths, &self.layout, &self.plan, &self.target)?;
-        self.inner.before_write(u)
-    }
-    fn command(
-        &self,
-        u: &Self::Unit,
-        rt: &crate::cli::CliRuntime,
-        r: &session::Reporter,
-    ) -> crate::process::CommandSpec {
-        self.inner.command(u, rt, r)
-    }
-    fn complete(
-        &self,
-        u: &Self::Unit,
-        o: crate::process::ExecOutput,
-        p: &session::Preflight,
-        r: &session::Reporter,
-    ) -> Result<session::UnitOutcome, AppError> {
-        self.inner.complete(u, o, p, r)
-    }
-    fn on_infrastructure_failure(
-        &self,
-        u: &Self::Unit,
-        e: AppError,
-        p: Option<&session::Preflight>,
-        r: &session::Reporter,
-    ) -> session::FailureDisposition {
-        self.inner.on_infrastructure_failure(u, e, p, r)
-    }
-    fn on_cancelled(&self, u: &Self::Unit, p: &session::Preflight, e: Option<AppError>) {
-        self.inner.on_cancelled(u, p, e)
-    }
 }
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod scheduling_tests;

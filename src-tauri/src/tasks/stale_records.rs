@@ -588,7 +588,7 @@ impl MutationAction for RestoreAction {
         })
     }
     fn before_write(&self, _: &InstallPlan) -> Result<(), AppError> {
-        super::manager::batch::verify_target(&self.paths, &self.layout, &self.plan, &self.target)
+        super::batch::verify_target(&self.paths, &self.layout, &self.plan, &self.target)
     }
     fn command(
         &self,

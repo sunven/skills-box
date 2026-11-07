@@ -668,6 +668,52 @@ pub(super) fn digest(value: &str) -> String {
     format!("{:x}", Sha256::digest(value.as_bytes()))
 }
 
+pub(super) fn verify_target(
+    paths: &crate::paths::AppPaths,
+    layout: &ScopeLayout,
+    plan: &BatchPlan,
+    target: &PlannedTarget,
+) -> Result<(), AppError> {
+    // Re-detect directories/configuration even after backup. The original
+    // layout alone would miss an Agent that appeared while a writer prepared.
+    let registry = crate::projects::ProjectRegistry::new(paths.clone());
+    let current = ScopeLayout::resolve_detected(paths, &registry, &layout.scope)?;
+    if current.root != plan.root
+        || current.project.as_ref().map(|p| &p.check_revision) != plan.project_revision.as_ref()
+    {
+        return Err(AppError::project_root_unavailable(
+            "项目",
+            "项目根目录已变化。",
+        ));
+    }
+    let layout = &current;
+    layout.ensure_mutation_ready()?;
+    if plan.stale.is_some() {
+        return crate::tasks::stale_records::verify(paths, layout, plan, target);
+    }
+    if plan.preview.action == BatchAction::UninstallAgents {
+        return crate::tasks::uninstall_agents::verify(paths, layout, target);
+    }
+    let fresh = inspect(
+        paths,
+        layout,
+        plan.preview.action,
+        &target.target.skill_id,
+        &target.target.name,
+        target.target.agent_id.as_deref(),
+        &plan.updates,
+    )?;
+    if !fresh.target.eligible || fresh.fingerprint != target.fingerprint {
+        return Err(AppError::batch_target_changed(
+            fresh
+                .target
+                .reason
+                .unwrap_or_else(|| "内容或挂载范围与确认时不同。".into()),
+        ));
+    }
+    Ok(())
+}
+
 pub fn stops_batch(error: &AppError) -> bool {
     matches!(
         error.code,

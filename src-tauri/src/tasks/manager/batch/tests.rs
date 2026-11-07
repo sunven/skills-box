@@ -1,13 +1,16 @@
 use super::*;
 use crate::baseline::BaselineStore;
 use crate::cli::{CliRuntime, CliRuntimeProvider};
+use crate::error::ErrorCode;
 use crate::inventory::UpdateState;
 use crate::paths::AppPaths;
 use crate::process::{CommandSpec, ExecError, ExecOutput, ProcessExecutor};
+use crate::tasks::TaskSkillStatus;
 use crate::tasks::{InventoryConflictProvider, TaskManagerConfig};
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{Notify, mpsc};
 
@@ -1050,6 +1053,235 @@ async fn copy_to_project_stop_retains_registration_and_owns_both_scope_writes() 
 }
 
 #[tokio::test]
+async fn failed_copy_counts_dependent_attachments_without_attempting_them() {
+    let f = Fixture::new();
+    let root = f.project_root();
+    let preview = f
+        .preview(f.copy_request(&root, &["alpha", "beta"], &["claude-code"]))
+        .await;
+    let source = f.paths.canonical_skills_dir().join("alpha/SKILL.md");
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let recorded = events.clone();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let out: EventSink = Arc::new(move |event| {
+        if event.message == "正在复制到项目 alpha…" {
+            fs::write(&source, "changed after confirmation").unwrap();
+        }
+        recorded.lock().unwrap().push(event.clone());
+        let _ = tx.send(event);
+    });
+    f.manager
+        .start_batch(ScopeId::Global, Fixture::confirmation(&preview), out)
+        .await
+        .unwrap();
+    let result = finished(&mut rx).await;
+    assert_eq!(
+        statuses(&result),
+        [
+            BatchStatus::Skipped,
+            BatchStatus::NotExecuted,
+            BatchStatus::Success,
+            BatchStatus::Success
+        ]
+    );
+    assert_eq!(
+        result
+            .skills
+            .iter()
+            .map(|s| (s.name.as_str(), s.status))
+            .collect::<Vec<_>>(),
+        [
+            ("alpha", TaskSkillStatus::Skipped),
+            ("beta", TaskSkillStatus::Installed),
+            ("beta", TaskSkillStatus::Installed)
+        ]
+    );
+    let rows = &result.batch.as_ref().unwrap().rows;
+    assert_eq!(
+        rows[0].error.as_ref().unwrap().code,
+        ErrorCode::BatchTargetChanged
+    );
+    assert_eq!(
+        rows[1].target.reason.as_deref(),
+        Some("该技能复制未成功，挂载未执行。")
+    );
+    assert!(rows[1].error.is_none());
+    assert!(rows[1].backup_path.is_none());
+    let events = events.lock().unwrap();
+    assert!(!events.iter().any(|e| e.message.contains("alpha · Claude")));
+    let progress = events
+        .iter()
+        .filter(|e| e.message.starts_with("已处理 "))
+        .map(|e| (e.completed, e.total))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        progress,
+        [(Some(1), Some(4)), (Some(3), Some(4)), (Some(4), Some(4))]
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| e.message == "正在复制到项目 beta…" && e.completed == Some(2))
+    );
+    assert!(!root.join(".agents/skills/alpha").exists());
+    assert!(root.join(".claude/skills/beta").is_symlink());
+}
+
+#[tokio::test]
+async fn stale_document_advance_replaces_target_failure_and_stops_with_its_backup() {
+    let f = Fixture::new();
+    f.make_stale(&["alpha", "beta"]);
+    let preview = f
+        .preview(Fixture::request(
+            BatchAction::CleanRecords,
+            &["alpha", "beta"],
+            &[],
+        ))
+        .await;
+    let plan = f.manager.batch_plan(&preview.id).unwrap();
+    let layout = f.manager.scope_layout(&ScopeId::Global).unwrap();
+    let lock_path = f.paths.lock_path();
+    let original = fs::read(&lock_path).unwrap();
+    let mut changed: serde_json::Value = serde_json::from_slice(&original).unwrap();
+    changed["skills"]["gamma"]["external"] = true.into();
+    let changed_bytes = serde_json::to_vec(&changed).unwrap();
+    let write_bytes = changed_bytes.clone();
+    let snapshots = Arc::new(Mutex::new(Vec::new()));
+    let recorded = snapshots.clone();
+    let ctx = session::SessionContext {
+        task_id: "stale-advance".into(),
+        sink: Arc::new(|_| {}),
+        cancel: CancelToken::new(),
+        envelope: TaskEnvelope {
+            action: TaskAction::Batch,
+            scope: ScopeId::Global,
+            started_at: 1,
+        },
+        runtime: f.manager.inner.runtime.clone(),
+        executor: f.executor.clone(),
+        record_snapshot: Arc::new(move |snapshot| {
+            recorded.lock().unwrap().push(snapshot.to_path_buf());
+            fs::write(&lock_path, &write_bytes).unwrap();
+        }),
+        set_cancellable: Arc::new(|_| {}),
+        expected_commands: None,
+    };
+    let FinishOutcome::Completed(result, _) = run(f.manager.clone(), layout, ctx, plan).await
+    else {
+        panic!("batch must retain its results");
+    };
+    assert_eq!(
+        statuses(&result),
+        [BatchStatus::Failed, BatchStatus::NotExecuted]
+    );
+    assert_eq!(result.overall, TaskOverall::Failed);
+    let rows = &result.batch.as_ref().unwrap().rows;
+    let error = rows[0].error.as_ref().unwrap();
+    assert_eq!(error.code, ErrorCode::LockReadFailed);
+    assert_eq!(
+        error.detail.as_deref(),
+        Some("Lock 在写入后变化，已停止后续操作，请重新预览。")
+    );
+    assert_eq!(result.skills.len(), 1);
+    assert_eq!(result.backup_path, rows[0].backup_path);
+    assert_eq!(result.skills[0].backup_path, rows[0].backup_path);
+    let snapshots = snapshots.lock().unwrap();
+    assert_eq!(snapshots.len(), 1);
+    assert!(snapshots[0].is_dir());
+    assert_eq!(fs::read(f.paths.lock_path()).unwrap(), changed_bytes);
+    assert!(f.executor.calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn restore_document_advance_replaces_success_and_stops_with_its_backup() {
+    let f = Fixture::new();
+    f.make_stale(&["alpha", "beta"]);
+    let preview = f
+        .preview(Fixture::request(
+            BatchAction::Restore,
+            &["alpha", "beta"],
+            &[],
+        ))
+        .await;
+    let lock_path = f.paths.lock_path();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let recorded = events.clone();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let out: EventSink = Arc::new(move |event| {
+        if event.message == "alpha · 已校验 alpha" {
+            // Restore has captured its writer's document. A later edit must
+            // not become the next target's authorized Lock document.
+            let mut lock: serde_json::Value =
+                serde_json::from_slice(&fs::read(&lock_path).unwrap()).unwrap();
+            lock["external"] = true.into();
+            fs::write(&lock_path, lock.to_string()).unwrap();
+        }
+        recorded.lock().unwrap().push(event.clone());
+        let _ = tx.send(event);
+    });
+    f.manager
+        .start_batch(ScopeId::Global, Fixture::confirmation(&preview), out)
+        .await
+        .unwrap();
+    let result = finished(&mut rx).await;
+    assert_eq!(
+        statuses(&result),
+        [BatchStatus::Failed, BatchStatus::NotExecuted]
+    );
+    assert_eq!(result.overall, TaskOverall::Failed);
+    let rows = &result.batch.as_ref().unwrap().rows;
+    let error = rows[0].error.as_ref().unwrap();
+    assert_eq!(error.code, ErrorCode::LockReadFailed);
+    assert_eq!(
+        error.detail.as_deref(),
+        Some("Lock 在写入后变化，已停止后续操作，请重新预览。")
+    );
+    assert!(rows[0].backup_path.is_some());
+    assert_eq!(result.backup_path, rows[0].backup_path);
+    assert_eq!(result.skills.len(), 1);
+    assert_eq!(result.skills[0].status, TaskSkillStatus::Failed);
+    assert_eq!(result.skills[0].error, rows[0].error);
+    assert_eq!(result.skills[0].backup_path, rows[0].backup_path);
+    assert!(
+        f.paths
+            .canonical_skills_dir()
+            .join("alpha/SKILL.md")
+            .is_file()
+    );
+    assert!(!f.paths.canonical_skills_dir().join("beta").exists());
+    let lock: serde_json::Value =
+        serde_json::from_slice(&fs::read(f.paths.lock_path()).unwrap()).unwrap();
+    assert_eq!(lock["external"], true);
+    assert_eq!(lock["skills"]["alpha"]["skillPath"], "moved/alpha/SKILL.md");
+    assert_eq!(lock["skills"]["beta"]["skillPath"], "skills/beta/SKILL.md");
+    let calls = f.executor.calls.lock().unwrap();
+    let installed = calls
+        .iter()
+        .flat_map(|c| c.args.windows(2))
+        .filter(|a| a[0] == "-s")
+        .map(|a| a[1].as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(installed, ["alpha"]);
+    let events = events.lock().unwrap();
+    let inner = events
+        .iter()
+        .filter(|e| e.message.starts_with("alpha · "))
+        .collect::<Vec<_>>();
+    assert!(inner.iter().any(|e| e.message == "alpha · 已校验 alpha"));
+    assert!(
+        inner
+            .iter()
+            .all(|e| e.completed == Some(0) && e.total == Some(2))
+    );
+    let progress = events
+        .iter()
+        .filter(|e| e.message.starts_with("已处理 "))
+        .map(|e| (e.completed, e.total))
+        .collect::<Vec<_>>();
+    assert_eq!(progress, [(Some(1), Some(2))]);
+}
+
+#[tokio::test]
 async fn copy_to_project_baseline_failure_restores_records_and_removes_its_copy() {
     let f = Fixture::new();
     let root = f.project_root();
@@ -1696,18 +1928,6 @@ async fn changes_during_backup_skip_cli_and_native_writers_and_keep_snapshot() {
             .await;
         let plan = f.manager.batch_plan(&preview.id).unwrap();
         let layout = f.manager.scope_layout(&ScopeId::Global).unwrap();
-        let prepared = uninstall::plan_uninstall(&f.paths, &layout, "alpha").unwrap();
-        let action = CheckedAction {
-            inner: uninstall::UninstallAction::new(
-                f.paths.clone(),
-                layout.clone(),
-                Duration::from_secs(5),
-            ),
-            paths: f.paths.clone(),
-            layout,
-            plan: plan.clone(),
-            target: plan.targets[0].clone(),
-        };
         let (out, _) = sink();
         let edit_path = f.paths.canonical_skills_dir().join("alpha/SKILL.md");
         let ctx = session::SessionContext {
@@ -1728,16 +1948,30 @@ async fn changes_during_backup_skip_cli_and_native_writers_and_keep_snapshot() {
             set_cancellable: Arc::new(|_| {}),
             expected_commands: None,
         };
-        match session::run(ctx, action, prepared).await {
-            FinishOutcome::Completed(result, _) => {
-                assert_eq!(
-                    result.skills[0].error.as_ref().unwrap().code,
-                    ErrorCode::BatchTargetChanged
-                );
-                assert!(result.skills[0].backup_path.is_some());
+        let target = plan.targets[0].clone();
+        let mut execution = BatchExecution::new(
+            f.paths.clone(),
+            f.manager.inner.projects.clone(),
+            layout,
+            ctx,
+            Duration::from_secs(5),
+            plan,
+        );
+        let outcome = execution.execute(&target, 0, 1).await;
+        assert_eq!(outcome.row.status, BatchStatus::Skipped);
+        assert_eq!(
+            outcome.row.error.as_ref().unwrap().code,
+            ErrorCode::BatchTargetChanged
+        );
+        assert!(outcome.row.backup_path.is_some());
+        assert!(matches!(
+            outcome.completion,
+            TargetCompletion::Attempted {
+                skill_status: TaskSkillStatus::Skipped,
+                continuation: Continuation::Continue,
+                ..
             }
-            other => panic!("expected retained snapshot: {other:?}"),
-        }
+        ));
         assert!(f.executor.calls.lock().unwrap().is_empty());
         assert!(f.paths.canonical_skills_dir().join("alpha").exists());
     }
@@ -1977,7 +2211,7 @@ async fn copy_detach_requires_confirmation_and_detects_edits_after_backup() {
         &|_| {
             fs::write(copy.join("SKILL.md"), "copy edit").unwrap();
         },
-        &|| verify_target(&f.paths, &layout, &plan, &plan.targets[0]),
+        &|| batch::verify_target(&f.paths, &layout, &plan, &plan.targets[0]),
     );
     assert_eq!(changed.unwrap_err().code, ErrorCode::BatchTargetChanged);
     assert!(copy.exists());
