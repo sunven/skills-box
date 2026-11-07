@@ -96,6 +96,10 @@ export function BatchDialog({
   const [changed, setChanged] = useState(false);
   const [confirmedDelete, setConfirmedDelete] = useState(false);
   const [confirmedCopies, setConfirmedCopies] = useState(false);
+  const resetConfirmations = useCallback(() => {
+    setConfirmedDelete(false);
+    setConfirmedCopies(false);
+  }, []);
   const [retryKeys, setRetryKeys] = useState<string[] | undefined>();
   const [history, setHistory] = useState<BatchRow[]>([]);
   const [viewingResult, setViewingResult] = useState(false);
@@ -151,15 +155,14 @@ export function BatchDialog({
 
   const applyPreview = useCallback((next: BatchPreview) => {
     if (previewRef.current && previewRef.current.revision !== next.revision) {
-      setConfirmedDelete(false);
-      setConfirmedCopies(false);
+      resetConfirmations();
       setChanged(true);
     }
     previewRef.current = next;
     setPreview(next);
     if (next.agents) setProjectAgents((current) => JSON.stringify(current) === JSON.stringify(next.agents) ? current : next.agents!);
     setPreviewError(null);
-  }, []);
+  }, [resetConfirmations]);
 
   const applyAgentCounts = useCallback((next: BatchPreview) => {
     const counts = new Map<string, number>();
@@ -173,8 +176,7 @@ export function BatchDialog({
   const loadPreview = useCallback(async () => {
     const seq = ++requestSeq.current;
     setLoading(true);
-    setConfirmedDelete(false);
-    setConfirmedCopies(false);
+    resetConfirmations();
     const { scope, action, skillIds, agentIds, retryKeys, projectRoot } =
       selectionRef.current;
     if (action === "copy_to_project" && !projectRoot) {
@@ -201,7 +203,7 @@ export function BatchDialog({
     } finally {
       if (seq === requestSeq.current) setLoading(false);
     }
-  }, [applyPreview, mutation.stateRef]);
+  }, [applyPreview, mutation.stateRef, resetConfirmations]);
 
   useEffect(() => {
     if (!hasAgents || isRestore || (isCopy && !projectRoot)) return;
@@ -271,8 +273,7 @@ export function BatchDialog({
           setPreviewError(
             asAppError(cause) ?? fallbackError("预览已失效，请重新预览。"),
           );
-          setConfirmedDelete(false);
-          setConfirmedCopies(false);
+          resetConfirmations();
         }
       } finally {
         refreshing = false;
@@ -290,6 +291,7 @@ export function BatchDialog({
     applyPreview,
     applyAgentCounts,
     mutation.stateRef,
+    resetConfirmations,
   ]);
 
   useModalFocus({
@@ -348,8 +350,7 @@ export function BatchDialog({
       setViewingResult(true);
       onCompleted(completedSkillIds(merged));
     } else {
-      setConfirmedDelete(false);
-      setConfirmedCopies(false);
+      resetConfirmations();
       await loadPreview();
     }
   };
@@ -365,8 +366,7 @@ export function BatchDialog({
     setPreview(null);
     previewRef.current = null;
     setChanged(false);
-    setConfirmedDelete(false);
-    setConfirmedCopies(false);
+    resetConfirmations();
   };
 
   const combinedResult: MutationResultView | null =
@@ -400,8 +400,7 @@ export function BatchDialog({
     previewRef.current = null;
     setPreviewError(null);
     setChanged(false);
-    setConfirmedDelete(false);
-    setConfirmedCopies(false);
+    resetConfirmations();
     setLoading(true);
   };
 

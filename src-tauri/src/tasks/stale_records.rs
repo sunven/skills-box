@@ -7,7 +7,7 @@ use super::{
 use crate::{
     agents::{self, DetectionContext},
     backup::{BackupAction, BackupStore},
-    baseline::{BaselineStore, LocalModification},
+    baseline::BaselineStore,
     error::AppError,
     paths::AppPaths,
     scope_layout::ScopeLayout,
@@ -271,24 +271,13 @@ pub fn inspect(
         serde_json::from_slice(&raw).map_err(|e| AppError::lock_read_failed(e.to_string()))?;
     let entry = layout.lock()?.get(name).cloned();
     let mut target = BatchTarget {
-        key: serde_json::to_string(&(skill_id, None::<String>)).unwrap(),
-        skill_id: skill_id.into(),
-        name: name.into(),
-        agent_id: None,
-        agent_name: None,
-        eligible: false,
-        reason: None,
-        local_modification: LocalModification::Unknown,
-        deletes_copy: false,
-        removes_last_copy: None,
         paths: vec![
             paths.display(&layout.lock_path),
             paths.display(&BaselineStore::for_scope(paths, &layout.scope).baseline_path(name)),
         ],
-        operation: None,
-        command: None,
         source: entry.as_ref().map(|e| e.source.clone()),
         reference: entry.as_ref().and_then(|e| e.reference.clone()),
+        ..BatchTarget::new(skill_id, name, None, None)
     };
     let mut install_plan = None;
     let assessment = (|| {

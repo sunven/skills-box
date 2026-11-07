@@ -208,7 +208,7 @@ fn collect_agent_ids(
     Ok(order)
 }
 
-fn cli_agent_ids(targets: &[InstallTarget]) -> Vec<String> {
+pub(crate) fn cli_agent_ids(targets: &[InstallTarget]) -> Vec<String> {
     targets
         .iter()
         .filter(|target| crate::agents::is_catalog_agent(&target.id))

@@ -58,10 +58,10 @@ impl DiscoveryTransport for FakeTransport {
         self.maximum.fetch_max(n, Ordering::SeqCst);
         let _active = Active(&self.active);
         tokio::time::sleep(Duration::from_millis(2)).await;
-        if is_github(source) {
-            if let Some(error) = self.version_error.lock().unwrap().clone() {
-                return Err(error);
-            }
+        if is_github(source)
+            && let Some(error) = self.version_error.lock().unwrap().clone()
+        {
+            return Err(error);
         }
         Ok(format!("{:040x}", self.commit.load(Ordering::SeqCst)))
     }

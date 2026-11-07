@@ -34,6 +34,19 @@ export interface DetailView {
   attachableAgents: InventoryAgent[];
 }
 
+export function attachableAgents(
+  agents: InventoryAgent[],
+  attachments: AgentAttachment[],
+): InventoryAgent[] {
+  return agents.filter(
+    (agent) =>
+      agent.detected &&
+      !agent.universal &&
+      !agent.shared &&
+      !attachments.some((attachment) => attachment.agentId === agent.id),
+  );
+}
+
 export function selectDetailView(
   skill: UpdateViewSkill,
   detail: SkillDetail | null | undefined,
@@ -76,12 +89,6 @@ export function selectDetailView(
       warnings.length > 0 ||
       Boolean(skill.updateResult?.error || skill.updateResult?.note) ||
       skill.update === "path_missing",
-    attachableAgents: agents.filter(
-      (agent) =>
-        agent.detected &&
-        !agent.universal &&
-        !agent.shared &&
-        !attachments.some((attachment) => attachment.agentId === agent.id),
-    ),
+    attachableAgents: attachableAgents(agents, attachments),
   };
 }

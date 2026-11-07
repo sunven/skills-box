@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { CheckCircle2 } from "lucide-react";
+import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { asAppError, fallbackError, revealAppData } from "../../lib/api";
 import {
@@ -30,14 +31,12 @@ export interface MutationResultProps {
   renderRetry?: (names: string[], label: string) => ReactNode;
 }
 
-function toneClass(status: MutationRowStatus): string {
-  if (status === "success") {
-    return "ml-auto rounded-sm bg-success-soft px-1.5 py-0.5 text-[11.5px] font-medium text-success";
-  }
-  if (status === "failed") {
-    return "ml-auto rounded-sm bg-destructive-soft px-1.5 py-0.5 text-[11.5px] font-medium text-destructive";
-  }
-  return "ml-auto rounded-sm bg-warning-soft px-1.5 py-0.5 text-[11.5px] font-medium text-warning";
+function rowBadgeVariant(
+  status: MutationRowStatus,
+): "success" | "destructive" | "warning" {
+  if (status === "success") return "success";
+  if (status === "failed") return "destructive";
+  return "warning";
 }
 
 function retryableRow(row: MutationRow, retryMode: MutationRetryMode): boolean {
@@ -112,9 +111,12 @@ export function MutationResult({
               <span className="min-w-0 break-words text-[13px] font-medium">
                 {row.name}
               </span>
-              <span className={`shrink-0 ${toneClass(row.status)}`}>
+              <Badge
+                variant={rowBadgeVariant(row.status)}
+                className="ml-auto shrink-0"
+              >
                 {row.statusLabel}
-              </span>
+              </Badge>
               {onRetryRow && !renderRetry && retryableRow(row, retryMode) ? (
                 <Button
                   variant="ghost"

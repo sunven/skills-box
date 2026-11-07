@@ -256,11 +256,7 @@ fn non_empty(value: Option<&String>) -> Option<&str> {
 }
 
 fn display_path(path: &Path, home: &Path) -> String {
-    match path.strip_prefix(home) {
-        Ok(rest) if rest.as_os_str().is_empty() => "~".to_string(),
-        Ok(rest) => format!("~/{}", rest.display()),
-        Err(_) => path.display().to_string(),
-    }
+    crate::paths::abbreviate_home(home, path)
 }
 
 #[cfg(test)]

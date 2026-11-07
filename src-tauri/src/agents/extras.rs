@@ -183,18 +183,6 @@ pub fn find(paths: &AppPaths, id: &str) -> Option<ExtraAgent> {
     load(paths).agents.into_iter().find(|agent| agent.id == id)
 }
 
-pub fn origin_of(paths: &AppPaths, id: &str) -> AgentOrigin {
-    if let Some(agent) = find(paths, id) {
-        if agent.builtin {
-            AgentOrigin::Builtin
-        } else {
-            AgentOrigin::User
-        }
-    } else {
-        AgentOrigin::Catalog
-    }
-}
-
 /// Append one validated user entry. Existing entries are preserved verbatim,
 /// including ones that failed validation, so a hand-edited file is never
 /// silently rewritten into a lossy form.
@@ -472,11 +460,7 @@ pub fn normalize_skills_dir(paths: &AppPaths, raw: &str) -> Result<String, Strin
 }
 
 fn template(paths: &AppPaths, path: &Path) -> String {
-    match path.strip_prefix(paths.home()) {
-        Ok(rest) if rest.as_os_str().is_empty() => "~".to_string(),
-        Ok(rest) => format!("~/{}", rest.display()),
-        Err(_) => path.display().to_string(),
-    }
+    crate::paths::abbreviate_home(paths.home(), path)
 }
 
 fn detect_path(skills_dir: &str) -> String {

@@ -61,12 +61,11 @@ fn resolve_spec(entry: &LockEntry) -> Result<SourceSpec, UpdateTargetError> {
         [entry.source_url.as_str(), entry.source.as_str()]
     };
     for candidate in candidates {
-        if let Ok(spec) = validate_source(candidate) {
-            if (github && spec.kind == SourceKind::GitHub)
-                || (!github && spec.kind == SourceKind::Git)
-            {
-                return Ok(spec);
-            }
+        if let Ok(spec) = validate_source(candidate)
+            && ((github && spec.kind == SourceKind::GitHub)
+                || (!github && spec.kind == SourceKind::Git))
+        {
+            return Ok(spec);
         }
     }
     Err(UpdateTargetError::Source {

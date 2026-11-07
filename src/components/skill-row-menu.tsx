@@ -8,6 +8,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { FileText, Link2, RefreshCw, Trash2 } from "lucide-react";
+import { attachableAgents } from "../lib/detail-view";
 import type { InventoryAgent, UpdateViewSkill } from "../lib/types";
 
 export type SkillMenuAction = "content" | "check" | "attachments" | "uninstall";
@@ -40,13 +41,7 @@ export function SkillRowMenu({
     left: number;
   } | null>(null);
   const managed = skill.management === "managed";
-  const canAttach = agents.some(
-    (agent) =>
-      agent.detected &&
-      !agent.universal &&
-      !agent.shared &&
-      !skill.attachments.some((attachment) => attachment.agentId === agent.id),
-  );
+  const canAttach = attachableAgents(agents, skill.attachments).length > 0;
   const canDetach = skill.attachments.some(
     (attachment) => attachment.detachable,
   );

@@ -180,14 +180,10 @@ pub struct UpdateService {
 impl UpdateService {
     pub fn new(paths: AppPaths) -> Self {
         let state = Arc::new(UpdateCheckStateStore::new(&paths));
-        Self::new_with_store(paths, state)
-    }
-
-    /// Production wiring: one store shared with the Project check lifecycle.
-    pub fn new_with_store(paths: AppPaths, state: Arc<UpdateCheckStateStore>) -> Self {
         Self::new_with_api(paths, state, api::GitHubApiClient::anonymous())
     }
 
+    /// Production wiring: one store shared with the Project check lifecycle.
     pub fn new_with_api(
         paths: AppPaths,
         state: Arc<UpdateCheckStateStore>,
@@ -211,20 +207,9 @@ impl UpdateService {
         clock: Arc<dyn Clock>,
         config: UpdateCheckConfig,
     ) -> Self {
-        let state = Arc::new(UpdateCheckStateStore::new(&paths));
-        Self::with_dependencies_and_store(paths, state, client, clock, config)
-    }
-
-    pub fn with_dependencies_and_store(
-        paths: AppPaths,
-        state: Arc<UpdateCheckStateStore>,
-        client: Arc<dyn GitHubTreeClient>,
-        clock: Arc<dyn Clock>,
-        config: UpdateCheckConfig,
-    ) -> Self {
         Self {
             cache: UpdateCache::new(&paths),
-            state,
+            state: Arc::new(UpdateCheckStateStore::new(&paths)),
             archive_client: Arc::new(SourceArchiveClient::new(paths.clone())),
             archive_cache: CommitArchiveCache::new(&paths),
             paths,
@@ -793,7 +778,7 @@ fn checkable_target(entry: &LockEntry) -> Result<Target, String> {
             return Err("版本指纹不是 64 位 SHA-256 内容指纹，无法比较。".to_string());
         }
     } else if !crate::git_tree::is_git_tree_hash(hash) {
-        if hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        if content_hash::is_content_hash(hash) {
             return Err(
                 "记录的是 64 位内容指纹（SHA-256），无法与 Git tree SHA 比较。".to_string(),
             );

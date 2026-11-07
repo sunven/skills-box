@@ -1,7 +1,7 @@
 import { SelectionCheckbox } from "./selection-checkbox";
 import { BATCH_ACTION_LABELS } from "../lib/batch";
 import type { BatchSelection } from "./batch-dialog";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { AlertTriangle, Loader2, Search, X } from "lucide-react";
 import { AnomalyBanner } from "./anomaly-panel";
 import { ProjectHeader } from "./project-header";
@@ -177,9 +177,9 @@ export function SkillListPane({
   onRetry,
 }: SkillListPaneProps) {
   const [checkedIds, setCheckedIds] = useState<Set<string>>(() => new Set());
-  const matchingIds = new Set(visibleSkills.map((skill) => skill.id));
-  const checkedSkills = visibleSkills.filter((skill) =>
-    checkedIds.has(skill.id),
+  const checkedSkills = useMemo(
+    () => visibleSkills.filter((skill) => checkedIds.has(skill.id)),
+    [visibleSkills, checkedIds],
   );
   useEffect(() => {
     if (batchRunning) return;
@@ -203,7 +203,9 @@ export function SkillListPane({
   }, []);
   const toggleAll = () =>
     setCheckedIds(
-      checkedSkills.length === visibleSkills.length ? new Set() : matchingIds,
+      checkedSkills.length === visibleSkills.length
+        ? new Set()
+        : new Set(visibleSkills.map((skill) => skill.id)),
     );
   const [menuTarget, setMenuTarget] = useState<SkillMenuTarget | null>(null);
   const rowActions = useSkillRowActions({

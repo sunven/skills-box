@@ -145,6 +145,24 @@ fn focus_main_window(app: &tauri::AppHandle) {
     }
 }
 
+/// Stop accepting writes and discovery, then exit once both have drained.
+fn spawn_graceful_shutdown(
+    app: tauri::AppHandle,
+    state: &AppState,
+    exit_guard: tokio::sync::OwnedRwLockReadGuard<()>,
+) {
+    state.exiting.store(true, Ordering::SeqCst);
+    state.app_updates.begin_shutdown();
+    let discovery = state.discovery.clone();
+    let tasks = state.tasks.clone();
+    tauri::async_runtime::spawn(async move {
+        let _exit_guard = exit_guard;
+        let _ = tasks.shutdown_mutations().await;
+        discovery.shutdown_and_wait().await;
+        app.exit(0);
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let paths = AppPaths::discover();
@@ -198,18 +216,7 @@ pub fn run() {
                     // Closing the main window ends discovery as well; a macOS
                     // window lifecycle must not leave an invisible scan running.
                     api.prevent_close();
-                    state.exiting.store(true, Ordering::SeqCst);
-                    state.app_updates.begin_shutdown();
-                    let discovery = state.discovery.clone();
-                    let tasks = state.tasks.clone();
-                    let app = window.app_handle().clone();
-                    discovery.shutdown();
-                    tauri::async_runtime::spawn(async move {
-                        let _exit_guard = exit_guard;
-                        let _ = tasks.shutdown_mutations().await;
-                        discovery.shutdown_and_wait().await;
-                        app.exit(0);
-                    });
+                    spawn_graceful_shutdown(window.app_handle().clone(), state.inner(), exit_guard);
                 }
             }
         })
@@ -292,17 +299,7 @@ pub fn run() {
                 let _ = app_handle.emit("exit-requested", active);
             } else {
                 api.prevent_exit();
-                state.exiting.store(true, Ordering::SeqCst);
-                state.app_updates.begin_shutdown();
-                let discovery = state.discovery.clone();
-                let app = app_handle.clone();
-                let tasks = state.tasks.clone();
-                tauri::async_runtime::spawn(async move {
-                    let _exit_guard = exit_guard;
-                    let _ = tasks.shutdown_mutations().await;
-                    discovery.shutdown_and_wait().await;
-                    app.exit(0);
-                });
+                spawn_graceful_shutdown(app_handle.clone(), state.inner(), exit_guard);
             }
         }
     });

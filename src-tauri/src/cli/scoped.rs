@@ -11,6 +11,7 @@ use crate::paths::AppPaths;
 use crate::process::CommandSpec;
 use crate::scope_layout::ScopeLayout;
 
+use super::commands::shell_quote;
 use super::{CLI_VERSION, CliRuntime};
 
 pub struct ScopedCli<'a> {
@@ -134,18 +135,6 @@ fn install_args(
     }
     args.extend(["-y".into(), "--json".into()]);
     args
-}
-
-fn shell_quote(value: &str) -> String {
-    if !value.is_empty()
-        && value
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || "_./:@%+=,-".contains(c))
-    {
-        value.to_string()
-    } else {
-        format!("'{}'", value.replace('\'', "'\\''"))
-    }
 }
 
 #[cfg(test)]

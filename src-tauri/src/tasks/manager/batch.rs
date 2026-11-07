@@ -152,20 +152,20 @@ impl TaskManager {
         let command_layout = layout.clone();
         let paths = self.inner.paths.clone();
         let id = uuid::Uuid::new_v4().to_string();
-        let mut plan =
-            tokio::task::spawn_blocking(move || {
-                let plan = batch::plan(&paths, &layout, request, id, updates)?;
-                if let Some(records) = checked_records {
-                    if plan.targets.iter().any(|target| {
-                        records.get(&target.target.name) != target.lock_entry.as_ref()
-                    }) {
-                        return Err(AppError::batch_preview_expired());
-                    }
-                }
-                Ok(plan)
-            })
-            .await
-            .map_err(|e| AppError::task_internal("批量预览", e))??;
+        let mut plan = tokio::task::spawn_blocking(move || {
+            let plan = batch::plan(&paths, &layout, request, id, updates)?;
+            if let Some(records) = checked_records
+                && plan
+                    .targets
+                    .iter()
+                    .any(|target| records.get(&target.target.name) != target.lock_entry.as_ref())
+            {
+                return Err(AppError::batch_preview_expired());
+            }
+            Ok(plan)
+        })
+        .await
+        .map_err(|e| AppError::task_internal("批量预览", e))??;
         self.fill_batch_commands(&command_layout, &mut plan).await?;
         let preview = plan.preview.clone();
         let mut previews = self
@@ -174,14 +174,13 @@ impl TaskManager {
             .lock()
             .unwrap_or_else(|p| p.into_inner());
         previews.retain(|_, p| crate::time::now_ms().saturating_sub(p.created_at) < 30 * 60 * 1000);
-        if previews.len() >= 32 {
-            if let Some(oldest) = previews
+        if previews.len() >= 32
+            && let Some(oldest) = previews
                 .iter()
                 .min_by_key(|(_, p)| p.created_at)
                 .map(|(id, _)| id.clone())
-            {
-                previews.remove(&oldest);
-            }
+        {
+            previews.remove(&oldest);
         }
         previews.insert(preview.id.clone(), plan);
         Ok(preview)
@@ -672,7 +671,11 @@ pub(super) async fn run(
                 status == BatchStatus::Success,
                 observed,
             ) {
-                Ok(bytes) => plan.stale.as_mut().unwrap().expected = bytes,
+                Ok(bytes) => {
+                    if let Some(stale) = plan.stale.as_mut() {
+                        stale.expected = bytes;
+                    }
+                }
                 Err(e) => {
                     stopped = true;
                     status = BatchStatus::Failed;

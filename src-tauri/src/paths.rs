@@ -134,11 +134,16 @@ impl AppPaths {
 
     /// Abbreviate the home prefix with `~` for display in the UI.
     pub fn display(&self, path: &Path) -> String {
-        match path.strip_prefix(&self.home) {
-            Ok(rest) if rest.as_os_str().is_empty() => "~".to_string(),
-            Ok(rest) => format!("~/{}", rest.display()),
-            Err(_) => path.display().to_string(),
-        }
+        abbreviate_home(&self.home, path)
+    }
+}
+
+/// Abbreviate a path that starts with `home` using `~` for display.
+pub(crate) fn abbreviate_home(home: &Path, path: &Path) -> String {
+    match path.strip_prefix(home) {
+        Ok(rest) if rest.as_os_str().is_empty() => "~".to_string(),
+        Ok(rest) => format!("~/{}", rest.display()),
+        Err(_) => path.display().to_string(),
     }
 }
 

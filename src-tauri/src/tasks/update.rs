@@ -26,9 +26,7 @@ use crate::logs::{OperationEntry, OperationLog};
 use crate::paths::AppPaths;
 use crate::process::{CommandSpec, ExecOutput};
 
-use super::install::{
-    InstallPlan, InstallTarget, UNIVERSAL_AGENT_ID, ensure_extra_attachments, verify_install,
-};
+use super::install::{InstallPlan, InstallTarget, ensure_extra_attachments, verify_install};
 use super::manager::{TaskAction, TaskPhase, TaskSkillResult, TaskSkillStatus};
 use super::session::{
     CancellationPolicy, FailureDisposition, FinalProgress, MutationAction, Preflight, Reporter,
@@ -180,12 +178,7 @@ pub fn plan_updates(
 
         let mut targets: Vec<InstallTarget> = targets.into_values().collect();
         targets.sort_by(|left, right| left.id.cmp(&right.id));
-        let mut agent_ids: Vec<String> = targets
-            .iter()
-            .filter(|target| crate::agents::is_catalog_agent(&target.id))
-            .map(|target| target.id.clone())
-            .collect();
-        agent_ids.push(UNIVERSAL_AGENT_ID.to_string());
+        let agent_ids = super::install::cli_agent_ids(&targets);
 
         let assessment = baseline_store.assess(
             name,

@@ -6,6 +6,7 @@ import {
   ShieldAlert,
   X,
 } from "lucide-react";
+import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { MutationError } from "./mutation/mutation-error";
 import { MutationProgress } from "./mutation/mutation-progress";
@@ -337,9 +338,9 @@ export function UpdateDialog({
                           {skill.source ?? "来源未知"}
                         </span>
                         {copyCandidates.has(skill.name) ? (
-                          <span className="ml-1 rounded-sm bg-warning-soft px-1 py-0.5 text-[11px] font-medium text-warning">
+                          <Badge variant="warning" className="ml-1">
                             copy → symlink
-                          </span>
+                          </Badge>
                         ) : null}
                       </li>
                     ))}

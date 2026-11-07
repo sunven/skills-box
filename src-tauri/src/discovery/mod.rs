@@ -737,12 +737,11 @@ impl DiscoveryService {
                     if !active.contains_key(&id.source) {
                         continue;
                     }
-                    if let Some(r) = h.sources.get_mut(&id.source) {
-                        if r.catalog.contains_key(&id.name) {
-                            if let Some(o) = r.history.get_mut(&id.name) {
-                                o.processed = true;
-                            }
-                        }
+                    if let Some(r) = h.sources.get_mut(&id.source)
+                        && r.catalog.contains_key(&id.name)
+                        && let Some(o) = r.history.get_mut(&id.name)
+                    {
+                        o.processed = true;
                     }
                 }
             } else {
@@ -778,15 +777,14 @@ impl DiscoveryService {
     }
     pub fn set_ignored(&self, id: DiscoveryId, ignored: bool) -> Result<(), AppError> {
         self.edit(|h, active| {
-            if active.contains_key(&id.source) {
-                if let Some(o) = h
+            if active.contains_key(&id.source)
+                && let Some(o) = h
                     .sources
                     .get_mut(&id.source)
                     .and_then(|r| r.history.get_mut(&id.name))
-                {
-                    o.ignored = ignored;
-                    o.processed = true;
-                }
+            {
+                o.ignored = ignored;
+                o.processed = true;
             }
         })
     }

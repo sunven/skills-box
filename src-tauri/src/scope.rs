@@ -10,8 +10,9 @@ use uuid::Uuid;
 use crate::error::AppError;
 use crate::security::validate_skill_id;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub enum ScopeId {
+    #[default]
     Global,
     Project(Uuid),
 }
@@ -69,12 +70,6 @@ impl ScopeId {
         };
         validate_skill_id(name)?;
         Ok(name)
-    }
-}
-
-impl Default for ScopeId {
-    fn default() -> Self {
-        Self::Global
     }
 }
 

@@ -3,6 +3,7 @@ import { useCliCommandPreview } from "../hooks/use-cli-commands";
 import { ActualCliCommands, CliPreviewStatus, CliRetryControl } from "./cli-command-display";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, PackageOpen, X } from "lucide-react";
+import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { MutationError } from "./mutation/mutation-error";
@@ -749,9 +750,7 @@ export function InstallWizard({
                                 {skill.name}
                               </span>
                               {conflict ? (
-                                <span className="rounded-sm bg-muted px-1.5 py-0.5 text-[11.5px] text-muted-foreground">
-                                  {conflictLabel(skill)}
-                                </span>
+                                <Badge variant="muted">{conflictLabel(skill)}</Badge>
                               ) : null}
                             </span>
                             <span className="mt-0.5 block text-[12px] leading-relaxed text-muted-foreground">
@@ -813,13 +812,11 @@ export function InstallWizard({
                               {agent.displayName}
                             </span>
                             {onlyUnmanaged ? (
-                              <span className="ml-auto rounded-sm bg-warning-soft px-1.5 py-0.5 text-[11.5px] font-medium text-warning">
+                              <Badge variant="warning" className="ml-auto">
                                 仅含未受管 skill
-                              </span>
+                              </Badge>
                             ) : managed > 0 ? (
-                              <span className="rounded-sm bg-muted px-1.5 py-0.5 text-[11.5px] text-muted-foreground">
-                                已含受管 skill
-                              </span>
+                              <Badge variant="muted">已含受管 skill</Badge>
                             ) : null}
                           </span>
                           <span className="mt-0.5 block font-mono text-[11px] text-muted-foreground">

@@ -196,7 +196,7 @@ impl ProjectRegistry {
         let file = self.load_mutable()?;
         let canonical = self.validate_root(root, &[], None)?;
         if let Some(project) = file.projects.iter().find(|p| p.root == canonical) {
-            self.lookup_available(project.id)?;
+            self.entry(project.clone()).require_available()?;
             return Ok(project.clone());
         }
         if let Some(project) = pending.filter(|p| p.root == canonical) {

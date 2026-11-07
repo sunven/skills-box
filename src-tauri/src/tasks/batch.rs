@@ -86,6 +86,33 @@ pub struct BatchTarget {
     pub reference: Option<String>,
 }
 
+impl BatchTarget {
+    pub fn new(
+        skill_id: &str,
+        name: &str,
+        agent_id: Option<&str>,
+        agent_name: Option<String>,
+    ) -> Self {
+        Self {
+            key: serde_json::to_string(&(skill_id, agent_id)).expect("string tuple"),
+            skill_id: skill_id.to_string(),
+            name: name.to_string(),
+            agent_id: agent_id.map(str::to_string),
+            agent_name,
+            eligible: false,
+            reason: None,
+            local_modification: LocalModification::Unknown,
+            deletes_copy: false,
+            removes_last_copy: None,
+            paths: Vec::new(),
+            operation: None,
+            command: None,
+            source: None,
+            reference: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BatchPreview {
@@ -316,27 +343,19 @@ fn preview_target(
                 fingerprint: digest(&reason),
                 lock_entry: None,
                 target: BatchTarget {
-                    key: serde_json::to_string(&(skill_id, agent_id)).expect("string tuple"),
-                    skill_id: skill_id.to_string(),
-                    name: name.to_string(),
-                    agent_id: agent_id.map(str::to_string),
-                    agent_name: agent_id.map(|id| {
-                        layout
-                            .agents
-                            .iter()
-                            .find(|a| a.id == id)
-                            .map_or_else(|| id.to_string(), |a| a.display_name.clone())
-                    }),
-                    eligible: false,
                     reason: Some(reason),
-                    local_modification: LocalModification::Unknown,
-                    deletes_copy: false,
-                    removes_last_copy: None,
-                    paths: Vec::new(),
-                    operation: None,
-                    command: None,
-                    source: None,
-                    reference: None,
+                    ..BatchTarget::new(
+                        skill_id,
+                        name,
+                        agent_id,
+                        agent_id.map(|id| {
+                            layout
+                                .agents
+                                .iter()
+                                .find(|a| a.id == id)
+                                .map_or_else(|| id.to_string(), |a| a.display_name.clone())
+                        }),
+                    )
                 },
             })
         }
@@ -355,24 +374,12 @@ pub fn inspect(
 ) -> Result<PlannedTarget, AppError> {
     let agents = target_agents(paths, layout, action);
     let agent = agent_id.and_then(|id| agents.iter().find(|a| a.id == id));
-    let mut target = BatchTarget {
-        key: serde_json::to_string(&(skill_id, agent_id)).expect("string tuple"),
-        skill_id: skill_id.to_string(),
-        name: name.to_string(),
-        agent_id: agent_id.map(str::to_string),
-        agent_name: agent_id
-            .map(|id| agent.map_or_else(|| id.to_string(), |a| a.display_name.clone())),
-        eligible: false,
-        reason: None,
-        local_modification: LocalModification::Unknown,
-        deletes_copy: false,
-        removes_last_copy: None,
-        paths: Vec::new(),
-        operation: None,
-        command: None,
-        source: None,
-        reference: None,
-    };
+    let mut target = BatchTarget::new(
+        skill_id,
+        name,
+        agent_id,
+        agent_id.map(|id| agent.map_or_else(|| id.to_string(), |a| a.display_name.clone())),
+    );
     if action == BatchAction::UninstallAgents {
         return super::uninstall_agents::inspect(paths, layout, target);
     }

@@ -41,39 +41,45 @@ export function SettingsPage({ onAgentsChanged, appUpdate, initialSection = "git
   const generation = useRef(0);
   useEffect(() => () => { generation.current += 1; }, []);
 
-  async function changeToken(action: "save" | "clear") {
+  async function runOperation<T>(
+    pendingAction: "save" | "clear" | "test",
+    action: () => Promise<T>,
+    onFreshResult: (result: T) => void,
+    failureMessage: string,
+  ) {
     const run = ++generation.current;
-    setPending(action);
+    setPending(pendingAction);
     setError(null);
     setNotice(null);
     setTest(null);
     try {
-      const status = await (action === "save" ? saveGitHubToken(token) : clearGitHubToken());
-      queryClient.setQueryData(githubSettingsQueryKey, status);
-      if (generation.current !== run) return;
-      setToken("");
-      setNotice(action === "save" ? "Token 已保存，后续请求立即生效。" : "已删除保存的 token。后续请求使用环境变量或匿名访问。");
+      const result = await action();
+      if (generation.current === run) onFreshResult(result);
     } catch (failure) {
-      if (generation.current === run) setError(asAppError(failure) ?? fallbackError("无法保存 GitHub 认证配置。"));
+      if (generation.current === run) setError(asAppError(failure) ?? fallbackError(failureMessage));
     } finally {
       if (generation.current === run) setPending(null);
     }
   }
 
+  async function changeToken(action: "save" | "clear") {
+    await runOperation(
+      action,
+      async () => {
+        const status = await (action === "save" ? saveGitHubToken(token) : clearGitHubToken());
+        queryClient.setQueryData(githubSettingsQueryKey, status);
+        return status;
+      },
+      () => {
+        setToken("");
+        setNotice(action === "save" ? "Token 已保存，后续请求立即生效。" : "已删除保存的 token。后续请求使用环境变量或匿名访问。");
+      },
+      "无法保存 GitHub 认证配置。",
+    );
+  }
+
   async function testAuth() {
-    const run = ++generation.current;
-    setPending("test");
-    setError(null);
-    setNotice(null);
-    setTest(null);
-    try {
-      const result = await testGitHubAuth();
-      if (generation.current === run) setTest(result);
-    } catch (failure) {
-      if (generation.current === run) setError(asAppError(failure) ?? fallbackError("无法测试 GitHub 认证。"));
-    } finally {
-      if (generation.current === run) setPending(null);
-    }
+    await runOperation("test", testGitHubAuth, setTest, "无法测试 GitHub 认证。");
   }
 
   const readError = settings.isError

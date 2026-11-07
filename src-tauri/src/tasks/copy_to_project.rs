@@ -97,16 +97,16 @@ pub fn plan(
             let content = tree_fingerprint(canonical)?;
             let fingerprint = crate::baseline::fingerprint_folder(canonical)
                 .map_err(AppError::skill_fingerprint_failed)?;
-            if let Some(baseline) = BaselineStore::for_scope(paths, &source.scope).load(name) {
-                if baseline.path == canonical.to_string_lossy() {
-                    local = if baseline.content_hash != fingerprint.content_hash {
-                        LocalModification::Modified
-                    } else if baseline.verified {
-                        LocalModification::Clean
-                    } else {
-                        LocalModification::Unknown
-                    };
-                }
+            if let Some(baseline) = BaselineStore::for_scope(paths, &source.scope).load(name)
+                && baseline.path == canonical.to_string_lossy()
+            {
+                local = if baseline.content_hash != fingerprint.content_hash {
+                    LocalModification::Modified
+                } else if baseline.verified {
+                    LocalModification::Clean
+                } else {
+                    LocalModification::Unknown
+                };
             }
             let target = layout.canonical_dir.join(name);
             ensure_inside(&layout, &target)?;
@@ -162,22 +162,17 @@ pub fn plan(
             }
             let agent = agent_id.and_then(|id| agents.iter().find(|a| a.id == id));
             let mut target = BatchTarget {
-                removes_last_copy: None,
-                key,
-                skill_id: skill_id.clone(),
-                name: name.into(),
-                agent_id: agent_id.map(str::to_string),
-                agent_name: agent_id
-                    .map(|id| agent.map_or_else(|| id.to_string(), |a| a.display_name.clone())),
-                eligible: false,
                 reason: source_reason.clone(),
                 local_modification: local,
-                deletes_copy: false,
                 paths: vec![paths.display(&layout.canonical_dir.join(name))],
                 operation: Some(if agent_id.is_some() { "attach" } else { "copy" }.into()),
-                command: None,
-                source: None,
-                reference: None,
+                ..BatchTarget::new(
+                    skill_id,
+                    name,
+                    agent_id,
+                    agent_id
+                        .map(|id| agent.map_or_else(|| id.to_string(), |a| a.display_name.clone())),
+                )
             };
             let mut fingerprint = String::new();
             if let Ok(skill) = &inspected {
@@ -626,7 +621,7 @@ pub fn execute(
         let _ = crate::logs::OperationLog::for_scope(paths, &layout.scope).append(
             &crate::logs::OperationEntry::new(
                 "copy_to_project",
-                &layout.scope.skill_id(name),
+                layout.scope.skill_id(name),
                 vec![],
                 "copied",
                 Some(paths.display(&snapshot.path)),

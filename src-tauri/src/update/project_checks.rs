@@ -84,10 +84,10 @@ impl ProjectUpdateChecks {
     ) -> Result<UpdateCheckResponse, AppError> {
         let (layout, revision) = {
             let _guard = self.lock();
-            if let Some(expected) = &expected_revision {
-                if !self.is_current(&scope, expected) {
-                    return Ok(Self::invalidated(scope, expected.clone()));
-                }
+            if let Some(expected) = &expected_revision
+                && !self.is_current(&scope, expected)
+            {
+                return Ok(Self::invalidated(scope, expected.clone()));
             }
             let layout = ScopeLayout::resolve(&self.paths, &self.projects, &scope, &[])?;
             let revision = layout

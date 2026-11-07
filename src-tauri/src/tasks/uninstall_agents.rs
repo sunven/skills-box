@@ -269,7 +269,7 @@ pub(crate) fn execute(
             &planned.target.skill_id,
             None,
             &[BackupAttachment::from(&attachment)],
-            &[attachment.agent_id.clone()],
+            std::slice::from_ref(&attachment.agent_id),
         )?;
         backup_path = Some(paths.display(&backup.path));
         record_snapshot(&backup.path);

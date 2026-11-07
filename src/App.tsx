@@ -308,9 +308,9 @@ function App() {
   const lockError = scope === GLOBAL_SCOPE ? scopeLockError : null;
   const scopeBlocked =
     scopeUnavailable || scopeLockError !== null || view.scopeError !== null;
+  const actionsDisabled = scopeBlocked || appUpdate.critical || batchRunning;
   const mutationsEnabled =
-    (report?.mutationsEnabled ?? false) && !scopeBlocked && !appUpdate.critical &&
-    !batchRunning;
+    (report?.mutationsEnabled ?? false) && !actionsDisabled;
 
   const mutateCheckUpdates = checkUpdates.mutate;
   const runAutoCheck = useCallback(async () => {
@@ -383,12 +383,21 @@ function App() {
     setStatus(defaults.status);
   }, []);
 
+  const openInstall = useCallback((seed: DiscoveryInstallSeed | null = null) => {
+    setInstallSeed(seed);
+    setInstallOpen(true);
+  }, []);
+
+  const openRelocateProject = useCallback((project: ProjectEntry) => {
+    setProjectDialog({ mode: "relocate", project });
+  }, []);
+
+  const openForgetProject = useCallback((project: ProjectEntry) => {
+    setProjectDialog({ mode: "forget", project });
+  }, []);
+
   const resetWorkspaceState = useCallback(() => {
-    const defaults = defaultFilters();
-    setQuery(defaults.query);
-    setSource(defaults.source);
-    setAgent(defaults.agent);
-    setStatus(defaults.status);
+    handleClearFilters();
     setSort("recent");
     setSelectedName(null);
     setDetailEntry(null);
@@ -399,7 +408,7 @@ function App() {
     setUninstallSkill(null);
     setBatchSelection(null);
     setBatchSucceededIds(new Set());
-  }, []);
+  }, [handleClearFilters]);
 
   const handleSelectScope = useCallback(
     (next: ScopeId) => {
@@ -512,7 +521,7 @@ function App() {
         isLoading={environment.isPending}
         isError={environment.isError}
         mutationsEnabled={mutationsEnabled}
-        onInstall={() => { setInstallSeed(null); setInstallOpen(true); }}
+        onInstall={() => openInstall()}
         updateReport={updateData}
         lastCheck={view.lastCheck}
         updateError={updateError}
@@ -535,12 +544,8 @@ function App() {
               notice={scopeNotice}
               onSelect={handleSelectScope}
               onAddProject={() => setProjectDialog({ mode: "add" })}
-              onRelocate={(project) =>
-              setProjectDialog({ mode: "relocate", project })
-            }
-              onForget={(project) =>
-              setProjectDialog({ mode: "forget", project })
-            }
+              onRelocate={openRelocateProject}
+              onForget={openForgetProject}
             />
           )
         }
@@ -552,7 +557,7 @@ function App() {
         initialFilter={discoveryEntry.filter} initialSource={discoveryEntry.source}
         projects={projects?.projects ?? EMPTY_PROJECTS} mutationsEnabled={mutationsEnabled}
         writesDisabled={appUpdate.critical}
-        onSelectScope={handleSelectScope} onInstall={(seed) => { setInstallSeed(seed); setInstallOpen(true); }} />
+        onSelectScope={handleSelectScope} onInstall={openInstall} />
       ) : (
         <>
           {projectWarnings.length > 0 ? (
@@ -623,9 +628,7 @@ function App() {
                       ? undefined
                       : (activeProject?.checkRevision ?? "initial")
                   }
-                  actionsDisabled={
-                    scopeBlocked || appUpdate.critical || batchRunning
-                  }
+                  actionsDisabled={actionsDisabled}
                   batchRunning={batchRunning}
                   batchMutationsEnabled={mutationsEnabled}
                   batchSucceededIds={batchSucceededIds}
@@ -672,16 +675,9 @@ function App() {
                   }
                   refreshingProject={checkUpdates.isPending}
                   onRefreshProject={handleRefreshProject}
-                  onInstall={() => {
-                    setInstallSeed(null);
-                    setInstallOpen(true);
-                  }}
-                  onRelocate={(project) =>
-                    setProjectDialog({ mode: "relocate", project })
-                  }
-                  onForget={(project) =>
-                    setProjectDialog({ mode: "forget", project })
-                  }
+                  onInstall={() => openInstall()}
+                  onRelocate={openRelocateProject}
+                  onForget={openForgetProject}
                   onQueryChange={setQuery}
                   onSortChange={setSort}
                   onStatusChange={handleStatusChange}
@@ -697,9 +693,7 @@ function App() {
                     skill={view.selectedSkill}
                     entry={detailEntry}
                     agents={snapshot?.installTargets ?? EMPTY_INVENTORY_AGENTS}
-                    actionsDisabled={
-                      scopeBlocked || appUpdate.critical || batchRunning
-                    }
+                    actionsDisabled={actionsDisabled}
                     checkingUpdates={checkUpdates.isPending}
                     onCheckUpdates={handleCheckUpdates}
                     onClose={handleCloseDetail}
@@ -722,11 +716,11 @@ function App() {
       <AnomalyDialog
         anomalies={view.anomalies}
         open={anomaliesOpen}
-        disabled={scopeBlocked || appUpdate.critical || batchRunning}
+        disabled={actionsDisabled}
         onProcessStale={() => { setAnomaliesOpen(false); setStaleRecordsOpen(true); }}
         onClose={() => setAnomaliesOpen(false)}
       />
-      {staleRecordsOpen ? <StaleRecordsDialog scope={scope} scopeLabel={activeProject?.displayName ?? "全局"} disabled={scopeBlocked || appUpdate.critical || batchRunning}
+      {staleRecordsOpen ? <StaleRecordsDialog scope={scope} scopeLabel={activeProject?.displayName ?? "全局"} disabled={actionsDisabled}
         onClose={() => setStaleRecordsOpen(false)}
         onSelect={(selection) => { setStaleRecordsOpen(false); setBatchSucceededIds(new Set()); setBatchSelection({ ...selection, scope }); }} /> : null}
       {!appUpdate.critical && view.updateDialog ? (

@@ -396,10 +396,10 @@ pub async fn run<A: MutationAction>(
         }
         let completed = if let Some(runtime) = &runtime {
             let mut spec = action.command(unit, runtime, &reporter);
-            if let Some(expected) = &ctx.expected_commands {
-                if !expected.contains(&crate::cli::commands::display_command(&spec)) {
-                    return FinishOutcome::Failed(AppError::cli_command_changed());
-                }
+            if let Some(expected) = &ctx.expected_commands
+                && !expected.contains(&crate::cli::commands::display_command(&spec))
+            {
+                return FinishOutcome::Failed(AppError::cli_command_changed());
             }
             spec.cli_context = Some(crate::cli::commands::CliCommandContext::task(
                 &ctx.task_id,

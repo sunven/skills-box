@@ -1199,15 +1199,14 @@ fn real_cli_project_scope_add_and_remove_stay_inside_the_project() {
     );
     sbx.assert_missing(&project.join(".agents/skills/code-review"));
     sbx.assert_missing(&project.join(".claude/skills/code-review"));
-    match sbx.read_project_lock(&project) {
-        Some(lock) => assert!(
+    if let Some(lock) = sbx.read_project_lock(&project) {
+        assert!(
             !lock["skills"]
                 .as_object()
                 .expect("project lock skills is an object")
                 .contains_key("code-review"),
             "project remove must delete the lock entry: {lock}"
-        ),
-        None => {}
+        );
     }
     assert!(
         project
