@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 import App from "./App";
@@ -8,6 +8,7 @@ import type { InventorySnapshot, PreviewSummary, TaskEvent, TaskPhase } from "./
 import { createFakeBackend, type FakeBackend, type FakeTask } from "./test/fake-backend";
 import { healthyReport } from "./test/fixtures";
 import { emptySnapshot, makeSkill, makeSnapshot } from "./test/inventory-fixtures";
+import { readInstallSourceHistory, rememberInstallSource } from "./lib/install-source-history";
 
 interface MockState {
   backend: FakeBackend;
@@ -125,6 +126,56 @@ async function startPreview(
 }
 
 describe("install wizard steps 1-2", () => {
+  it("remembers only completed successful inputs and restores them after remounting", async () => {
+    const state = setup();
+    const dialog = await openWizard();
+    expect(within(dialog).queryByRole("combobox", { name: "历史输入" })).not.toBeInTheDocument();
+    await startPreview(state, dialog, "  phuryn/pm-skills  ");
+    emit(state, event("cloning", { message: "正在克隆仓库…" }));
+    expect(readInstallSourceHistory()).toEqual([]);
+
+    emit(state, completed(preview({ source: "https://github.com/phuryn/pm-skills" })));
+    expect(readInstallSourceHistory()).toEqual(["phuryn/pm-skills"]);
+    cleanup();
+
+    const restored = setup();
+    const reopened = await openWizard();
+    const history = within(reopened).getByRole("combobox", { name: "历史输入" });
+    expect(within(history).getByRole("option", { name: "phuryn/pm-skills" })).toBeInTheDocument();
+    fireEvent.change(history, { target: { value: "phuryn/pm-skills" } });
+    expect(within(reopened).getByLabelText("仓库来源")).toHaveValue("phuryn/pm-skills");
+    expect(restored.backend.count(API_COMMANDS.startPreview)).toBe(0);
+  });
+
+  it.each([
+    ["failure", event("failed", { error: { message: "预览失败", retryable: true } })],
+    ["cancellation", event("cancelled")],
+    ["parse failure", completed(preview({ parseFailed: true, rawOutput: "unrecognized output" }))],
+    ["missing summary", event("completed")],
+    ["unsuccessful result", completed(preview(), {
+      result: { ...completed(preview()).result!, overall: "failed" },
+    })],
+  ])("does not add a history entry after %s", async (_name, terminal) => {
+    rememberInstallSource("previous/skills");
+    const state = setup();
+    const dialog = await openWizard();
+    await startPreview(state, dialog, "acme/not-recorded");
+    expect(within(dialog).getByRole("combobox", { name: "历史输入" })).toBeDisabled();
+    emit(state, terminal as TaskEvent);
+    expect(readInstallSourceHistory()).toEqual(["previous/skills"]);
+  });
+
+  it("does not remember a source when preview fails to start", async () => {
+    const state = setup({ startError: { code: "network.fetch_failed", message: "无法访问仓库", retryable: true } });
+    const dialog = await openWizard();
+    fireEvent.change(within(dialog).getByLabelText("仓库来源"), { target: { value: "acme/not-recorded" } });
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "预览仓库" })).toBeEnabled());
+    fireEvent.click(within(dialog).getByRole("button", { name: "预览仓库" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("无法访问仓库");
+    expect(state.backend.count(API_COMMANDS.startPreview)).toBe(1);
+    expect(readInstallSourceHistory()).toEqual([]);
+  });
+
   it("opens command help on click before and after entering a source", async () => {
     const state = setup();
     const dialog = await openWizard();

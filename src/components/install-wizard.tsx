@@ -2,7 +2,7 @@ import type { DiscoveryInstallSeed } from "../lib/discovery";
 import { useCliCommandPreview } from "../hooks/use-cli-commands";
 import { ActualCliCommands, CliPreviewHelp, CliPreviewStatus, CliRetryControl } from "./cli-command-display";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, PackageOpen, X } from "lucide-react";
+import { AlertTriangle, Check, PackageOpen, X } from "lucide-react";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -29,6 +29,7 @@ import type {
 import { GLOBAL_SCOPE } from "../lib/types";
 import { projectCanonicalPath, projectScope } from "../lib/scope";
 import { taskEventDriver, useMutation } from "../lib/mutation";
+import { readInstallSourceHistory, rememberInstallSource } from "../lib/install-source-history";
 
 interface InstallWizardProps {
   open: boolean;
@@ -49,6 +50,8 @@ interface InstallWizardProps {
 }
 
 type Step = 1 | 2 | 3 | 4 | 5;
+
+const STEP_TITLES = ["选择来源", "选择 skill", "选择 agent", "确认", "执行安装"] as const;
 
 /** Minimal agent row shared by the global and project target sets. */
 interface WizardAgent {
@@ -122,16 +125,6 @@ function defaultAgentSelection(
   );
 }
 
-function StepBars({ step }: { step: Step }) {
-  return (
-    <div className="step-track" aria-hidden="true">
-      {[1, 2, 3, 4, 5].map((index) => (
-        <span key={index} data-done={index <= step ? "true" : "false"} />
-      ))}
-    </div>
-  );
-}
-
 export function InstallWizard({
   open,
   seed = null,
@@ -155,6 +148,8 @@ export function InstallWizard({
   const [seedIssue, setSeedIssue] = useState<string | null>(null);
   const [step, setStep] = useState<Step>(1);
   const [sourceInput, setSourceInput] = useState("");
+  const [sourceHistory, setSourceHistory] = useState(readInstallSourceHistory);
+  const previewSourceRef = useRef<string | null>(null);
   const [preview, setPreview] = useState<PreviewSummary | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [skillSearch, setSkillSearch] = useState("");
@@ -170,6 +165,11 @@ export function InstallWizard({
   const handlePreviewEvent = useCallback((event: TaskEvent) => {
     if (event.phase === "completed") {
       const resultPreview = event.result?.preview ?? null;
+      const source = previewSourceRef.current;
+      previewSourceRef.current = null;
+      if (source && event.result?.overall === "success" && resultPreview && !resultPreview.parseFailed) {
+        setSourceHistory(rememberInstallSource(source));
+      }
       setPreview(resultPreview);
       setSeedIssue(null);
       const intent = seedRef.current;
@@ -208,10 +208,12 @@ export function InstallWizard({
       return;
     }
     if (event.phase === "failed") {
+      previewSourceRef.current = null;
       setStep(1);
       return;
     }
     if (event.phase === "cancelled") {
+      previewSourceRef.current = null;
       setStep(1);
     }
   }, []);
@@ -290,6 +292,7 @@ export function InstallWizard({
 
   const resetPreviewSelection = useCallback(() => {
     installMutation.reset();
+    previewSourceRef.current = null;
     setPreview(null);
     setSelected(new Set());
     setSkillSearch("");
@@ -392,6 +395,7 @@ export function InstallWizard({
     }
     if (!sourceCommandPreview.data || sourceCommandPreview.isFetching || sourceCommandPreview.isError) return;
     resetPreviewSelection();
+    previewSourceRef.current = seed ? null : source;
     void previewMutation.start(
       taskEventDriver({
         total: 1,
@@ -487,16 +491,7 @@ export function InstallWizard({
 
   if (!open) return null;
 
-  const stepTitle =
-    step === 1
-      ? "选择来源"
-      : step === 2
-        ? "选择 skill"
-        : step === 3
-          ? "选择 agent"
-          : step === 4
-            ? "确认"
-            : "执行安装";
+  const stepTitle = STEP_TITLES[step - 1];
 
   return (
     <div
@@ -516,9 +511,14 @@ export function InstallWizard({
         {seedIssue ? <p role="alert" className="notice m-4" data-tone="error">{seedIssue}</p> : null}
         <div className="modal-head">
           <div className="min-w-0">
-            <h2 id="install-wizard-title" className="modal-title">
-              安装 skill · {stepTitle}
-            </h2>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <h2 id="install-wizard-title" className="modal-title">
+                安装 skill · {stepTitle}
+              </h2>
+              <span role="status" className="whitespace-nowrap text-[12px] text-muted-foreground">
+                第 {step} / {STEP_TITLES.length} 步
+              </span>
+            </div>
             <p className="modal-sub">
               支持公开 HTTPS Git 根仓库，只安装默认分支。
             </p>
@@ -569,10 +569,29 @@ export function InstallWizard({
             <X className="size-4" aria-hidden="true" />
           </Button>
         </div>
-        <div className="px-5">
-          <StepBars step={step} />
-        </div>
-
+        <ol aria-label="安装步骤" className="grid shrink-0 grid-cols-2 gap-x-3 gap-y-2 px-5 pb-4 sm:grid-cols-5">
+          {STEP_TITLES.map((title, index) => {
+            const number = index + 1;
+            const current = number === step;
+            const completed = number < step;
+            return (
+              <li
+                key={title}
+                aria-current={current ? "step" : undefined}
+                className={`flex items-center gap-1.5 whitespace-nowrap text-[12px] ${current ? "font-medium text-foreground" : "text-muted-foreground"}`}
+              >
+                <span
+                  aria-hidden="true"
+                  className={`flex size-5 shrink-0 items-center justify-center rounded-full border text-[11px] ${current ? "border-foreground bg-foreground text-background" : "border-border-strong"}`}
+                >
+                  {completed ? <Check className="size-3" /> : number}
+                </span>
+                <span className="sr-only">第 {number} 步{completed ? "，已完成" : ""}：</span>
+                {title}
+              </li>
+            );
+          })}
+        </ol>
         <div className="modal-body">
           {step === 1 ? (
             <>
@@ -597,6 +616,23 @@ export function InstallWizard({
                 </Button>
                 <CliPreviewHelp preview={sourceCommandPreview} emptyMessage="请先输入仓库来源，随后可查看将执行的完整命令。" />
               </div>
+              {!seed && sourceHistory.length > 0 ? (
+                <label className="mt-2 flex items-center gap-2 text-[12px] text-muted-foreground">
+                  <span className="shrink-0">历史输入</span>
+                  <select
+                    aria-label="历史输入"
+                    value=""
+                    disabled={previewRunning || installRunning}
+                    onChange={(event) => setSourceInput(event.target.value)}
+                    className="h-7 min-w-0 flex-1 rounded-md border border-border-strong bg-card px-1.5 text-foreground"
+                  >
+                    <option value="" disabled>选择预览成功的来源</option>
+                    {sourceHistory.map((source) => (
+                      <option key={source} value={source}>{source}</option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
               <p className="mt-2 text-[12px] text-muted-foreground">
                 示例：mattpocock/skills · 将读取仓库内的 SKILL.md 列表。不支持子目录、#ref、SSH、本地路径或 Notion。
               </p>
@@ -604,7 +640,7 @@ export function InstallWizard({
               <MutationError error={previewState.startError} showCode />
               <MutationError error={previewState.error} />
               <CliPreviewStatus preview={sourceCommandPreview} />
-              <ActualCliCommands taskId={previewState.taskId} />
+              {!previewRunning ? <ActualCliCommands taskId={previewState.taskId} /> : null}
 
               {previewRunning ? (
                 <MutationProgress
@@ -616,6 +652,7 @@ export function InstallWizard({
                   canCancel={Boolean(previewState.taskId) && !previewCancelling}
                   cancelLabel="取消预览"
                   onCancel={handleCancel}
+                  actions={previewState.taskId ? <ActualCliCommands taskId={previewState.taskId} /> : null}
                 />
               ) : null}
 
@@ -984,7 +1021,7 @@ export function InstallWizard({
 
           {step === 5 ? (
             <>
-              <ActualCliCommands taskId={installState.taskId} />
+              {!installRunning ? <ActualCliCommands taskId={installState.taskId} /> : null}
               {installRunning ? (
                 <>
                   <MutationProgress
@@ -1000,6 +1037,7 @@ export function InstallWizard({
                     }
                     cancelLabel="取消安装"
                     onCancel={handleCancel}
+                    actions={installState.taskId ? <ActualCliCommands taskId={installState.taskId} /> : null}
                   />
                   <p
                     data-testid="install-lock-note"

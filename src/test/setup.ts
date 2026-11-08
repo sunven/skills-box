@@ -8,4 +8,5 @@ afterEach(() => {
   cleanup();
   resetFakeBackends();
   clearMocks();
+  localStorage.clear();
 });

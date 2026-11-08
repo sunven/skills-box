@@ -2024,23 +2024,6 @@
   font-weight: 500;
 }
 
-.step-track {
-  display: flex;
-  gap: 4px;
-  margin-top: 12px;
-}
-
-.step-track span {
-  height: 3px;
-  flex: 1;
-  border-radius: 999px;
-  background: var(--border);
-}
-
-.step-track span[data-done="true"] {
-  background: var(--foreground);
-}
-
 /* ---------- Responsive ---------- */
 
 @media (max-width: 1180px) {
@@ -2494,6 +2477,7 @@
 .cli-command-display { min-width: 0; margin-top: 10px; }
 .cli-command-list { min-width: 0; max-width: 100%; }
 .cli-command-records { display: flex; align-items: center; gap: 4px; margin: 6px 0; color: var(--muted-foreground); font-size: 12px; }
+.mutation-progress-actions .cli-command-records { margin: 0; }
 .command-help-tooltip {
   position: fixed;
   z-index: 60;

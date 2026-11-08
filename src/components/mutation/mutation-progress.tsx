@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Loader2 } from "lucide-react";
 import { Button } from "../ui/button";
 import { TASK_PHASE_LABELS } from "../../lib/task-labels";
@@ -15,6 +16,7 @@ export interface MutationProgressProps {
   onCancel?: () => void;
   /** Shown instead of "准备中" for native actions without a task phase. */
   label?: string;
+  actions?: ReactNode;
 }
 
 export function MutationProgress({
@@ -28,6 +30,7 @@ export function MutationProgress({
   cancelLabel,
   onCancel,
   label,
+  actions,
 }: MutationProgressProps) {
   const safeTotal = total > 0 ? total : 1;
   const percent = Math.min(100, Math.round((completed / safeTotal) * 100));
@@ -70,8 +73,11 @@ export function MutationProgress({
           style={indeterminate ? undefined : { width: `${percent}%` }}
         />
       </div>
-      {message ? (
-        <p className="mt-1.5 text-[12px] text-muted-foreground">{message}</p>
+      {message || actions ? (
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted-foreground">
+          {message ? <p className="min-w-0 flex-1 basis-48 break-words">{message}</p> : null}
+          {actions ? <div className="mutation-progress-actions ml-auto shrink-0">{actions}</div> : null}
+        </div>
       ) : null}
     </div>
   );
