@@ -157,6 +157,7 @@ export function InstallWizard({
   const [sourceInput, setSourceInput] = useState("");
   const [preview, setPreview] = useState<PreviewSummary | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [skillSearch, setSkillSearch] = useState("");
   const [manualInput, setManualInput] = useState("");
   const [selectedAgents, setSelectedAgents] = useState<Set<string>>(new Set());
   const retryAttemptRef = useRef(false);
@@ -291,6 +292,7 @@ export function InstallWizard({
     installMutation.reset();
     setPreview(null);
     setSelected(new Set());
+    setSkillSearch("");
     setSelectedAgents(new Set());
     lastInstallRef.current = null;
     agentsTouchedRef.current = false;
@@ -332,6 +334,15 @@ export function InstallWizard({
   );
 
   const normalSkills = preview?.skills ?? [];
+  const searchQuery = skillSearch.trim().toLowerCase();
+  const visibleSkills = normalSkills.filter(
+    (skill) =>
+      skill.name.toLowerCase().includes(searchQuery) ||
+      skill.description.toLowerCase().includes(searchQuery),
+  );
+  const installableNames = normalSkills
+    .filter((skill) => !skill.conflict)
+    .map((skill) => skill.name);
   const normalSkillsAllConflicted =
     normalSkills.length > 0 && normalSkills.every((skill) => Boolean(skill.conflict));
   const selectedNames = useMemo(() => Array.from(selected), [selected]);
@@ -639,6 +650,37 @@ export function InstallWizard({
                 </span>
               </div>
 
+              {!preview.noSkills && !preview.parseFailed ? (
+                <div className="mt-3 flex flex-wrap items-center gap-1">
+                  <Input
+                    type="search"
+                    aria-label="搜索待安装的 skill"
+                    placeholder="搜索名称或描述"
+                    className="mr-2 min-w-40 flex-1"
+                    value={skillSearch}
+                    onChange={(event) => setSkillSearch(event.target.value)}
+                  />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    title="全选仓库中所有可安装的 skill"
+                    disabled={selected.size === installableNames.length}
+                    onClick={() => setSelected(new Set(installableNames))}
+                  >
+                    全选
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    title="取消仓库中所有 skill 的选择"
+                    disabled={selected.size === 0}
+                    onClick={() => setSelected(new Set())}
+                  >
+                    取消全选
+                  </Button>
+                </div>
+              ) : null}
+
               {preview.noSkills ? (
                 <div
                   data-testid="preview-empty"
@@ -712,10 +754,17 @@ export function InstallWizard({
               ) : null}
 
               {!preview.noSkills && !preview.parseFailed ? (
+                <p role="status" className="mt-2 text-[12px] text-muted-foreground">
+                  {visibleSkills.length === 0 ? "没有匹配的 skill" : `显示 ${visibleSkills.length}/${normalSkills.length} 个 skill`}
+                  {` · 已选 ${selected.size} 个`}
+                </p>
+              ) : null}
+
+              {!preview.noSkills && !preview.parseFailed ? (
                 <ul className="mt-3 space-y-1.5">
-                  {preview.skills.map((skill, index) => {
+                  {visibleSkills.map((skill, index) => {
                     const previousGroup =
-                      index > 0 ? preview.skills[index - 1]!.group : undefined;
+                      index > 0 ? visibleSkills[index - 1]!.group : undefined;
                     const showGroup =
                       Boolean(skill.group) && skill.group !== previousGroup;
                     const conflict = skill.conflict;
@@ -726,17 +775,18 @@ export function InstallWizard({
                             {skill.group}
                           </p>
                         ) : null}
-                        <label
+                        <div
                           data-testid="preview-skill"
                           data-skill-name={skill.name}
                           className={
                             conflict
-                              ? "flex cursor-not-allowed items-start gap-2.5 rounded-md border border-border bg-raised px-3 py-2.5 opacity-70"
-                              : "flex cursor-pointer items-start gap-2.5 rounded-md border border-border px-3 py-2.5 transition-colors hover:border-border-strong aria-[checked=true]:border-border-strong aria-[checked=true]:bg-active"
+                              ? "flex items-start gap-2.5 rounded-md border border-border bg-raised px-3 py-2.5 opacity-70"
+                              : "flex items-start gap-2.5 rounded-md border border-border px-3 py-2.5 transition-colors hover:border-border-strong aria-[checked=true]:border-border-strong aria-[checked=true]:bg-active"
                           }
                           aria-checked={selected.has(skill.name)}
                         >
                           <input
+                            id={`preview-skill-${index}`}
                             type="checkbox"
                             className="mt-0.5"
                             checked={selected.has(skill.name)}
@@ -744,25 +794,34 @@ export function InstallWizard({
                             onChange={() => toggleSkill(skill.name)}
                             aria-label={`选择 ${skill.name}`}
                           />
-                          <span className="min-w-0 flex-1">
-                            <span className="flex flex-wrap items-center gap-1.5">
+                          <div className="relative min-w-0 flex-1">
+                            <label
+                              htmlFor={`preview-skill-${index}`}
+                              className={`flex min-h-5 flex-wrap items-center gap-1.5 break-all pr-24 leading-5 ${conflict ? "cursor-not-allowed" : "cursor-pointer"}`}
+                            >
                               <span className="text-[13px] font-medium">
                                 {skill.name}
                               </span>
                               {conflict ? (
                                 <Badge variant="muted">{conflictLabel(skill)}</Badge>
                               ) : null}
-                            </span>
-                            <span className="mt-0.5 block text-[12px] leading-relaxed text-muted-foreground">
-                              {skill.description || "（无描述）"}
-                            </span>
+                            </label>
+                            <details className="group text-[12px] text-muted-foreground">
+                              <summary className="absolute right-0 top-0 w-fit cursor-pointer select-none leading-5">
+                                <span className="group-open:hidden">展开描述</span>
+                                <span className="hidden group-open:inline">收起描述</span>
+                              </summary>
+                              <p className="mt-1 leading-relaxed">
+                                {skill.description || "（无描述）"}
+                              </p>
+                            </details>
                             {conflict ? (
                               <span className="mt-0.5 block text-[12px] text-muted-foreground">
                                 现有来源：{conflict.source ?? "未知"}
                               </span>
                             ) : null}
-                          </span>
-                        </label>
+                          </div>
+                        </div>
                       </li>
                     );
                   })}

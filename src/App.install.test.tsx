@@ -184,6 +184,7 @@ describe("install wizard steps 1-2", () => {
               description: "Beta description",
               conflict: { management: "managed", source: "other/existing" },
             },
+            { name: "gamma", description: "Gamma description" },
           ],
         }),
       ),
@@ -192,20 +193,41 @@ describe("install wizard steps 1-2", () => {
     expect(within(dialog).queryByRole("button", { name: "取消预览" })).not.toBeInTheDocument();
     const alpha = within(dialog).getByLabelText("选择 alpha");
     const beta = within(dialog).getByLabelText("选择 beta");
+    const gamma = within(dialog).getByLabelText("选择 gamma");
     expect(alpha).toBeEnabled();
     expect(beta).toBeDisabled();
     expect(within(dialog).getByText("已安装")).toBeInTheDocument();
     expect(within(dialog).getByText("现有来源：other/existing")).toBeInTheDocument();
-    expect(within(dialog).getByText("预览完成 · 2/2")).toBeInTheDocument();
+    expect(within(dialog).getByText("预览完成 · 3/3")).toBeInTheDocument();
 
     const next = within(dialog).getByRole("button", { name: "下一步" });
+    const selectAll = within(dialog).getByRole("button", { name: "全选" });
+    const clearSelection = within(dialog).getByRole("button", { name: "取消全选" });
     expect(alpha).toBeChecked();
     expect(beta).not.toBeChecked();
+    expect(gamma).toBeChecked();
+    expect(selectAll).toBeDisabled();
+    expect(clearSelection).toBeEnabled();
     expect(next).toBeEnabled();
-    fireEvent.click(alpha);
+    fireEvent.click(clearSelection);
+    expect(alpha).not.toBeChecked();
+    expect(gamma).not.toBeChecked();
+    expect(selectAll).toBeEnabled();
+    expect(clearSelection).toBeDisabled();
     expect(next).toBeDisabled();
     fireEvent.click(alpha);
     expect(next).toBeEnabled();
+    fireEvent.click(clearSelection);
+    expect(alpha).not.toBeChecked();
+    expect(next).toBeDisabled();
+    fireEvent.click(selectAll);
+    expect(alpha).toBeChecked();
+    expect(beta).not.toBeChecked();
+    expect(beta).toBeDisabled();
+    expect(gamma).toBeChecked();
+    expect(next).toBeEnabled();
+    fireEvent.click(gamma);
+    expect(selectAll).toBeEnabled();
     fireEvent.click(next);
 
     expect(
@@ -229,6 +251,55 @@ describe("install wizard steps 1-2", () => {
     await waitFor(() => expect(
       within(dialog).getByRole("button", { name: "开始安装" }),
     ).toBeEnabled());
+  });
+
+  it("searches names and descriptions while preserving selection across filters", async () => {
+    const state = setup();
+    const dialog = await openWizard();
+    await startPreview(state, dialog);
+    emit(state, completed(preview({ skills: [
+      { name: "alpha", description: "Review code", group: "Engineering" },
+      {
+        name: "beta", description: "Existing skill", group: "Planning",
+        conflict: { management: "managed", source: "other/existing" },
+      },
+      { name: "gamma", description: "Plan a roadmap", group: "Planning" },
+    ] })));
+
+    const search = within(dialog).getByRole("searchbox", { name: "搜索待安装的 skill" });
+    const next = within(dialog).getByRole("button", { name: "下一步" });
+    fireEvent.change(search, { target: { value: "  ALPHA  " } });
+    expect(within(dialog).getAllByTestId("preview-skill")).toHaveLength(1);
+    expect(within(dialog).getByLabelText("选择 alpha")).toBeChecked();
+    expect(within(dialog).getByText("显示 1/3 个 skill · 已选 2 个")).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByLabelText("选择 alpha"));
+
+    fireEvent.change(search, { target: { value: "ROADMAP" } });
+    expect(within(dialog).getAllByTestId("preview-skill")).toHaveLength(1);
+    expect(within(dialog).getByLabelText("选择 gamma")).toBeChecked();
+    expect(within(dialog).getByText("Planning")).toBeInTheDocument();
+    expect(within(dialog).queryByText("Engineering")).not.toBeInTheDocument();
+
+    fireEvent.change(search, { target: { value: "no-match" } });
+    expect(within(dialog).queryAllByTestId("preview-skill")).toHaveLength(0);
+    expect(within(dialog).getByText("没有匹配的 skill · 已选 1 个")).toBeInTheDocument();
+    expect(next).toBeEnabled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消全选" }));
+    expect(next).toBeDisabled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "全选" }));
+    expect(within(dialog).getByText("没有匹配的 skill · 已选 2 个")).toBeInTheDocument();
+
+    fireEvent.change(search, { target: { value: "gamma" } });
+    fireEvent.click(within(dialog).getByLabelText("选择 gamma"));
+    fireEvent.change(search, { target: { value: "" } });
+    expect(within(dialog).getAllByTestId("preview-skill")).toHaveLength(3);
+    expect(within(dialog).getByLabelText("选择 alpha")).toBeChecked();
+    expect(within(dialog).getByLabelText("选择 gamma")).not.toBeChecked();
+    expect(within(dialog).getByLabelText("选择 beta")).not.toBeChecked();
+    expect(within(dialog).getByLabelText("选择 beta")).toBeDisabled();
+    fireEvent.click(next);
+    fireEvent.click(within(dialog).getByRole("button", { name: "下一步" }));
+    expect(within(dialog).getByTestId("install-confirm")).toHaveTextContent("1 个 · alpha");
   });
 
   it("auto-skips selection for a single installable skill but still shows agents and confirm", async () => {
