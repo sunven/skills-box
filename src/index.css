@@ -834,8 +834,6 @@
   color: var(--muted-foreground);
   font-size: 12px;
 }
-.env-cli-command summary { cursor: pointer; }
-.env-cli-command .cli-command-list { max-height: 240px; overflow: auto; }
 
 .env-row {
   display: flex;
@@ -2495,7 +2493,29 @@
 .batch-command { margin-top: 6px; padding: 8px 10px; border-radius: 4px; background: var(--background); font-family: var(--font-mono); font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .cli-command-display { min-width: 0; margin-top: 10px; }
 .cli-command-list { min-width: 0; max-width: 100%; }
-.discovery-source-record .cli-command-list { flex-basis: 100%; }
+.cli-command-records { display: flex; align-items: center; gap: 4px; margin: 6px 0; color: var(--muted-foreground); font-size: 12px; }
+.command-help-tooltip {
+  position: fixed;
+  z-index: 60;
+  width: min(560px, calc(100vw - 32px));
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  box-shadow: 0 6px 20px rgb(11 13 15 / 0.12);
+}
+.command-help-tooltip::before {
+  content: "";
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  width: 100%;
+  height: 6px;
+}
+.command-help-tooltip[data-placement="top"]::before { bottom: auto; top: 100%; }
+.command-help-content { overflow-y: auto; overscroll-behavior: contain; }
+.command-help-content .cli-command-display:first-child { margin-top: 0; }
+.discovery-source-record .cli-command-records { margin-left: auto; }
 .batch-confirm { display: flex; align-items: flex-start; gap: 9px; margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 12.5px; }
 .batch-confirm input { flex: none; margin-top: 3px; accent-color: var(--accent); }
 .batch-agents { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 24px; }

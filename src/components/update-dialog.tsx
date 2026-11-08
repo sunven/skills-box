@@ -24,7 +24,7 @@ import {
 import { taskEventDriver, useMutation } from "../lib/mutation";
 import type { ScopeId } from "../lib/types";
 import { useCliCommandPreview } from "../hooks/use-cli-commands";
-import { ActualCliCommands, CliPreviewStatus, CliRetryControl } from "./cli-command-display";
+import { ActualCliCommands, CliPreviewHelp, CliPreviewStatus, CliRetryControl } from "./cli-command-display";
 
 interface UpdateDialogProps {
   open: boolean;
@@ -160,8 +160,7 @@ export function UpdateDialog({
               {title}
             </h2>
             <p className="modal-sub">
-              更新前强制备份；逐个 skill 调用 skills add，不调用 skills update /
-              check。
+              更新前强制备份；按 skill 逐个更新。
             </p>
           </div>
           <Button
@@ -297,8 +296,7 @@ export function UpdateDialog({
                       className="mt-0.5 size-3.5 shrink-0"
                       aria-hidden="true"
                     />
-                    更新执行：rebuilt skills add（当前物理挂载的非 universal agents +
-                    universal）。已断开的 agent 不会被重挂；无挂载时仅 -a universal。
+                    更新当前已挂载的 agent；已断开的 agent 不会被重挂，无挂载时仅更新共享目录。
                   </div>
                 </>
               )}
@@ -487,6 +485,7 @@ export function UpdateDialog({
                   {mode === "all" && executionNames.length > 0
                     ? ` (${executionNames.length})`
                     : ""}                </Button>
+                <CliPreviewHelp preview={commandPreview} />
               </>
             ) : null}
             {running ? (

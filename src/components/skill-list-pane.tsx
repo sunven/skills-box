@@ -526,7 +526,7 @@ export function SkillListPane({
             description={
               projectHeader
                 ? "这个项目还没有 skill。安装后会写入项目的 .agents/skills，并记录在项目 lock 中。"
-                : "还没有全局 skill。安装后会显示在这里；也可以先在终端运行 npx skills add … -g。"
+                : "还没有全局 skill。安装后会显示在这里。"
             }
             action={
               projectHeader && onInstall ? (

@@ -503,12 +503,10 @@ describe("uninstall", () => {
     );
 
     const dialog = await openUninstall("alpha");
-    expect(within(dialog).getByTestId("uninstall-command")).toHaveTextContent(
-      "skills remove -s",
-    );
-    expect(
-      within(dialog).getByTestId("uninstall-command"),
-    ).not.toHaveTextContent("-g");
+    await waitFor(() => expect(state.backend.count(API_COMMANDS.previewCliCommands)).toBeGreaterThan(0));
+    fireEvent.click(within(dialog).getByRole("button", { name: "查看将执行的命令" }));
+    await waitFor(() => expect(screen.getByRole("tooltip")).toHaveTextContent("skills@latest remove -s alpha"));
+    expect(screen.getByRole("tooltip")).not.toHaveTextContent(" -g");
 
     await confirmUninstall(dialog);
     await waitFor(() =>

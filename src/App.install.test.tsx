@@ -125,6 +125,29 @@ async function startPreview(
 }
 
 describe("install wizard steps 1-2", () => {
+  it("opens command help on click before and after entering a source", async () => {
+    const state = setup();
+    const dialog = await openWizard();
+    const help = within(dialog).getByRole("button", { name: "查看将执行的命令" });
+
+    fireEvent.click(help);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("请先输入仓库来源");
+    expect(state.backend.count(API_COMMANDS.previewCliCommands)).toBe(0);
+
+    fireEvent.keyDown(help, { key: "Escape" });
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    expect(dialog).toBeInTheDocument();
+
+    fireEvent.change(within(dialog).getByLabelText("仓库来源"), {
+      target: { value: "acme/skills" },
+    });
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "预览仓库" })).toBeEnabled());
+    fireEvent.click(help);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("add acme/skills -l -g");
+    expect(help).toHaveAttribute("aria-describedby", screen.getByRole("tooltip").id);
+    expect(state.backend.count(API_COMMANDS.startPreview)).toBe(0);
+  });
+
   it("shows backend source validation errors and blocks empty input", async () => {
     const state = setup({
       startError: {

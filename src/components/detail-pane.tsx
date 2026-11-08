@@ -502,7 +502,7 @@ export const DetailPane = memo(function DetailPane({
                       variant="outline"
                       size="sm"
                       onClick={() => onUpdate(skill.name)}
-                      title="更新前备份；使用当前物理挂载的 agent 重建 skills add"
+                      title="更新前备份；保留当前 agent 挂载"
                     >
                       <ArrowUpCircle className="size-3.5" aria-hidden="true" />
                       更新

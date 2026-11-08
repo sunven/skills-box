@@ -33,3 +33,12 @@ The inspector used two explicit allowances: `placeholder-data` because shared fa
 
 Production inspector evidence: [report](production-inspect/report.json), [desktop](production-inspect/desktop-fold.jpg), [tablet](production-inspect/tablet-fold.jpg), [mobile](production-inspect/mobile-fold.jpg).
 Additional flow screenshots are in [flows](flows/).
+
+## Question-mark command help — 2026-11-08
+
+- All preview, retry and actual invocation displays now use shared question-mark help. Operation buttons show one help for all selected commands; Environment and each Discovery source group their actual records.
+- Clicking, hovering and keyboard focus open help. Escape dismisses help before its dialog; outside clicks and keyboard departure dismiss it. Portals prevent clipping, long commands wrap, and long lists scroll within the viewport.
+- Loading, errors, empty input, native actions and missing actual calls have explicit explanations. Refresh controls remain on the page; preview ids, retry selections and invocation observation retain their existing contracts.
+- `pnpm test`: 354 tests passed across 39 files. `pnpm build` and `git diff --check` passed.
+- Browser checks covered Source preview, Install confirmation/result, Update all, single Uninstall, Batch Update, Environment records and Discovery help. Five update commands fit in one scrollable help, with automatic placement above the button. At 390px, commands wrapped without horizontal overflow.
+- Checks used the fake backend. A cached Discovery scan correctly produced no new call; injected fake command events verified running-to-terminal updates while its help stayed open. Pointer travel across the portal gap and keyboard departure while hovering content were also verified.

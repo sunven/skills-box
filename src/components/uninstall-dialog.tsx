@@ -10,7 +10,7 @@ import type { ScopeId, UpdateViewSkill } from "../lib/types";
 import { ATTACHMENT_LABELS } from "../lib/inventory-view";
 import { taskEventDriver, useMutation } from "../lib/mutation";
 import { useCliCommandPreview } from "../hooks/use-cli-commands";
-import { ActualCliCommands, CliPreviewStatus } from "./cli-command-display";
+import { ActualCliCommands, CliPreviewHelp, CliPreviewStatus } from "./cli-command-display";
 
 interface UninstallDialogProps {
   open: boolean;
@@ -99,8 +99,6 @@ export function UninstallDialog({
         : (skill.canonicalPath ?? "canonical 路径未知（可能已缺失）");
   const showInitial = !running && !result;
   const closeDisabled = !mutation.canClose();
-  const removeCommand =
-    scope === "global" ? "skills remove -g -s" : "skills remove -s";
 
   return (
     <div
@@ -126,7 +124,7 @@ export function UninstallDialog({
             <p className="modal-sub" data-testid="uninstall-command">
               {unmanaged
                 ? "先备份，再删除所列技能目录与 Agent 挂载；符号链接只删除链接本身。"
-                : `先备份，再执行 ${removeCommand}；CLI 退出后会逐项校验。`}
+                : "先备份，再卸载技能；CLI 退出后会逐项校验。"}
             </p>
           </div>
           <Button
@@ -319,6 +317,7 @@ export function UninstallDialog({
                 >
                   确认卸载
                 </Button>
+                <CliPreviewHelp preview={commandPreview} />
               </>
             ) : null}
             {running ? (

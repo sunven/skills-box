@@ -1,6 +1,6 @@
 import type { DiscoveryInstallSeed } from "../lib/discovery";
 import { useCliCommandPreview } from "../hooks/use-cli-commands";
-import { ActualCliCommands, CliPreviewStatus, CliRetryControl } from "./cli-command-display";
+import { ActualCliCommands, CliPreviewHelp, CliPreviewStatus, CliRetryControl } from "./cli-command-display";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, PackageOpen, X } from "lucide-react";
 import { Badge } from "./ui/badge";
@@ -576,7 +576,7 @@ export function InstallWizard({
         <div className="modal-body">
           {step === 1 ? (
             <>
-              <div className="flex items-start gap-2">
+              <div className="flex items-center gap-2">
                 <Input
                   aria-label="仓库来源"
                   placeholder="GitHub owner/repo 或 HTTPS Git 仓库地址"
@@ -595,6 +595,7 @@ export function InstallWizard({
                 >
                   预览仓库
                 </Button>
+                <CliPreviewHelp preview={sourceCommandPreview} emptyMessage="请先输入仓库来源，随后可查看将执行的完整命令。" />
               </div>
               <p className="mt-2 text-[12px] text-muted-foreground">
                 示例：mattpocock/skills · 将读取仓库内的 SKILL.md 列表。不支持子目录、#ref、SSH、本地路径或 Notion。
@@ -630,10 +631,7 @@ export function InstallWizard({
           ) : null}
 
           {step > 1 && step < 5 && previewState.taskId ? (
-            <details className="mb-3 text-xs text-muted-foreground">
-              <summary className="cursor-pointer">来源预览调用</summary>
-              <ActualCliCommands taskId={previewState.taskId} />
-            </details>
+            <div className="mb-3"><ActualCliCommands taskId={previewState.taskId} /></div>
           ) : null}
           {step === 2 && preview ? (
             <>
@@ -1093,6 +1091,7 @@ export function InstallWizard({
                 >
                   开始安装
                 </Button>
+                <CliPreviewHelp preview={installCommandPreview} />
               </>
             ) : null}
             {step === 5 && !installRunning ? (

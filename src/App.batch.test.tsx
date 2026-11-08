@@ -371,9 +371,13 @@ describe("inventory batch operations", () => {
     await screen.findByRole("button", { name: "确认更新 (2)" });
 
     const targets = screen.getAllByTestId("batch-target");
-    expect(within(targets[0]!).getByText(commands.alpha!)).toBeInTheDocument();
+    expect(screen.queryByText(commands.alpha!)).not.toBeInTheDocument();
     expect(within(targets[1]!).queryByText("将执行的命令")).not.toBeInTheDocument();
-    expect(within(targets[2]!).getByText(commands.gamma!)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "查看将执行的命令" }));
+    const tooltip = screen.getByRole("tooltip");
+    expect(tooltip).toHaveTextContent(commands.alpha!);
+    expect(tooltip).toHaveTextContent(commands.gamma!);
+    expect(tooltip).not.toHaveTextContent("-s beta");
     expect(backend.count("start_batch")).toBe(0);
   });
 

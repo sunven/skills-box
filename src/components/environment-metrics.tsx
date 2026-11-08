@@ -85,10 +85,9 @@ export function EnvironmentMetrics({ report }: EnvironmentMetricsProps) {
           <span>{row.label}</span>
         </div>
       ))}
-      <details className="env-cli-command">
-        <summary>CLI 调用记录</summary>
+      <div className="env-cli-command">
         <ActualCliCommands origin="environment" />
-      </details>
+      </div>
     </div>
   );
 }

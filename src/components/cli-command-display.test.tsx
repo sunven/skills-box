@@ -19,7 +19,10 @@ describe("CLI command display", () => {
     const backend = createFakeBackend({ commands: { preview_cli_commands: () => preview } }).install();
     const execute = vi.fn();
     render(<QueryClientProvider client={createQueryClient()}><CliRetryControl scope="global" request={{ action: "update", skills: ["alpha"] }} label="重试 alpha" disabled={false} onExecute={execute} /></QueryClientProvider>);
-    expect(await screen.findByText(command)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "重试 alpha" })).toBeEnabled());
+    expect(screen.queryByText(command)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "查看将执行的命令" }));
+    expect(screen.getByRole("tooltip")).toHaveTextContent(command);
     fireEvent.click(screen.getByRole("button", { name: "重试 alpha" }));
     expect(execute).toHaveBeenCalledWith(preview.id);
     expect(backend.callsOf("preview_cli_commands")[0]?.payload).toMatchObject({ request: { action: "update", skills: ["alpha"] } });
@@ -34,6 +37,7 @@ describe("CLI command display", () => {
     const view = (name: string) => <QueryClientProvider client={client}><CliRetryControl scope="global" request={{ action: "update", skills: [name] }} label="执行" disabled={false} onExecute={execute} /></QueryClientProvider>;
     const rendered = render(view("alpha"));
     expect(screen.getByRole("button", { name: "执行" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "查看将执行的命令" }));
     rendered.rerender(view("beta"));
     await act(async () => alpha.resolve(preview));
     expect(screen.queryByText(command)).toBeNull();
@@ -41,6 +45,7 @@ describe("CLI command display", () => {
     const next = { id: "beta-id", entries: [{ name: "beta", command: command.replace("-s alpha", "-s beta"), reason: null }] };
     await act(async () => beta.resolve(next));
     await waitFor(() => expect(screen.getByRole("button", { name: "执行" })).toBeEnabled());
+    expect(screen.getByRole("tooltip")).toHaveTextContent(next.entries[0]!.command!);
     fireEvent.click(screen.getByRole("button", { name: "执行" }));
     expect(execute).toHaveBeenCalledWith("beta-id");
   });
@@ -51,9 +56,22 @@ describe("CLI command display", () => {
     render(<QueryClientProvider client={createQueryClient()}><CliRetryControl scope="global" request={{ action: "update", skills: ["alpha"] }} label="执行" disabled={false} onExecute={vi.fn()} /></QueryClientProvider>);
     expect(await screen.findByRole("alert")).toHaveTextContent("命令已变化");
     expect(screen.getByRole("button", { name: "执行" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "查看将执行的命令" }));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("命令已变化");
     failed = false;
     fireEvent.click(screen.getByRole("button", { name: "刷新命令" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "执行" })).toBeEnabled());
+  });
+
+  it("shows the native operation explanation without inventing a CLI command", async () => {
+    const native = { id: "native-preview", entries: [{ name: "alpha", command: null, reason: "由应用直接删除技能目录。" }] };
+    const backend = createFakeBackend({ commands: { preview_cli_commands: () => native } }).install();
+    render(<QueryClientProvider client={createQueryClient()}><CliRetryControl scope="global" request={{ action: "uninstall", skill: "alpha" }} label="执行" disabled={false} onExecute={vi.fn()} /></QueryClientProvider>);
+    await waitFor(() => expect(screen.getByRole("button", { name: "执行" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "查看将执行的命令" }));
+    expect(screen.getByRole("tooltip")).toHaveTextContent(native.entries[0]!.reason);
+    expect(screen.getByRole("tooltip").querySelector("code")).toBeNull();
+    expect(backend.tasks).toHaveLength(0);
   });
 
   it("merges actual events with an in-flight snapshot without downgrading status", async () => {
@@ -65,7 +83,8 @@ describe("CLI command display", () => {
     render(<QueryClientProvider client={client}><Observed /></QueryClientProvider>);
     act(() => window.dispatchEvent(new CustomEvent("cli-command", { detail: { ...record, status: "failed" } })));
     await act(async () => snapshot.resolve([record]));
-    expect(await screen.findByText("执行失败的命令")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "查看实际调用命令" }));
+    await waitFor(() => expect(screen.getByRole("tooltip")).toHaveTextContent("执行失败的命令"));
     expect(client.getQueryData<CliCommandRecord[]>(cliCommandsQueryKey)?.[0]?.status).toBe("failed");
     expect(screen.getByText(command)).toBeInTheDocument();
   });

@@ -1,7 +1,8 @@
 import { useMemo, useRef, useState } from "react";
 import { AlertTriangle, FolderOpen, Loader2, X } from "lucide-react";
 import { Button } from "./ui/button";
-import { ActualCliCommands, CliCommandDisplay } from "./cli-command-display";
+import { ActualCliCommands, CliCommandPreviewList } from "./cli-command-display";
+import { CommandHelp } from "./ui/command-help";
 import { AgentLogo } from "./agent-logo";
 import { MutationProgress } from "./mutation/mutation-progress";
 import { MutationResult } from "./mutation/mutation-result";
@@ -301,9 +302,6 @@ export function BatchDialog({
                               {target.reason}
                             </p>
                           ) : null}
-                          {target.eligible && target.command ? (
-                            <CliCommandDisplay command={target.command} />
-                          ) : null}
                           {isCopy && target.eligible && target.operation === "copy" && target.localModification !== "clean" ? (
                             <p className="mt-1 text-warning">{target.localModification === "modified" ? "将复制当前本地改动。" : "无法确认本地改动，将复制当前内容。"}项目之后可能提示与上游内容不同。</p>
                           ) : null}
@@ -503,6 +501,15 @@ export function BatchDialog({
                   disabled={submitDisabled}
                   onClick={() => void operation.confirm()}
                 >{isClean ? `清理 ${candidates.length} 条记录` : isRestore ? `恢复 ${candidates.length} 个技能` : `确认${actionLabel} (${candidates.length})`}</Button>
+                <CommandHelp label="查看将执行的命令">
+                  {loading ? <p className="text-xs text-muted-foreground">正在核对操作目标…</p> :
+                    previewError ? <p className="text-xs text-muted-foreground">{previewError.message}</p> :
+                    !preview ? <p className="text-xs text-muted-foreground">请先选择操作目标。</p> :
+                    <CliCommandPreviewList entries={candidates.map((target) => ({
+                      name: batchTargetLabel(target), command: target.command ?? null,
+                      reason: target.command ? null : "由应用直接处理，不执行 CLI 命令。",
+                    }))} />}
+                </CommandHelp>
               </>
             )}
           </div>
