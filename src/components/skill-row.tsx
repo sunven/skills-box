@@ -226,9 +226,7 @@ export const SkillRow = memo(function SkillRow({
           >
             <ArrowUpCircle aria-hidden="true" />
           </button>
-        ) : (
-          <span className="skill-row-action-slot" aria-hidden="true" />
-        )}
+        ) : null}
         <button
           type="button"
           className="skill-row-action"

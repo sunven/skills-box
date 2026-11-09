@@ -650,8 +650,7 @@ function App() {
                   totalSkills={view.totalSkills}
                   visibleSkills={view.visibleSkills}
                   anomalies={view.anomalies}
-                  sourceCount={view.sourceCount}
-                  candidateCount={view.candidateCount}
+                  summary={view.listSummary}
                   availableDiscoveryCount={view.availableDiscoveryCount}
                   onOpenAvailableDiscoveries={() =>
                     setDiscoveryEntry({

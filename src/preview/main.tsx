@@ -184,7 +184,9 @@ window.setTimeout(async () => {
     await pause(350);
     await selectDetailTab("操作");
     const target = params.has("uninstall")
-      ? buttonByText("彻底卸载")
+      ? document.querySelector<HTMLButtonElement>(
+          'button[aria-label="彻底卸载"]',
+        )
       : document.querySelector<HTMLButtonElement>(
           'button[aria-label^="断开 "]',
         );

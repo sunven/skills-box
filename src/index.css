@@ -446,10 +446,10 @@
 }
 
 .canvas-summary {
-  margin-top: 5px;
   color: var(--muted-foreground);
-  font-size: 13px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 
 .canvas-summary .n {
@@ -608,9 +608,9 @@
 }
 
 .scope-tab[aria-pressed="true"] {
-  background: var(--card);
-  color: var(--foreground);
-  font-weight: 500;
+  background: var(--accent);
+  color: var(--primary-foreground);
+  font-weight: 600;
 }
 
 .scope-menu {
@@ -882,12 +882,14 @@
   max-width: 100%;
 }
 
-.toolbar-count {
+.toolbar-summary {
+  display: flex;
+  max-width: 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px 12px;
   margin-left: auto;
-  color: var(--muted-foreground);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
 }
 
 .anomaly-strip {
@@ -999,14 +1001,10 @@
   gap: 4px;
 }
 
-.skill-row-action,
-.skill-row-action-slot {
+.skill-row-action {
   flex: none;
   width: 28px;
   height: 28px;
-}
-
-.skill-row-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1358,8 +1356,9 @@
 
 .detail-update-actions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  flex: none;
+  align-items: center;
+  gap: 4px;
 }
 
 .detail-update-meta {

@@ -475,47 +475,13 @@ export const DetailPane = memo(function DetailPane({
               className="detail-update-summary"
               data-testid="detail-update-summary"
             >
-              {management === "managed" ? (
-                <div className="detail-update-actions">
-                  {onCheckUpdates ? (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={checkingUpdates}
-                      aria-busy={checkingUpdates}
-                      onClick={() => onCheckUpdates([skill.name])}
-                      title="只读检查该 skill 的来源；不会运行 skills check"
-                    >
-                      <RefreshCw
-                        className={
-                          checkingUpdates
-                            ? "size-3.5 animate-spin"
-                            : "size-3.5"
-                        }
-                        aria-hidden="true"
-                      />
-                      检查更新
-                    </Button>
-                  ) : null}
-                  {update === "update" && onUpdate ? (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => onUpdate(skill.name)}
-                      title="更新前备份；保留当前 agent 挂载"
-                    >
-                      <ArrowUpCircle className="size-3.5" aria-hidden="true" />
-                      更新
-                    </Button>
-                  ) : null}
-                </div>
-              ) : (
+              {management !== "managed" ? (
                 <p className="text-[12px] leading-relaxed text-muted-foreground">
                   {management === "copy_only"
                     ? "仅副本 skill 不提供更新检查。"
                     : "未受管 skill 不提供更新检查。"}
                 </p>
-              )}
+              ) : null}
               <dl className="detail-update-meta">
                 <MetaRow label="上次检查">
                   <span
@@ -534,18 +500,51 @@ export const DetailPane = memo(function DetailPane({
                   </span>
                 </MetaRow>
               </dl>
-              {onUninstall ? (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="shrink-0 border-destructive/35 text-destructive hover:bg-destructive-soft hover:text-destructive"
-                  onClick={() => onUninstall(skill.name)}
-                  title="删除 canonical、所有 agent 挂载、lock 条目与基线；先备份，不自动回滚"
-                >
-                  <Trash2 className="size-3.5" aria-hidden="true" />
-                  彻底卸载
-                </Button>
-              ) : null}
+              <div className="detail-update-actions">
+                {management === "managed" && update === "update" && onUpdate ? (
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    aria-label="更新"
+                    onClick={() => onUpdate(skill.name)}
+                    title="更新"
+                  >
+                    <ArrowUpCircle className="size-3.5" aria-hidden="true" />
+                  </Button>
+                ) : null}
+                {management === "managed" && onCheckUpdates ? (
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    aria-label="检查更新"
+                    disabled={checkingUpdates}
+                    aria-busy={checkingUpdates}
+                    onClick={() => onCheckUpdates([skill.name])}
+                    title="检查更新"
+                  >
+                    <RefreshCw
+                      className={
+                        checkingUpdates
+                          ? "size-3.5 animate-spin"
+                          : "size-3.5"
+                      }
+                      aria-hidden="true"
+                    />
+                  </Button>
+                ) : null}
+                {onUninstall ? (
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    aria-label="彻底卸载"
+                    className="shrink-0 border-destructive/35 text-destructive hover:bg-destructive-soft hover:text-destructive"
+                    onClick={() => onUninstall(skill.name)}
+                    title="删除 canonical、所有 agent 挂载、lock 条目与基线；先备份，不自动回滚"
+                  >
+                    <Trash2 className="size-3.5" aria-hidden="true" />
+                  </Button>
+                ) : null}
+              </div>
             </div>
           </div>
           <ClampedDescription

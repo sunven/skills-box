@@ -174,6 +174,13 @@ describe("inventory list", () => {
     fireEvent.click(sidebarButton(/acme\/skills/));
     expect(rowNames()).toEqual(["beta", "alpha"]);
     expect(screen.getByText("2 个")).toBeInTheDocument();
+    const summary = screen
+      .getByRole("region", { name: "Skill 列表" })
+      .querySelector(".canvas-summary");
+    expect(summary).toHaveTextContent(
+      "2 个 skill · 1 个来源 · 0 个可更新 · 0 个异常",
+    );
+    expect(summary).not.toHaveTextContent("共 4");
     // Status counts follow the source; agent counts still describe the inventory.
     expect(screen.getByRole("option", { name: "未受管 (0)" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Claude Code (4)" })).toBeInTheDocument();
@@ -182,14 +189,23 @@ describe("inventory list", () => {
       target: { value: "gemini-cli" },
     });
     expect(rowNames()).toEqual(["beta"]);
+    expect(summary).toHaveTextContent(
+      "1 个 skill · 1 个来源 · 0 个可更新 · 0 个异常",
+    );
 
     fireEvent.change(screen.getByRole("combobox", { name: "状态筛选" }), {
       target: { value: "unmanaged" },
     });
     expect(screen.getByText("没有匹配的 skill")).toBeInTheDocument();
+    expect(summary).toHaveTextContent(
+      "0 个 skill · 0 个来源 · 0 个可更新 · 0 个异常",
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "清除筛选" }));
     expect(rowNames()).toEqual(["beta", "alpha", "delta", "gamma"]);
+    expect(summary).toHaveTextContent(
+      "4 个 skill · 3 个来源 · 0 个可更新 · 2 个异常",
+    );
   });
 
   it("updates anomaly counts when switching sidebar sources with the anomaly filter active", async () => {

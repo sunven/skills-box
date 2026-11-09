@@ -149,6 +149,9 @@ describe("workspace projection", () => {
     expect(filtered.visibleSkills.map((skill) => skill.name)).toEqual([
       "beta", "alpha",
     ]);
+    expect(filtered.listSummary).toEqual({
+      skillCount: 2, sourceCount: 1, updateCount: 0, anomalyCount: 2,
+    });
 
     const searched = select({
       ...input,
@@ -160,6 +163,9 @@ describe("workspace projection", () => {
       }),
     });
     expect(searched.visibleSkills.map((skill) => skill.name)).toEqual(["beta"]);
+    expect(searched.listSummary).toEqual({
+      skillCount: 1, sourceCount: 1, updateCount: 0, anomalyCount: 1,
+    });
     expect(searched.statusCounts).toEqual(filtered.statusCounts);
     expect(select(input).statusCounts).toBe(initial.statusCounts);
   });
@@ -263,6 +269,9 @@ describe("workspace projection", () => {
     const filtered = buildWorkspaceView(base);
     expect(filtered.visibleSkills.map((skill) => skill.name)).toEqual(["beta"]);
     expect(filtered.selectedSkill).toBeNull();
+    expect(filtered.listSummary).toEqual({
+      skillCount: 1, sourceCount: 1, updateCount: 0, anomalyCount: 0,
+    });
 
     const byStatus = buildWorkspaceView({
       ...base,
@@ -271,6 +280,9 @@ describe("workspace projection", () => {
     });
     expect(byStatus.visibleSkills.map((skill) => skill.name)).toEqual(["alpha"]);
     expect(byStatus.selectedSkill).toBeNull();
+    expect(byStatus.listSummary).toEqual({
+      skillCount: 1, sourceCount: 1, updateCount: 1, anomalyCount: 0,
+    });
 
     const byName = buildWorkspaceView({
       ...base,

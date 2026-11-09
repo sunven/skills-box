@@ -357,7 +357,7 @@ describe("skill row actions", () => {
     expect(screen.queryByRole("menu")).toBeNull();
     expect(trigger).toHaveFocus();
     fireEvent.click(trigger);
-    fireEvent.pointerDown(screen.getByRole("heading", { name: "全局 Skills" }));
+    fireEvent.pointerDown(screen.getByRole("region", { name: "Skill 列表" }));
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
@@ -412,7 +412,12 @@ describe("skill row actions", () => {
     });
     await openMenu();
     fireEvent.click(screen.getByRole("button", { name: "切换到全局" }));
-    await screen.findByRole("heading", { name: "全局 Skills" });
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "切换到全局" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+    });
     expect(screen.queryByRole("menu")).toBeNull();
     expect(
       await screen.findByRole("button", { name: "打开目录 alpha" }),

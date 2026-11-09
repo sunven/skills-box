@@ -30,7 +30,7 @@ import {
   type StatusCounts,
   type StatusFilter,
 } from "../lib/inventory-view";
-import type { ProjectHeaderView } from "../lib/workspace-view";
+import type { ProjectHeaderView, SkillListSummary } from "../lib/workspace-view";
 
 interface SkillListPaneProps {
   scope: ScopeId;
@@ -50,8 +50,7 @@ interface SkillListPaneProps {
   totalSkills: number;
   visibleSkills: UpdateViewSkill[];
   anomalies: AnomalyView;
-  sourceCount: number;
-  candidateCount: number;
+  summary: SkillListSummary;
   availableDiscoveryCount: number;
   onOpenAvailableDiscoveries: () => void;
   query: string;
@@ -82,22 +81,17 @@ interface SkillListPaneProps {
 }
 
 function CanvasSummary({
-  totalSkills,
+  skillCount,
   sourceCount,
-  candidateCount,
+  updateCount,
   anomalyCount,
-}: {
-  totalSkills: number;
-  sourceCount: number;
-  candidateCount: number;
-  anomalyCount: number;
-}) {
+}: SkillListSummary) {
   return (
     <p className="canvas-summary">
-      <span className="n">{totalSkills}</span> 个 skill ·{" "}
+      <span className="n">{skillCount} 个</span> skill ·{" "}
       <span className="n">{sourceCount}</span> 个来源 ·{" "}
-      <span className={candidateCount > 0 ? "update" : "n"}>
-        {candidateCount}
+      <span className={updateCount > 0 ? "update" : "n"}>
+        {updateCount}
       </span>{" "}
       个可更新 ·{" "}
       <span className={anomalyCount > 0 ? "anomaly" : "n"}>{anomalyCount}</span>{" "}
@@ -146,8 +140,7 @@ export function SkillListPane({
   totalSkills,
   visibleSkills,
   anomalies,
-  sourceCount,
-  candidateCount,
+  summary,
   availableDiscoveryCount,
   onOpenAvailableDiscoveries,
   query,
@@ -252,33 +245,12 @@ export function SkillListPane({
   return (
     <section aria-label="Skill 列表" className="canvas">
       {projectHeader ? (
-        <>
-          <ProjectHeader
-            view={projectHeader}
-            refreshing={refreshingProject}
-            onRefresh={onRefreshProject ?? (() => {})}
-          />
-          <CanvasSummary
-            totalSkills={totalSkills}
-            sourceCount={sourceCount}
-            candidateCount={candidateCount}
-            anomalyCount={anomalies.total}
-          />
-        </>
-      ) : (
-        <div className="canvas-head">
-          <div className="min-w-0">
-            <h1 className="canvas-title">全局 Skills</h1>
-            <CanvasSummary
-              totalSkills={totalSkills}
-              sourceCount={sourceCount}
-              candidateCount={candidateCount}
-              anomalyCount={anomalies.total}
-            />
-          </div>
-        </div>
-      )}
-
+        <ProjectHeader
+          view={projectHeader}
+          refreshing={refreshingProject}
+          onRefresh={onRefreshProject ?? (() => {})}
+        />
+      ) : null}
       <div className="toolbar">
         <div className="toolbar-search">
           <Search
@@ -343,7 +315,7 @@ export function SkillListPane({
             </option>
           ))}
         </select>
-        <div className="ml-auto flex items-center gap-3">
+        <div className="toolbar-summary">
           {availableDiscoveryCount > 0 ? (
             <Button
               variant="outline"
@@ -355,7 +327,7 @@ export function SkillListPane({
               可安装 {availableDiscoveryCount}
             </Button>
           ) : null}
-          <span className="toolbar-count">{visibleSkills.length} 个</span>
+          <CanvasSummary {...summary} />
         </div>
       </div>
 

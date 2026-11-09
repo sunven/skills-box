@@ -93,6 +93,13 @@ export interface WorkspaceViewInput {
   updateSkillName: string | null;
 }
 
+export interface SkillListSummary {
+  skillCount: number;
+  sourceCount: number;
+  updateCount: number;
+  anomalyCount: number;
+}
+
 export interface WorkspaceView {
   scopeProjects: ScopeProjectView[];
   activeProject: ProjectEntry | null;
@@ -101,6 +108,7 @@ export interface WorkspaceView {
   scopeError: AppError | null;
   skills: UpdateViewSkill[];
   visibleSkills: UpdateViewSkill[];
+  listSummary: SkillListSummary;
   selectedSkill: UpdateViewSkill | null;
   statusCounts: ReturnType<typeof computeStatusCounts>;
   sourceOptions: ReturnType<typeof computeSourceOptions>;
@@ -189,6 +197,13 @@ function projectWorkspace(
 ): WorkspaceView {
   const { skills, updateSummary, candidateCount } = inventory;
   const visibleSkills = selectVisibleSkills(skills, input.filters, input.sort);
+  const visibleStatusCounts = computeStatusCounts(visibleSkills);
+  const listSummary: SkillListSummary = {
+    skillCount: visibleSkills.length,
+    sourceCount: new Set(visibleSkills.map((skill) => skill.source)).size,
+    updateCount: visibleStatusCounts.update,
+    anomalyCount: visibleStatusCounts.anomaly,
+  };
   // Status options describe the selected source, independently of the active
   // status, search query and agent filter.
   const statusCounts =
@@ -291,6 +306,7 @@ function projectWorkspace(
     projectHeader,
     scopeError,
     visibleSkills,
+    listSummary,
     statusCounts,
     availableDiscoveryCount,
     discoverySource,
