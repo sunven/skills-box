@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.4] - 2026-11-09
+
+### Bug Fixes
+
+- Refine skill inventory controls and filtered counts
+
+### Features
+
+- Improve install skill selection and disable input suggestions
+- Unify CLI command help tooltips
+- Improve install wizard guidance and source history
+- Add application data management settings
+
+### Refactor
+
+- Isolate batch target execution and state
+- Isolate batch operation preview and retry flow
+- Share update check attempt scheduling
+
 ## [0.1.3] - 2026-11-06
 
 ### Bug Fixes
@@ -18,6 +37,10 @@ All notable changes to this project will be documented in this file.
 - Display actual skills CLI commands and use latest version
 - Support independent WorkBuddy project skills
 - Clean stale records and restore missing skills
+
+### Refactor
+
+- Consolidate duplicated helpers and shared UI state
 
 ## [0.1.2] - 2026-11-04
 
