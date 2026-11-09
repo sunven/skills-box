@@ -1,3 +1,4 @@
+import { appDataFixture } from "../test/app-data-fixtures";
 import { discoveryFixture, discoveryProject } from "../test/discovery-fixtures";
 import React from "react";
 import ReactDOM from "react-dom/client";
@@ -19,6 +20,7 @@ import "../index.css";
 
 createFakeBackend({
   data: {
+    appData: appDataFixture(),
     appUpdate: new URLSearchParams(location.search).has("appUpdate") ? initialAppUpdate({
       enabled: true, phase: "available", lastAttemptAt: Date.now(),
       candidate: { version: "0.2.0", notes: "## 更新内容\n\n- 新增应用自动检查和安全更新。\n- 改善安装进度与错误恢复。" },

@@ -85,6 +85,11 @@ export const API_COMMANDS = {
   removeExtraAgent: "remove_extra_agent",
   startUninstall: "start_uninstall",
   revealAppData: "reveal_app_data",
+  getAppData: "get_app_data",
+  saveDataPreferences: "save_data_preferences",
+  previewAppDataCleanup: "preview_app_data_cleanup",
+  cleanAppData: "clean_app_data",
+  revealBackup: "reveal_backup",
 } as const;
 
 export type ApiCommand = (typeof API_COMMANDS)[keyof typeof API_COMMANDS];
@@ -424,6 +429,22 @@ export function startUninstall(
 /** Open a fixed app-data directory; the frontend never supplies a path. */
 export function revealAppData(kind: AppDataKind): Promise<void> {
   return invoke<void>(API_COMMANDS.revealAppData, { kind });
+}
+
+export function getAppData(): Promise<import("./types").AppDataReport> {
+  return invoke(API_COMMANDS.getAppData);
+}
+export function saveDataPreferences(preferences: import("./types").DataPreferences): Promise<import("./types").DataPreferences> {
+  return invoke(API_COMMANDS.saveDataPreferences, { preferences });
+}
+export function previewAppDataCleanup(selection: import("./types").AppDataSelection): Promise<import("./types").AppDataPreview> {
+  return invoke(API_COMMANDS.previewAppDataCleanup, { selection });
+}
+export function cleanAppData(previewId: string): Promise<import("./types").AppDataCleanupResult> {
+  return invoke(API_COMMANDS.cleanAppData, { previewId });
+}
+export function revealBackup(id: string): Promise<void> {
+  return invoke(API_COMMANDS.revealBackup, { id });
 }
 
 /** Normalize a rejected Tauri command into the shared `AppError` shape. */

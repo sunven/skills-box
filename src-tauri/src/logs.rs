@@ -7,7 +7,8 @@
 //! error.
 
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -18,6 +19,8 @@ use crate::paths::AppPaths;
 use crate::time::now_ms;
 
 pub const OPERATIONS_LOG_FILE: &str = "operations.jsonl";
+const MAX_LOG_BYTES: u64 = 10 * 1024 * 1024;
+static LOG_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OperationEntry {
@@ -52,7 +55,7 @@ impl OperationEntry {
 pub struct OperationLog {
     path: PathBuf,
     scope: crate::scope::ScopeId,
-    write_lock: Mutex<()>,
+    enabled: bool,
 }
 
 impl std::fmt::Debug for OperationLog {
@@ -66,7 +69,7 @@ impl std::fmt::Debug for OperationLog {
 
 impl OperationLog {
     pub fn new(paths: &AppPaths) -> Self {
-        Self::from_path(paths.logs_dir().join(OPERATIONS_LOG_FILE))
+        Self::for_scope(paths, &crate::scope::ScopeId::Global)
     }
 
     /// One shared log file; every line is tagged with the scope that owns the
@@ -75,7 +78,7 @@ impl OperationLog {
         Self {
             path: paths.logs_dir().join(OPERATIONS_LOG_FILE),
             scope: scope.clone(),
-            write_lock: Mutex::new(()),
+            enabled: paths.data_preferences().operation_logging,
         }
     }
 
@@ -83,7 +86,7 @@ impl OperationLog {
         Self {
             path: path.into(),
             scope: crate::scope::ScopeId::Global,
-            write_lock: Mutex::new(()),
+            enabled: true,
         }
     }
 
@@ -94,8 +97,10 @@ impl OperationLog {
     /// Append one JSONL line. Failures are returned for callers/tests but must
     /// not be treated as operation failures.
     pub fn append(&self, entry: &OperationEntry) -> Result<(), AppError> {
-        let _guard = self
-            .write_lock
+        if !self.enabled {
+            return Ok(());
+        }
+        let _guard = LOG_WRITE_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(parent) = self.path.parent() {
@@ -115,9 +120,19 @@ impl OperationLog {
         };
         let serialized = serde_json::to_string(&line)
             .map_err(|error| log_write_failed(&self.path, error.into()))?;
+        if serialized.len() as u64 + 1 > MAX_LOG_BYTES {
+            return Err(log_write_failed(
+                &self.path,
+                std::io::Error::other("log entry exceeds size limit"),
+            ));
+        }
+        rotate(&self.path, serialized.len() as u64 + 1)
+            .map_err(|e| log_write_failed(&self.path, e))?;
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
             .open(&self.path)
             .map_err(|error| log_write_failed(&self.path, error))?;
         file.write_all(serialized.as_bytes())
@@ -125,6 +140,61 @@ impl OperationLog {
             .and_then(|_| file.flush())
             .map_err(|error| log_write_failed(&self.path, error))
     }
+}
+
+fn rotate(path: &Path, incoming: u64) -> std::io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("missing log directory"))?;
+    if fs::symlink_metadata(parent)?.file_type().is_symlink() {
+        return Err(std::io::Error::other("log directory must not be a symlink"));
+    }
+    let length = match fs::symlink_metadata(path) {
+        Ok(m) if m.is_file() => m.len(),
+        Ok(_) => return Err(std::io::Error::other("log must be a regular file")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0,
+        Err(e) => return Err(e),
+    };
+    if length.saturating_add(incoming) <= MAX_LOG_BYTES {
+        return Ok(());
+    }
+    // Existing unbounded files predate rotation. Keep only the newest whole
+    // records that fit one segment before admitting that file into rotation.
+    if length > MAX_LOG_BYTES {
+        let mut source = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path)?;
+        source.seek(SeekFrom::End(-(MAX_LOG_BYTES as i64)))?;
+        let mut tail = Vec::new();
+        source.take(MAX_LOG_BYTES).read_to_end(&mut tail)?;
+        let start = tail
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(tail.len(), |i| i + 1);
+        let mut replacement = tempfile::NamedTempFile::new_in(parent)?;
+        replacement.write_all(&tail[start..])?;
+        replacement.as_file().sync_all()?;
+        replacement.persist(path).map_err(|e| e.error)?;
+    }
+    for i in (1..=4).rev() {
+        let destination = parent.join(format!("operations.{i}.jsonl"));
+        if i == 4 && destination.try_exists()? {
+            fs::remove_file(&destination)?;
+        }
+        let source = if i == 1 {
+            path.to_path_buf()
+        } else {
+            parent.join(format!("operations.{}.jsonl", i - 1))
+        };
+        if let Ok(m) = fs::symlink_metadata(&source) {
+            if !m.is_file() {
+                return Err(std::io::Error::other("log must be a regular file"));
+            }
+            fs::rename(&source, &destination)?;
+        }
+    }
+    Ok(())
 }
 
 fn log_write_failed(path: &Path, error: std::io::Error) -> AppError {
@@ -259,6 +329,88 @@ mod tests {
             .collect();
         assert_eq!(lines[0]["scope"], project.as_string());
         assert_eq!(lines[1]["scope"], "global");
+    }
+
+    #[test]
+    fn disabled_logging_preserves_old_data_and_captured_operation_policy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(tmp.path().join("home"), tmp.path().join("data"));
+        let settings = crate::settings::SettingsService::new(paths.clone(), None);
+        let active = paths
+            .data_coordination
+            .operation(crate::settings::DataPreferences::default());
+        settings
+            .save_data_preferences(crate::settings::DataPreferences {
+                retain_backups: true,
+                operation_logging: false,
+            })
+            .unwrap();
+        OperationLog::new(&paths)
+            .append(&entry("old operation", None))
+            .unwrap();
+        drop(active);
+        let before = fs::read(paths.logs_dir().join(OPERATIONS_LOG_FILE)).unwrap();
+        OperationLog::new(&paths)
+            .append(&entry("new operation", None))
+            .unwrap();
+        assert_eq!(
+            before,
+            fs::read(paths.logs_dir().join(OPERATIONS_LOG_FILE)).unwrap()
+        );
+    }
+
+    #[test]
+    fn rotation_bounds_total_files_and_adopts_an_existing_oversized_log() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(OPERATIONS_LOG_FILE);
+        let log = OperationLog::from_path(&path);
+        // Small records at both ends of a large legacy payload; only complete
+        // records from the recent tail survive migration to bounded segments.
+        let mut legacy = vec![b' '; MAX_LOG_BYTES as usize + 20];
+        legacy.extend_from_slice(b"\n{\"recent\":true}\n");
+        fs::write(&path, &legacy).unwrap();
+        log.append(&entry("new", None)).unwrap();
+        assert_eq!(
+            fs::read(tmp.path().join("operations.1.jsonl")).unwrap(),
+            b"{\"recent\":true}\n"
+        );
+        for i in 0..7 {
+            let file = OpenOptions::new().write(true).open(&path).unwrap();
+            file.set_len(MAX_LOG_BYTES).unwrap();
+            log.append(&entry(&format!("new-{i}"), None)).unwrap();
+        }
+        let files: Vec<_> = fs::read_dir(tmp.path())
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(files.len(), 5);
+        assert!(
+            files
+                .iter()
+                .all(|f| f.metadata().unwrap().len() <= MAX_LOG_BYTES)
+        );
+        let newest = fs::read_to_string(&path).unwrap();
+        assert!(newest.contains("new-6"));
+    }
+
+    #[test]
+    fn logging_refuses_symlink_files_and_directories() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tmp.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join(OPERATIONS_LOG_FILE), b"keep").unwrap();
+        let paths = AppPaths::new(tmp.path().join("home"), tmp.path().join("app"));
+        fs::create_dir_all(paths.app_data()).unwrap();
+        std::os::unix::fs::symlink(&outside, paths.logs_dir()).unwrap();
+        assert!(
+            OperationLog::new(&paths)
+                .append(&entry("new", None))
+                .is_err()
+        );
+        assert_eq!(
+            fs::read(outside.join(OPERATIONS_LOG_FILE)).unwrap(),
+            b"keep"
+        );
     }
 
     #[test]

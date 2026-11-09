@@ -31,6 +31,75 @@ use crate::update::project_checks::{ForgetProjectResult, RelocateProjectResult};
 use crate::update::state::UpdateCheckState;
 
 #[tauri::command]
+pub async fn get_app_data(state: State<'_, AppState>) -> Result<crate::app_data::Report, AppError> {
+    let service = state.app_data.clone();
+    let paths = state.paths.clone();
+    let settings = state.settings.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut report = service.report(&paths)?;
+        report.preferences = settings.data_preferences()?;
+        Ok(report)
+    })
+    .await
+    .map_err(|e| crate::app_data::error(e.to_string()))?
+}
+
+#[tauri::command]
+pub fn save_data_preferences(
+    state: State<'_, AppState>,
+    preferences: crate::settings::DataPreferences,
+) -> Result<crate::settings::DataPreferences, AppError> {
+    let _write = state.app_updates.configuration_write()?;
+    state.settings.save_data_preferences(preferences)
+}
+
+#[tauri::command]
+pub async fn preview_app_data_cleanup(
+    state: State<'_, AppState>,
+    selection: crate::app_data::Selection,
+) -> Result<crate::app_data::Preview, AppError> {
+    let service = state.app_data.clone();
+    let paths = state.paths.clone();
+    tauri::async_runtime::spawn_blocking(move || service.preview(&paths, selection))
+        .await
+        .map_err(|e| crate::app_data::error(e.to_string()))?
+}
+
+#[tauri::command]
+pub async fn clean_app_data(
+    state: State<'_, AppState>,
+    preview_id: String,
+) -> Result<crate::app_data::CleanupResult, AppError> {
+    let permit = state.tasks.try_acquire_mutation()?;
+    let cleanup = state.paths.data_coordination.cleanup()?;
+    let configuration = state.app_updates.configuration_write()?;
+    let service = state.app_data.clone();
+    let paths = state.paths.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (_permit, _cleanup, _configuration) = (permit, cleanup, configuration);
+        service.clean(&paths, &preview_id)
+    })
+    .await
+    .map_err(|e| crate::app_data::error(e.to_string()))?
+}
+
+#[tauri::command]
+pub async fn reveal_backup(
+    state: State<'_, AppState>,
+    app: AppHandle,
+    id: String,
+) -> Result<(), AppError> {
+    let service = state.app_data.clone();
+    let paths = state.paths.clone();
+    let path = tauri::async_runtime::spawn_blocking(move || service.backup_directory(&paths, &id))
+        .await
+        .map_err(|e| crate::app_data::error(e.to_string()))??;
+    app.opener()
+        .open_path(path.to_string_lossy().to_string(), None::<&str>)
+        .map_err(|e| AppError::open_failed(e.to_string()))
+}
+
+#[tauri::command]
 pub fn get_github_settings(
     state: State<'_, AppState>,
 ) -> Result<crate::settings::GitHubSettingsStatus, AppError> {

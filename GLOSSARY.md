@@ -208,6 +208,22 @@ _Avoid_: hash, checksum
 A pre-operation copy of the lock, canonical folder, copy attachments, and attachment manifest.
 _Avoid_: archive, dump
 
+**Backup retention**:
+The preference to keep Backup snapshots after successful operations. Snapshots from failed or interrupted operations remain available independently of this preference.
+_Avoid_: disable backups, skip backup
+
+**Protected backup snapshot**:
+A Backup snapshot referenced by a running or interrupted Mutation session and therefore unavailable for deletion until that reference is cleared.
+_Avoid_: locked backup, undeletable backup
+
+**Diagnostic operation log**:
+The append-only record of selected Skill operation outcomes and errors kept to help diagnose failures; it is not a complete application runtime log or operation history.
+_Avoid_: audit log, runtime log
+
+**App data**:
+The data Skills Box creates and keeps for its own operation, including settings, project registrations, discovery history, backup snapshots, diagnostic logs and caches. It excludes installed Skill files, Agent attachments and data owned by external tools.
+_Avoid_: skill data, all local data
+
 **Read model**:
 The projection of the lock and filesystem that the UI displays.
 _Avoid_: cache, state

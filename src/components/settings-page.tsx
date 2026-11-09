@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, KeyRound, Settings2, Download } from "lucide-react";
+import { ExternalLink, KeyRound, Settings2, Download, Database } from "lucide-react";
 import type { AppUpdateModel } from "../hooks/use-app-update";
+import { AppDataSettings } from "./app-data-settings";
 import { AppUpdateSettings } from "./app-update-settings";
 import {
   asAppError, clearGitHubToken, fallbackError, getGitHubSettings,
@@ -22,7 +23,7 @@ const sourceLabels: Record<GitHubTokenSource, string> = {
   anonymous: "匿名请求",
 };
 
-export type SettingsSection = "github" | "agents" | "updates";
+export type SettingsSection = "github" | "agents" | "updates" | "data";
 export function SettingsPage({ onAgentsChanged, appUpdate, initialSection = "github" }: {
   onAgentsChanged: () => void; appUpdate: AppUpdateModel; initialSection?: SettingsSection;
 }) {
@@ -117,16 +118,23 @@ export function SettingsPage({ onAgentsChanged, appUpdate, initialSection = "git
           aria-controls="app-update-settings" onClick={() => selectSection("updates")}>
           <Download className="size-4" aria-hidden="true" />应用更新
         </button>
+        <button type="button" aria-current={activeSection === "data" ? "page" : undefined}
+          aria-controls="app-data-settings" onClick={() => selectSection("data")}>
+          <Database className="size-4" aria-hidden="true" />应用数据
+        </button>
       </nav>
       <div ref={panelRef} className="settings-panel">
         <div className="settings-content">
           <h1 id="settings-title">设置</h1>
-          <p className="text-muted-foreground">管理应用更新、GitHub 认证和额外 Agent。</p>
+          <p className="text-muted-foreground">管理应用更新、GitHub 认证、额外 Agent 和应用数据。</p>
           <section id="app-update-settings" className="settings-card" aria-labelledby="app-update-title" hidden={activeSection !== "updates"}>
             <h2 id="app-update-title">应用更新</h2>
             <AppUpdateSettings update={appUpdate} />
           </section>
           <fieldset className="contents" disabled={appUpdate.critical}>
+          <section id="app-data-settings" className="settings-card" aria-labelledby="app-data-title" hidden={activeSection !== "data"}>
+            <AppDataSettings active={activeSection === "data"} critical={appUpdate.critical} />
+          </section>
           <section id="github-settings" className="settings-card" aria-labelledby="github-settings-title" hidden={activeSection !== "github"}>
             <div className="flex items-center gap-2">
               <KeyRound className="size-4 text-muted-foreground" aria-hidden="true" />

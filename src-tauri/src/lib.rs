@@ -1,4 +1,5 @@
 pub mod agents;
+mod app_data;
 pub mod app_update;
 pub mod attach;
 pub mod attachment_target;
@@ -53,6 +54,7 @@ use update::state::UpdateCheckStateStore;
 
 pub struct AppState {
     pub paths: AppPaths,
+    pub app_data: std::sync::Arc<app_data::DataService>,
     pub environment: Arc<EnvironmentService>,
     pub read_model: Arc<ReadModel>,
     pub projects: Arc<ProjectRegistry>,
@@ -109,6 +111,7 @@ impl AppState {
         );
         Self {
             app_updates: app_update::AppUpdateService::new(tasks.clone()),
+            app_data: std::sync::Arc::new(app_data::DataService::default()),
             read_model,
             discovery,
             cli_commands,
@@ -221,6 +224,11 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            commands::get_app_data,
+            commands::save_data_preferences,
+            commands::preview_app_data_cleanup,
+            commands::clean_app_data,
+            commands::reveal_backup,
             commands::get_app_update_state,
             commands::check_app_update,
             commands::start_app_update,

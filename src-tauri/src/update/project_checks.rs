@@ -82,6 +82,7 @@ impl ProjectUpdateChecks {
         skill_ids: Option<Vec<String>>,
         expected_revision: Option<String>,
     ) -> Result<UpdateCheckResponse, AppError> {
+        let _activity = self.paths.data_coordination.activity()?;
         let (layout, revision) = {
             let _guard = self.lock();
             if let Some(expected) = &expected_revision

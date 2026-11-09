@@ -96,6 +96,37 @@ require approval in Privacy & Security. Move the app from its DMG to Application
 or another writable directory before updating. See [release setup](docs/releasing.md)
 for signing keys, local signed builds and the complete release workflow.
 
+## Application data
+
+Open **设置 → 应用数据** to view total and cleanable storage, manage operation
+backups and diagnostic logs, or preview a cleanup. Sizes count files under
+`~/Library/Application Support/com.sunven.skills-box`; they exclude installed
+Skills, Agent attachments, external tool caches and WebView browser storage.
+Unreadable items are reported, and unknown files are counted separately.
+
+**保留操作备份** defaults to on. Turning it off still creates the required
+pre-operation snapshot, then removes the new snapshot after success. Failed,
+interrupted and standalone cancelled operations retain their snapshots. A
+stopped batch can release snapshots belonging only to successful targets.
+Existing backups remain until manually deleted. The list shows time, action,
+Skill or task, Scope and size, with directory and deletion controls. Snapshots
+referenced by running or interrupted operations are protected. Snapshot
+restoration is not included.
+
+**记录诊断日志** also defaults to on and controls subsequent operation logs;
+existing files remain when it is disabled. These logs cover selected Skill
+outcomes and errors. They rotate at 10 MiB per file, with up to five files
+(50 MiB total). An oversized legacy log is trimmed to recent complete records
+when the next write triggers rotation.
+
+Combined cleanup selects only cache by default; backups and logs require
+explicit selection. A preview lists the files and estimated space before
+confirmation. Cache cleanup removes update trees and Source archives, which
+are fetched again when needed. Settings, project registrations, discovery
+history, check results and baselines are preserved. Cleanup asks you to retry
+if a Skill operation or cache task is busy; partial deletion failures are
+reported individually and require another preview before retrying.
+
 ## Development
 
 ```bash
@@ -119,5 +150,6 @@ cargo test --test generic_git_sources -- --ignored --nocapture
 - Source discovery spec: `.scratch/skill-discovery/spec.md`
 - Auto update check spec: `.scratch/auto-update-check/spec.md`
 - App update spec: `.scratch/app-update/spec.md`
+- Application data spec: `.scratch/app-data-management/spec.md`
 - Domain glossary: `GLOSSARY.md`
 - Architecture decision: `docs/adr/0001-cli-mutations-native-reads.md`

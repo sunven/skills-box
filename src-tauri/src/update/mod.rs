@@ -224,6 +224,7 @@ impl UpdateService {
         &self,
         skill_ids: Option<Vec<String>>,
     ) -> Result<UpdateCheckReport, AppError> {
+        let _activity = self.paths.data_coordination.activity()?;
         let lock = LockFile::read(&self.paths.lock_path())?;
         let full_check = skill_ids.is_none();
         let now = self.clock.now_epoch_ms();

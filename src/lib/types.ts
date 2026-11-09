@@ -233,6 +233,16 @@ export interface CancelAck {
 }
 
 export type AppDataKind = "backups" | "logs" | "cache" | "baselines";
+export type AppDataCategory = "backups" | "logs" | "cache" | "preserved" | "other";
+export interface DataPreferences { retainBackups: boolean; operationLogging: boolean }
+export interface AppDataUsage { category: AppDataCategory; bytes: number; cleanableBytes: number; count: number }
+export interface AppDataBackup { id: string; name: string; action: string | null; scope: string | null; createdAtEpochMs: number | null; bytes: number; protectedReason: string | null }
+export interface AppDataReport { directory: string; preferences: DataPreferences; totalBytes: number; cleanableBytes: number; categories: AppDataUsage[]; backups: AppDataBackup[]; warnings: string[]; scannedAtEpochMs: number }
+export interface AppDataSelection { itemIds?: string[]; backupIds: string[]; allBackups: boolean; logs: boolean; cache: boolean }
+export interface AppDataPreviewItem { id: string; label: string; category: AppDataCategory; bytes: number }
+export interface AppDataPreview { id: string; items: AppDataPreviewItem[]; totalBytes: number }
+export interface AppDataCleanupItem { id: string; label: string; freedBytes: number; error: string | null }
+export interface AppDataCleanupResult { items: AppDataCleanupItem[]; freedBytes: number }
 
 /** The frontend sends only semantic values; Rust validates and appends universal. */
 export interface InstallRequest {

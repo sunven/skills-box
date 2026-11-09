@@ -111,6 +111,7 @@ pub enum ErrorCode {
     AppUpdateUnavailable,
     AppUpdateReadOnly,
     AppUpdateBusy,
+    AppDataFailed,
 }
 
 impl ErrorCode {
@@ -221,6 +222,7 @@ impl ErrorCode {
         Self::AppUpdateUnavailable,
         Self::AppUpdateReadOnly,
         Self::AppUpdateBusy,
+        Self::AppDataFailed,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -331,6 +333,7 @@ impl ErrorCode {
             Self::AppUpdateUnavailable => "app_update.unavailable",
             Self::AppUpdateReadOnly => "app_update.read_only",
             Self::AppUpdateBusy => "app_update.busy",
+            Self::AppDataFailed => "app_data.failed",
         }
     }
 
@@ -365,7 +368,7 @@ mod tests {
 
     #[test]
     fn all_codes_are_unique_and_stable() {
-        assert_eq!(ErrorCode::ALL.len(), 106);
+        assert_eq!(ErrorCode::ALL.len(), 107);
         let values: Vec<&str> = ErrorCode::ALL.iter().map(|code| code.as_str()).collect();
         let unique: HashSet<&str> = values.iter().copied().collect();
         assert_eq!(unique.len(), values.len());
@@ -478,6 +481,7 @@ mod tests {
                 "app_update.unavailable",
                 "app_update.read_only",
                 "app_update.busy",
+                "app_data.failed",
             ]
         );
     }

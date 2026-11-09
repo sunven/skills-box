@@ -11,10 +11,11 @@ use std::path::{Path, PathBuf};
 
 pub const APP_IDENTIFIER: &str = "com.sunven.skills-box";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct AppPaths {
     home: PathBuf,
     app_data: PathBuf,
+    pub(crate) data_coordination: std::sync::Arc<crate::app_data::coordination::Coordination>,
 }
 
 impl AppPaths {
@@ -35,7 +36,7 @@ impl AppPaths {
             (true, Some(root)) if !root.is_empty() => PathBuf::from(root),
             _ => default_app_data_root(&home),
         };
-        Self { home, app_data }
+        Self::new(home, app_data)
     }
 
     /// Fully injectable constructor for tests and future settings plumbing.
@@ -43,7 +44,14 @@ impl AppPaths {
         Self {
             home: home.into(),
             app_data: app_data.into(),
+            data_coordination: Default::default(),
         }
+    }
+
+    pub(crate) fn data_preferences(&self) -> crate::settings::DataPreferences {
+        self.data_coordination
+            .policy()
+            .unwrap_or_else(|| crate::settings::data_preferences(self))
     }
 
     pub fn home(&self) -> &Path {
@@ -241,3 +249,10 @@ mod tests {
         assert_eq!(paths.display(Path::new("/Users/tester")), "~");
     }
 }
+
+impl PartialEq for AppPaths {
+    fn eq(&self, other: &Self) -> bool {
+        self.home == other.home && self.app_data == other.app_data
+    }
+}
+impl Eq for AppPaths {}

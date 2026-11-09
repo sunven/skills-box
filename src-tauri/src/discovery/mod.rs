@@ -486,6 +486,7 @@ impl DiscoveryService {
     /// Starts an asynchronous run; returns immediately and is single-flight.
     /// Progress/state polling never waits for all sources to complete.
     pub fn start(&self, manual: bool) -> Result<DiscoveryProgress, AppError> {
+        let activity = self.inner.paths.data_coordination.activity()?;
         self.refresh();
         let mut state = self.lock();
         if state.closed {
@@ -535,6 +536,7 @@ impl DiscoveryService {
             let service = self.clone();
             let run = progress.run_id;
             tauri::async_runtime::spawn(async move {
+                let _activity = activity;
                 service.run(queue, run, cancel).await;
             });
         }

@@ -1462,6 +1462,51 @@ mod execution_tests {
     }
 
     #[tokio::test]
+    async fn successful_uninstall_discards_only_its_backup_when_retention_is_off() {
+        let fixture = ExecFixture::new();
+        let settings = crate::settings::SettingsService::new(fixture.paths.clone(), None);
+        settings
+            .save_data_preferences(crate::settings::DataPreferences {
+                retain_backups: false,
+                operation_logging: false,
+            })
+            .unwrap();
+        let older = crate::backup::BackupStore::new(&fixture.paths)
+            .create(
+                crate::backup::BackupAction::Uninstall,
+                "older",
+                None,
+                &[],
+                &[],
+            )
+            .unwrap();
+        let paths = fixture.paths.clone();
+        let remove = remove_all_post(fixture.home.clone(), fixture.paths.clone(), "alpha");
+        fixture
+            .executor
+            .push(RemoveResponse::success(SUCCESS, move || {
+                assert_eq!(
+                    fs::read_dir(paths.backups_dir()).unwrap().count(),
+                    2,
+                    "backup must exist before mutation"
+                );
+                remove();
+            }));
+        let (_, event) = run_task(&fixture.manager, "alpha").await;
+        let result = event.result.unwrap();
+        assert_eq!(result.overall, TaskOverall::Success);
+        assert!(result.backup_path.is_none());
+        assert!(result.skills.iter().all(|row| row.backup_path.is_none()));
+        assert!(result.log_path.is_none());
+        assert!(older.path.exists());
+        assert_eq!(
+            fs::read_dir(fixture.paths.backups_dir()).unwrap().count(),
+            1
+        );
+        assert!(!fixture.paths.logs_dir().join("operations.jsonl").exists());
+    }
+
+    #[tokio::test]
     async fn uninstall_success_backs_up_removes_verifies_and_logs() {
         let fixture = ExecFixture::new();
         fixture.executor.push(RemoveResponse::success(

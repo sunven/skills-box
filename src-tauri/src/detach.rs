@@ -262,6 +262,11 @@ pub(crate) fn detach_agent_checked(
         result.backup_path.clone(),
         None,
     ));
+    if let Some(backup) = &result.backup_path
+        && crate::app_data::remove_successful_snapshot(paths, backup).unwrap_or(false)
+    {
+        result.backup_path = None;
+    }
     Ok(result)
 }
 

@@ -48,6 +48,11 @@ import type {
   UpdateCheckReport,
   UpdateCheckResponse,
   UpdateCheckState,
+  AppDataReport,
+  DataPreferences,
+  AppDataSelection,
+  AppDataPreview,
+  AppDataCleanupResult,
 } from "../lib/types";
 import { healthyReport } from "./fixtures";
 import {
@@ -203,6 +208,11 @@ export interface FakeCommandContract {
     result: string;
   };
   reveal_app_data: { args: { kind: AppDataKind }; result: void };
+  get_app_data: { args: Record<string, never>; result: AppDataReport };
+  save_data_preferences: { args: { preferences: DataPreferences }; result: DataPreferences };
+  preview_app_data_cleanup: { args: { selection: AppDataSelection }; result: AppDataPreview };
+  clean_app_data: { args: { previewId: string }; result: AppDataCleanupResult };
+  reveal_backup: { args: { id: string }; result: void };
 }
 
 export type FakeHandler<K extends ApiCommand> = (
@@ -224,6 +234,7 @@ export interface FakeBackendData {
   appUpdate: AppUpdateSnapshot;
   discovery: DiscoveryState;
   githubSettings: GitHubSettingsStatus;
+  appData: AppDataReport;
   environment: Factory<EnvReport>;
   /** Initial in-memory registry; list/add/relocate/forget mutate their own copy. */
   projects: Factory<ProjectList>;
@@ -352,6 +363,12 @@ export function createFakeBackend(
   options: FakeBackendOptions = {},
 ): FakeBackend {
   const defaultData: FakeBackendData = {
+    appData: {
+      directory: "~/Library/Application Support/com.sunven.skills-box",
+      preferences: { retainBackups: true, operationLogging: true },
+      totalBytes: 0, cleanableBytes: 0, backups: [], warnings: [], scannedAtEpochMs: Date.now(),
+      categories: (["backups", "logs", "cache", "preserved", "other"] as const).map((category) => ({ category, bytes: 0, cleanableBytes: 0, count: 0 })),
+    },
     appUpdate: initialAppUpdate(),
     discovery: {
       sources: [],
@@ -392,6 +409,7 @@ export function createFakeBackend(
   };
   const initialData: FakeBackendData = { ...defaultData, ...options.data };
   let data: FakeBackendData = { ...initialData };
+  const dataPreviews = new Map<string, AppDataPreview>();
   let projectList: ProjectList = factoryValue(initialData.projects);
   const initialProjects = projectList;
 
@@ -1835,6 +1853,37 @@ export function createFakeBackend(
       scheduleAutoTask(task, "uninstall", [skillId], scope);
       return task.taskId;
     },
+    get_app_data: () => structuredClone(data.appData),
+    save_data_preferences: ({ preferences }) => {
+      data = { ...data, appData: { ...data.appData, preferences: { ...preferences } } };
+      return { ...preferences };
+    },
+    preview_app_data_cleanup: ({ selection }) => {
+      if (selection.backupIds.some((id) => !data.appData.backups.some((b) => b.id === id && !b.protectedReason))) throw { code: "app_data.failed", message: "备份不存在或受保护。", retryable: true };
+      const items: AppDataPreview["items"] = data.appData.backups.filter((b) => !b.protectedReason && (selection.itemIds ? selection.itemIds.includes(b.id) : (selection.allBackups || selection.backupIds.includes(b.id)))).map((b) => ({ id: b.id, label: `backups/${b.name}`, category: "backups", bytes: b.bytes }));
+      for (const category of ["logs", "cache"] as const) {
+        const usage = data.appData.categories.find((c) => c.category === category);
+        if ((selection.itemIds ? selection.itemIds.includes(category) : selection[category]) && usage?.cleanableBytes) items.push({ id: category, label: category === "logs" ? "logs/operations.jsonl" : "cache/archives", category, bytes: usage.cleanableBytes });
+      }
+      if (!items.length) throw { code: "app_data.failed", message: "所选类别没有可清理的文件。", retryable: true };
+      const preview = { id: `data-preview-${dataPreviews.size + 1}`, items, totalBytes: items.reduce((n,i) => n + i.bytes,0) };
+      dataPreviews.set(preview.id, preview);
+      return preview;
+    },
+    clean_app_data: ({ previewId }) => {
+      if (factoryValue(data.activeMutation)) throw { code: "task.busy", message: "有任务正在执行。", retryable: true };
+      const preview = dataPreviews.get(previewId);
+      if (!preview) throw { code: "app_data.failed", message: "清理预览已失效。", retryable: true };
+      dataPreviews.delete(previewId);
+      const ids = new Set(preview.items.map((i) => i.id));
+      const categories = data.appData.categories.map((c) => {
+        const amount = preview.items.filter((i) => i.category === c.category).reduce((n,i) => n + i.bytes,0);
+        return { ...c, bytes: c.bytes - amount, cleanableBytes: c.cleanableBytes - amount, count: Math.max(0,c.count - preview.items.filter((i) => i.category === c.category).length) };
+      });
+      data = { ...data, appData: { ...data.appData, categories, totalBytes: data.appData.totalBytes - preview.totalBytes, cleanableBytes: data.appData.cleanableBytes - preview.totalBytes, backups: data.appData.backups.filter((b) => !ids.has(b.id)) } };
+      return { freedBytes: preview.totalBytes, items: preview.items.map((i) => ({ id: i.id, label: i.label, freedBytes: i.bytes, error: null })) };
+    },
+    reveal_backup: ({ id }) => { if (!data.appData.backups.some((b) => b.id === id)) throw { code: "app_data.failed", message: "备份不存在。", retryable: true }; },
     reveal_app_data: () => undefined,
   };
 

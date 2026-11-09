@@ -29,12 +29,47 @@ pub struct GitHubSettingsStatus {
     pub effective_source: TokenSource,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SettingsFile {
     version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     github_token: Option<String>,
+    #[serde(default)]
+    data_management: DataPreferences,
+    #[serde(flatten)]
+    extra: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DataPreferences {
+    pub retain_backups: bool,
+    pub operation_logging: bool,
+}
+impl Default for DataPreferences {
+    fn default() -> Self {
+        Self {
+            retain_backups: true,
+            operation_logging: true,
+        }
+    }
+}
+impl Default for SettingsFile {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            github_token: None,
+            data_management: DataPreferences::default(),
+            extra: Default::default(),
+        }
+    }
+}
+
+pub(crate) fn data_preferences(paths: &AppPaths) -> DataPreferences {
+    load(&paths.settings_path())
+        .map(|config| config.data_management)
+        .unwrap_or_default()
 }
 
 pub(crate) struct Credentials {
@@ -45,7 +80,7 @@ pub(crate) struct Credentials {
 
 pub struct SettingsService {
     paths: AppPaths,
-    saved: Mutex<Result<Option<String>, AppError>>,
+    saved: Mutex<Result<SettingsFile, AppError>>,
     environment: Option<String>,
     revision: AtomicU64,
 }
@@ -76,7 +111,13 @@ impl SettingsService {
 
     pub fn status(&self) -> Result<GitHubSettingsStatus, AppError> {
         let saved = self.saved.lock().unwrap_or_else(|p| p.into_inner());
-        self.status_for(saved.as_ref().map_err(Clone::clone)?.as_deref())
+        self.status_for(
+            saved
+                .as_ref()
+                .map_err(Clone::clone)?
+                .github_token
+                .as_deref(),
+        )
     }
 
     fn status_for(&self, saved: Option<&str>) -> Result<GitHubSettingsStatus, AppError> {
@@ -95,7 +136,7 @@ impl SettingsService {
 
     pub(crate) fn credentials(&self) -> Result<Credentials, AppError> {
         let saved = self.saved.lock().unwrap_or_else(|p| p.into_inner());
-        let token = saved.as_ref().map_err(Clone::clone)?;
+        let token = &saved.as_ref().map_err(Clone::clone)?.github_token;
         let source = self.status_for(token.as_deref())?.effective_source;
         let token = token.as_ref().or(self.environment.as_ref());
         Ok(Credentials {
@@ -103,6 +144,23 @@ impl SettingsService {
             revision: self.revision.load(Ordering::SeqCst),
             token: token.map(|value| normalize_token(value)).transpose()?,
         })
+    }
+
+    pub fn data_preferences(&self) -> Result<DataPreferences, AppError> {
+        let saved = self.saved.lock().unwrap_or_else(|p| p.into_inner());
+        Ok(saved.as_ref().map_err(Clone::clone)?.data_management)
+    }
+
+    pub fn save_data_preferences(
+        &self,
+        preferences: DataPreferences,
+    ) -> Result<DataPreferences, AppError> {
+        let mut saved = self.saved.lock().unwrap_or_else(|p| p.into_inner());
+        let mut config = saved.as_ref().map_err(Clone::clone)?.clone();
+        config.data_management = preferences;
+        persist(&self.paths.settings_path(), &config)?;
+        *saved = Ok(config);
+        Ok(preferences)
     }
 
     pub fn save(&self, token: &str) -> Result<GitHubSettingsStatus, AppError> {
@@ -115,10 +173,18 @@ impl SettingsService {
 
     fn replace(&self, token: Option<String>) -> Result<GitHubSettingsStatus, AppError> {
         let mut saved = self.saved.lock().unwrap_or_else(|p| p.into_inner());
-        persist(&self.paths.settings_path(), token.as_deref())?;
-        *saved = Ok(token);
+        let mut config = saved.as_ref().cloned().unwrap_or_default();
+        config.github_token = token;
+        persist(&self.paths.settings_path(), &config)?;
+        *saved = Ok(config);
         self.revision.fetch_add(1, Ordering::SeqCst);
-        self.status_for(saved.as_ref().map_err(Clone::clone)?.as_deref())
+        self.status_for(
+            saved
+                .as_ref()
+                .map_err(Clone::clone)?
+                .github_token
+                .as_deref(),
+        )
     }
 }
 
@@ -131,14 +197,16 @@ fn normalize_token(raw: &str) -> Result<String, AppError> {
     Ok(token.to_string())
 }
 
-fn load(path: &Path) -> Result<Option<String>, AppError> {
+fn load(path: &Path) -> Result<SettingsFile, AppError> {
     let mut file = match OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)
     {
         Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(SettingsFile::default());
+        }
         Err(_) => return Err(AppError::settings_read_failed()),
     };
     let metadata = file
@@ -157,18 +225,19 @@ fn load(path: &Path) -> Result<Option<String>, AppError> {
     if raw.len() > 65_536 {
         return Err(AppError::settings_read_failed());
     }
-    let config: SettingsFile =
+    let mut config: SettingsFile =
         serde_json::from_str(&raw).map_err(|_| AppError::settings_read_failed())?;
     if config.version != 1 {
         return Err(AppError::settings_read_failed());
     }
-    config
+    config.github_token = config
         .github_token
         .map(|token| normalize_token(&token).map_err(|_| AppError::settings_read_failed()))
-        .transpose()
+        .transpose()?;
+    Ok(config)
 }
 
-fn persist(path: &Path, token: Option<&str>) -> Result<(), AppError> {
+fn persist(path: &Path, config: &SettingsFile) -> Result<(), AppError> {
     let write = || -> std::io::Result<()> {
         if let Ok(metadata) = fs::symlink_metadata(path)
             && !metadata.is_file()
@@ -182,10 +251,7 @@ fn persist(path: &Path, token: Option<&str>) -> Result<(), AppError> {
         let mut temp = tempfile::NamedTempFile::new_in(parent)?;
         temp.as_file()
             .set_permissions(fs::Permissions::from_mode(0o600))?;
-        let raw = serde_json::to_vec(&SettingsFile {
-            version: 1,
-            github_token: token.map(str::to_string),
-        })?;
+        let raw = serde_json::to_vec(config)?;
         temp.write_all(&raw)?;
         temp.write_all(b"\n")?;
         temp.as_file().sync_all()?;

@@ -329,6 +329,7 @@ pub(super) enum FinishOutcome {
 /// `try_acquire_mutation` backs the serialized write slot; preview never takes
 /// this permit. Lock order is always permit, then the Project registry mutex.
 pub struct MutationPermit {
+    _policy: crate::app_data::coordination::Operation,
     _permit: tokio::sync::OwnedSemaphorePermit,
 }
 
@@ -451,7 +452,14 @@ impl TaskManager {
         self.ensure_not_shutting_down()?;
         Arc::clone(&self.inner.mutation_slots)
             .try_acquire_owned()
-            .map(|permit| MutationPermit { _permit: permit })
+            .map(|permit| MutationPermit {
+                _policy: self
+                    .inner
+                    .paths
+                    .data_coordination
+                    .operation(crate::settings::data_preferences(&self.inner.paths)),
+                _permit: permit,
+            })
             .map_err(|_| AppError::task_busy())
     }
 
@@ -1232,7 +1240,7 @@ impl TaskManager {
     }
 
     fn finish(&self, task_id: &str, sink: &EventSink, outcome: FinishOutcome) {
-        let (cancel_requested, clear_marker, action, scope, started_at) = {
+        let (cancel_requested, clear_marker, action, scope, started_at, snapshots) = {
             let mut tasks = self.lock_tasks();
             let Some(entry) = tasks.get_mut(task_id) else {
                 return;
@@ -1249,6 +1257,11 @@ impl TaskManager {
                 entry.action,
                 entry.scope.clone(),
                 entry.started_at_epoch_ms,
+                entry
+                    .mutation
+                    .as_ref()
+                    .map(|m| m.snapshot_paths.clone())
+                    .unwrap_or_default(),
             )
         };
         if clear_marker {
@@ -1271,7 +1284,14 @@ impl TaskManager {
             outcome
         };
         let event = match outcome {
-            FinishOutcome::Completed(result, message) => {
+            FinishOutcome::Completed(mut result, message) => {
+                if clear_marker {
+                    crate::app_data::finish_successful_backups(
+                        &self.inner.paths,
+                        &mut result,
+                        &snapshots,
+                    );
+                }
                 debug_assert_eq!(result.action, action);
                 debug_assert_eq!(result.scope, scope);
                 debug_assert_eq!(result.started_at, started_at);

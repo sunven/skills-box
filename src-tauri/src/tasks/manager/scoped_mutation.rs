@@ -70,9 +70,13 @@ impl<P> PlannedMutation<P> {
         let manager = self.manager;
         let spawned_id = registered.task_id.clone();
         tokio::spawn(async move {
-            let _permit = self.scope.permit;
+            let permit = self.scope.permit;
             let outcome = session::run(ctx, action, self.plan).await;
-            manager.finish(&spawned_id, &on_event, outcome);
+            let _ = tokio::task::spawn_blocking(move || {
+                let _permit = permit;
+                manager.finish(&spawned_id, &on_event, outcome);
+            })
+            .await;
         });
         Ok(registered.task_id)
     }
@@ -196,10 +200,14 @@ impl PlannedMutation<crate::tasks::batch::BatchPlan> {
         let ctx = self.manager.session_context(&registered, sink.clone());
         let id = registered.task_id.clone();
         tokio::spawn(async move {
-            let _permit = self.scope.permit;
+            let permit = self.scope.permit;
             let outcome =
                 super::batch::run(self.manager.clone(), self.scope.layout, ctx, self.plan).await;
-            self.manager.finish(&id, &sink, outcome);
+            let _ = tokio::task::spawn_blocking(move || {
+                let _permit = permit;
+                self.manager.finish(&id, &sink, outcome);
+            })
+            .await;
         });
         Ok(registered.task_id)
     }
