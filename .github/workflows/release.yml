@@ -52,9 +52,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'skills-box v__VERSION__'
+          releaseName: 'Skills Box v__VERSION__'
           releaseBody: |
-            ## skills-box v__VERSION__
+            ## Skills Box v__VERSION__
 
             本次更新说明见 [CHANGELOG](https://github.com/sunven/skills-box/blob/main/CHANGELOG.md)。
           releaseDraft: false
