@@ -40,7 +40,9 @@ export function AppUpdateSettings({ update }: { update: AppUpdateModel }) {
       </div> : null}
       {update.critical ? <p className="notice mt-4" role="status">安装与重启期间无法关闭应用或开始新写入，请稍候。</p> : null}
       {update.error ? <div className="notice mt-4" data-tone="negative" role="alert">
-        <p>{update.error.message}</p>{update.error.hint ? <p className="mt-1">{update.error.hint}</p> : null}
+        <div>
+          <p>{update.error.message}</p>{update.error.hint ? <p className="mt-1">{update.error.hint}</p> : null}
+        </div>
       </div> : null}
       {state?.candidate ? <div className="app-update-notes mt-6">
         <h3 className="font-medium">版本 {state.candidate.version}</h3>

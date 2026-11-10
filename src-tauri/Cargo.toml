@@ -1,6 +1,6 @@
 [package]
 name = "skills-box"
-version = "0.1.4"
+version = "0.1.5"
 description = "Manage global Agent Skills across coding agents"
 authors = ["sunven"]
 edition = "2024"
