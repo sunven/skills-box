@@ -289,6 +289,8 @@ export interface InventorySkill {
   name: string;
   description: string | null;
   source: string | null;
+  sourceType?: string | null;
+  sourceVersion?: string | null;
   management: ManagementState;
   updatedAt: string | null;
   canonicalPath: string | null;

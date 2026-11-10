@@ -155,11 +155,9 @@ fn entry_error(name: &str, detail: impl AsRef<str>) -> AppError {
 /// use the v1 `skills-lock.json`. Both normalize to the shared [`LockEntry`]
 /// shape, so callers never branch on the scope to read entries.
 #[derive(Debug)]
-pub(crate) enum ScopedLock {
-    Global(LockFile),
-    Project(ProjectLockFile),
+pub(crate) struct ScopedLock {
+    entries: BTreeMap<String, LockEntry>,
 }
-
 impl ScopedLock {
     pub(crate) fn read(scope: &ScopeId, lock_path: &Path) -> Result<Self, AppError> {
         match scope {
@@ -167,34 +165,30 @@ impl ScopedLock {
             ScopeId::Project(_) => Self::project(lock_path),
         }
     }
-
-    pub(crate) fn global(lock_path: &Path) -> Result<Self, AppError> {
-        Ok(Self::Global(LockFile::read(lock_path)?))
+    pub(crate) fn global(path: &Path) -> Result<Self, AppError> {
+        Self::merge(path, LockFile::read(path)?.entries().clone())
     }
-
-    pub(crate) fn project(lock_path: &Path) -> Result<Self, AppError> {
-        Ok(Self::Project(ProjectLockFile::read(lock_path)?))
+    pub(crate) fn project(path: &Path) -> Result<Self, AppError> {
+        Self::merge(path, ProjectLockFile::read(path)?.entries().clone())
     }
-
+    fn merge(path: &Path, mut entries: BTreeMap<String, LockEntry>) -> Result<Self, AppError> {
+        for (name, record) in crate::marketplace::records::Records::read(path)?.skills {
+            if entries.insert(name.clone(), record.entry()).is_some() {
+                return Err(AppError::lock_corrupt(format!(
+                    "Git 与市场记录同名：{name}"
+                )));
+            }
+        }
+        Ok(Self { entries })
+    }
     pub(crate) fn entries(&self) -> &BTreeMap<String, LockEntry> {
-        match self {
-            Self::Global(lock) => lock.entries(),
-            Self::Project(lock) => lock.entries(),
-        }
+        &self.entries
     }
-
     pub(crate) fn contains(&self, name: &str) -> bool {
-        match self {
-            Self::Global(lock) => lock.contains(name),
-            Self::Project(lock) => lock.contains(name),
-        }
+        self.entries.contains_key(name)
     }
-
     pub(crate) fn get(&self, name: &str) -> Option<&LockEntry> {
-        match self {
-            Self::Global(lock) => lock.get(name),
-            Self::Project(lock) => lock.get(name),
-        }
+        self.entries.get(name)
     }
 }
 

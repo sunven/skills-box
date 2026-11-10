@@ -1,0 +1,546 @@
+import { useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { ArrowLeft, ArrowRight, ExternalLink, Search, X } from "lucide-react";
+import {
+  asAppError,
+  fallbackError,
+  getMarketplaceSkill,
+  listMarketplaceSkills,
+  openExternalUrl,
+  prepareMarketplaceInstall,
+  startMarketplaceInstall,
+} from "../lib/api";
+import {
+  marketplaceAddress,
+  marketplaceKey,
+  type MarketplaceCoordinate,
+  type MarketplaceListing,
+  type MarketplacePreview,
+} from "../lib/marketplace";
+import type { AppError, InventorySnapshot, ScopeId } from "../lib/types";
+import { useMutation, taskEventDriver } from "../lib/mutation";
+import { useModalFocus } from "../hooks/use-modal-focus";
+import { Button } from "./ui/button";
+import { Input } from "./ui/input";
+import { SkillMarkdown } from "./skill-markdown";
+import { MutationError } from "./mutation/mutation-error";
+import { MutationProgress } from "./mutation/mutation-progress";
+import { MutationResult } from "./mutation/mutation-result";
+import {
+  ActualCliCommands,
+  CliCommandPreviewList,
+} from "./cli-command-display";
+import { MarketplaceCliHelp } from "./marketplace-cli-help";
+
+interface Props {
+  scope: ScopeId;
+  snapshot?: InventorySnapshot;
+  disabled: boolean;
+  onView: (name: string) => void;
+}
+export function MarketplacePage({ scope, snapshot, disabled, onView }: Props) {
+  const [input, setInput] = useState("");
+  const [search, setSearch] = useState({ keyword: "", page: 1 });
+  const [selected, setSelected] = useState<MarketplaceCoordinate | null>(null);
+  const previous = useRef<{
+    search: typeof search;
+    listing: MarketplaceListing;
+  } | null>(null);
+  const catalog = useQuery({
+    queryKey: ["marketplace", "list", search.keyword, search.page],
+    queryFn: () => listMarketplaceSkills(search.keyword, search.page),
+    retry: false,
+    staleTime: 60_000,
+  });
+  useEffect(() => {
+    if (catalog.data) previous.current = { search, listing: catalog.data };
+  }, [catalog.data, search]);
+  const fallback = catalog.isError && !catalog.data ? previous.current : null;
+  const listing = catalog.data ?? fallback?.listing;
+  const shownSearch = fallback?.search ?? search;
+  return (
+    <main className="discovery-page" aria-labelledby="marketplace-title">
+      <div className="discovery-content">
+        <div className="discovery-heading">
+          <div>
+            <h1 id="marketplace-title">技能市场</h1>
+            <p className="text-muted-foreground">
+              从 SkillHub
+              浏览和安装公开技能。安装后的技能可在当前作用域统一管理。
+            </p>
+          </div>
+          <span className="badge">来源 · SkillHub</span>
+        </div>
+        <form
+          className="discovery-controls"
+          onSubmit={(e) => {
+            e.preventDefault();
+            setSearch({ keyword: input.trim(), page: 1 });
+          }}
+        >
+          <label className="discovery-search">
+            <Search className="size-4" aria-hidden="true" />
+            <Input
+              aria-label="搜索 SkillHub"
+              placeholder="搜索技能名称或用途"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+            />
+          </label>
+          <Button type="submit" variant="outline">
+            搜索
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={catalog.isFetching}
+            onClick={() => void catalog.refetch()}
+          >
+            刷新目录
+          </Button>
+        </form>
+        {catalog.isError ? (
+          <div className="notice" role="alert">
+            <p>
+              SkillHub 请求失败。
+              {listing
+                ? `保留上次成功结果：${shownSearch.keyword || "默认目录"}，第 ${shownSearch.page} 页。`
+                : "尚无可显示的结果。"}
+            </p>
+            <p>{asAppError(catalog.error)?.detail}</p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void catalog.refetch()}
+            >
+              重试
+            </Button>
+          </div>
+        ) : null}
+        {catalog.isFetching ? <p role="status">正在加载 SkillHub…</p> : null}
+        {listing ? (
+          <>
+            <p className="text-xs text-muted-foreground">
+              {shownSearch.keyword
+                ? `搜索「${shownSearch.keyword}」`
+                : "默认目录"}{" "}
+              · 共 {listing.total.toLocaleString()} 项 · 第 {listing.page} 页
+            </p>
+            <div className="marketplace-grid">
+              {listing.skills.map((skill) => {
+                const installed = snapshot?.skills.find(
+                  (s) =>
+                    s.sourceType === "skillhub" &&
+                    s.source === marketplaceAddress(skill.coordinate),
+                );
+                return (
+                  <article
+                    key={marketplaceKey(skill.coordinate)}
+                    className="marketplace-card"
+                  >
+                    <button
+                      className="marketplace-card-title"
+                      onClick={() => setSelected(skill.coordinate)}
+                    >
+                      {skill.name}
+                    </button>
+                    <p className="font-mono text-xs text-muted-foreground break-all">
+                      {marketplaceAddress(skill.coordinate)}
+                    </p>
+                    <p className="marketplace-description">
+                      {skill.description || "平台未提供描述。"}
+                    </p>
+                    <div className="flex items-center justify-between gap-2 mt-auto">
+                      <span className="text-xs text-muted-foreground">
+                        {skill.publisher || skill.coordinate.namespace}
+                        {skill.version ? ` · ${skill.version}` : ""}
+                      </span>
+                      {installed ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => onView(installed.name)}
+                        >
+                          已安装 · 查看
+                        </Button>
+                      ) : (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setSelected(skill.coordinate)}
+                        >
+                          查看详情
+                        </Button>
+                      )}
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+            {listing.skills.length === 0 ? (
+              <p className="discovery-empty">
+                没有找到相关技能，请换个关键词。
+              </p>
+            ) : null}
+            <div className="flex justify-between items-center mt-4">
+              <Button
+                variant="outline"
+                disabled={catalog.isFetching || search.page <= 1}
+                onClick={() => setSearch((s) => ({ ...s, page: s.page - 1 }))}
+              >
+                <ArrowLeft />
+                上一页
+              </Button>
+              <span className="text-sm">第 {search.page} 页</span>
+              <Button
+                variant="outline"
+                disabled={
+                  catalog.isFetching ||
+                  catalog.isError ||
+                  search.page * listing.pageSize >= listing.total
+                }
+                onClick={() => setSearch((s) => ({ ...s, page: s.page + 1 }))}
+              >
+                下一页
+                <ArrowRight />
+              </Button>
+            </div>
+          </>
+        ) : null}
+      </div>
+      {selected ? (
+        <MarketplaceDetailDialog
+          key={`${scope}:${marketplaceKey(selected)}`}
+          coordinate={selected}
+          scope={scope}
+          snapshot={snapshot}
+          disabled={disabled}
+          onClose={() => setSelected(null)}
+          onView={onView}
+        />
+      ) : null}
+    </main>
+  );
+}
+
+function MarketplaceDetailDialog({
+  coordinate,
+  scope,
+  snapshot,
+  disabled,
+  onClose,
+  onView,
+}: Props & { coordinate: MarketplaceCoordinate; onClose: () => void }) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const [agents, setAgents] = useState<string[]>([]);
+  const [preview, setPreview] = useState<MarketplacePreview | null>(null);
+  const [preparing, setPreparing] = useState(false);
+  const [prepareError, setPrepareError] = useState<AppError | null>(null);
+  const detail = useQuery({
+    queryKey: ["marketplace", "detail", marketplaceKey(coordinate)],
+    queryFn: () => getMarketplaceSkill(coordinate),
+    retry: false,
+  });
+  const mutation = useMutation({
+    action: "install",
+    scope,
+    fallbackFailure: "SkillHub 安装失败。",
+    fallbackStart: "无法开始 SkillHub 安装。",
+  });
+  const {
+    running,
+    result,
+    startError,
+    error,
+    taskId,
+    message,
+    phase,
+    completed,
+    total,
+    cancelling,
+  } = mutation.state;
+  const close = () => {
+    if (!preparing && mutation.requestClose()) onClose();
+  };
+  useModalFocus({
+    open: true,
+    panelRef,
+    initialFocusRef: closeRef,
+    onClose: close,
+    canClose: () => !preparing && mutation.canClose(),
+  });
+  const data = preview?.detail ?? detail.data;
+  const installed = snapshot?.skills.find(
+    (s) =>
+      s.sourceType === "skillhub" &&
+      s.source === marketplaceAddress(coordinate),
+  );
+  const collision = data?.originalName
+    ? snapshot?.skills.find(
+        (s) => s.name === data.originalName && s !== installed,
+      )
+    : null;
+  async function prepare() {
+    setPreparing(true);
+    setPrepareError(null);
+    setPreview(null);
+    mutation.reset();
+    try {
+      setPreview(await prepareMarketplaceInstall(scope, coordinate, agents));
+    } catch (e) {
+      setPrepareError(
+        asAppError(e) ?? fallbackError("无法准备 SkillHub 安装。"),
+      );
+    } finally {
+      setPreparing(false);
+    }
+  }
+  const failure = prepareError ?? startError ?? error;
+  return (
+    <div
+      className="modal-overlay"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) close();
+      }}
+    >
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="marketplace-detail-title"
+        className="modal-panel max-w-3xl"
+      >
+        <div className="modal-head">
+          <div>
+            <h2 id="marketplace-detail-title" className="modal-title">
+              {data?.name ?? coordinate.slug}
+            </h2>
+            <p className="modal-sub">
+              SkillHub · {marketplaceAddress(coordinate)}
+            </p>
+          </div>
+          <Button
+            ref={closeRef}
+            variant="ghost"
+            size="icon"
+            aria-label="关闭市场详情"
+            disabled={preparing || !mutation.canClose()}
+            onClick={close}
+          >
+            <X />
+          </Button>
+        </div>
+        <div className="modal-body space-y-4">
+          {detail.isPending ? (
+            <p role="status">正在读取技能说明与版本…</p>
+          ) : null}
+          {detail.isError ? (
+            <>
+              <MutationError
+                error={
+                  asAppError(detail.error) ??
+                  fallbackError("无法读取技能详情。")
+                }
+              />
+              <Button
+                variant="outline"
+                disabled={running}
+                onClick={() => void detail.refetch()}
+              >
+                重试详情
+              </Button>
+            </>
+          ) : null}
+          {data ? (
+            <>
+              <div className="panel-well space-y-2">
+                <p>{data.description}</p>
+                <p>
+                  发布者：{data.publisher || coordinate.namespace} · 平台版本：
+                  {data.version}
+                </p>
+                <p>原始技能名：{data.originalName ?? "未声明有效名称"}</p>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void openExternalUrl(data.officialUrl)}
+                >
+                  <ExternalLink />
+                  官方页面
+                </Button>
+              </div>
+              {data.requirements.map((text) => (
+                <p className="notice" key={text}>
+                  {text}
+                </p>
+              ))}
+              <details open={!preview && !running && !result}>
+                <summary className="cursor-pointer font-medium">
+                  技能说明与运行要求
+                </summary>
+                <div className="marketplace-markdown">
+                  <SkillMarkdown content={data.markdown} />
+                </div>
+              </details>
+              <MutationError error={data.installError} />
+              {installed ? (
+                <Button
+                  onClick={() => {
+                    close();
+                    onView(installed.name);
+                  }}
+                >
+                  已安装 · 查看
+                </Button>
+              ) : collision ? (
+                <p className="notice" role="alert">
+                  当前作用域已有同名技能 {collision.name}（
+                  {collision.source ?? "本地技能"}）。请先卸载原技能。
+                </p>
+              ) : !running && !result && !data.installError ? (
+                <>
+                  <fieldset disabled={preparing || !!preview || disabled}>
+                    <legend className="font-medium mb-2">
+                      安装到 {scope === "global" ? "全局" : "当前项目"} · 选择
+                      Agent
+                    </legend>
+                    <div className="flex flex-wrap gap-4">
+                      {snapshot?.installTargets.map((agent) => (
+                        <label
+                          key={agent.id}
+                          className="flex gap-2 items-center"
+                        >
+                          <input
+                            type="checkbox"
+                            disabled={!agent.detected && scope === "global"}
+                            checked={agents.includes(agent.id)}
+                            onChange={(e) =>
+                              setAgents((old) =>
+                                e.target.checked
+                                  ? [...old, agent.id]
+                                  : old.filter((id) => id !== agent.id),
+                              )
+                            }
+                          />
+                          {agent.displayName}
+                          {agent.shared ? "（共享目录）" : ""}
+                        </label>
+                      ))}
+                    </div>
+                  </fieldset>
+                  {!preview ? (
+                    <Button
+                      disabled={preparing || disabled || agents.length === 0}
+                      onClick={() => void prepare()}
+                    >
+                      {preparing ? "正在核实版本与目标…" : "预览安装"}
+                    </Button>
+                  ) : (
+                    <div className="panel-well space-y-3">
+                      <p>
+                        确认安装 {data.originalName} · {data.version} 到{" "}
+                        {scope === "global" ? "全局" : "当前项目"}
+                      </p>
+                      <p className="text-sm">
+                        挂载：
+                        {agents
+                          .map(
+                            (id) =>
+                              snapshot?.installTargets.find((a) => a.id === id)
+                                ?.displayName ?? id,
+                          )
+                          .join("、")}
+                      </p>
+                      <CliCommandPreviewList
+                        entries={preview.commands.entries}
+                      />
+                      <div className="flex gap-2">
+                        <Button
+                          disabled={disabled || !!startError}
+                          onClick={() =>
+                            void mutation.start(
+                              taskEventDriver({
+                                total: 1,
+                                message: "正在准备 SkillHub 安装…",
+                                launch: (onEvent) =>
+                                  startMarketplaceInstall(
+                                    scope,
+                                    preview.commands.id,
+                                    onEvent,
+                                  ),
+                              }),
+                            )
+                          }
+                        >
+                          确认安装
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            setPreview(null);
+                            setPrepareError(null);
+                            mutation.reset();
+                          }}
+                        >
+                          重新预览
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : null}
+            </>
+          ) : null}
+          <MutationError error={failure} />
+          {failure?.code === "marketplace.cli_unavailable" ? (
+            <MarketplaceCliHelp
+              onReady={() => {
+                setPrepareError(null);
+                setPreview(null);
+                mutation.reset();
+              }}
+            />
+          ) : null}
+          {running ? (
+            <MutationProgress
+              phase={phase}
+              message={message}
+              completed={completed}
+              total={total}
+              cancelling={cancelling}
+              canCancel
+              onCancel={() =>
+                void mutation.cancel("正在写入技能，请等待完成。")
+              }
+            />
+          ) : null}
+          <ActualCliCommands taskId={taskId} />
+          {result ? (
+            <>
+              <MutationResult
+                action="install"
+                result={result}
+                testIdPrefix="marketplace"
+              />
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setPreview(null);
+                  mutation.reset();
+                }}
+              >
+                返回详情
+              </Button>
+              {result.outcome === "success" && data?.originalName ? (
+                <Button onClick={() => onView(data.originalName!)}>
+                  查看已安装技能
+                </Button>
+              ) : null}
+            </>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}

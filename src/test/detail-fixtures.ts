@@ -41,6 +41,8 @@ export function detailForSkill(skill: InventorySkill): SkillDetail {
     name: skill.name,
     description: skill.description,
     source: skill.source,
+    sourceType: skill.sourceType ?? "github",
+    ref: skill.sourceVersion ?? null,
     management: skill.management,
     updatedAt: skill.updatedAt,
     canonicalPath: skill.canonicalPath,

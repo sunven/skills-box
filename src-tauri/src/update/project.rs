@@ -97,6 +97,8 @@ impl ProjectUpdateService {
         layout: &ScopeLayout,
         skill_ids: Option<Vec<String>>,
     ) -> Result<UpdateCheckReport, AppError> {
+        layout.lock()?;
+        let market_records = crate::marketplace::records::Records::read(&layout.lock_path)?;
         let lock = ProjectLockFile::read(&layout.lock_path)?;
         let now = self.clock.now_epoch_ms();
         let selected = skill_ids
@@ -109,7 +111,16 @@ impl ProjectUpdateService {
         let (skills, groups) = collect_targets(&lock, selected.as_ref());
         // Freshness is commit-keyed and the commit is only known after a
         // network lookup, so every group still needs a source-budget slot.
-        Ok(attempt::run(
+        let slots = Arc::new(tokio::sync::Semaphore::new(self.config.concurrency.max(1)));
+        let market_check = crate::marketplace::updates::check(
+            market_records,
+            selected.as_ref(),
+            self.config.max_sources.saturating_sub(groups.len()),
+            self.config.concurrency,
+            self.config.deadline_ms,
+            &slots,
+        );
+        let git_check = attempt::run(
             PreparedCheck {
                 checked_at_epoch_ms: now,
                 skills,
@@ -120,18 +131,23 @@ impl ProjectUpdateService {
                 concurrency: self.config.concurrency,
                 deadline_ms: self.config.deadline_ms,
             },
-            ProjectGroupExecutor {
-                service: self,
-                archives: SourceArchives::new(
-                    Arc::clone(&self.client),
-                    self.cache.clone(),
-                    Arc::clone(&self.clock),
-                    self.config.cache_ttl_ms,
-                    self.config.limits,
-                ),
+            attempt::SharedSlots {
+                slots: Arc::clone(&slots),
+                executor: ProjectGroupExecutor {
+                    service: self,
+                    archives: SourceArchives::new(
+                        Arc::clone(&self.client),
+                        self.cache.clone(),
+                        Arc::clone(&self.clock),
+                        self.config.cache_ttl_ms,
+                        self.config.limits,
+                    ),
+                },
             },
-        )
-        .await)
+        );
+        let (mut report, market_results) = tokio::join!(git_check, market_check);
+        crate::marketplace::updates::merge(&mut report, market_results);
+        Ok(report)
     }
 
     async fn group_outcome(&self, group: Group, archives: &SourceArchives) -> GroupOutcome {

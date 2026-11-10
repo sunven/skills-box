@@ -52,6 +52,7 @@ struct Fingerprint {
     /// lock/canonical stamps; `None` for global.
     root: Option<PathBuf>,
     lock: FileStamp,
+    marketplace: FileStamp,
     extras: FileStamp,
     canonical: DirStamp,
     agents: Vec<DirStamp>,
@@ -100,6 +101,7 @@ impl Fingerprint {
         Self {
             root: layout.project.as_ref().map(|_| layout.root.clone()),
             lock: FileStamp::capture(&layout.lock_path),
+            marketplace: FileStamp::capture(&crate::marketplace::records::path(&layout.lock_path)),
             extras: FileStamp::capture(&paths.agents_config_path()),
             canonical: DirStamp::capture(&layout.canonical_dir),
             agents: layout
@@ -569,6 +571,10 @@ impl SkillView {
             name: self.name.clone(),
             description: self.description.clone(),
             source: self.source.clone(),
+            source_type: self.source_type.clone(),
+            source_version: (self.source_type.as_deref() == Some("skillhub"))
+                .then(|| self.reference.clone())
+                .flatten(),
             management: self.management,
             updated_at: self.updated_at.clone(),
             canonical_path: self.canonical_path.as_ref().map(|path| paths.display(path)),

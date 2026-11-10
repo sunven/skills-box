@@ -1,3 +1,4 @@
+import { MarketplaceCliHelp } from "./marketplace-cli-help";
 import { useCliCommandRecords, useCliCommandPreview } from "../hooks/use-cli-commands";
 import type { CliCommandEntry, CliCommandRequest } from "../lib/cli-commands";
 import type { ScopeId } from "../lib/types";
@@ -61,6 +62,7 @@ export function ActualCliCommands({ taskId, origin, source }: { taskId?: string 
 
 export function CliPreviewStatus({ preview }: { preview: ReturnType<typeof useCliCommandPreview> }) {
   if (preview.isFetching) return <p role="status" className="mt-2 text-xs text-muted-foreground">正在准备执行命令…</p>;
+  if (asAppError(preview.error)?.code === "marketplace.cli_unavailable" || preview.data?.marketplaceCliRequired) return <MarketplaceCliHelp onReady={() => void preview.refetch()} />;
   if (preview.error) return <div className="mt-2 text-xs"><p role="alert">{asAppError(preview.error)?.message ?? "无法读取执行命令。"}</p><Button variant="ghost" size="sm" onClick={() => void preview.refetch()}>刷新命令</Button></div>;
   return null;
 }

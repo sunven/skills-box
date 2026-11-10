@@ -1,4 +1,5 @@
 import { appDataFixture } from "../test/app-data-fixtures";
+import { detailForSkill } from "../test/detail-fixtures";
 import { discoveryFixture, discoveryProject } from "../test/discovery-fixtures";
 import React from "react";
 import ReactDOM from "react-dom/client";
@@ -36,7 +37,10 @@ createFakeBackend({
       const name = ["caveman", "design-an-interface", "diagnose"][i] ?? `missing-skill-${i + 1}`;
       return { id: name, name, source: "mattpocock/skills", reference: null, cleanReason: null, restoreReason: null };
     }) } : undefined,
-    detail: (skillId) => skillDetail(skillId),
+    detail: (skillId, current) => {
+      const installed = current.skills.find((skill) => skill.id === skillId || skill.name === skillId);
+      return installed?.sourceType === "skillhub" ? detailForSkill(installed) : skillDetail(skillId);
+    },
     listDir: listSkillDir,
     readFile: readSkillFile,
     updateReport,

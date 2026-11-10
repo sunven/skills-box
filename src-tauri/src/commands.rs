@@ -872,3 +872,47 @@ pub fn invalidate_discovery_source(
     let _write = state.app_updates.configuration_write()?;
     state.discovery.invalidate(source)
 }
+
+#[tauri::command]
+pub async fn list_marketplace_skills(
+    keyword: String,
+    page: u32,
+) -> Result<crate::marketplace::provider::Listing, AppError> {
+    crate::marketplace::provider::list(&keyword, page).await
+}
+#[tauri::command]
+pub async fn get_marketplace_skill(
+    coordinate: crate::marketplace::Coordinate,
+) -> Result<crate::marketplace::provider::Detail, AppError> {
+    crate::marketplace::provider::detail(&coordinate).await
+}
+#[tauri::command]
+pub async fn get_marketplace_cli(
+    state: State<'_, AppState>,
+) -> Result<crate::marketplace::runtime::Status, AppError> {
+    Ok(state.tasks.marketplace_cli().await)
+}
+#[tauri::command]
+pub async fn prepare_marketplace_install(
+    state: State<'_, AppState>,
+    scope: ScopeId,
+    coordinate: crate::marketplace::Coordinate,
+    agents: Vec<String>,
+) -> Result<crate::tasks::marketplace::Preview, AppError> {
+    state
+        .tasks
+        .prepare_marketplace(scope, coordinate, agents)
+        .await
+}
+#[tauri::command]
+pub async fn start_marketplace_install(
+    state: State<'_, AppState>,
+    scope: ScopeId,
+    preview_id: String,
+    on_event: Channel<TaskEvent>,
+) -> Result<TaskId, AppError> {
+    state
+        .tasks
+        .start_marketplace(scope, preview_id, task_event_sink(on_event))
+        .await
+}

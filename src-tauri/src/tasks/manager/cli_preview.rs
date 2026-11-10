@@ -10,6 +10,9 @@ impl TaskManager {
         scope: ScopeId,
         request: CliCommandRequest,
     ) -> Result<CliCommandPreview, AppError> {
+        if let CliCommandRequest::Update { skills } = &request {
+            return self.preview_update_commands(scope, skills.clone()).await;
+        }
         let layout = self.scope_layout(&scope)?;
         if let CliCommandRequest::Preview { source } = &request {
             let source = crate::tasks::validate_source(source)?;

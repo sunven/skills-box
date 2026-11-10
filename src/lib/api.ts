@@ -1,3 +1,4 @@
+import type { MarketplaceCoordinate, MarketplaceListing, MarketplaceDetail, MarketplaceCli, MarketplacePreview } from "./marketplace";
 import type { BatchRequest, BatchPreview, BatchConfirmation, StaleRecord } from "./batch";
 import type { CliCommandRequest, CliCommandPreview, CliCommandRecord } from "./cli-commands";
 import type {
@@ -37,6 +38,11 @@ import { GLOBAL_SCOPE } from "./types";
 
 /** Every IPC command the frontend may invoke. */
 export const API_COMMANDS = {
+  listMarketplaceSkills: "list_marketplace_skills",
+  getMarketplaceSkill: "get_marketplace_skill",
+  getMarketplaceCli: "get_marketplace_cli",
+  prepareMarketplaceInstall: "prepare_marketplace_install",
+  startMarketplaceInstall: "start_marketplace_install",
   getAppUpdateState: "get_app_update_state",
   checkAppUpdate: "check_app_update",
   startAppUpdate: "start_app_update",
@@ -539,4 +545,13 @@ export function startBatch(
 
 export function listStaleRecords(scope: ScopeId): Promise<StaleRecord[]> {
   return invoke<StaleRecord[]>(API_COMMANDS.listStaleRecords, { scope });
+}
+
+export function listMarketplaceSkills(keyword: string, page: number): Promise<MarketplaceListing> { return invoke(API_COMMANDS.listMarketplaceSkills, { keyword, page }); }
+export function getMarketplaceSkill(coordinate: MarketplaceCoordinate): Promise<MarketplaceDetail> { return invoke(API_COMMANDS.getMarketplaceSkill, { coordinate }); }
+export function getMarketplaceCli(): Promise<MarketplaceCli> { return invoke(API_COMMANDS.getMarketplaceCli); }
+export function prepareMarketplaceInstall(scope: ScopeId, coordinate: MarketplaceCoordinate, agents: string[]): Promise<MarketplacePreview> { return invoke(API_COMMANDS.prepareMarketplaceInstall, { scope, coordinate, agents }); }
+export function startMarketplaceInstall(scope: ScopeId, previewId: string, onEvent: (event: TaskEvent) => void): Promise<string> {
+  const channel = new Channel<TaskEvent>(); channel.onmessage = onEvent;
+  return invoke(API_COMMANDS.startMarketplaceInstall, { scope, previewId, onEvent: channel });
 }

@@ -178,6 +178,7 @@ export function UpdateDialog({
         </div>
 
         <div className="modal-body">
+          {showInitial && mode === "all" && commandPreview.data?.marketplaceVersions ? <div className="panel-well space-y-2"><p className="font-medium">确认的 SkillHub 目标版本</p>{Object.entries(commandPreview.data.marketplaceVersions).map(([name, version]) => <p key={name}>{name} · {version}</p>)}</div> : null}
           {showInitial && mode === "single" ? (
             <div data-testid="update-single-confirm">
               {!singleSkill || !singleEligible ? (
@@ -204,7 +205,7 @@ export function UpdateDialog({
                         title={singleSkill.updateResult?.lockHash ?? undefined}
                       >
                         {singleSkill.updateResult?.lockHash
-                          ? shortHash(singleSkill.updateResult.lockHash, 10)
+                          ? singleSkill.sourceType === "skillhub" ? singleSkill.updateResult.lockHash : shortHash(singleSkill.updateResult.lockHash, 10)
                           : "—"}
                       </strong>
                     </div>
@@ -215,7 +216,7 @@ export function UpdateDialog({
                         title={singleSkill.updateResult?.remoteHash ?? undefined}
                       >
                         {singleSkill.updateResult?.remoteHash
-                          ? shortHash(singleSkill.updateResult.remoteHash, 10)
+                          ? singleSkill.sourceType === "skillhub" ? commandPreview.data?.marketplaceVersions?.[singleSkill.name] ?? singleSkill.updateResult.remoteHash : shortHash(singleSkill.updateResult.remoteHash, 10)
                           : "—"}
                       </strong>
                     </div>

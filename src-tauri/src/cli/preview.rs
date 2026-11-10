@@ -25,6 +25,9 @@ pub struct CliCommandEntry {
 pub struct CliCommandPreview {
     pub id: String,
     pub entries: Vec<CliCommandEntry>,
+    pub marketplace_cli_required: bool,
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub marketplace_versions: std::collections::BTreeMap<String, String>,
 }
 impl CliCommandPreview {
     pub fn new(scope: &ScopeId, action: &str, entries: Vec<CliCommandEntry>) -> Self {
@@ -33,6 +36,8 @@ impl CliCommandPreview {
         Self {
             id: format!("{:x}", Sha256::digest(bytes)),
             entries,
+            marketplace_versions: Default::default(),
+            marketplace_cli_required: false,
         }
     }
     pub fn validate(&self, expected: &str) -> Result<Vec<String>, AppError> {
@@ -78,12 +83,18 @@ pub fn update_preview(
         .map(|item| CliCommandEntry {
             name: item.name.clone(),
             command: Some(display_command(
-                &ScopedCli::new(runtime.expect("executable update runtime"), layout).install(
-                    &item.source,
-                    std::slice::from_ref(&item.name),
-                    &item.agent_ids,
-                    crate::timeouts::WRITE_TIMEOUT,
-                ),
+                &item
+                    .marketplace_plan
+                    .as_ref()
+                    .map(|p| p.command())
+                    .unwrap_or_else(|| {
+                        ScopedCli::new(runtime.expect("executable update runtime"), layout).install(
+                            &item.source,
+                            std::slice::from_ref(&item.name),
+                            &item.agent_ids,
+                            crate::timeouts::WRITE_TIMEOUT,
+                        )
+                    }),
             )),
             reason: None,
         })
@@ -93,7 +104,21 @@ pub fn update_preview(
             reason: Some(skip.error.message.clone()),
         }))
         .collect();
-    CliCommandPreview::new(&layout.scope, "update", entries)
+    let mut preview = CliCommandPreview::new(&layout.scope, "update", entries);
+    preview.marketplace_cli_required = plan
+        .skipped
+        .iter()
+        .any(|s| s.error.code == crate::error::ErrorCode::MarketplaceCliUnavailable);
+    preview.marketplace_versions = plan
+        .items
+        .iter()
+        .filter_map(|i| {
+            i.marketplace_plan
+                .as_ref()
+                .map(|p| (i.name.clone(), p.detail.summary.version.clone()))
+        })
+        .collect();
+    preview
 }
 pub fn uninstall_preview(
     layout: &ScopeLayout,
@@ -156,7 +181,7 @@ impl CommandPlan for InstallPlan {
 }
 impl CommandPlan for UpdatePlan {
     fn needs_cli(&self) -> bool {
-        !self.items.is_empty()
+        self.items.iter().any(|i| i.marketplace_record.is_none())
     }
     fn command_preview(
         &self,
@@ -168,7 +193,7 @@ impl CommandPlan for UpdatePlan {
 }
 impl CommandPlan for UninstallPlan {
     fn needs_cli(&self) -> bool {
-        self.management != crate::inventory::ManagementState::Unmanaged
+        !self.marketplace && self.management != crate::inventory::ManagementState::Unmanaged
     }
     fn command_preview(
         &self,

@@ -33,7 +33,11 @@ impl TaskManager {
         }
         use crate::tasks::parser::PreviewParseOutcome;
         let mut sources = HashMap::new();
-        let runtime = self.inner.runtime.cli_runtime().await;
+        let runtime = if plan.targets.iter().any(|t| t.target.eligible) {
+            self.inner.runtime.cli_runtime().await
+        } else {
+            return Ok(());
+        };
         for target in &mut plan.targets {
             if !target.target.eligible {
                 continue;
@@ -343,7 +347,10 @@ impl TaskManager {
         }
         let needs_cli = plan.targets.iter().any(|t| {
             t.target.eligible
-                && (plan.preview.action == BatchAction::Update || t.lock_entry.is_some())
+                && (plan.preview.action == BatchAction::Update
+                    || t.lock_entry
+                        .as_ref()
+                        .is_some_and(|e| e.source_type != "skillhub"))
         });
         let runtime = if needs_cli {
             Some(self.inner.runtime.cli_runtime().await?)
@@ -368,7 +375,12 @@ impl TaskManager {
                         .next()
                         .and_then(|e| e.command)
                 }
-                BatchAction::Uninstall if target.lock_entry.is_some() => {
+                BatchAction::Uninstall
+                    if target
+                        .lock_entry
+                        .as_ref()
+                        .is_some_and(|e| e.source_type != "skillhub") =>
+                {
                     Some(crate::cli::commands::display_command(
                         &crate::cli::ScopedCli::new(
                             runtime.as_ref().expect("uninstall runtime"),

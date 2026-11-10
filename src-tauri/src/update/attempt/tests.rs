@@ -459,3 +459,35 @@ fn report_sorts_sources_by_case_insensitive_name_then_ref_and_keeps_success_time
     assert_eq!(report.cached_source_count, 4);
     assert!(resource.is_closed());
 }
+
+#[tokio::test]
+async fn shared_slots_bound_two_source_adapters_under_one_attempt_limit() {
+    let slots = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+    let (git, mut git_requests, _) = executor();
+    let (market, mut market_requests, _) = executor();
+    let mut git_check = Box::pin(run(
+        prepared(vec![PreparedSource::Pending("git")]),
+        limits(),
+        SharedSlots {
+            executor: git,
+            slots: slots.clone(),
+        },
+    ));
+    let mut market_check = Box::pin(run(
+        prepared(vec![PreparedSource::Pending("market")]),
+        limits(),
+        SharedSlots {
+            executor: market,
+            slots,
+        },
+    ));
+    assert!(futures::poll!(&mut git_check).is_pending());
+    assert!(futures::poll!(&mut market_check).is_pending());
+    let git_started = git_requests.try_recv().unwrap();
+    assert!(market_requests.try_recv().is_err());
+    complete(git_started, UpdateSourceStatus::Ok);
+    git_check.await;
+    assert!(futures::poll!(&mut market_check).is_pending());
+    complete(market_requests.try_recv().unwrap(), UpdateSourceStatus::Ok);
+    market_check.await;
+}

@@ -206,6 +206,15 @@ impl BackupStore {
             }
         };
 
+        let market = crate::marketplace::records::path(&self.lock_path);
+        match fs::copy(
+            &market,
+            directory.join(crate::marketplace::records::FILE_NAME),
+        ) {
+            Ok(_) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(io_backup_error(&market, e)),
+        }
         let canonical_present = match canonical {
             Some(source) => {
                 ensure_directory(source)?;
@@ -330,7 +339,7 @@ fn ensure_directory(path: &Path) -> Result<(), AppError> {
 /// Recursive copy that preserves symlinks as symlinks and file permissions.
 /// The root itself may be a symlink to a directory (link installs); its
 /// contents are read through the link.
-fn copy_tree(source: &Path, destination: &Path) -> io::Result<()> {
+pub(crate) fn copy_tree(source: &Path, destination: &Path) -> io::Result<()> {
     fs::create_dir_all(destination)?;
     let mut entries = fs::read_dir(source)?.collect::<Result<Vec<_>, io::Error>>()?;
     entries.sort_by_key(|entry| entry.file_name());

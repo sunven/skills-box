@@ -413,6 +413,15 @@ pub fn inspect(
     }
     let eligibility: Result<(), AppError> = match action {
         BatchAction::Update => (|| {
+            if located
+                .lock_entry
+                .as_ref()
+                .is_some_and(|e| e.source_type == "skillhub")
+            {
+                return Err(AppError::batch_target_changed(
+                    "SkillHub 技能请使用单项更新或「更新全部」，以确认平台目标版本。",
+                ));
+            }
             let planned = update::plan_updates(paths, layout, &[name.to_string()])?;
             if let Some(skip) = planned.skipped.first() {
                 return Err(skip.error.clone());

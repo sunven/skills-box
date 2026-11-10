@@ -4,6 +4,25 @@
 use super::{AppError, ErrorCode};
 
 impl AppError {
+    pub fn marketplace_unavailable(detail: impl std::fmt::Display) -> Self {
+        Self::new(
+            ErrorCode::MarketplaceUnavailable,
+            "无法读取 SkillHub 技能或版本。",
+        )
+        .detail(detail.to_string())
+        .hint("请检查网络并刷新详情后重试。")
+        .retryable(true)
+    }
+    pub fn marketplace_cli_unavailable(detail: impl std::fmt::Display) -> Self {
+        Self::new(
+            ErrorCode::MarketplaceCliUnavailable,
+            "SkillHub CLI 未安装或不可用。",
+        )
+        .detail(detail.to_string())
+        .hint("请按 SkillHub 官方说明安装 CLI，然后重新检测。")
+        .retryable(true)
+    }
+
     pub fn app_update_check_failed(error: impl std::fmt::Display) -> Self {
         Self::new(ErrorCode::AppUpdateCheckFailed, "无法检查应用更新。")
             .detail(error.to_string())

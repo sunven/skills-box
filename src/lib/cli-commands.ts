@@ -6,7 +6,7 @@ export type CliCommandRequest =
   | { action: "update"; skills: string[] }
   | { action: "uninstall"; skill: string };
 export interface CliCommandEntry { name: string; command: string | null; reason: string | null }
-export interface CliCommandPreview { id: string; entries: CliCommandEntry[] }
+export interface CliCommandPreview { id: string; entries: CliCommandEntry[]; marketplaceVersions?: Record<string, string>; marketplaceCliRequired?: boolean }
 export interface CliCommandRecord {
   id: string; command: string; status: "running" | "succeeded" | "failed" | "cancelled";
   startedAt: number;

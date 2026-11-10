@@ -188,6 +188,13 @@ pub fn read_lock(layout: &ScopeLayout) -> Result<Vec<u8>, AppError> {
         .parent()
         .ok_or_else(|| AppError::path_invalid("Lock 没有父目录。"))?;
     readable_directory(parent, layout)?;
+    if !layout.lock_path.exists() && crate::marketplace::records::path(&layout.lock_path).exists() {
+        return Ok(format!(
+            "{{\"version\":{},\"skills\":{{}}}}",
+            if layout.is_global() { 3 } else { 1 }
+        )
+        .into_bytes());
+    }
     let meta = fs::symlink_metadata(&layout.lock_path)
         .map_err(|e| AppError::lock_read_failed(e.to_string()))?;
     if !meta.is_file() || meta.file_type().is_symlink() {
@@ -241,6 +248,9 @@ pub fn list(paths: &AppPaths, layout: &ScopeLayout) -> Result<Vec<StaleRecord>, 
                 .map(|e| e.detail.unwrap_or(e.message))
         });
         let restore_reason = clean_reason.clone().or_else(|| {
+            if entry.source_type == "skillhub" {
+                return Some("请先清理市场记录，再到技能市场重新安装。".into());
+            }
             crate::update_target::resolve(entry)
                 .err()
                 .map(|e| e.detail().to_string())
@@ -287,6 +297,11 @@ pub fn inspect(
         let dirs = absence(paths, layout, name)?;
         let baseline = baseline_bytes(paths, layout, name)?;
         if action == BatchAction::Restore {
+            if entry.source_type == "skillhub" {
+                return Err(AppError::batch_target_changed(
+                    "请先清理市场记录，再到技能市场重新安装。",
+                ));
+            }
             let source = crate::update_target::resolve(entry)
                 .map_err(|e| AppError::path_invalid(e.detail()))?;
             let mut plan = install::validate_request(
@@ -312,11 +327,7 @@ pub fn inspect(
             install_plan = Some(plan);
         }
         Ok::<_, AppError>(digest(
-            format!(
-                "{:?}|{:?}|{:?}|{:?}",
-                value["skills"][name], baseline, dirs, install_plan
-            )
-            .as_bytes(),
+            format!("{:?}|{:?}|{:?}|{:?}", entry, baseline, dirs, install_plan).as_bytes(),
         ))
     })();
     let fingerprint = match assessment {
@@ -469,6 +480,31 @@ pub fn clean(
         record,
     )?;
     check()?;
+    if target
+        .lock_entry
+        .as_ref()
+        .is_some_and(|e| e.source_type == "skillhub")
+    {
+        let current = crate::marketplace::records::Records::read(&layout.lock_path)?;
+        if current
+            .skills
+            .get(&target.target.name)
+            .map(|r| r.entry())
+            .as_ref()
+            != target.lock_entry.as_ref()
+        {
+            return Err(AppError::batch_target_changed("市场记录已变化。"));
+        }
+        crate::marketplace::records::Records::remove(&layout.lock_path, &target.target.name)?;
+        if layout.lock()?.contains(&target.target.name) {
+            return Err(AppError::verify_failed("市场记录清理后仍然存在。"));
+        }
+        let mut warnings = vec![];
+        if let Err(e) = BaselineStore::for_scope(paths, &layout.scope).clear(&target.target.name) {
+            warnings.push(AppError::baseline_clear_failed(e));
+        }
+        return Ok(warnings);
+    }
     let mut value: Value =
         serde_json::from_slice(&plan.stale.as_ref().expect("stale plan").expected)
             .map_err(|e| AppError::lock_read_failed(e.to_string()))?;
@@ -515,7 +551,15 @@ pub fn advance(
     observed: Option<Vec<u8>>,
 ) -> Result<Vec<u8>, AppError> {
     let before = &plan.stale.as_ref().unwrap().expected;
-    let expected = if plan.preview.action == BatchAction::CleanRecords && succeeded {
+    let market = plan
+        .targets
+        .iter()
+        .find(|t| t.target.name == name)
+        .and_then(|t| t.lock_entry.as_ref())
+        .is_some_and(|e| e.source_type == "skillhub");
+    let expected = if market {
+        before.clone()
+    } else if plan.preview.action == BatchAction::CleanRecords && succeeded {
         let mut value: Value = serde_json::from_slice(before)
             .map_err(|e| AppError::lock_read_failed(e.to_string()))?;
         value["skills"].as_object_mut().unwrap().remove(name);

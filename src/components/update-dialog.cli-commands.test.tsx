@@ -34,6 +34,19 @@ function setup() {
 }
 
 describe("update command previews and retries", () => {
+  it("shows full platform labels and the version pinned by the marketplace preview", async () => {
+    const skill = { ...makeUpdateViewSkill({ name: "market-skill", source: "@publisher/slug", sourceType: "skillhub", sourceVersion: "release-2026.11.10", update: "update" }),
+      updateResult: { name: "market-skill", source: "@publisher/slug", ref: null, lockHash: "release-2026.11.10", remoteHash: "release-2026.11.11", state: "update" as const, cached: false, error: null, note: null, lastSuccessAtEpochMs: 1, previousState: null },
+    };
+    const snapshot = makeSnapshot({ skills: [skill] });
+    createFakeBackend({ data: { snapshot }, commands: { preview_cli_commands: () => ({ id: "pinned-release", entries: [{ name: skill.name, command: "skillhub install slug@release-2026.11.12 --namespace publisher", reason: null }], marketplaceVersions: { [skill.name]: "release-2026.11.12" } }) } }).install();
+    const view = selectUpdateDialog({ mode: "single", skills: [skill], agents: snapshot.agents, summary: { candidates: [skill], skipped: [] }, singleName: skill.name });
+    render(<QueryClientProvider client={createQueryClient()}><UpdateDialog open scope="global" view={view} onClose={vi.fn()} /></QueryClientProvider>);
+    expect(await screen.findByText("release-2026.11.12")).toBeInTheDocument();
+    expect(screen.getByText("release-2026.11.10")).toBeInTheDocument();
+    expect(screen.queryByText("release-2026.11.11")).not.toBeInTheDocument();
+  });
+
   it("shows every update-all command before starting and retains actual calls", async () => {
     const backend = setup();
     const start = screen.getByRole("button", { name: "开始更新 (2)" });

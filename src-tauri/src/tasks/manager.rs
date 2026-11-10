@@ -30,6 +30,7 @@ use super::update as update_task;
 
 pub(crate) mod batch;
 mod cli_preview;
+mod marketplace;
 mod scoped_mutation;
 
 pub type TaskId = String;
@@ -278,6 +279,8 @@ struct Inner {
     mutation_slots: Arc<Semaphore>,
     config: TaskManagerConfig,
     batch_previews: Mutex<HashMap<String, super::batch::BatchPlan>>,
+    marketplace_previews: Mutex<HashMap<String, super::marketplace::Plan>>,
+    update_previews: Mutex<HashMap<String, (crate::scope::ScopeId, super::update::UpdatePlan)>>,
     shutting_down: AtomicBool,
     finished_notify: Notify,
 }
@@ -421,6 +424,8 @@ impl TaskManager {
                 mutation_slots: Arc::new(Semaphore::new(1)),
                 config,
                 batch_previews: Mutex::new(HashMap::new()),
+                marketplace_previews: Mutex::new(HashMap::new()),
+                update_previews: Mutex::new(HashMap::new()),
                 shutting_down: AtomicBool::new(false),
                 finished_notify: Notify::new(),
             }),
@@ -922,9 +927,13 @@ impl TaskManager {
     ) -> Result<TaskId, AppError> {
         self.ensure_not_shutting_down()?;
         let names = install::validate_skill_names(&skill_ids)?;
+        let pinned = self.pinned_updates(&preview_id);
+        self.validate_pinned_updates(&pinned).await?;
         let planned = self
             .plan_scoped_mutation(scope, MutationKind::Update, move |paths, layout| {
-                update_task::plan_updates(paths, layout, &names)
+                let mut plan = update_task::plan_updates(paths, layout, &names)?;
+                marketplace::apply_pinned_updates(paths, layout, &mut plan, pinned)?;
+                Ok(plan)
             })
             .await?;
         let skills = planned
@@ -933,14 +942,24 @@ impl TaskManager {
             .iter()
             .map(|item| item.name.clone())
             .collect();
-        let planned = planned.with_command_preview(preview_id).await?;
-        planned.start(skills, on_event, |layout, _| {
+        let planned = planned.with_command_preview(preview_id.clone()).await?;
+        let result = planned.start(skills, on_event, |layout, _| {
             update_task::UpdateAction::new(
                 self.inner.paths.clone(),
                 layout,
                 self.inner.config.install_timeout,
             )
-        })
+        });
+        if result.is_ok() {
+            if let Some(id) = preview_id {
+                self.inner
+                    .update_previews
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&id);
+            }
+        }
+        result
     }
 
     /// Validate an uninstall target synchronously, acquire the single-writer
@@ -1397,6 +1416,7 @@ impl Clone for TaskManager {
 
 #[cfg(test)]
 mod tests {
+    mod marketplace;
     mod scoped_cli;
 
     use super::*;

@@ -183,8 +183,20 @@ impl MarkerStore {
             // lock even if its scope was serialized as a project.
             None => (self.lock_path.clone(), lock_health::LockSchema::GlobalV3),
         };
-        let lock =
+        let mut lock =
             lock_health::inspect_path(&lock_path, &lock_path.display().to_string(), lock_schema);
+        if lock.healthy() {
+            if let Err(error) = crate::marketplace::records::Records::read(&lock_path) {
+                lock.path = crate::marketplace::records::path(&lock_path)
+                    .display()
+                    .to_string();
+                lock.exists = true;
+                lock.status = lock_health::LockStatus::Corrupt;
+                lock.version = None;
+                lock.skill_count = None;
+                lock.error = Some(error);
+            }
+        }
 
         let mut snapshots_present = Vec::new();
         let mut snapshots_missing = Vec::new();
@@ -333,6 +345,26 @@ mod tests {
         assert_eq!(report.snapshots_present, vec![present.to_string_lossy()]);
         assert_eq!(report.snapshots_missing, vec![missing.to_string_lossy()]);
         assert!(!report.snapshots_are_intact());
+    }
+
+    #[test]
+    fn corrupt_marketplace_records_are_reported_by_startup_verification() {
+        let (_tmp, paths, store) = fixture();
+        let record_path = crate::marketplace::records::path(&paths.lock_path());
+        fs::write(&record_path, "{invalid").unwrap();
+        store.begin(&mutation(&["market-skill"])).unwrap();
+        let report = store.inspect().unwrap();
+        assert!(!report.lock_is_healthy());
+        assert_eq!(report.lock.path, record_path.display().to_string());
+        assert!(
+            report
+                .lock
+                .error
+                .unwrap()
+                .hint
+                .unwrap()
+                .contains(crate::marketplace::records::FILE_NAME)
+        );
     }
 
     #[test]

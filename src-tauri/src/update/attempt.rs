@@ -39,6 +39,30 @@ pub(super) trait GroupExecutor: Send + Sync {
     fn timed_out(&self, group: &Self::Group) -> GroupOutcome;
 }
 
+/// Git and marketplace checks share these slots within one scope's attempt.
+pub(super) struct SharedSlots<E> {
+    pub executor: E,
+    pub slots: std::sync::Arc<tokio::sync::Semaphore>,
+}
+#[async_trait::async_trait]
+impl<E: GroupExecutor> GroupExecutor for SharedSlots<E> {
+    type Group = E::Group;
+    async fn check(&self, group: &Self::Group) -> GroupOutcome {
+        let _permit = self
+            .slots
+            .acquire()
+            .await
+            .expect("attempt slots remain open");
+        self.executor.check(group).await
+    }
+    fn skipped(&self, group: &Self::Group, max_sources: usize) -> GroupOutcome {
+        self.executor.skipped(group, max_sources)
+    }
+    fn timed_out(&self, group: &Self::Group) -> GroupOutcome {
+        self.executor.timed_out(group)
+    }
+}
+
 pub(super) async fn run<E: GroupExecutor>(
     prepared: PreparedCheck<E::Group>,
     limits: SchedulingLimits,

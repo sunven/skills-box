@@ -36,6 +36,8 @@ use super::session::{
 #[derive(Debug, Clone)]
 pub struct UpdateItem {
     pub name: String,
+    pub marketplace_record: Option<crate::marketplace::records::Installation>,
+    pub marketplace_plan: Option<super::marketplace::Plan>,
     /// Normalized source, with `#ref` appended only when the lock pinned
     /// a non-default branch/tag/commit.
     pub source: String,
@@ -128,14 +130,22 @@ pub fn plan_updates(
             });
             continue;
         };
-        let target = match crate::update_target::resolve(&entry) {
-            Ok(target) => target,
-            Err(error) => {
-                plan.skipped.push(UpdateSkip {
-                    name: name.clone(),
-                    error: AppError::skill_source_unresolvable(name, error.detail()),
-                });
-                continue;
+        let marketplace_record = crate::marketplace::records::Records::read(&layout.lock_path)?
+            .skills
+            .get(name)
+            .cloned();
+        let source = if marketplace_record.is_some() {
+            entry.source.clone()
+        } else {
+            match crate::update_target::resolve(&entry) {
+                Ok(target) => target.cli_source(),
+                Err(error) => {
+                    plan.skipped.push(UpdateSkip {
+                        name: name.clone(),
+                        error: AppError::skill_source_unresolvable(name, error.detail()),
+                    });
+                    continue;
+                }
             }
         };
 
@@ -185,9 +195,10 @@ pub fn plan_updates(
             Some(&canonical),
             Some(entry.skill_folder_hash.as_str()),
         );
-        let source = target.cli_source();
         plan.items.push(UpdateItem {
-            name: target.name,
+            name: name.clone(),
+            marketplace_record,
+            marketplace_plan: None,
             source,
             canonical,
             lock_hash: entry.skill_folder_hash.clone(),
@@ -355,7 +366,17 @@ impl MutationAction for UpdateAction {
     type Unit = UpdateItem;
 
     fn uses_cli(&self, plan: &Self::Plan) -> bool {
-        !plan.items.is_empty()
+        plan.items.iter().any(|i| i.marketplace_record.is_none())
+    }
+
+    fn independent_command(&self, item: &Self::Unit, _: &Reporter) -> Option<CommandSpec> {
+        item.marketplace_plan.as_ref().map(|p| p.command())
+    }
+    fn before_write(&self, item: &Self::Unit) -> Result<(), AppError> {
+        if let Some(plan) = &item.marketplace_plan {
+            plan.check(&self.paths, &self.layout)?;
+        }
+        Ok(())
     }
 
     fn profile(&self, plan: &Self::Plan) -> SessionProfile {
@@ -400,6 +421,9 @@ impl MutationAction for UpdateAction {
             format!("正在备份 {}…", item.name),
             Some(item.name.as_str()),
         );
+        if let Some(plan) = &item.marketplace_plan {
+            plan.check(&self.paths, &self.layout)?;
+        }
         let mut warnings = Vec::new();
         if item.local_modification != LocalModification::Clean {
             let detail = item
@@ -468,7 +492,20 @@ impl MutationAction for UpdateAction {
             format!("正在校验 {} 的 canonical、挂载与 lock…", item.name),
             Some(item.name.as_str()),
         );
-        let verification = verify_update(&self.layout, item, &output);
+        let verification = if let Some(plan) = &item.marketplace_plan {
+            match super::marketplace::publish(&self.paths, plan, &output) {
+                Ok(warnings) => UpdateVerification {
+                    result: Ok(()),
+                    warnings,
+                },
+                Err(error) => UpdateVerification {
+                    result: Err(error),
+                    warnings: vec![],
+                },
+            }
+        } else {
+            verify_update(&self.layout, item, &output)
+        };
         let mut warnings = verification.warnings;
         let (status, error) = match verification.result {
             Ok(()) => (TaskSkillStatus::Updated, None),

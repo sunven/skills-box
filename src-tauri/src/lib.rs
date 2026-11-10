@@ -20,6 +20,7 @@ pub mod interrupted;
 pub mod inventory;
 pub mod lock;
 pub mod logs;
+pub mod marketplace;
 pub mod paths;
 pub mod process;
 pub mod project_lock;
@@ -235,6 +236,11 @@ pub fn run() {
             commands::get_environment,
             commands::get_cli_commands,
             commands::preview_cli_commands,
+            commands::list_marketplace_skills,
+            commands::get_marketplace_skill,
+            commands::get_marketplace_cli,
+            commands::prepare_marketplace_install,
+            commands::start_marketplace_install,
             commands::get_discovery_state,
             commands::start_discovery_scan,
             commands::acknowledge_discoveries,

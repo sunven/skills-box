@@ -49,6 +49,8 @@ pub const UNINSTALL_TIMEOUT: Duration = INSTALL_TIMEOUT;
 pub struct UninstallPlan {
     pub name: String,
     pub management: ManagementState,
+    pub marketplace: bool,
+    marketplace_record: Option<crate::marketplace::records::Installation>,
     /// Shared canonical folder; absent when only Agent attachments exist.
     pub canonical: Option<PathBuf>,
     /// Every physical attachment, sorted by agent id and path.
@@ -146,8 +148,12 @@ pub fn plan_uninstall(
         agent_ids.insert(UNIVERSAL_AGENT_ID.to_string());
     }
 
+    let marketplace = located
+        .lock_entry
+        .as_ref()
+        .is_some_and(|e| e.source_type == "skillhub");
     let mut native_path_state = Vec::new();
-    if located.management == ManagementState::Unmanaged {
+    if marketplace || located.management == ManagementState::Unmanaged {
         for path in canonical
             .iter()
             .chain(attachments.iter().map(|attachment| &attachment.path))
@@ -183,8 +189,13 @@ pub fn plan_uninstall(
     }
 
     Ok(UninstallPlan {
-        name: located.name,
+        name: located.name.clone(),
         management: located.management,
+        marketplace,
+        marketplace_record: crate::marketplace::records::Records::read(&layout.lock_path)?
+            .skills
+            .get(&located.name)
+            .cloned(),
         canonical,
         attachments,
         agent_ids: agent_ids.into_iter().collect(),
@@ -398,7 +409,7 @@ impl MutationAction for UninstallAction {
     type Unit = UninstallPlan;
 
     fn uses_cli(&self, plan: &Self::Plan) -> bool {
-        plan.management != ManagementState::Unmanaged
+        !plan.marketplace && plan.management != ManagementState::Unmanaged
     }
 
     fn before_write(&self, plan: &Self::Unit) -> Result<(), AppError> {
@@ -442,10 +453,13 @@ impl MutationAction for UninstallAction {
     ) -> Result<UnitOutcome, AppError> {
         reporter.progress(
             TaskPhase::RunningCli,
-            format!("正在卸载未受管技能 {}…", plan.name),
+            format!("正在卸载技能 {}…", plan.name),
             Some(plan.name.as_str()),
         );
         let outcome = remove_unmanaged_paths(plan).and_then(|()| {
+            if plan.marketplace {
+                crate::marketplace::records::Records::remove(&self.layout.lock_path, &plan.name)?;
+            }
             reporter.progress(
                 TaskPhase::Verifying,
                 "正在校验技能目录、Agent 挂载与安装记录…",

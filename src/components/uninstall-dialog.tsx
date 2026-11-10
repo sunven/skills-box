@@ -90,7 +90,7 @@ export function UninstallDialog({
   if (!open || !skill) return null;
 
   const attachments = skill.attachments;
-  const unmanaged = skill.management === "unmanaged";
+  const unmanaged = skill.management === "unmanaged" || skill.sourceType === "skillhub";
   const canonicalLabel =
     skill.management === "copy_only"
       ? "无 canonical（仅副本）"

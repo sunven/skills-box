@@ -180,6 +180,11 @@ pub trait MutationAction: Send + Sync + 'static {
         true
     }
 
+    /// A provider-specific process may run independently of the Git/Node runtime.
+    fn independent_command(&self, _unit: &Self::Unit, _reporter: &Reporter) -> Option<CommandSpec> {
+        None
+    }
+
     /// Native writers share the backup, cancellation seal and result envelope.
     fn execute_native(
         &self,
@@ -394,8 +399,10 @@ pub async fn run<A: MutationAction>(
                 }
             }
         }
-        let completed = if let Some(runtime) = &runtime {
-            let mut spec = action.command(unit, runtime, &reporter);
+        let command = action
+            .independent_command(unit, &reporter)
+            .or_else(|| runtime.as_ref().map(|r| action.command(unit, r, &reporter)));
+        let completed = if let Some(mut spec) = command {
             if let Some(expected) = &ctx.expected_commands
                 && !expected.contains(&crate::cli::commands::display_command(&spec))
             {

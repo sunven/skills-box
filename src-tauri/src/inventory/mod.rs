@@ -83,6 +83,8 @@ pub struct InventorySkill {
     pub name: String,
     pub description: Option<String>,
     pub source: Option<String>,
+    pub source_type: Option<String>,
+    pub source_version: Option<String>,
     pub management: ManagementState,
     pub updated_at: Option<String>,
     pub canonical_path: Option<String>,

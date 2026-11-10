@@ -69,11 +69,31 @@ Reinstall a missing Skill from the Source recorded in its Lock entry. The Chines
 _Avoid_: repair, backup restore
 
 **Source**:
-The upstream origin a skill is installed from; accepts public Git repositories over HTTPS.
+The upstream origin a skill is installed from, either a Git source or a published skill offered by a Marketplace source.
 _Avoid_: repo, registry
 
+**Git source**:
+A public Git repository that provides skills for installation and upstream discovery.
+_Avoid_: marketplace source
+
+**Skill marketplace**:
+The app's entry for obtaining skills from Marketplace sources. The Chinese UI labels it 「技能市场」.
+_Avoid_: skill store, source discovery
+
+**Marketplace source**:
+A service that offers published skills for installation through the Skill marketplace, such as SkillHub.
+_Avoid_: marketplace instance, Git source
+
+**Marketplace coordinate**:
+The identity of a published skill within a Marketplace source, including its publisher namespace and skill identifier. It is distinct from the skill's local name and from any one published version.
+_Avoid_: installation name, display name
+
+**Marketplace version**:
+The version label assigned by a Marketplace source to a release of a published skill. It can differ from version information declared inside the skill's content.
+_Avoid_: content hash, Git ref
+
 **Discovery source**:
-A source associated with at least one existing installation record in Global scope or a registered Project, whose default branch is followed for Source discovery.
+A Git source associated with at least one existing installation record in Global scope or a registered Project, whose default branch is followed for Source discovery.
 _Avoid_: subscription, watched repository
 
 **Source catalog**:
@@ -89,7 +109,7 @@ A skill observed in a Source catalog, identified by its source and case-insensit
 _Avoid_: managed skill, update candidate
 
 **Source archive**:
-The files of a source at one commit, used by an update check to compare skill content with the recorded version fingerprint.
+The files of a Git source at one commit, used by an update check to compare skill content with the recorded version fingerprint.
 _Avoid_: backup snapshot, installed skill copy
 
 **Install**:
@@ -153,11 +173,11 @@ Remove a Skill's selected Agent attachments while retaining its canonical store,
 _Avoid_: complete uninstall, detach
 
 **Lock entry**:
-The record that ties a skill name to its source, path, hash, and install/update times.
+The installation record that ties a skill name to its source, location, recorded version or content fingerprint, and any available install/update times.
 _Avoid_: manifest, metadata file
 
 **Update check**:
-The read-only comparison of each managed skill's recorded version fingerprint against its source, run automatically or on demand for one scope. It never changes skill files.
+The read-only comparison of each managed skill's recorded version or upstream content fingerprint against its source, run automatically or on demand for one scope. It never changes skill files.
 _Avoid_: update, sync, refresh
 
 **Check attempt**:
@@ -189,11 +209,11 @@ The read-only check for a newer Skills Box release, independent of a scope's man
 _Avoid_: update check, skill update check
 
 **Update candidate**:
-A skill whose upstream version fingerprint differs from the one recorded in its lock entry.
+A skill whose upstream version or content fingerprint differs from the one recorded in its lock entry, according to its Source's update policy.
 _Avoid_: outdated skill, dirty skill
 
 **Update target**:
-The normalized source and optional safe ref resolved from a lock entry; update checks and update execution share it.
+The resolved source identity and applicable Git reference or Marketplace version used to check or perform an update. Execution retains the target confirmed by the user.
 _Avoid_: source spec, repo ref
 
 **Local modification**:

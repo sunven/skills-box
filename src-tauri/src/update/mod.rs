@@ -225,12 +225,14 @@ impl UpdateService {
         skill_ids: Option<Vec<String>>,
     ) -> Result<UpdateCheckReport, AppError> {
         let _activity = self.paths.data_coordination.activity()?;
+        crate::lock::ScopedLock::global(&self.paths.lock_path())?;
+        let market_records = crate::marketplace::records::Records::read(&self.paths.lock_path())?;
         let lock = LockFile::read(&self.paths.lock_path())?;
         let full_check = skill_ids.is_none();
         let now = self.clock.now_epoch_ms();
         let selected = skill_ids.map(|ids| ids.into_iter().collect::<BTreeSet<_>>());
         let (skills, groups) = self.collect_targets(&lock, selected.as_ref());
-        let sources = groups
+        let sources: Vec<_> = groups
             .into_values()
             .map(|group| {
                 let cached = if group.is_content() {
@@ -248,7 +250,21 @@ impl UpdateService {
                 }
             })
             .collect();
-        let mut report = attempt::run(
+        let slots = Arc::new(tokio::sync::Semaphore::new(self.config.concurrency.max(1)));
+        let market_check = crate::marketplace::updates::check(
+            market_records,
+            selected.as_ref(),
+            self.config.max_sources.saturating_sub(
+                sources
+                    .iter()
+                    .filter(|s| matches!(s, PreparedSource::Pending(_)))
+                    .count(),
+            ),
+            self.config.concurrency,
+            self.config.deadline_ms,
+            &slots,
+        );
+        let git_check = attempt::run(
             PreparedCheck {
                 checked_at_epoch_ms: now,
                 skills,
@@ -259,18 +275,22 @@ impl UpdateService {
                 concurrency: self.config.concurrency,
                 deadline_ms: self.config.deadline_ms,
             },
-            GlobalGroupExecutor {
-                service: self,
-                archives: SourceArchives::new(
-                    Arc::clone(&self.archive_client),
-                    self.archive_cache.clone(),
-                    Arc::clone(&self.clock),
-                    self.config.cache_ttl_ms,
-                    ArchiveLimits::default(),
-                ),
+            attempt::SharedSlots {
+                slots: Arc::clone(&slots),
+                executor: GlobalGroupExecutor {
+                    service: self,
+                    archives: SourceArchives::new(
+                        Arc::clone(&self.archive_client),
+                        self.archive_cache.clone(),
+                        Arc::clone(&self.clock),
+                        self.config.cache_ttl_ms,
+                        ArchiveLimits::default(),
+                    ),
+                },
             },
-        )
-        .await;
+        );
+        let (mut report, market_results) = tokio::join!(git_check, market_check);
+        crate::marketplace::updates::merge(&mut report, market_results);
         if full_check {
             let state = UpdateCheckState::from_report(&report);
             if let Err(error) = self.state.store(&crate::scope::ScopeId::Global, &state) {

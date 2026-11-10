@@ -1,3 +1,6 @@
+import type { MarketplaceCoordinate, MarketplaceListing, MarketplaceDetail, MarketplaceCli, MarketplacePreview } from "../lib/marketplace";
+import { marketplaceAddress } from "../lib/marketplace";
+import { marketplaceSkill, marketplaceCli } from "./marketplace-fixtures";
 import type {
   StaleRecord,
   BatchRequest,
@@ -67,6 +70,11 @@ type Factory<T> = T | (() => T);
 type MaybePromise<T> = T | Promise<T>;
 
 export interface FakeCommandContract {
+  list_marketplace_skills: { args: { keyword: string; page: number }; result: MarketplaceListing };
+  get_marketplace_skill: { args: { coordinate: MarketplaceCoordinate }; result: MarketplaceDetail };
+  get_marketplace_cli: { args: Record<string, never>; result: MarketplaceCli };
+  prepare_marketplace_install: { args: { scope: ScopeId; coordinate: MarketplaceCoordinate; agents: string[] }; result: MarketplacePreview };
+  start_marketplace_install: { args: { scope: ScopeId; previewId: string; onEvent: Channel<TaskEvent> }; result: string };
   list_stale_records: { args: { scope: ScopeId }; result: StaleRecord[] };
   get_cli_commands: { args: Record<string, never>; result: CliCommandRecord[] };
   preview_cli_commands: { args: { scope: ScopeId; request: CliCommandRequest }; result: CliCommandPreview };
@@ -409,6 +417,8 @@ export function createFakeBackend(
   };
   const initialData: FakeBackendData = { ...defaultData, ...options.data };
   let data: FakeBackendData = { ...initialData };
+  const marketPreviews = new Map<string, { scope: ScopeId; preview: MarketplacePreview; agents: string[] }>();
+  const marketTasks = new Map<string, { scope: ScopeId; preview: MarketplacePreview; agents: string[] }>();
   const dataPreviews = new Map<string, AppDataPreview>();
   let projectList: ProjectList = factoryValue(initialData.projects);
   const initialProjects = projectList;
@@ -440,6 +450,7 @@ export function createFakeBackend(
     const globalArgs = scope === GLOBAL_SCOPE ? ["-g"] : [];
     const installArgs = (source: string, names: string[], agents: string[]) => ["add", source, ...globalArgs, ...names.flatMap((name) => ["-s", name]), ...agents.flatMap((id) => ["-a", id]), "-y", "--json"];
     let entries: CliCommandPreview["entries"];
+    const marketplaceVersions: Record<string, string> = {};
     if (request.action === "preview") {
       const source = request.source.trim();
       entries = [{ name: source, command: commandFor(scope, ["add", source, "-l", ...globalArgs]), reason: null }];
@@ -450,6 +461,12 @@ export function createFakeBackend(
       entries = request.skills.map((name) => {
         const skill = snapshot.skills.find((skill) => skill.id === name || skill.name === name);
         const update = reportFor(scope).skills.find((skill) => skill.name === name);
+        if (skill?.sourceType === "skillhub") {
+          const [namespace, slug] = (skill.source ?? "").replace(/^@/, "").split("/");
+          const version = update?.remoteHash ?? marketplaceSkill.version;
+          marketplaceVersions[skill.name] = version;
+          return { name: skill.name, command: `skillhub --skip-self-upgrade install ${slug}@${version} --namespace ${namespace} --dir /tmp/skills-box-market-update-${skill.name} --json`, reason: null };
+        }
         const source = `${update?.source ?? skill?.source ?? "acme/skills"}${update?.ref ? `#${update.ref}` : ""}`;
         const agents = [...new Set((skill?.attachments ?? []).filter((a) => { const agent = snapshot.agents.find((agent) => agent.id === a.agentId); return !agent?.universal && (agent === undefined || agent.origin === "catalog") && (a.mode === "link" || a.mode === "copy"); }).map((a) => a.agentId))].sort();
         return { name, command: commandFor(scope, installArgs(source, [skill?.name ?? name], [...agents, "universal"])), reason: null };
@@ -457,9 +474,9 @@ export function createFakeBackend(
     } else {
       const skill = snapshot.skills.find((skill) => skill.id === request.skill || skill.name === request.skill);
       const name = skill?.name ?? request.skill.split("/").slice(-1)[0]!;
-      entries = [{ name, command: skill?.management === "unmanaged" ? null : commandFor(scope, ["remove", ...globalArgs, "-s", name, "-y"]), reason: null }];
+      entries = [{ name, command: skill?.management === "unmanaged" || skill?.sourceType === "skillhub" ? null : commandFor(scope, ["remove", ...globalArgs, "-s", name, "-y"]), reason: null }];
     }
-    return { id: JSON.stringify([scope, request.action, entries]), entries };
+    return { id: JSON.stringify([scope, request.action, entries]), entries, ...(Object.keys(marketplaceVersions).length ? { marketplaceVersions } : {}) };
   };
   const prepareTaskCommands = (scope: ScopeId, request: CliCommandRequest, expected?: string) => {
     const preview = cliPreview(scope, request);
@@ -517,6 +534,13 @@ export function createFakeBackend(
           event.phase === "cancelled"
         )
           batchRuns.delete(task.taskId);
+        const market = marketTasks.get(task.taskId);
+        if (market && event.result?.overall === "success") {
+          const detail = market.preview.detail;
+          installInto(market.scope, [detail.originalName!]);
+          const snapshot = snapshotFor(market.scope);
+          setSnapshot({ ...snapshot, skills: snapshot.skills.map((s) => s.name === detail.originalName ? { ...s, source: marketplaceAddress(detail.coordinate), sourceType: "skillhub", sourceVersion: detail.version, description: detail.description, attachments: market.agents.map((id) => ({ agentId: id, agentName: snapshot.installTargets.find((a) => a.id === id)?.displayName ?? id, mode: "link" as const, path: `~/.${id}/skills/${s.name}`, detachable: true })) } : s) }, market.scope);
+        }
         if (event.result?.action === "install") {
           const source = installSources.get(task.taskId);
           const installed = new Set(
@@ -665,6 +689,7 @@ export function createFakeBackend(
             ...skill,
             management: "managed" as const,
             localModification: "clean" as const,
+            sourceVersion: skill.sourceType === "skillhub" ? reportFor(scope).skills.find((row) => row.name === skill.name)?.remoteHash ?? skill.sourceVersion : skill.sourceVersion,
             updatedAt,
           }
         : skill,
@@ -1268,6 +1293,7 @@ export function createFakeBackend(
           if (request.targetKeys && !request.targetKeys.includes(key)) continue;
           const agent = projectAgents.find((a) => a.id === agentId);
           const reason = !skill ? "技能已不存在。"
+            : skill.sourceType === "skillhub" ? "市场技能请从技能市场选择项目进行独立安装。"
             : skill.management !== "managed" || !skill.canonicalPath ? "仅受管且有共享目录的技能可复制。"
             : conflict ? "项目已有同名技能，内容不同，不覆盖。"
             : !agentId ? existing ? "项目已有相同内容，复用，不重复复制。" : null
@@ -1320,6 +1346,7 @@ export function createFakeBackend(
             (result) => result.name === skill.name,
           );
           target.reason =
+            skill.sourceType === "skillhub" ? "市场技能请单独更新，或使用更新全部。" :
             skill.management === "copy_only"
               ? "仅副本不可更新。"
               : skill.localModification !== "clean"
@@ -1718,6 +1745,27 @@ export function createFakeBackend(
         data.githubSettings.effectiveSource === "anonymous" ? 59 : 4_999,
       resetAtEpochMs: Date.now() + 3_600_000,
     }),
+    list_marketplace_skills: ({ keyword, page }) => ({ skills: page === 1 && `${marketplaceSkill.name} ${marketplaceSkill.description}`.toLowerCase().includes(keyword.toLowerCase()) ? [marketplaceSkill] : [], total: keyword && !`${marketplaceSkill.name} ${marketplaceSkill.description}`.toLowerCase().includes(keyword.toLowerCase()) ? 0 : 1, page, pageSize: 20 }),
+    get_marketplace_skill: ({ coordinate }) => ({ ...marketplaceSkill, coordinate }),
+    get_marketplace_cli: () => marketplaceCli,
+    prepare_marketplace_install: ({ scope, coordinate, agents }) => {
+      const existing = snapshotFor(scope).skills.find((s) => s.name === marketplaceSkill.originalName);
+      if (existing) throw { code: "skill.conflict", message: "当前作用域已有同名技能。", retryable: false } satisfies AppError;
+      const detail = { ...marketplaceSkill, coordinate };
+      const id = `marketplace-${scope}-${marketPreviews.size}`;
+      const preview: MarketplacePreview = { detail, commands: { id, entries: [{ name: detail.originalName!, command: `cd /tmp/skills-box-skillhub-preview && /Users/demo/.local/bin/skillhub --skip-self-upgrade install ${coordinate.slug}@${detail.version} --namespace ${coordinate.namespace} --dir /tmp/skills-box-skillhub-preview --json`, reason: null }] } };
+      marketPreviews.set(id, { scope, preview, agents });
+      return preview;
+    },
+    start_marketplace_install: ({ scope, previewId, onEvent }) => {
+      const plan = marketPreviews.get(previewId);
+      if (!plan || plan.scope !== scope) throw { code: "cli.command_changed", message: "请刷新预览。", retryable: true } satisfies AppError;
+      const task = makeTask("start_marketplace_install", onEvent);
+      marketTasks.set(task.taskId, plan);
+      taskCommands.set(task.taskId, { scope, commands: plan.preview.commands.entries.flatMap((e) => e.command ? [e.command] : []) });
+      scheduleAutoTask(task, "install", [plan.preview.detail.originalName!], scope);
+      return task.taskId;
+    },
     get_cli_commands: () => cliRecords,
     preview_cli_commands: ({ scope, request }) => cliPreview(scope, request),
     get_environment: ({ refresh }) => {

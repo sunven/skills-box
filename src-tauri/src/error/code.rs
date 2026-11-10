@@ -5,6 +5,8 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ErrorCode {
+    MarketplaceUnavailable,
+    MarketplaceCliUnavailable,
     EnvNodeMissing,
     EnvNodeTooOld,
     EnvNodeProbeFailed,
@@ -116,6 +118,8 @@ pub enum ErrorCode {
 
 impl ErrorCode {
     pub const ALL: &'static [ErrorCode] = &[
+        Self::MarketplaceUnavailable,
+        Self::MarketplaceCliUnavailable,
         Self::EnvNodeMissing,
         Self::EnvNodeTooOld,
         Self::EnvNodeProbeFailed,
@@ -227,6 +231,8 @@ impl ErrorCode {
 
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::MarketplaceUnavailable => "marketplace.unavailable",
+            Self::MarketplaceCliUnavailable => "marketplace.cli_unavailable",
             Self::EnvNodeMissing => "env.node_missing",
             Self::EnvNodeTooOld => "env.node_too_old",
             Self::EnvNodeProbeFailed => "env.node_probe_failed",
@@ -368,13 +374,15 @@ mod tests {
 
     #[test]
     fn all_codes_are_unique_and_stable() {
-        assert_eq!(ErrorCode::ALL.len(), 107);
+        assert_eq!(ErrorCode::ALL.len(), 109);
         let values: Vec<&str> = ErrorCode::ALL.iter().map(|code| code.as_str()).collect();
         let unique: HashSet<&str> = values.iter().copied().collect();
         assert_eq!(unique.len(), values.len());
         assert_eq!(
             values,
             vec![
+                "marketplace.unavailable",
+                "marketplace.cli_unavailable",
                 "env.node_missing",
                 "env.node_too_old",
                 "env.node_probe_failed",

@@ -8,6 +8,8 @@ import { formatEpochDateTime, type LastCheckSummary } from "../lib/update-view";
 interface AppHeaderProps {
   settingsOpen: boolean;
   discoveryOpen: boolean;
+  marketplaceOpen?: boolean;
+  onOpenMarketplace?: () => void;
   discoveryCount: number;
   onOpenDiscovery: () => void;
   onOpenSettings: () => void;
@@ -50,6 +52,8 @@ function BrandMark() {
 export function AppHeader({
   settingsOpen,
   discoveryOpen,
+  marketplaceOpen = false,
+  onOpenMarketplace,
   discoveryCount,
   onOpenDiscovery,
   onOpenSettings,
@@ -109,7 +113,7 @@ export function AppHeader({
   return (
     <header className="topbar">
       <div className="flex min-w-0 items-center gap-3">
-        {settingsOpen || discoveryOpen ? null : <Button
+        {settingsOpen || discoveryOpen || marketplaceOpen ? null : <Button
           variant="ghost"
           size="icon"
           className="rail-toggle"
@@ -141,8 +145,9 @@ export function AppHeader({
       <div className="topbar-center">{scopeSwitcher}</div>
 
       <div className="topbar-actions">
+        <Button variant={marketplaceOpen ? "outline" : "ghost"} size="sm" aria-pressed={marketplaceOpen} onClick={onOpenMarketplace}>技能市场</Button>
         <Button variant={discoveryOpen ? "outline" : "ghost"} size="sm" onClick={onOpenDiscovery} aria-label={`发现 (${discoveryCount})`} aria-pressed={discoveryOpen}>发现{discoveryCount > 0 ? <span className="discovery-count" data-testid="discovery-badge">{discoveryCount}</span> : null}</Button>
-        {settingsOpen || discoveryOpen ? <><Button variant="ghost" size="sm" onClick={onReturnToSkills}><ArrowLeft aria-hidden="true" />返回 skills</Button>{discoveryOpen ? <Button variant="ghost" size="icon" aria-label="设置" onClick={onOpenSettings}><Settings aria-hidden="true" /></Button> : null}</> : <>
+        {settingsOpen || discoveryOpen || marketplaceOpen ? <><Button variant="ghost" size="sm" onClick={onReturnToSkills}><ArrowLeft aria-hidden="true" />返回 skills</Button>{discoveryOpen ? <Button variant="ghost" size="icon" aria-label="设置" onClick={onOpenSettings}><Settings aria-hidden="true" /></Button> : null}</> : <>
         <span
           data-testid="last-update-check"
           data-error={!checkingUpdates && updateError ? "true" : undefined}

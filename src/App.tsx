@@ -1,3 +1,4 @@
+import { MarketplacePage } from "./components/marketplace-page";
 import { BatchDialog, type BatchSelection } from "./components/batch-dialog";
 import { useCliCommandSubscription } from "./hooks/use-cli-commands";
 import { DiscoveryPage } from "./components/discovery-page";
@@ -167,6 +168,7 @@ function App() {
   const [anomaliesOpen, setAnomaliesOpen] = useState(false);
   const [installOpen, setInstallOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [marketplaceOpen, setMarketplaceOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("github");
   const appUpdate = useAppUpdate();
   const [discoveryEntry, setDiscoveryEntry] = useState<{
@@ -512,11 +514,13 @@ function App() {
       ) : null}
       <AppHeader
         settingsOpen={settingsOpen}
+        marketplaceOpen={marketplaceOpen}
+        onOpenMarketplace={() => { setMarketplaceOpen(true); setSettingsOpen(false); setDiscoveryEntry(null); }}
         discoveryOpen={discoveryEntry !== null}
         discoveryCount={discovery.query.data?.unreadCount ?? 0}
-        onOpenDiscovery={() => { setSettingsOpen(false); setDiscoveryEntry({ filter: "uninstalled", source: "all" }); }}
-        onOpenSettings={() => { setSettingsSection("github"); setSettingsOpen(true); setDiscoveryEntry(null); }}
-        onReturnToSkills={() => { setSettingsOpen(false); setDiscoveryEntry(null); }}
+        onOpenDiscovery={() => { setMarketplaceOpen(false); setSettingsOpen(false); setDiscoveryEntry({ filter: "uninstalled", source: "all" }); }}
+        onOpenSettings={() => { setMarketplaceOpen(false); setSettingsSection("github"); setSettingsOpen(true); setDiscoveryEntry(null); }}
+        onReturnToSkills={() => { setMarketplaceOpen(false); setSettingsOpen(false); setDiscoveryEntry(null); }}
         report={report}
         isLoading={environment.isPending}
         isError={environment.isError}
@@ -552,6 +556,8 @@ function App() {
       />
       {settingsOpen ? (
         <SettingsPage onAgentsChanged={handleRecheck} appUpdate={appUpdate} initialSection={settingsSection} />
+      ) : marketplaceOpen ? (
+        <MarketplacePage scope={scope} snapshot={snapshot} disabled={actionsDisabled || !snapshot} onView={(name) => { setMarketplaceOpen(false); handleClearFilters(); handleSelectSkill(name); }} />
       ) : discoveryEntry ? (
         <DiscoveryPage discovery={discovery} scope={scope}
         initialFilter={discoveryEntry.filter} initialSource={discoveryEntry.source}

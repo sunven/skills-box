@@ -217,6 +217,18 @@ pub(crate) fn cli_agent_ids(targets: &[InstallTarget]) -> Vec<String> {
         .collect()
 }
 
+pub(crate) fn validate_selected_agents(
+    paths: &AppPaths,
+    layout: &crate::scope_layout::ScopeLayout,
+    agents: &[String],
+) -> Result<(Vec<String>, Vec<InstallTarget>), AppError> {
+    if layout.is_global() {
+        validate_agents(paths, agents)
+    } else {
+        validate_project_agents(paths, layout, agents)
+    }
+}
+
 fn validate_agents(
     paths: &AppPaths,
     raw: &[String],

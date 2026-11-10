@@ -348,13 +348,13 @@ export function SkillListPane({
                     actionsDisabled ||
                     batchRunning ||
                     ((action === "update" || action === "uninstall") &&
-                      !batchMutationsEnabled)
+                      !batchMutationsEnabled && !(action === "uninstall" && checkedSkills.every((s) => s.sourceType === "skillhub" || s.management === "unmanaged")))
                   }
                   title={
                     actionsDisabled || batchRunning
                       ? "当前无法开始写入操作"
                       : (action === "update" || action === "uninstall") &&
-                          !batchMutationsEnabled
+                          !batchMutationsEnabled && !(action === "uninstall" && checkedSkills.every((s) => s.sourceType === "skillhub" || s.management === "unmanaged"))
                         ? "请先配置可用的执行环境"
                         : undefined
                   }

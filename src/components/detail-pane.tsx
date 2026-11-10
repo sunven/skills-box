@@ -843,7 +843,7 @@ export const DetailPane = memo(function DetailPane({
                       </span>
                     ) : null}
                   </MetaRow>
-                  <MetaRow label="ref">{detail.ref ?? "—"}</MetaRow>
+                  <MetaRow label={detail.sourceType === "skillhub" ? "平台版本" : "ref"}>{detail.ref ?? "—"}</MetaRow>
                   <MetaRow label="skillPath" mono>
                     <span
                       className="path-value"
@@ -873,7 +873,7 @@ export const DetailPane = memo(function DetailPane({
                   <MetaRow label="目录修改时间">
                     {formatEpochMs(detail.directoryMtimeEpochMs)}
                   </MetaRow>
-                  <MetaRow label="版本指纹" mono>
+                  <MetaRow label={detail.sourceType === "skillhub" ? "安装内容基线" : "版本指纹"} mono>
                     {detail.hash ? <HashValue hash={detail.hash} /> : "—"}
                   </MetaRow>
                   <MetaRow label="本地改动">

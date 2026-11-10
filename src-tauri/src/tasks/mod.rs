@@ -6,6 +6,7 @@ pub mod conflicts;
 pub(crate) mod copy_to_project;
 pub mod install;
 pub mod manager;
+pub mod marketplace;
 pub mod parser;
 pub mod preview;
 mod session;
