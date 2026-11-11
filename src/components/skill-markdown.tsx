@@ -19,19 +19,21 @@ const sanitizeSchema = {
   },
 };
 
-export interface SkillInternalLinks {
-  scope: ScopeId;
-  skillId: string;
+export interface MarkdownFileLinks {
   /** Directory of the previewed markdown file, relative to the skill root. */
   baseDir: string;
   onNavigate: (path: string) => void;
+}
+export interface SkillInternalLinks extends MarkdownFileLinks {
+  scope: ScopeId;
+  skillId: string;
 }
 
 interface SafeLinkProps {
   href?: string;
   children?: ReactNode;
   onOpen: (url: string) => void;
-  internalLinks?: SkillInternalLinks;
+  internalLinks?: MarkdownFileLinks;
 }
 
 function SafeLink({ href, children, onOpen, internalLinks }: SafeLinkProps) {
@@ -225,6 +227,7 @@ interface SkillMarkdownProps {
   content: string;
   onOpenUrl?: (url: string) => void;
   internalLinks?: SkillInternalLinks;
+  fileLinks?: MarkdownFileLinks;
 }
 
 /**
@@ -239,6 +242,7 @@ export const SkillMarkdown = memo(function SkillMarkdown({
   content,
   onOpenUrl,
   internalLinks,
+  fileLinks,
 }: SkillMarkdownProps) {
   const open = onOpenUrl ?? openExternal;
   // A stable component map keeps ReactMarkdown from remounting every node when
@@ -249,8 +253,9 @@ export const SkillMarkdown = memo(function SkillMarkdown({
       h2: MarkdownHeading2,
       h3: MarkdownHeading3,
       h4: MarkdownHeading4,
+      pre: ({ children }) => <pre tabIndex={0}>{children}</pre>,
       a: ({ href, children }) => (
-        <SafeLink href={href} onOpen={open} internalLinks={internalLinks}>
+        <SafeLink href={href} onOpen={open} internalLinks={internalLinks ?? fileLinks}>
           {children}
         </SafeLink>
       ),
@@ -276,6 +281,10 @@ export const SkillMarkdown = memo(function SkillMarkdown({
             />
           );
         }
+        const filePath = fileLinks ? resolveSkillRelativePath(fileLinks.baseDir, url) : null;
+        if (fileLinks && filePath) {
+          return <ImageNote label={label} note="包内图片" onOpen={() => fileLinks.onNavigate(filePath)} />;
+        }
         return (
           <ImageNote
             label={label}
@@ -288,7 +297,7 @@ export const SkillMarkdown = memo(function SkillMarkdown({
         );
       },
     }),
-    [open, internalLinks],
+    [open, internalLinks, fileLinks],
   );
 
   return (

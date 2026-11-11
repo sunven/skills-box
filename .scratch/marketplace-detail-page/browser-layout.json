@@ -1,0 +1,52 @@
+[
+  {
+    "viewport": "1440x900",
+    "measurement": {
+      "width": 1440,
+      "documentOverflow": false,
+      "mainOverflow": false,
+      "barTop": 52,
+      "headerBottom": 52
+    }
+  },
+  {
+    "viewport": "1024x768",
+    "measurement": {
+      "width": 1024,
+      "documentOverflow": false,
+      "mainOverflow": false,
+      "barTop": 52,
+      "headerBottom": 52
+    }
+  },
+  {
+    "viewport": "768x1024",
+    "measurement": {
+      "width": 768,
+      "documentOverflow": false,
+      "mainOverflow": false,
+      "barTop": 52,
+      "headerBottom": 52
+    }
+  },
+  {
+    "viewport": "390x844",
+    "measurement": {
+      "width": 390,
+      "documentOverflow": false,
+      "mainOverflow": false,
+      "barTop": 91,
+      "headerBottom": 91
+    }
+  },
+  {
+    "viewport": "320x844",
+    "measurement": {
+      "width": 320,
+      "documentOverflow": false,
+      "mainOverflow": false,
+      "barTop": 91,
+      "headerBottom": 91
+    }
+  }
+]

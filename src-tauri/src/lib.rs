@@ -239,6 +239,8 @@ pub fn run() {
             commands::list_marketplace_skills,
             commands::list_marketplace_categories,
             commands::get_marketplace_skill,
+            commands::list_marketplace_files,
+            commands::read_marketplace_file,
             commands::get_marketplace_cli,
             commands::prepare_marketplace_install,
             commands::start_marketplace_install,

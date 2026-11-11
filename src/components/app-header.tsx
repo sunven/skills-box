@@ -6,6 +6,7 @@ import type { AppError, EnvReport, UpdateCheckReport } from "../lib/types";
 import { formatEpochDateTime, type LastCheckSummary } from "../lib/update-view";
 
 interface AppHeaderProps {
+  inert?: boolean;
   settingsOpen: boolean;
   discoveryOpen: boolean;
   marketplaceOpen?: boolean;
@@ -50,6 +51,7 @@ function BrandMark() {
 }
 
 export function AppHeader({
+  inert = false,
   settingsOpen,
   discoveryOpen,
   marketplaceOpen = false,
@@ -111,7 +113,7 @@ export function AppHeader({
       : environmentSummary(report);
 
   return (
-    <header className="topbar">
+    <header className="topbar" inert={inert}>
       <div className="flex min-w-0 items-center gap-3">
         {settingsOpen || discoveryOpen || marketplaceOpen ? null : <Button
           variant="ghost"

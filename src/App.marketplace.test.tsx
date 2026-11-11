@@ -16,6 +16,7 @@ import {
 import { nodeMissingReport } from "./test/fixtures";
 import { marketplaceCli, marketplaceSkill } from "./test/marketplace-fixtures";
 import { makeSkill, makeSnapshot } from "./test/inventory-fixtures";
+import type { InventorySnapshot } from "./lib/types";
 
 function setup(options: FakeBackendOptions = {}) {
   const backend = createFakeBackend(options).install();
@@ -33,14 +34,192 @@ async function openMarket() {
 async function openDetail() {
   await openMarket();
   fireEvent.click(screen.getByRole("button", { name: marketplaceSkill.name }));
-  const dialog = await screen.findByRole("dialog", {
-    name: marketplaceSkill.name,
-  });
-  await within(dialog).findByText(/平台版本：1.2.0/);
-  return dialog;
+  const page = await screen.findByRole("main", { name: marketplaceSkill.name });
+  await within(page).findByText(/平台版本：1.2.0/);
+  return page;
+}
+async function openInstallation() {
+  const page = await openDetail();
+  fireEvent.click(within(page).getByRole("button", { name: "安装" }));
+  return screen.findByRole("dialog", { name: `安装 · ${marketplaceSkill.name}` });
 }
 
 describe("SkillHub marketplace", () => {
+  it("reads the complete overview in a page and switches to the exact source without opening installation", async () => {
+    const backend = setup({
+      commands: {
+        get_marketplace_skill: () => ({
+          ...marketplaceSkill,
+          requirements: ["运行此技能需要 API Key；请按技能说明配置。"],
+        }),
+      },
+    });
+    const page = await openDetail();
+    expect(screen.queryByRole("dialog", { name: `安装 · ${marketplaceSkill.name}` })).not.toBeInTheDocument();
+    expect(within(page).getByRole("region", { name: "技能概述" })).toHaveTextContent("使用技能前，请选择笔记目录。");
+    expect(within(page).getByLabelText("收藏：109")).toHaveTextContent("109");
+    expect(within(page).getByLabelText("下载量：11,384,000")).toHaveTextContent("1138.4万");
+    expect(within(page).getByText(/运行此技能需要 API Key/)).toBeInTheDocument();
+    expect(within(page).getByRole("tab", { name: "概述" })).toHaveAttribute("aria-selected", "true");
+    expect(within(page).getByRole("tab", { name: "文件" })).toHaveAttribute("aria-selected", "false");
+    expect(within(page).queryByText(/name: workspace-notes/)).not.toBeInTheDocument();
+    fireEvent.click(within(page).getByRole("button", { name: "查看原文" }));
+    expect(within(page).getByLabelText("SKILL.md 原文").textContent).toBe(marketplaceSkill.markdown);
+    fireEvent.click(within(page).getByRole("button", { name: "返回渲染" }));
+    expect(within(page).getByTestId("skill-markdown-rendered")).toBeInTheDocument();
+    fireEvent.click(within(page).getByRole("button", { name: "官方页面" }));
+    await waitFor(() => expect(backend.callsOf("open_external_url")[0]?.payload.url).toBe(marketplaceSkill.officialUrl));
+    expect(backend.count("prepare_marketplace_install")).toBe(0);
+    expect(backend.count("get_marketplace_cli")).toBe(0);
+    expect(backend.count("list_marketplace_files")).toBe(0);
+  });
+
+  it("returns to the same list position, query, filters, page and unsubmitted input", async () => {
+    const backend = setup({
+      commands: {
+        list_marketplace_skills: ({ page }) => ({ skills: [marketplaceSkill], total: 49, page, pageSize: 24 }),
+      },
+    });
+    await openMarket();
+    const input = screen.getByRole("textbox", { name: "搜索 SkillHub" });
+    fireEvent.change(input, { target: { value: "notes" } });
+    fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+    fireEvent.click(screen.getByRole("button", { name: "下载量" }));
+    const category = screen.getByRole("combobox", { name: "场景分类" });
+    await within(category).findByRole("option", { name: "开发编程" });
+    fireEvent.change(category, { target: { value: "dev-programming" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "API Key 筛选" }), { target: { value: "required" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "下一页" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+    await screen.findByText(/共 49 项 · 第 2 页/);
+    fireEvent.change(input, { target: { value: "draft not submitted" } });
+    const list = screen.getByRole("main", { name: "技能市场" });
+    list.scrollTop = 420;
+    const opener = screen.getByRole("button", { name: marketplaceSkill.name });
+    fireEvent.click(opener);
+    const page = await screen.findByRole("main", { name: marketplaceSkill.name });
+    fireEvent.click(within(page).getByRole("button", { name: "返回列表" }));
+    expect(list.scrollTop).toBe(420);
+    expect(opener).toHaveFocus();
+    expect(input).toHaveValue("draft not submitted");
+    expect(category).toHaveValue("dev-programming");
+    expect(screen.getByRole("combobox", { name: "API Key 筛选" })).toHaveValue("required");
+    expect(screen.getByRole("button", { name: "下载量" })).toHaveAttribute("aria-pressed", "true");
+    expect(backend.callsOf("list_marketplace_skills").slice(-1)[0].payload).toEqual({
+      keyword: "notes", page: 2, sort: "downloads", category: "dev-programming", apiKey: "required",
+    });
+  });
+
+  it("preserves the reading state across scopes and waits for the new inventory before offering installation", async () => {
+    const scope = "project:11111111-1111-4111-8111-111111111111" as const;
+    let release: ((value: InventorySnapshot) => void) | undefined;
+    const backend = setup({
+      data: {
+        snapshot: makeSnapshot({ skills: [makeSkill({ name: "local-name", source: "@example/workspace-notes", sourceType: "skillhub", sourceVersion: "1.0.0" })] }),
+        projects: { projects: [{ id: scope.slice(8), root: "/tmp/project", displayName: "Example", addedAt: 1, lastOpenedAt: 1, available: true }], lastActiveScope: "global", warnings: [] },
+      },
+      commands: {
+        get_inventory: (args, fake) => args.scope === scope
+          ? new Promise((resolve) => { release = resolve; })
+          : fake.dispatch("get_inventory", args),
+      },
+    });
+    const page = await openDetail();
+    expect(within(page).getByRole("button", { name: "查看已安装技能" })).toBeEnabled();
+    expect(within(page).getByText("平台版本：1.2.0")).toBeInTheDocument();
+    fireEvent.click(within(page).getByRole("button", { name: "查看原文" }));
+    page.scrollTop = 360;
+    fireEvent.click(screen.getByRole("button", { name: "切换到项目 Example", hidden: true }));
+    await waitFor(() => expect(release).toBeDefined());
+    expect(within(page).getByRole("button", { name: "安装" })).toBeDisabled();
+    expect(within(page).queryByRole("button", { name: "查看已安装技能" })).not.toBeInTheDocument();
+    release!(makeSnapshot());
+    await waitFor(() => expect(within(page).getByRole("button", { name: "安装" })).toBeEnabled());
+    expect(page.scrollTop).toBe(360);
+    expect(within(page).getByLabelText("SKILL.md 原文").textContent).toBe(marketplaceSkill.markdown);
+    expect(within(page).getByText("安装到：项目 · Example")).toBeInTheDocument();
+    expect(backend.count("get_marketplace_skill")).toBe(1);
+    within(page).getByRole("button", { name: "安装" }).focus();
+    fireEvent.click(within(page).getByRole("button", { name: "安装" }));
+    const dialog = await screen.findByRole("dialog", { name: `安装 · ${marketplaceSkill.name}` });
+    expect(screen.getByRole("button", { name: "切换到全局" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "切换到全局" }));
+    expect(backend.callsOf("set_active_scope").slice(-1)[0].payload.scope).toBe(scope);
+    fireEvent.click(within(dialog).getByRole("button", { name: "关闭安装" }));
+    expect(page.scrollTop).toBe(360);
+    expect(within(page).getByRole("button", { name: "安装" })).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "切换到全局" }));
+    await within(page).findByRole("button", { name: "查看已安装技能" });
+  });
+
+  it("retains the result until dismissal, then refreshes the detail action without navigating away", async () => {
+    setup({ autoTasks: { delayMs: 5 } });
+    const dialog = await openInstallation();
+    const page = screen.getByRole("main", { name: marketplaceSkill.name });
+    page.scrollTop = 280;
+    fireEvent.click(within(dialog).getByLabelText("Claude Code"));
+    fireEvent.click(within(dialog).getByRole("button", { name: "预览安装" }));
+    fireEvent.click(await within(dialog).findByRole("button", { name: "确认安装" }));
+    await waitFor(() => expect(screen.getByTestId("marketplace-result")).toHaveAttribute("data-overall", "success"));
+    expect(dialog).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "返回详情" }));
+    await within(page).findByRole("button", { name: "查看已安装技能" });
+    expect(dialog).not.toBeInTheDocument();
+    expect(page.scrollTop).toBe(280);
+    fireEvent.click(within(page).getByRole("button", { name: "查看已安装技能" }));
+    expect(await screen.findByRole("heading", { name: "workspace-notes" })).toBeInTheDocument();
+  });
+
+  it("keeps the install dialog and target fixed while preview preparation is pending", async () => {
+    let release: (() => void) | undefined;
+    const backend = setup({
+      commands: {
+        prepare_marketplace_install: (args, fake) => new Promise((resolve) => {
+          release = () => resolve(fake.dispatch("prepare_marketplace_install", args));
+        }),
+      },
+    });
+    const dialog = await openInstallation();
+    fireEvent.click(within(dialog).getByLabelText("Claude Code"));
+    fireEvent.click(within(dialog).getByRole("button", { name: "预览安装" }));
+    await waitFor(() => expect(release).toBeDefined());
+    expect(within(dialog).getByRole("button", { name: "关闭安装" })).toBeDisabled();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(dialog).toBeInTheDocument();
+    release!();
+    expect(await within(dialog).findByRole("button", { name: "确认安装" })).toBeEnabled();
+    expect(backend.callsOf("prepare_marketplace_install")[0].payload.scope).toBe("global");
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(dialog).not.toBeInTheDocument();
+    expect(screen.getByRole("main", { name: marketplaceSkill.name })).toBeInTheDocument();
+  });
+
+  it("keeps the selected identity visible after a detail failure and retries before allowing installation", async () => {
+    let fail = true;
+    const backend = setup({
+      commands: {
+        get_marketplace_skill: () => {
+          if (fail) throw { code: "marketplace.unavailable", message: "详情暂时不可用", retryable: true };
+          return { ...marketplaceSkill, stars: null, downloads: 0 };
+        },
+      },
+    });
+    await openMarket();
+    fireEvent.click(screen.getByRole("button", { name: marketplaceSkill.name }));
+    const page = await screen.findByRole("main", { name: marketplaceSkill.name });
+    await within(page).findByText("详情暂时不可用");
+    expect(within(page).getByText("@example/workspace-notes")).toBeInTheDocument();
+    expect(within(page).getByRole("button", { name: "安装" })).toBeDisabled();
+    expect(within(page).queryByRole("region", { name: "技能概述" })).not.toBeInTheDocument();
+    fail = false;
+    fireEvent.click(within(page).getByRole("button", { name: "重试详情" }));
+    await within(page).findByRole("region", { name: "技能概述" });
+    expect(within(page).getByRole("button", { name: "安装" })).toBeEnabled();
+    expect(within(page).getByLabelText("收藏：平台未提供")).toHaveTextContent("—");
+    expect(within(page).getByLabelText("下载量：0")).toHaveTextContent("0");
+    expect(backend.count("prepare_marketplace_install")).toBe(0);
+  });
+
   it("combines API Key filtering with category, search, sorting and pagination", async () => {
     const backend = setup({
       commands: {
@@ -289,7 +468,7 @@ describe("SkillHub marketplace", () => {
         }),
       },
     });
-    const dialog = await openDetail();
+    const dialog = await openInstallation();
     expect(backend.count("get_marketplace_cli")).toBe(0);
     fireEvent.click(within(dialog).getByLabelText("Claude Code"));
     fireEvent.click(within(dialog).getByRole("button", { name: "预览安装" }));
@@ -301,8 +480,10 @@ describe("SkillHub marketplace", () => {
     );
     expect(backend.count("start_marketplace_install")).toBe(0);
     fireEvent.click(
-      within(dialog).getByRole("button", { name: "关闭市场详情" }),
+      within(dialog).getByRole("button", { name: "关闭安装" }),
     );
+    expect(screen.getByRole("main", { name: marketplaceSkill.name })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "返回列表" }));
     expect(screen.getByRole("button", { name: "刷新目录" })).toBeEnabled();
   });
 
@@ -326,7 +507,7 @@ describe("SkillHub marketplace", () => {
         }),
       },
     });
-    const dialog = await openDetail();
+    const dialog = await openInstallation();
     fireEvent.click(within(dialog).getByLabelText("Claude Code"));
     fireEvent.click(within(dialog).getByRole("button", { name: "预览安装" }));
     const recheck = await within(dialog).findByRole("button", {
@@ -369,8 +550,8 @@ describe("SkillHub marketplace", () => {
         snapshots: { [scope]: makeSnapshot({ skills: [] }) },
       },
     });
-    const dialog = await openDetail();
-    expect(within(dialog).getByText(/安装到 当前项目/)).toBeInTheDocument();
+    const dialog = await openInstallation();
+    expect(within(dialog).getByRole("group", { name: /安装到 项目 · Example/ })).toBeInTheDocument();
     fireEvent.click(within(dialog).getByLabelText("Claude Code"));
     fireEvent.click(within(dialog).getByRole("button", { name: "预览安装" }));
     fireEvent.click(
@@ -465,7 +646,7 @@ describe("SkillHub marketplace", () => {
 
   it("confirms a backend preview with multiple agents and returns a managed installation", async () => {
     const backend = setup({ autoTasks: { delayMs: 5 } });
-    const dialog = await openDetail();
+    const dialog = await openInstallation();
     fireEvent.click(within(dialog).getByLabelText("Claude Code"));
     fireEvent.click(within(dialog).getByLabelText("Codex（共享目录）"));
     fireEvent.click(within(dialog).getByRole("button", { name: "预览安装" }));

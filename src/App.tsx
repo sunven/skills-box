@@ -169,6 +169,7 @@ function App() {
   const [installOpen, setInstallOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [marketplaceOpen, setMarketplaceOpen] = useState(false);
+  const [marketplaceInstallOpen, setMarketplaceInstallOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("github");
   const appUpdate = useAppUpdate();
   const [discoveryEntry, setDiscoveryEntry] = useState<{
@@ -414,7 +415,7 @@ function App() {
 
   const handleSelectScope = useCallback(
     (next: ScopeId) => {
-      if (!scopeReady || next === scope || batchRunningRef.current) return;
+      if (!scopeReady || next === scope || batchRunningRef.current || marketplaceInstallOpen) return;
       resetWorkspaceState();
       setScopeNotice(null);
       setActiveScope(next);
@@ -427,7 +428,7 @@ function App() {
           setScopeNotice(typed.message);
         });
     },
-    [queryClient, resetWorkspaceState, scope, scopeReady],
+    [queryClient, resetWorkspaceState, scope, scopeReady, marketplaceInstallOpen],
   );
 
   const handleProjectAdded = useCallback(
@@ -513,6 +514,7 @@ function App() {
         <p className="notice" role="status">正在安装应用更新并准备重启，暂时无法关闭应用或开始新的写入。</p>
       ) : null}
       <AppHeader
+        inert={marketplaceInstallOpen}
         settingsOpen={settingsOpen}
         marketplaceOpen={marketplaceOpen}
         onOpenMarketplace={() => { setMarketplaceOpen(true); setSettingsOpen(false); setDiscoveryEntry(null); }}
@@ -541,7 +543,7 @@ function App() {
         scopeSwitcher={
           settingsOpen || discoveryEntry ? null : (
             <ScopeSwitcher
-              disabled={appUpdate.critical || batchRunning}
+              disabled={appUpdate.critical || batchRunning || marketplaceInstallOpen}
               activeScope={scope}
               projects={view.scopeProjects}
               warnings={projects?.warnings ?? EMPTY_WARNINGS}
@@ -557,7 +559,14 @@ function App() {
       {settingsOpen ? (
         <SettingsPage onAgentsChanged={handleRecheck} appUpdate={appUpdate} initialSection={settingsSection} />
       ) : marketplaceOpen ? (
-        <MarketplacePage scope={scope} snapshot={snapshot} disabled={actionsDisabled || !snapshot} onView={(name) => { setMarketplaceOpen(false); handleClearFilters(); handleSelectSkill(name); }} />
+        <MarketplacePage
+          scope={scope}
+          scopeLabel={scope === GLOBAL_SCOPE ? "全局" : `项目 · ${activeProject?.displayName ?? "当前项目"}`}
+          snapshot={snapshot}
+          disabled={actionsDisabled || !snapshot}
+          onInstallOpenChange={setMarketplaceInstallOpen}
+          onView={(name) => { setMarketplaceOpen(false); handleClearFilters(); handleSelectSkill(name); }}
+        />
       ) : discoveryEntry ? (
         <DiscoveryPage discovery={discovery} scope={scope}
         initialFilter={discoveryEntry.filter} initialSource={discoveryEntry.source}

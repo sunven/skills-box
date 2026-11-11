@@ -22,6 +22,8 @@ SkillHub 是首个 Marketplace source，本次只实现 SkillHub。领域与执�
 - 市场卡片底部仅显示版本号，不显示发布者标识（2026-11-11 用户追加）。
 - 主流程为「列表或搜索结果 → 详情 → 安装确认 → 安装结果」。本次不做独立榜单页面和收藏操作。
 - 详情展示技能名称、发布者、描述、Marketplace version、技能说明、已声明的运行依赖与官方页面入口。名称和版本的含义遵循下文身份规则；平台没有提供的信息不伪造。
+- 2026-11-11 市场详情页改版已确认并实施；独立阅读视图、安装弹窗及导航状态详见[详情页增量规格](../marketplace-detail-page/spec.md)与[验证记录](../marketplace-detail-page/implementation.md)。
+- 后续追加「文件」页签，读取固定平台版本的文件树和只读预览，详见[市场文件规格](../marketplace-files/spec.md)。
 - 使用 Skill 所需的 API Key 等依赖属于 Skill 自身的运行要求，详情展示已知要求；技能安装沿用内容落盘与挂载的定义。
 - 当前安装目标可以是 Global scope 或已注册 Project；沿用现有 Scope 选择和多 Agent 选择方式。目录内容与 Scope 无关，已安装状态和冲突按当前 Scope 判断。
 - 无 SkillHub CLI 时，浏览、搜索和详情仍可使用。

@@ -80,6 +80,10 @@ _Avoid_: marketplace source
 The app's entry for obtaining skills from Marketplace sources. The Chinese UI labels it 「技能市场」.
 _Avoid_: skill store, source discovery
 
+**Marketplace detail**:
+The published description and release information for one skill offered by a Marketplace source, distinct from management of its local installation. The Chinese UI labels it 「市场详情」.
+_Avoid_: installed skill detail, installation record
+
 **Marketplace source**:
 A service that offers published skills for installation through the Skill marketplace, such as SkillHub.
 _Avoid_: marketplace instance, Git source

@@ -1,4 +1,5 @@
 //! Marketplace adapters and app-owned, scope-local installation records.
+pub mod files;
 pub mod provider;
 pub mod records;
 pub mod runtime;

@@ -48,6 +48,15 @@ export interface MarketplaceDetail extends MarketplaceSkill {
   installError: AppError | null;
   requirements: string[];
 }
+export interface MarketplaceFileEntry {
+  path: string;
+  sizeBytes: number;
+}
+export interface MarketplaceFiles {
+  coordinate: MarketplaceCoordinate;
+  version: string;
+  files: MarketplaceFileEntry[];
+}
 export interface MarketplaceCli {
   available: boolean;
   path: string | null;

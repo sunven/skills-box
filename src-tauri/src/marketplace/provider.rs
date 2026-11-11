@@ -134,7 +134,7 @@ fn text<'a>(v: &'a Value, keys: &[&str]) -> &'a str {
         .find_map(|key| v.get(key).and_then(Value::as_str).filter(|s| !s.is_empty()))
         .unwrap_or("")
 }
-fn coordinate(v: &Value) -> Result<Coordinate, AppError> {
+pub(super) fn coordinate(v: &Value) -> Result<Coordinate, AppError> {
     let ns = &v["namespace"];
     let value = Coordinate {
         source: MarketplaceSource::Skillhub,

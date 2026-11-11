@@ -8,6 +8,7 @@ import App from "../App";
 import { createQueryClient } from "../lib/query-client";
 import { createFakeBackend } from "../test/fake-backend";
 import { initialAppUpdate } from "../lib/app-update";
+import { marketplaceSkill } from "../test/marketplace-fixtures";
 import {
   environment,
   listSkillDir,
@@ -19,7 +20,24 @@ import {
 } from "./fixtures";
 import "../index.css";
 
+const params = new URLSearchParams(location.search);
+const marketplaceMarkdown = params.has("marketplaceLong")
+  ? `${marketplaceSkill.markdown}\n\n${[
+      ["记录项目决策", "在项目目录中保存决策背景、采用的方案与后续检查事项。每条记录包含日期和关联文件，便于在任务交接时追溯依据。"],
+      ["检索已有知识", "先查阅已有笔记与相关代码，再补充新的结论。引用文件时保留相对路径，并说明结论适用的项目范围。"],
+      ["整理任务交接", "交接记录说明已完成工作、当前验证结果和剩余事项。将需要人工处理的步骤列出，并关联相关决策。"],
+      ["维护笔记目录", "按主题整理笔记，定期合并重复内容。保留仍然有效的历史依据，避免将临时观察写成长期约定。"],
+    ].map(([title, text]) => `## ${title}\n\n${text}\n\n1. 查阅当前项目的约定与相关记录。\n2. 保存与本次任务有关的事实和验证结果。\n3. 为后续任务提供明确的文件位置。`).join("\n\n")}\n\n## 命令示例\n\n\`\`\`bash\nnotes search --project workspace --include-decisions --include-handoffs --format markdown --output ./docs/project-notes/search-results.md\n\`\`\`\n\n| 项目记录 | 用途 | 关联信息 |\n| --- | --- | --- |\n| 项目约定 | 当前约束 | 记录来源与生效时间 |\n| 决策记录 | 方案依据 | 关联讨论与验证结果 |\n| 任务交接 | 后续工作 | 提供文件位置和检查步骤 |`
+  : marketplaceSkill.markdown;
+
 createFakeBackend({
+  commands: params.has("marketplaceLong") ? {
+    get_marketplace_skill: ({ coordinate }) => ({ ...marketplaceSkill, coordinate, markdown: marketplaceMarkdown }),
+    prepare_marketplace_install: async (args, fake) => {
+      const preview = await fake.dispatch("prepare_marketplace_install", args);
+      return { ...preview, detail: { ...preview.detail, markdown: marketplaceMarkdown } };
+    },
+  } : undefined,
   data: {
     appData: appDataFixture(),
     appUpdate: new URLSearchParams(location.search).has("appUpdate") ? initialAppUpdate({
@@ -61,7 +79,6 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
 );
 
 // Dev-only driver for inspecting dialog states.
-const params = new URLSearchParams(location.search);
 const buttonByText = (text: string) =>
   [...document.querySelectorAll("button")].find((candidate) =>
     candidate.textContent?.trim().startsWith(text),
@@ -133,6 +150,16 @@ async function driveContent() {
 }
 
 window.setTimeout(async () => {
+  if (params.has("marketplace") || params.has("marketplaceLong") || params.has("marketplaceFiles")) {
+    clickButton("技能市场");
+    await pause(160);
+    clickButton(marketplaceSkill.name);
+    if (params.has("marketplaceFiles")) {
+      await pause(160);
+      document.querySelector<HTMLButtonElement>("#marketplace-tab-files")?.click();
+    }
+    return;
+  }
   if (params.has("check")) clickButton("检查更新");
   await pause(400);
   if (params.has("batchUninstall")) {

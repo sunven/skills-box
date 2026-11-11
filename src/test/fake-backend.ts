@@ -1,6 +1,6 @@
-import type { MarketplaceCoordinate, MarketplaceListing, MarketplaceDetail, MarketplaceCli, MarketplacePreview, MarketplaceSort, MarketplaceCategory, MarketplaceApiKeyFilter } from "../lib/marketplace";
+import type { MarketplaceCoordinate, MarketplaceListing, MarketplaceDetail, MarketplaceCli, MarketplacePreview, MarketplaceSort, MarketplaceCategory, MarketplaceApiKeyFilter, MarketplaceFiles } from "../lib/marketplace";
 import { marketplaceAddress } from "../lib/marketplace";
-import { marketplaceSkill, marketplaceCli, marketplaceCategories } from "./marketplace-fixtures";
+import { marketplaceSkill, marketplaceCli, marketplaceCategories, marketplaceFiles, marketplaceFileContent } from "./marketplace-fixtures";
 import type {
   StaleRecord,
   BatchRequest,
@@ -73,6 +73,8 @@ export interface FakeCommandContract {
   list_marketplace_categories: { args: Record<string, never>; result: MarketplaceCategory[] };
   list_marketplace_skills: { args: { keyword: string; page: number; sort: MarketplaceSort; category: string; apiKey: MarketplaceApiKeyFilter }; result: MarketplaceListing };
   get_marketplace_skill: { args: { coordinate: MarketplaceCoordinate }; result: MarketplaceDetail };
+  list_marketplace_files: { args: { coordinate: MarketplaceCoordinate; version: string }; result: MarketplaceFiles };
+  read_marketplace_file: { args: { coordinate: MarketplaceCoordinate; version: string; path: string }; result: SkillFileContent };
   get_marketplace_cli: { args: Record<string, never>; result: MarketplaceCli };
   prepare_marketplace_install: { args: { scope: ScopeId; coordinate: MarketplaceCoordinate; agents: string[] }; result: MarketplacePreview };
   start_marketplace_install: { args: { scope: ScopeId; previewId: string; onEvent: Channel<TaskEvent> }; result: string };
@@ -1752,6 +1754,8 @@ export function createFakeBackend(
       return { skills: page === 1 && matches ? [marketplaceSkill] : [], total: matches ? 1 : 0, page, pageSize: 24 };
     },
     get_marketplace_skill: ({ coordinate }) => ({ ...marketplaceSkill, coordinate }),
+    list_marketplace_files: ({ coordinate, version }) => ({ coordinate, version, files: marketplaceFiles }),
+    read_marketplace_file: ({ path }) => marketplaceFileContent(path),
     get_marketplace_cli: () => marketplaceCli,
     prepare_marketplace_install: ({ scope, coordinate, agents }) => {
       const existing = snapshotFor(scope).skills.find((s) => s.name === marketplaceSkill.originalName);

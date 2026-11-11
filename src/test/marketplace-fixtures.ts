@@ -1,4 +1,5 @@
-import type { MarketplaceCli, MarketplaceDetail, MarketplaceCategory } from "../lib/marketplace";
+import type { MarketplaceCli, MarketplaceDetail, MarketplaceCategory, MarketplaceFileEntry } from "../lib/marketplace";
+import type { SkillFileContent } from "../lib/types";
 export const marketplaceSkill: MarketplaceDetail = {
   coordinate: {
     source: "skillhub",
@@ -27,6 +28,34 @@ export const marketplaceCli: MarketplaceCli = {
     "curl -fsSL https://skillhub-1388575217.cos.ap-guangzhou.myqcloud.com/install/install.sh | bash -s -- --cli-only",
   instructionsUrl: "https://skillhub.cn/install/skillhub.md",
 };
+
+const fileTexts: Record<string, string> = {
+  "SKILL.md": marketplaceSkill.markdown,
+  "references/guide.md": "# 笔记指南\n\n将项目决策写入独立笔记，保留日期与关联文件。\n\n[查看示例脚本](../scripts/notes.py)\n\n[返回技能说明](../SKILL.md)",
+  "scripts/notes.py": 'from pathlib import Path\n\nfor note in Path("notes").glob("*.md"):\n    print(note.name)\n',
+  "LICENSE": "MIT License\n\nCopyright (c) Example\n",
+};
+const previewImage = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXioAAAAASUVORK5CYII=";
+export const marketplaceFiles: MarketplaceFileEntry[] = [
+  ...Object.entries(fileTexts).map(([path, text]) => ({ path, sizeBytes: new TextEncoder().encode(text).length })),
+  { path: "assets/preview.png", sizeBytes: 68 },
+  { path: "assets/data.bin", sizeBytes: 128 },
+  { path: "references/large.txt", sizeBytes: 2 * 1024 * 1024 },
+];
+export function marketplaceFileContent(path: string): SkillFileContent {
+  const entry = marketplaceFiles.find((file) => file.path === path);
+  if (!entry) throw new Error("此版本中没有该文件");
+  const image = path.endsWith(".png");
+  return {
+    path, displayPath: path, sizeBytes: entry.sizeBytes,
+    limitBytes: image ? 5 * 1024 * 1024 : 1024 * 1024,
+    kind: image ? "image" : path.endsWith(".md") ? "markdown" : "text",
+    status: path.endsWith(".bin") ? "binary" : path.endsWith("large.txt") ? "too_large" : "ok",
+    content: fileTexts[path] ?? null,
+    dataUrl: image ? previewImage : null,
+    error: null,
+  };
+}
 
 export const marketplaceCategories: MarketplaceCategory[] = [
   { key: "pay-skill", name: "Pay Skill" },

@@ -894,6 +894,21 @@ pub async fn get_marketplace_skill(
     crate::marketplace::provider::detail(&coordinate).await
 }
 #[tauri::command]
+pub async fn list_marketplace_files(
+    coordinate: crate::marketplace::Coordinate,
+    version: String,
+) -> Result<crate::marketplace::files::Listing, AppError> {
+    crate::marketplace::files::list(&coordinate, &version).await
+}
+#[tauri::command]
+pub async fn read_marketplace_file(
+    coordinate: crate::marketplace::Coordinate,
+    version: String,
+    path: String,
+) -> Result<crate::content::SkillFileContent, AppError> {
+    crate::marketplace::files::read(&coordinate, &version, &path).await
+}
+#[tauri::command]
 pub async fn get_marketplace_cli(
     state: State<'_, AppState>,
 ) -> Result<crate::marketplace::runtime::Status, AppError> {

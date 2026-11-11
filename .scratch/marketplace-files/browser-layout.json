@@ -1,0 +1,32 @@
+[
+  {
+    "documentOverflow": false,
+    "mainOverflow": false,
+    "previewOverflow": false,
+    "width": 1440
+  },
+  {
+    "documentOverflow": false,
+    "mainOverflow": false,
+    "previewOverflow": false,
+    "width": 1024
+  },
+  {
+    "documentOverflow": false,
+    "mainOverflow": false,
+    "previewOverflow": false,
+    "width": 768
+  },
+  {
+    "documentOverflow": false,
+    "mainOverflow": false,
+    "previewOverflow": false,
+    "width": 390
+  },
+  {
+    "documentOverflow": false,
+    "mainOverflow": false,
+    "previewOverflow": false,
+    "width": 320
+  }
+]

@@ -452,7 +452,7 @@ fn is_markdown(name: &str) -> bool {
     matches!(extension_lower(name).as_deref(), Some("md" | "markdown"))
 }
 
-fn file_kind(name: &str) -> SkillFileKind {
+pub(crate) fn file_kind(name: &str) -> SkillFileKind {
     match extension_lower(name).as_deref() {
         Some("md" | "markdown") => SkillFileKind::Markdown,
         Some(extension) if IMAGE_EXTENSIONS.contains(&extension) => SkillFileKind::Image,
@@ -460,7 +460,7 @@ fn file_kind(name: &str) -> SkillFileKind {
     }
 }
 
-fn image_mime(name: &str) -> Option<&'static str> {
+pub(crate) fn image_mime(name: &str) -> Option<&'static str> {
     match extension_lower(name).as_deref() {
         Some("png") => Some("image/png"),
         Some("jpg" | "jpeg") => Some("image/jpeg"),
@@ -471,7 +471,7 @@ fn image_mime(name: &str) -> Option<&'static str> {
     }
 }
 
-fn limit_for(kind: SkillFileKind) -> u64 {
+pub(crate) fn limit_for(kind: SkillFileKind) -> u64 {
     match kind {
         SkillFileKind::Image => CONTENT_IMAGE_LIMIT_BYTES,
         SkillFileKind::Markdown | SkillFileKind::Text => CONTENT_TEXT_LIMIT_BYTES,

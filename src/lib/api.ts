@@ -1,4 +1,4 @@
-import type { MarketplaceCoordinate, MarketplaceListing, MarketplaceDetail, MarketplaceCli, MarketplacePreview, MarketplaceSort, MarketplaceCategory, MarketplaceApiKeyFilter } from "./marketplace";
+import type { MarketplaceCoordinate, MarketplaceListing, MarketplaceDetail, MarketplaceCli, MarketplacePreview, MarketplaceSort, MarketplaceCategory, MarketplaceApiKeyFilter, MarketplaceFiles } from "./marketplace";
 import type { BatchRequest, BatchPreview, BatchConfirmation, StaleRecord } from "./batch";
 import type { CliCommandRequest, CliCommandPreview, CliCommandRecord } from "./cli-commands";
 import type {
@@ -41,6 +41,8 @@ export const API_COMMANDS = {
   listMarketplaceSkills: "list_marketplace_skills",
   listMarketplaceCategories: "list_marketplace_categories",
   getMarketplaceSkill: "get_marketplace_skill",
+  listMarketplaceFiles: "list_marketplace_files",
+  readMarketplaceFile: "read_marketplace_file",
   getMarketplaceCli: "get_marketplace_cli",
   prepareMarketplaceInstall: "prepare_marketplace_install",
   startMarketplaceInstall: "start_marketplace_install",
@@ -551,6 +553,12 @@ export function listStaleRecords(scope: ScopeId): Promise<StaleRecord[]> {
 export function listMarketplaceCategories(): Promise<MarketplaceCategory[]> { return invoke(API_COMMANDS.listMarketplaceCategories); }
 export function listMarketplaceSkills(keyword: string, page: number, sort: MarketplaceSort, category: string, apiKey: MarketplaceApiKeyFilter): Promise<MarketplaceListing> { return invoke(API_COMMANDS.listMarketplaceSkills, { keyword, page, sort, category, apiKey }); }
 export function getMarketplaceSkill(coordinate: MarketplaceCoordinate): Promise<MarketplaceDetail> { return invoke(API_COMMANDS.getMarketplaceSkill, { coordinate }); }
+export function listMarketplaceFiles(coordinate: MarketplaceCoordinate, version: string): Promise<MarketplaceFiles> {
+  return invoke(API_COMMANDS.listMarketplaceFiles, { coordinate, version });
+}
+export function readMarketplaceFile(coordinate: MarketplaceCoordinate, version: string, path: string): Promise<SkillFileContent> {
+  return invoke(API_COMMANDS.readMarketplaceFile, { coordinate, version, path });
+}
 export function getMarketplaceCli(): Promise<MarketplaceCli> { return invoke(API_COMMANDS.getMarketplaceCli); }
 export function prepareMarketplaceInstall(scope: ScopeId, coordinate: MarketplaceCoordinate, agents: string[]): Promise<MarketplacePreview> { return invoke(API_COMMANDS.prepareMarketplaceInstall, { scope, coordinate, agents }); }
 export function startMarketplaceInstall(scope: ScopeId, previewId: string, onEvent: (event: TaskEvent) => void): Promise<string> {
