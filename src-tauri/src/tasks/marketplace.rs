@@ -473,7 +473,7 @@ impl MutationAction for Action {
                 backup_path: Some(backup.clone()),
             }],
             warnings,
-            backup_path: backup,
+            backup_path: Some(backup),
             final_progress: None,
         })
     }

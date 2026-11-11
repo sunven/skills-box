@@ -94,7 +94,9 @@ object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'
 - No shell is used. `TokioExecutor` spawns `Command::new(program).args(...)`
   with `env_clear()` and a minimal allowlist, `stdin(Stdio::null())`, and a
   dedicated process group so cancel/timeout can `SIGTERM` then `SIGKILL` the
-  whole npx → npm → git tree.
+  whole npx → npm → git tree. The deadline and cancellation cover output
+  collection as well as the direct child, including descendants that retain
+  output pipes after that child exits.
 - Sources, skill names, agent ids, `skillId` and app-data kinds are validated
   server-side. The renderer sends only semantic values (`source`, skill ids,
   agent ids, `taskId`, app-data `kind`, an https URL); **paths never cross IPC
@@ -105,6 +107,14 @@ object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'
   source. The app never spawns `skills list`, `skills update`, `skills check`,
   `remove -a`, `remove --all`, `add --all`, `-a '*'` or `--copy`.
 - Mutations are serialized and create a lock snapshot before writing.
+- Project mutation readiness validates the physical containment of the
+  canonical store and lock, including existing parent links for missing paths.
+  Git installs repeat these checks before backup and immediately before the
+  CLI runs. Uninstall rejects a linked Agent skills directory, and copy
+  dependency checks protect links to both the copy and its contents.
+- Ordinary shutdown waits for unregistered native workers to release the
+  mutation permit, including workers whose requesting future was dropped.
+  These workers settle their file operations before the application exits.
 - Command previews accept the same semantic requests as task starts. Rust
   formats the executable, cwd and argv from the validated execution plan and
   returns copyable text plus a preview fingerprint. Starts revalidate that

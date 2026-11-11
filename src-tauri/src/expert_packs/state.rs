@@ -87,11 +87,23 @@ pub fn observe(
             .map(|l| {
                 l.attachments
                     .iter()
-                    .filter(|a| matches!(a.mode, AttachmentMode::Native | AttachmentMode::Link))
+                    .filter(|a| match a.mode {
+                        AttachmentMode::Native => true,
+                        AttachmentMode::Link => std::fs::canonicalize(&canonical)
+                            .ok()
+                            .zip(std::fs::canonicalize(&a.path).ok())
+                            .is_some_and(|(canonical, target)| canonical == target),
+                        _ => false,
+                    })
                     .map(|a| a.agent_id.clone())
                     .collect()
             })
             .unwrap_or_default();
+        let attachment_conflict = located.as_ref().is_some_and(|l| {
+            l.attachments.iter().any(|a| {
+                snapshot.agents.contains(&a.agent_id) && !attached_agents.contains(&a.agent_id)
+            })
+        });
         let missing_agents = snapshot
             .agents
             .iter()
@@ -119,7 +131,7 @@ pub fn observe(
             version,
             version_changed,
             modified,
-            conflict: !identity && (located.is_some() || entry.is_some()),
+            conflict: (!identity && (located.is_some() || entry.is_some())) || attachment_conflict,
         });
     }
     Ok(LocalPack {

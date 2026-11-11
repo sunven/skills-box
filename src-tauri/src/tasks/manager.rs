@@ -458,17 +458,19 @@ impl TaskManager {
     /// also what keeps a Project root from moving.
     pub fn try_acquire_mutation(&self) -> Result<MutationPermit, AppError> {
         self.ensure_not_shutting_down()?;
-        Arc::clone(&self.inner.mutation_slots)
+        let permit = Arc::clone(&self.inner.mutation_slots)
             .try_acquire_owned()
-            .map(|permit| MutationPermit {
-                _policy: self
-                    .inner
-                    .paths
-                    .data_coordination
-                    .operation(crate::settings::data_preferences(&self.inner.paths)),
-                _permit: permit,
-            })
-            .map_err(|_| AppError::task_busy())
+            .map_err(|_| AppError::task_busy())?;
+        // Shutdown may begin between the first check and slot acquisition.
+        self.ensure_not_shutting_down()?;
+        Ok(MutationPermit {
+            _policy: self
+                .inner
+                .paths
+                .data_coordination
+                .operation(crate::settings::data_preferences(&self.inner.paths)),
+            _permit: permit,
+        })
     }
 
     fn ensure_not_shutting_down(&self) -> Result<(), AppError> {
@@ -574,12 +576,17 @@ impl TaskManager {
     /// Stop for application exit: keep the marker (so the next launch warns),
     /// cancel all tasks and wait briefly for mutation process groups to be
     /// reaped. The executor escalates SIGTERM -> 3s -> SIGKILL, so six seconds
-    /// covers the kill plus pipe cleanup.
+    /// covers that cleanup. Unregistered native workers cannot be cancelled;
+    /// shutdown waits for them to release the write slot before exiting.
     pub async fn shutdown_mutations(&self) -> ShutdownReport {
         self.inner.shutting_down.store(true, Ordering::SeqCst);
         let active = self.active_mutation();
         let cancelled_tasks = self.cancel_all_tasks();
         if active.is_none() {
+            // Native Attach/Detach and blocking planning own the write slot
+            // without a registry entry. They cannot be cancelled safely;
+            // wait for their actual worker to release it before app.exit().
+            let _permit = self.inner.mutation_slots.acquire().await;
             return ShutdownReport {
                 active,
                 cancelled_tasks,

@@ -127,11 +127,27 @@ impl ScopeLayout {
         ScopedLock::read(&self.scope, &self.lock_path)
     }
 
-    /// A project lock that cannot be parsed or uses an unsupported version is
-    /// a scope error: every mutation and preview for that scope is rejected
-    /// before a task is registered. Global behavior is unchanged.
+    /// Project writes and previews require contained store/lock paths and a
+    /// readable, supported lock. Missing paths are allowed only when their
+    /// nearest existing ancestor still resolves inside the Project root.
     pub fn ensure_mutation_ready(&self) -> Result<(), AppError> {
         if self.project.is_some() {
+            for path in [&self.canonical_dir, &self.lock_path] {
+                project_path::lexical(&self.root, path)
+                    .and_then(|_| project_path::resolve(path, &self.root, Existence::AllowMissing))
+                    .map_err(|error| match error {
+                        PathError::PhysicalEscape(_) | PathError::LexicalEscape(_) => {
+                            AppError::path_outside_allowed_root(format!(
+                                "项目写入路径解析后位于项目根之外：{}",
+                                path.display()
+                            ))
+                        }
+                        _ => AppError::path_invalid(format!(
+                            "项目写入路径无法安全解析：{}",
+                            path.display()
+                        )),
+                    })?;
+            }
             let _ = self.lock()?;
         }
         Ok(())

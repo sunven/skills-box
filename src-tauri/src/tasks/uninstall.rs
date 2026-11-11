@@ -105,6 +105,24 @@ pub fn plan_uninstall(
             .then_with(|| left.path.cmp(&right.path))
     });
     let canonical = located.canonical_path;
+    for attachment in attachments
+        .iter()
+        .filter(|a| a.mode != AttachmentMode::Native)
+    {
+        let parent = attachment
+            .path
+            .parent()
+            .ok_or_else(|| AppError::path_invalid("卸载目标缺少父目录。"))?;
+        if matches!(
+            crate::attachment_target::inspect_agent_dir(parent),
+            crate::attachment_target::AgentDirectoryState::Symlink
+        ) {
+            return Err(AppError::path_invalid(format!(
+                "agent skills 目录本身是符号链接：{}",
+                parent.display()
+            )));
+        }
+    }
     let removal_paths: BTreeSet<&PathBuf> = canonical
         .iter()
         .chain(attachments.iter().map(|attachment| &attachment.path))
@@ -116,19 +134,11 @@ pub fn plan_uninstall(
         .iter()
         .filter(|attachment| attachment.mode == AttachmentMode::Copy)
     {
-        let dependents = match crate::detach::find_copy_dependents(
-            &layout.agents,
-            &layout.canonical_dir,
-            &copy.path,
-        ) {
-            Ok(dependents) => dependents
+        let dependents =
+            crate::detach::find_copy_dependents(&layout.agents, &layout.canonical_dir, &copy.path)?
                 .into_iter()
                 .filter(|dependent| !removal_paths.contains(&dependent.path))
-                .collect::<Vec<_>>(),
-            // An unresolvable copy has nothing to compare against; planning
-            // stays permissive and post-uninstall verification still runs.
-            Err(_) => continue,
-        };
+                .collect::<Vec<_>>();
         if !dependents.is_empty() {
             let list = dependents
                 .iter()
@@ -403,7 +413,7 @@ impl UninstallAction {
                 backup_path: Some(backup_display.clone()),
             }],
             warnings,
-            backup_path: backup_display,
+            backup_path: Some(backup_display),
             final_progress: None,
         })
     }
@@ -506,25 +516,13 @@ impl MutationAction for UninstallAction {
             Some(plan.name.as_str()),
         );
         let backups = BackupStore::for_layout(&self.paths, &self.layout);
-        let backup = backups
-            .create(
-                BackupAction::Uninstall,
-                &plan.name,
-                plan.canonical.as_deref(),
-                &plan.backup_attachments(),
-                &plan.agent_ids,
-            )
-            .inspect_err(|error| {
-                let log = OperationLog::for_scope(&self.paths, &self.layout.scope);
-                let _ = log.append(&OperationEntry::new(
-                    "uninstall",
-                    &plan.name,
-                    plan.agent_ids.clone(),
-                    "failed",
-                    None,
-                    Some(error.clone()),
-                ));
-            })?;
+        let backup = backups.create(
+            BackupAction::Uninstall,
+            &plan.name,
+            plan.canonical.as_deref(),
+            &plan.backup_attachments(),
+            &plan.agent_ids,
+        )?;
         Ok(Preflight {
             snapshot: backup.path,
             post_message: None,
@@ -959,6 +957,43 @@ mod tests {
             detail.contains(".gemini/skills/different-skill"),
             "{detail}"
         );
+    }
+
+    #[test]
+    fn regression_uninstall_protects_links_to_copy_contents() {
+        let fixture = Fixture::new();
+        let child = fixture.claude.join("alpha/child");
+        fs::create_dir_all(&child).unwrap();
+        fs::write(child.join("SKILL.md"), "child").unwrap();
+        symlink(&child, fixture.qoder.join("child")).unwrap();
+
+        assert_eq!(
+            fixture.plan("alpha").unwrap_err().code,
+            ErrorCode::AgentDependencyConflict
+        );
+        assert!(fixture.qoder.join("child/SKILL.md").is_file());
+    }
+
+    #[test]
+    fn regression_uninstall_rejects_a_linked_agent_skills_directory() {
+        for name in ["alpha", "unmanaged"] {
+            let fixture = Fixture::new();
+            fs::create_dir_all(fixture.claude.join(name)).unwrap();
+            fs::write(
+                fixture.claude.join(name).join("SKILL.md"),
+                "external content",
+            )
+            .unwrap();
+            let external = fixture.home.join("external-skills");
+            fs::rename(&fixture.claude, &external).unwrap();
+            symlink(&external, &fixture.claude).unwrap();
+
+            assert_eq!(fixture.plan(name).unwrap_err().code, ErrorCode::PathInvalid);
+            assert_eq!(
+                fs::read_to_string(external.join(name).join("SKILL.md")).unwrap(),
+                "external content"
+            );
+        }
     }
 
     #[test]

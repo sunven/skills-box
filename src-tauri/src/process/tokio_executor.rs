@@ -78,7 +78,7 @@ fn inject_debug_fake_cli(spec: CommandSpec) -> CommandSpec {
 pub struct TokioExecutor;
 
 enum WaitOutcome {
-    Exited(std::process::ExitStatus),
+    Exited(std::process::ExitStatus, Vec<u8>, Vec<u8>),
     TimedOut,
     Cancelled,
     Io(std::io::Error),
@@ -118,48 +118,44 @@ impl ProcessExecutor for TokioExecutor {
             .take()
             .expect("stderr is piped when spawning with Stdio::piped");
 
-        let stdout_task = tokio::spawn(async move {
-            let mut buffer = Vec::new();
-            let _ = stdout_pipe.read_to_end(&mut buffer).await;
-            buffer
-        });
-        let stderr_task = tokio::spawn(async move {
-            let mut buffer = Vec::new();
-            let _ = stderr_pipe.read_to_end(&mut buffer).await;
-            buffer
-        });
-
+        // The deadline covers the leader and both pipes. Descendants can keep
+        // a pipe open after the leader exits; cancellation must still kill
+        // their process group, and dropping this future stops the reads.
         let outcome = tokio::select! {
             biased;
             _ = cancel.cancelled() => WaitOutcome::Cancelled,
-            result = tokio::time::timeout(spec.timeout, child.wait()) => match result {
-                Ok(Ok(status)) => WaitOutcome::Exited(status),
+            result = tokio::time::timeout(spec.timeout, async {
+                let mut stdout = Vec::new();
+                let mut stderr = Vec::new();
+                let (status, _, _) = tokio::try_join!(
+                    child.wait(),
+                    stdout_pipe.read_to_end(&mut stdout),
+                    stderr_pipe.read_to_end(&mut stderr),
+                )?;
+                Ok::<_, std::io::Error>((status, stdout, stderr))
+            }) => match result {
+                Ok(Ok((status, stdout, stderr))) => WaitOutcome::Exited(status, stdout, stderr),
                 Ok(Err(error)) => WaitOutcome::Io(error),
                 Err(_) => WaitOutcome::TimedOut,
             },
         };
 
-        let status = match outcome {
-            WaitOutcome::Exited(status) => status,
+        let (status, stdout, stderr) = match outcome {
+            WaitOutcome::Exited(status, stdout, stderr) => (status, stdout, stderr),
             WaitOutcome::Cancelled => {
                 stop_child(&mut child, pid).await;
-                collect_pipes(stdout_task, stderr_task).await;
                 return Err(ExecError::Cancelled);
             }
             WaitOutcome::TimedOut => {
                 stop_child(&mut child, pid).await;
-                collect_pipes(stdout_task, stderr_task).await;
                 return Err(ExecError::Timeout(spec.timeout));
             }
             WaitOutcome::Io(error) => {
                 stop_child(&mut child, pid).await;
-                collect_pipes(stdout_task, stderr_task).await;
                 return Err(ExecError::Io(error.to_string()));
             }
         };
 
-        let stdout = stdout_task.await.unwrap_or_default();
-        let stderr = stderr_task.await.unwrap_or_default();
         let signal = {
             use std::os::unix::process::ExitStatusExt;
             status.signal()
@@ -210,14 +206,6 @@ async fn stop_child(child: &mut Child, pid: Option<u32>) {
         }
     }
     let _ = child.wait().await;
-}
-
-async fn collect_pipes(
-    stdout_task: tokio::task::JoinHandle<Vec<u8>>,
-    stderr_task: tokio::task::JoinHandle<Vec<u8>>,
-) {
-    let _ = tokio::time::timeout(Duration::from_secs(1), stdout_task).await;
-    let _ = tokio::time::timeout(Duration::from_secs(1), stderr_task).await;
 }
 
 fn terminate_group(pid: Option<u32>, signal: i32) {
@@ -313,6 +301,49 @@ mod tests {
             started.elapsed() < Duration::from_secs(5),
             "timeout should not wait for the child"
         );
+    }
+
+    #[tokio::test]
+    async fn regression_timeout_covers_output_after_the_leader_exits() {
+        let error = TokioExecutor
+            .run(
+                spec("/bin/sh", &["-c", "/bin/sleep 2 & exit 0"], &[], 100),
+                CancelToken::new(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error, ExecError::Timeout(Duration::from_millis(100)));
+    }
+
+    #[tokio::test]
+    async fn regression_cancellation_covers_output_after_the_leader_exits() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pid_file = tmp.path().join("leader.pid");
+        let script = format!("/bin/sleep 2 & echo $$ > '{}'; exit 0", pid_file.display());
+        let cancel = CancelToken::new();
+        let task = tokio::spawn({
+            let cancel = cancel.clone();
+            async move {
+                TokioExecutor
+                    .run(spec("/bin/sh", &["-c", &script], &[], 10_000), cancel)
+                    .await
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if let Ok(raw) = std::fs::read_to_string(&pid_file)
+                    && let Ok(pid) = raw.trim().parse::<i32>()
+                    && unsafe { libc::kill(pid, 0) } == -1
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("leader should have exited and been reaped");
+        cancel.cancel();
+        assert_eq!(task.await.unwrap().unwrap_err(), ExecError::Cancelled);
     }
 
     #[tokio::test]

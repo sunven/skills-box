@@ -370,7 +370,7 @@ fn ensure_not_universal(agent: &AgentDir, canonical_dir: &Path) -> Result<(), Ap
     Ok(())
 }
 
-fn inspect_agent_dir(agent_dir: &Path) -> AgentDirectoryState {
+pub(crate) fn inspect_agent_dir(agent_dir: &Path) -> AgentDirectoryState {
     match fs::symlink_metadata(agent_dir) {
         Ok(metadata) if metadata.file_type().is_symlink() => AgentDirectoryState::Symlink,
         Ok(metadata) if !metadata.is_dir() => AgentDirectoryState::NotDirectory,

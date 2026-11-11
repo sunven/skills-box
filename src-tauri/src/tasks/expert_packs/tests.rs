@@ -193,6 +193,39 @@ fn result(outcome: FinishOutcome) -> crate::tasks::TaskResult {
 }
 
 #[tokio::test]
+async fn regression_pack_completeness_rejects_links_to_other_content() {
+    use std::os::unix::fs::symlink;
+
+    for project in [false, true] {
+        let f = Fixture::new(project);
+        f.install().await;
+        for name in ["first", f.plan.snapshot.workflow_name.as_str()] {
+            let attachment = f.plan.layout.root.join(".claude/skills").join(name);
+            let unrelated = f.plan.layout.root.join("unrelated").join(name);
+            fs::create_dir_all(&unrelated).unwrap();
+            fs::write(unrelated.join("SKILL.md"), "unrelated content").unwrap();
+            fs::remove_file(&attachment).unwrap();
+            symlink(&unrelated, &attachment).unwrap();
+
+            let observed = state::observe(&f.paths, &f.plan.layout, &f.plan.snapshot).unwrap();
+            let skill = observed.skills.iter().find(|s| s.name == name).unwrap();
+            assert!(!observed.complete, "{observed:?}");
+            assert_eq!(skill.missing_agents, ["claude-code"]);
+            assert!(!skill.attached_agents.iter().any(|id| id == "claude-code"));
+            assert!(skill.conflict);
+
+            fs::remove_file(&attachment).unwrap();
+            symlink(f.plan.layout.canonical_dir.join(name), &attachment).unwrap();
+            assert!(
+                state::observe(&f.paths, &f.plan.layout, &f.plan.snapshot)
+                    .unwrap()
+                    .complete
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn stages_every_member_before_publication_in_both_scopes_and_workflow_is_managed() {
     for project in [false, true] {
         let f = Fixture::new(project);

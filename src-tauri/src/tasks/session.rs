@@ -89,7 +89,7 @@ pub struct FinalProgress {
 pub struct UnitOutcome {
     pub rows: Vec<TaskSkillResult>,
     pub warnings: Vec<AppError>,
-    pub backup_path: String,
+    pub backup_path: Option<String>,
     /// Emitted after the unit's rows are appended, and after update re-enables
     /// cancellation, so a cancel requested on this event is accepted.
     pub final_progress: Option<FinalProgress>,
@@ -108,8 +108,8 @@ pub(crate) struct FailedUnit<'a> {
     pub agents: &'a [String],
 }
 
-/// Shared bookkeeping for a unit whose infrastructure failed. Without a
-/// preflight there is no completed unit to keep, so the task fails.
+/// Shared bookkeeping for a failed unit, including preparation failures that
+/// have no backup. The session decides whether to stop or continue.
 pub(crate) fn unit_failure(
     paths: &AppPaths,
     scope: &crate::scope::ScopeId,
@@ -119,24 +119,13 @@ pub(crate) fn unit_failure(
     final_progress: Option<FinalProgress>,
 ) -> FailureDisposition {
     let log = OperationLog::for_scope(paths, scope);
-    let Some(preflight) = preflight else {
-        let _ = log.append(&OperationEntry::new(
-            unit.action,
-            unit.name,
-            unit.agents.to_vec(),
-            "failed",
-            None,
-            Some(error.clone()),
-        ));
-        return FailureDisposition::TaskFailed(error);
-    };
-    let backup_display = paths.display(&preflight.snapshot);
+    let backup_display = preflight.map(|p| paths.display(&p.snapshot));
     let _ = log.append(&OperationEntry::new(
         unit.action,
         unit.name,
         unit.agents.to_vec(),
         "failed",
-        Some(backup_display.clone()),
+        backup_display.clone(),
         Some(error.clone()),
     ));
     FailureDisposition::UnitFailed(UnitOutcome {
@@ -144,7 +133,7 @@ pub(crate) fn unit_failure(
             name: unit.name.to_string(),
             status: TaskSkillStatus::Failed,
             error: Some(error),
-            backup_path: Some(backup_display.clone()),
+            backup_path: backup_display.clone(),
         }],
         warnings: Vec::new(),
         backup_path: backup_display,
@@ -200,7 +189,7 @@ pub trait MutationAction: Send + Sync + 'static {
     fn preflight(&self, unit: &Self::Unit, reporter: &Reporter) -> Result<Preflight, AppError>;
 
     /// Revalidate authorization after the snapshot, immediately before invoking
-    /// the writer. Standalone actions keep their existing behavior.
+    /// the writer.
     fn before_write(&self, _unit: &Self::Unit) -> Result<(), AppError> {
         Ok(())
     }
@@ -328,19 +317,28 @@ pub async fn run<A: MutationAction>(
             let preflight = tokio::task::spawn_blocking(move || {
                 hook_action.preflight(&hook_unit, &hook_reporter)
             })
-            .await;
+            .await
+            .unwrap_or_else(|join| Err(AppError::backup_failed(join.to_string())));
             match preflight {
-                Ok(Ok(preflight)) => preflight,
-                Ok(Err(error)) => return FinishOutcome::Failed(error),
-                Err(join) => {
-                    let error = AppError::backup_failed(join.to_string());
-                    match action.on_infrastructure_failure(unit, error.clone(), None, &reporter) {
-                        FailureDisposition::TaskFailed(error) => {
-                            return FinishOutcome::Failed(error);
-                        }
-                        // A preflight failure has no completed unit to keep.
-                        FailureDisposition::UnitFailed(_) => return FinishOutcome::Failed(error),
+                Ok(preflight) => preflight,
+                Err(error) => {
+                    let failure =
+                        action.on_infrastructure_failure(unit, error.clone(), None, &reporter);
+                    if rows.is_empty() {
+                        return FinishOutcome::Failed(error);
                     }
+                    // Earlier units may already have changed files. Keep their
+                    // rows and backup references, report this failure, and stop
+                    // before attempting another write without a backup.
+                    match failure {
+                        FailureDisposition::UnitFailed(outcome) => {
+                            backup_paths.extend(outcome.backup_path);
+                            rows.extend(outcome.rows);
+                            warnings.extend(outcome.warnings);
+                        }
+                        FailureDisposition::TaskFailed(error) => warnings.push(error),
+                    }
+                    break;
                 }
             }
         };
@@ -392,7 +390,7 @@ pub async fn run<A: MutationAction>(
             match action.on_infrastructure_failure(unit, error, Some(&preflight), &reporter) {
                 FailureDisposition::TaskFailed(error) => return FinishOutcome::Failed(error),
                 FailureDisposition::UnitFailed(outcome) => {
-                    backup_paths.push(outcome.backup_path);
+                    backup_paths.extend(outcome.backup_path);
                     rows.extend(outcome.rows);
                     warnings.extend(outcome.warnings);
                     continue;
@@ -434,7 +432,7 @@ pub async fn run<A: MutationAction>(
                         }
                         FailureDisposition::UnitFailed(outcome) => {
                             let final_progress = outcome.final_progress.clone();
-                            backup_paths.push(outcome.backup_path.clone());
+                            backup_paths.extend(outcome.backup_path.clone());
                             rows.extend(outcome.rows);
                             warnings.extend(outcome.warnings);
                             emit_final_progress(
@@ -481,7 +479,7 @@ pub async fn run<A: MutationAction>(
                     FailureDisposition::TaskFailed(error) => return FinishOutcome::Failed(error),
                     FailureDisposition::UnitFailed(outcome) => {
                         let final_progress = outcome.final_progress.clone();
-                        backup_paths.push(outcome.backup_path.clone());
+                        backup_paths.extend(outcome.backup_path.clone());
                         rows.extend(outcome.rows);
                         warnings.extend(outcome.warnings);
                         emit_final_progress(
@@ -503,7 +501,7 @@ pub async fn run<A: MutationAction>(
             (ctx.set_cancellable)(true);
         }
         let final_progress = outcome.final_progress.clone();
-        backup_paths.push(outcome.backup_path.clone());
+        backup_paths.extend(outcome.backup_path.clone());
         rows.extend(outcome.rows);
         warnings.extend(outcome.warnings);
         emit_final_progress(&ctx, final_progress.as_ref(), rows.len() as u32, total);
@@ -655,6 +653,7 @@ mod tests {
         failure_mode: FailureMode,
         cancel: CancelToken,
         cancel_in_preflight: Option<String>,
+        fail_in_preflight: Option<(String, bool)>,
         cancel_in_complete: Option<String>,
         panic_in_complete: bool,
         final_progress: bool,
@@ -675,6 +674,7 @@ mod tests {
                 failure_mode: FailureMode::Unit,
                 cancel,
                 cancel_in_preflight: None,
+                fail_in_preflight: None,
                 cancel_in_complete: None,
                 panic_in_complete: false,
                 final_progress: false,
@@ -718,6 +718,12 @@ mod tests {
             _reporter: &Reporter,
         ) -> Result<Preflight, AppError> {
             self.record(format!("preflight:{unit}"));
+            if let Some((name, panic)) = &self.fail_in_preflight
+                && name == unit
+            {
+                assert!(!panic, "backup worker panic");
+                return Err(AppError::backup_failed("backup fixture error"));
+            }
             if self.cancel_in_preflight.as_deref() == Some(unit.as_str()) {
                 self.cancel.cancel();
             }
@@ -761,7 +767,7 @@ mod tests {
             Ok(UnitOutcome {
                 rows: vec![self.row(unit, self.profile.success_status)],
                 warnings: Vec::new(),
-                backup_path: format!("/tmp/backup-{unit}"),
+                backup_path: Some(format!("/tmp/backup-{unit}")),
                 final_progress: self.final_progress.then(|| FinalProgress {
                     phase: TaskPhase::Verifying,
                     message: format!("processed {unit}"),
@@ -781,11 +787,15 @@ mod tests {
             match self.failure_mode {
                 FailureMode::Task => FailureDisposition::TaskFailed(error),
                 FailureMode::Unit => FailureDisposition::UnitFailed(UnitOutcome {
-                    rows: vec![self.row(unit, TaskSkillStatus::Failed)],
+                    rows: vec![TaskSkillResult {
+                        name: unit.clone(),
+                        status: TaskSkillStatus::Failed,
+                        error: Some(error),
+                        backup_path: preflight.map(|p| p.snapshot.display().to_string()),
+                    }],
                     warnings: Vec::new(),
                     backup_path: preflight
-                        .map(|preflight| preflight.snapshot.display().to_string())
-                        .unwrap_or_else(|| format!("/tmp/backup-{unit}")),
+                        .map(|preflight| preflight.snapshot.display().to_string()),
                     final_progress: self.final_progress.then(|| FinalProgress {
                         phase: TaskPhase::Verifying,
                         message: format!("processed {unit}"),
@@ -1008,6 +1018,51 @@ mod tests {
         };
         assert_eq!(error.code, ErrorCode::CliTimeout);
         assert!(!calls(&harness).iter().any(|call| call == "complete:alpha"));
+    }
+
+    #[tokio::test]
+    async fn regression_later_preflight_failure_keeps_prior_results_and_stops() {
+        for panic in [false, true] {
+            let cancel = CancelToken::new();
+            let executor = Arc::new(ScriptedExecutor::new().expect_any(ScriptedResponse::ok("{}")));
+            let harness = harness(executor.clone(), cancel.clone());
+            let mut action = FakeAction::new(
+                Arc::clone(&harness.calls),
+                cancel,
+                profile(
+                    TaskAction::Update,
+                    TaskSkillStatus::Updated,
+                    3,
+                    CancellationPolicy::BetweenUnits,
+                ),
+                vec!["alpha", "beta", "gamma"],
+            );
+            action.fail_in_preflight = Some(("beta".into(), panic));
+            let FinishOutcome::Completed(result, _) = run(harness.ctx.clone(), action, ()).await
+            else {
+                panic!("earlier changes must remain in the final result");
+            };
+            assert_eq!(result.overall, TaskOverall::Partial);
+            assert_eq!(result.skills.len(), 2);
+            assert_eq!(result.skills[0].name, "alpha");
+            assert_eq!(result.skills[0].status, TaskSkillStatus::Updated);
+            assert!(result.skills[0].backup_path.is_some());
+            assert_eq!(result.skills[1].name, "beta");
+            assert_eq!(result.skills[1].status, TaskSkillStatus::Failed);
+            assert_eq!(
+                result.skills[1].error.as_ref().unwrap().code,
+                ErrorCode::BackupFailed
+            );
+            assert!(result.skills[1].backup_path.is_none());
+            assert_eq!(result.backup_path, result.skills[0].backup_path);
+            assert_eq!(result.log_path.as_deref(), Some("/tmp/operations.jsonl"));
+            assert!(
+                !calls(&harness)
+                    .iter()
+                    .any(|call| call.contains("gamma") || call == "command:beta")
+            );
+            assert_eq!(executor.call_count(), 1);
+        }
     }
 
     #[tokio::test]

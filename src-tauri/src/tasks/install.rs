@@ -91,6 +91,7 @@ pub fn validate_request(
     layout: &crate::scope_layout::ScopeLayout,
     request: &InstallRequest,
 ) -> Result<InstallPlan, AppError> {
+    layout.ensure_mutation_ready()?;
     let source = validate_source(&request.source)?;
     let skills = validate_skill_names(&request.skills)?;
     let (agent_ids, targets) = if layout.is_global() {
@@ -838,6 +839,7 @@ impl MutationAction for InstallAction {
     fn preflight(&self, plan: &Self::Unit, _reporter: &Reporter) -> Result<Preflight, AppError> {
         // The app never writes the lock, but a corrupt lock for this scope must
         // block the install before the CLI spawns.
+        self.layout.ensure_mutation_ready()?;
         self.layout.lock()?;
         let retry_source = plan.retry.then_some(plan.source.as_str());
         if let Some(conflict) =
@@ -856,6 +858,19 @@ impl MutationAction for InstallAction {
             }),
             warnings: Vec::new(),
         })
+    }
+
+    fn before_write(&self, plan: &Self::Unit) -> Result<(), AppError> {
+        self.layout.ensure_mutation_ready()?;
+        if !self.layout.is_global() {
+            let agents = plan
+                .targets
+                .iter()
+                .map(|t| t.id.clone())
+                .collect::<Vec<_>>();
+            validate_project_agents(&self.paths, &self.layout, &agents)?;
+        }
+        Ok(())
     }
 
     fn command(&self, plan: &Self::Unit, runtime: &CliRuntime, reporter: &Reporter) -> CommandSpec {
@@ -919,7 +934,7 @@ impl MutationAction for InstallAction {
         Ok(UnitOutcome {
             rows: verification.results,
             warnings,
-            backup_path: self.paths.display(&preflight.snapshot),
+            backup_path: Some(self.paths.display(&preflight.snapshot)),
             final_progress: None,
         })
     }
@@ -1835,6 +1850,45 @@ mod tests {
         match parse_install_output(raw) {
             InstallOutput::Results(results) => results,
             other => panic!("expected results, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn regression_project_install_rejects_escaping_store_and_lock() {
+        use std::os::unix::fs::symlink;
+
+        for relative in [".agents/skills", ".agents", "skills-lock.json"] {
+            let (tmp, paths) = fixture();
+            let root = tmp.path().join("project");
+            fs::create_dir_all(&root).unwrap();
+            let project = crate::projects::ProjectRegistry::new(paths.clone())
+                .add(root.to_str().unwrap())
+                .unwrap()
+                .project;
+            let layout = crate::scope_layout::ScopeLayout::project(&paths, project);
+            let request = request("acme/skills", &["alpha"], &[]);
+            let plan = super::validate_request(&paths, &layout, &request).unwrap();
+            let outside = tmp.path().join("outside");
+            if relative == "skills-lock.json" {
+                fs::write(&outside, r#"{"version":1,"skills":{}}"#).unwrap();
+            } else {
+                fs::create_dir_all(&outside).unwrap();
+            }
+            let target = layout.root.join(relative);
+            fs::create_dir_all(target.parent().unwrap()).unwrap();
+            symlink(&outside, &target).unwrap();
+
+            assert!(
+                super::validate_request(&paths, &layout, &request).is_err(),
+                "{relative}"
+            );
+            let action = InstallAction::new(
+                paths.clone(),
+                layout,
+                Duration::from_secs(1),
+                "regression".into(),
+            );
+            assert!(action.before_write(&plan).is_err(), "{relative}");
         }
     }
 }

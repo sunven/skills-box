@@ -142,7 +142,7 @@ fn dependencies(
     attachment: &AttachmentLocation,
     allowed_links: &HashSet<PathBuf>,
 ) -> Result<(), AppError> {
-    let dependents = crate::detach::find_copy_content_dependents(
+    let dependents = crate::detach::find_copy_dependents(
         &layout.agents,
         &layout.canonical_dir,
         &attachment.path,

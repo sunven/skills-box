@@ -309,6 +309,50 @@ async fn planning_errors_and_panics_release_the_scope_without_registering() {
 }
 
 #[tokio::test]
+async fn regression_shutdown_waits_for_abandoned_native_work() {
+    let fixture = Fixture::new();
+    let manager = fixture.manager.clone();
+    let scope = fixture.scope.clone();
+    let (pause, waiting, resume) = WorkerPause::new();
+    let requesting = tokio::spawn(async move {
+        manager
+            .run_scoped_native(
+                scope,
+                move |_, _| {
+                    pause.wait();
+                    Ok(())
+                },
+                |error| AppError::agent_detach_failed(error.to_string()),
+            )
+            .await
+    });
+    started(waiting).await;
+    requesting.abort();
+    assert!(requesting.await.unwrap_err().is_cancelled());
+
+    let shutdown = fixture.manager.shutdown_mutations();
+    tokio::pin!(shutdown);
+    let waits_for_worker = tokio::time::timeout(Duration::from_millis(25), &mut shutdown)
+        .await
+        .is_err();
+    resume.send(()).unwrap();
+    if waits_for_worker {
+        let report = tokio::time::timeout(Duration::from_secs(2), shutdown)
+            .await
+            .unwrap();
+        assert!(!report.timed_out);
+    }
+    assert!(
+        waits_for_worker,
+        "shutdown returned while a native worker still held the write permit"
+    );
+    assert_eq!(
+        fixture.manager.try_acquire_mutation().unwrap_err().code,
+        ErrorCode::TaskShuttingDown
+    );
+}
+
+#[tokio::test]
 async fn shutdown_during_planning_prevents_registration_and_cli_execution() {
     let fixture = Fixture::new();
     let manager = fixture.manager.clone();
@@ -333,10 +377,17 @@ async fn shutdown_during_planning_prevents_registration_and_cli_execution() {
         })
     });
     started(waiting).await;
-    let report = fixture.manager.shutdown_mutations().await;
+    let shutdown = fixture.manager.shutdown_mutations();
+    tokio::pin!(shutdown);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(25), &mut shutdown)
+            .await
+            .is_err()
+    );
+    resume.send(()).unwrap();
+    let report = shutdown.await;
     assert!(report.active.is_none());
     assert_eq!(report.cancelled_tasks, 0);
-    resume.send(()).unwrap();
     assert_eq!(
         requesting.await.unwrap().unwrap_err().code,
         ErrorCode::TaskShuttingDown

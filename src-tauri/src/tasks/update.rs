@@ -380,6 +380,7 @@ impl MutationAction for UpdateAction {
         item.marketplace_plan.as_ref().map(|p| p.command())
     }
     fn before_write(&self, item: &Self::Unit) -> Result<(), AppError> {
+        self.layout.ensure_mutation_ready()?;
         if let Some(plan) = &item.marketplace_plan {
             plan.check(&self.paths, &self.layout)?;
         }
@@ -423,6 +424,7 @@ impl MutationAction for UpdateAction {
     }
 
     fn preflight(&self, item: &Self::Unit, reporter: &Reporter) -> Result<Preflight, AppError> {
+        self.layout.ensure_mutation_ready()?;
         reporter.progress(
             TaskPhase::Backup,
             format!("正在备份 {}…", item.name),
@@ -447,25 +449,13 @@ impl MutationAction for UpdateAction {
         }
 
         let backups = BackupStore::for_layout(&self.paths, &self.layout);
-        let backup = backups
-            .create(
-                BackupAction::Update,
-                &item.name,
-                Some(&item.canonical),
-                &item.attachments,
-                &item.agent_ids,
-            )
-            .inspect_err(|error| {
-                let log = OperationLog::for_scope(&self.paths, &self.layout.scope);
-                let _ = log.append(&OperationEntry::new(
-                    "update",
-                    &item.name,
-                    item.agent_ids.clone(),
-                    "failed",
-                    None,
-                    Some(error.clone()),
-                ));
-            })?;
+        let backup = backups.create(
+            BackupAction::Update,
+            &item.name,
+            Some(&item.canonical),
+            &item.attachments,
+            &item.agent_ids,
+        )?;
         Ok(Preflight {
             snapshot: backup.path,
             post_message: None,
@@ -546,7 +536,7 @@ impl MutationAction for UpdateAction {
                 backup_path: Some(backup_display.clone()),
             }],
             warnings,
-            backup_path: backup_display,
+            backup_path: Some(backup_display),
             final_progress: Some(FinalProgress {
                 phase: TaskPhase::Verifying,
                 message: format!("已处理 {}", item.name),
@@ -1468,6 +1458,60 @@ mod tests {
             lines[0]["error"]["code"],
             crate::error::ErrorCode::BackupFailed.as_str()
         );
+    }
+
+    #[tokio::test]
+    async fn regression_later_backup_failure_reports_the_written_skill_and_backup() {
+        let fixture = Fixture::new(&[
+            ("alpha", "acme/skills", None),
+            ("beta", "acme/skills", None),
+        ]);
+        let beta = add_canonical(&fixture, "beta");
+        let post = simulate_update(
+            fixture.canonical.clone(),
+            fixture.qoder.clone(),
+            fixture.claude.clone(),
+            fixture.paths.lock_path(),
+            "alpha",
+        );
+        let saved_beta = beta.with_file_name("beta-original");
+        let retained_beta = saved_beta.clone();
+        let executor = Arc::new(UpdateExecutor::new(vec![
+            UpdateResponse::installed("alpha").with_post(move || {
+                post();
+                // An external replacement after planning makes the next
+                // backup fail without permission or timing dependencies.
+                fs::rename(&beta, &saved_beta).unwrap();
+                fs::write(&beta, "not a directory").unwrap();
+            }),
+        ]));
+        let manager = update_manager(&fixture.paths, executor.clone());
+        let (_, event) = run_update_task(&manager, &["alpha", "beta"]).await;
+        let result = event.result.unwrap();
+        assert_eq!(result.overall, TaskOverall::Partial);
+        assert_eq!(result.skills.len(), 2);
+        assert_eq!(result.skills[0].status, TaskSkillStatus::Updated);
+        let backup = PathBuf::from(result.skills[0].backup_path.as_ref().unwrap());
+        assert!(backup.join("canonical/SKILL.md").is_file());
+        assert_eq!(result.skills[1].status, TaskSkillStatus::Failed);
+        assert_eq!(
+            result.skills[1].error.as_ref().unwrap().code,
+            ErrorCode::BackupFailed
+        );
+        assert!(result.skills[1].backup_path.is_none());
+        assert!(result.log_path.is_some());
+        assert_eq!(executor.calls().len(), 1);
+        assert!(
+            fs::read_to_string(fixture.canonical.join("SKILL.md"))
+                .unwrap()
+                .contains("v2")
+        );
+        assert!(
+            fs::read_to_string(retained_beta.join("SKILL.md"))
+                .unwrap()
+                .contains("v1")
+        );
+        assert_eq!(log_lines(&fixture).len(), 2);
     }
 
     #[tokio::test]

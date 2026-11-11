@@ -280,31 +280,13 @@ pub struct DependentLink {
 }
 
 /// Find every symlink (inside any detected agent skills directory or the
-/// canonical store) whose realpath is the copy directory being removed.
-/// Dangling symlinks cannot resolve and are ignored.
+/// canonical store) whose realpath is the copy directory or its contents.
+/// Missing roots and dangling links have no resolvable dependencies; other
+/// scan failures must block deletion rather than assume there are none.
 pub fn find_copy_dependents(
     agents: &[AgentDir],
     canonical_dir: &Path,
     target: &Path,
-) -> Result<Vec<DependentLink>, AppError> {
-    find_dependents(agents, canonical_dir, target, false)
-}
-
-/// Selective removal also protects links to content inside a copy, and cannot
-/// assume an unreadable Agent directory has no dependents.
-pub(crate) fn find_copy_content_dependents(
-    agents: &[AgentDir],
-    canonical_dir: &Path,
-    target: &Path,
-) -> Result<Vec<DependentLink>, AppError> {
-    find_dependents(agents, canonical_dir, target, true)
-}
-
-fn find_dependents(
-    agents: &[AgentDir],
-    canonical_dir: &Path,
-    target: &Path,
-    include_content: bool,
 ) -> Result<Vec<DependentLink>, AppError> {
     let target_real = fs::canonicalize(target).map_err(|error| {
         AppError::agent_detach_failed(format!("无法解析 copy 目录 {}：{error}", target.display()))
@@ -327,13 +309,13 @@ fn find_dependents(
         // still depend on the copy. Deletion targets are guarded separately.
         let metadata = match fs::metadata(&root) {
             Ok(metadata) => metadata,
-            Err(error) if include_content && error.kind() != std::io::ErrorKind::NotFound => {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
                 return Err(AppError::agent_detach_failed(format!(
                     "无法检查依赖目录 {}：{error}",
                     root.display()
                 )));
             }
-            Err(_) => continue,
         };
         if !metadata.is_dir() {
             continue;
@@ -344,38 +326,48 @@ fn find_dependents(
         }
         let entries = match fs::read_dir(&root) {
             Ok(entries) => entries,
-            Err(error) if include_content => {
+            Err(error) => {
                 return Err(AppError::agent_detach_failed(format!(
                     "无法检查依赖目录 {}：{error}",
                     root.display()
                 )));
             }
-            Err(_) => continue,
         };
         for entry in entries {
             let entry = match entry {
                 Ok(entry) => entry,
-                Err(error) if include_content => {
+                Err(error) => {
                     return Err(AppError::agent_detach_failed(error.to_string()));
                 }
-                Err(_) => continue,
             };
             let path = entry.path();
             if path == target {
                 continue;
             }
-            let Ok(metadata) = fs::symlink_metadata(&path) else {
-                continue;
+            let metadata = match fs::symlink_metadata(&path) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(AppError::agent_detach_failed(format!(
+                        "无法检查依赖链接 {}：{error}",
+                        path.display()
+                    )));
+                }
             };
             if !metadata.file_type().is_symlink() {
                 continue;
             }
-            let Ok(resolved) = fs::canonicalize(&path) else {
-                continue;
+            let resolved = match fs::canonicalize(&path) {
+                Ok(resolved) => resolved,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(AppError::agent_detach_failed(format!(
+                        "无法解析依赖链接 {}：{error}",
+                        path.display()
+                    )));
+                }
             };
-            if (resolved == target_real || (include_content && resolved.starts_with(&target_real)))
-                && seen_links.insert(path.clone())
-            {
+            if resolved.starts_with(&target_real) && seen_links.insert(path.clone()) {
                 dependents.push(DependentLink {
                     label: label.clone(),
                     path,
@@ -407,6 +399,7 @@ fn log_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::ErrorCode;
     use crate::inventory::{AgentDir, ManagementState};
     use std::os::unix::fs::symlink;
 
@@ -621,6 +614,20 @@ mod tests {
             2,
             "native codex + qoder link remain; claude is gone"
         );
+    }
+
+    #[test]
+    fn regression_copy_detach_protects_links_to_its_contents() {
+        let fixture = Fixture::new();
+        fixture.managed_skill("alpha");
+        let copy = fixture.copy(&fixture.claude, "alpha");
+        let child = fixture.copy(&copy, "child");
+        fixture.link(&fixture.qoder, "child", &child);
+
+        let error = fixture.detach("alpha", "claude-code").unwrap_err();
+        assert_eq!(error.code, ErrorCode::AgentDependencyConflict);
+        assert!(fixture.qoder.join("child/SKILL.md").is_file());
+        assert!(copy.join("SKILL.md").is_file());
     }
 
     #[test]
