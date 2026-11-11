@@ -46,6 +46,7 @@ export function ExpertPackPage({
   const [tab, setTab] = useState<"local" | "upstream">(
     initialSlug ? "local" : "upstream",
   );
+  const [workflowRaw, setWorkflowRaw] = useState(false);
   const [forget, setForget] = useState(false);
   const [forgetting, setForgetting] = useState(false);
   const [forgetError, setForgetError] = useState<AppError | null>(null);
@@ -88,6 +89,7 @@ export function ExpertPackPage({
   function select(next: string, localTab = false) {
     setSlug(next);
     setTab(localTab ? "local" : "upstream");
+    setWorkflowRaw(false);
     setForget(false);
     setForgetError(null);
   }
@@ -398,13 +400,30 @@ export function ExpertPackPage({
                         ))}
                       </div>
                       <section aria-label="官方工作流">
-                        <h2 className="font-semibold mb-3">官方工作流</h2>
-                        <SkillMarkdown content={detail.workflow} />
+                        <div className="flex items-center justify-between gap-3 mb-3">
+                          <h2 className="font-semibold">官方工作流</h2>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            aria-pressed={workflowRaw}
+                            onClick={() => setWorkflowRaw((value) => !value)}
+                          >
+                            {workflowRaw ? "返回渲染" : "查看原文"}
+                          </Button>
+                        </div>
+                        {workflowRaw ? (
+                          <pre
+                            className="pack-document"
+                            role="region"
+                            aria-label="官方工作流原文"
+                            tabIndex={0}
+                          >
+                            {detail.workflow}
+                          </pre>
+                        ) : (
+                          <SkillMarkdown content={detail.workflow} />
+                        )}
                       </section>
-                      <details>
-                        <summary>查看官方原文</summary>
-                        <pre className="pack-document">{detail.workflow}</pre>
-                      </details>
                     </>
                   )}
                 </>
