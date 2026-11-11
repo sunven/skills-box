@@ -84,7 +84,10 @@ fn resolved_attachments(
         layout.install_targets(&crate::inventory::detected_agent_dirs(paths))
     };
     let mut result = vec![];
-    for target in targets.iter().filter(|t| !t.universal) {
+    for target in targets
+        .iter()
+        .filter(|t| t.needs_attachment(&layout.canonical_dir))
+    {
         if let Some(existing) = located.attachments.iter().find(|a| a.agent_id == target.id) {
             if existing.mode != crate::inventory::AttachmentMode::Link
                 || fs::canonicalize(&existing.path).ok()
@@ -97,12 +100,13 @@ fn resolved_attachments(
             }
             continue;
         }
-        result.push(crate::attachment_target::resolve_copy_attach(
+        result.push(crate::attachment_target::resolve_publication_attach(
             &layout.canonical_dir,
             &located,
             &agents,
             &target.id,
             TargetContext::for_layout(layout),
+            false,
         )?);
     }
     Ok(result)
@@ -411,7 +415,11 @@ impl CommandPlan for Plan {
 
 fn attach(paths: &AppPaths, plan: &Plan, unit: &Unit) -> Result<(), AppError> {
     let layout = &plan.layout;
-    for target in plan.targets.iter().filter(|t| !t.universal) {
+    for target in plan
+        .targets
+        .iter()
+        .filter(|t| t.needs_attachment(&layout.canonical_dir))
+    {
         let path = target.skills_dir.join(&unit.name);
         if fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink())
             && fs::canonicalize(&path).ok()
@@ -419,7 +427,7 @@ fn attach(paths: &AppPaths, plan: &Plan, unit: &Unit) -> Result<(), AppError> {
         {
             continue;
         }
-        crate::attach::attach_agent_checked(
+        crate::attach::attach_publication_checked(
             paths,
             layout,
             &layout.scope.skill_id(&unit.name),

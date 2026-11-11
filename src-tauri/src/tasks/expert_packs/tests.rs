@@ -25,12 +25,26 @@ struct Fixture {
 }
 impl Fixture {
     fn new(project: bool) -> Self {
+        Self::with_agents(
+            project,
+            if project {
+                &["claude-code"]
+            } else {
+                &["claude-code", "codex"]
+            },
+        )
+    }
+
+    fn with_agents(project: bool, selected: &[&str]) -> Self {
         let tmp = tempfile::tempdir().unwrap();
         let root = fs::canonicalize(tmp.path()).unwrap();
         let paths = AppPaths::new(root.join("home"), root.join("data"));
         paths.ensure_dirs().unwrap();
         fs::create_dir_all(paths.home().join(".claude/skills")).unwrap();
         fs::create_dir_all(paths.home().join(".codex")).unwrap();
+        if selected.contains(&"cursor") {
+            fs::create_dir_all(paths.home().join(".cursor")).unwrap();
+        }
         let registry = crate::projects::ProjectRegistry::new(paths.clone());
         let scope = if project {
             let dir = root.join("project");
@@ -40,11 +54,10 @@ impl Fixture {
             ScopeId::Global
         };
         let layout = ScopeLayout::resolve_detected(&paths, &registry, &scope).unwrap();
-        let agents = if project {
-            vec!["claude-code".into()]
-        } else {
-            vec!["claude-code".into(), "codex".into()]
-        };
+        let agents = selected
+            .iter()
+            .map(|id| (*id).to_string())
+            .collect::<Vec<_>>();
         let (_, targets) =
             super::super::install::validate_selected_agents(&paths, &layout, &agents).unwrap();
         let members: Vec<_> = ["first", "second"]
@@ -193,14 +206,63 @@ fn result(outcome: FinishOutcome) -> crate::tasks::TaskResult {
 }
 
 #[tokio::test]
+async fn cursor_pack_install_and_supplement_create_required_global_attachments() {
+    let mut f = Fixture::with_agents(false, &["cursor", "codex"]);
+
+    let installed = f.install().await;
+    assert_eq!(installed.overall, TaskOverall::Success, "{installed:?}");
+    let cursor = f.paths.home().join(".cursor/skills");
+    for name in f.plan.snapshot.names() {
+        assert!(cursor.join(name).is_symlink());
+        assert_eq!(
+            fs::canonicalize(cursor.join(name)).unwrap(),
+            fs::canonicalize(f.plan.layout.canonical_dir.join(name)).unwrap()
+        );
+    }
+    assert!(
+        state::observe(&f.paths, &f.plan.layout, &f.plan.snapshot)
+            .unwrap()
+            .complete
+    );
+
+    fs::remove_file(cursor.join("first")).unwrap();
+    let before = fs::read(f.plan.layout.canonical_dir.join("first/SKILL.md")).unwrap();
+    let supplement = Plan::build(
+        &f.paths,
+        f.plan.layout.clone(),
+        f.plan.snapshot.clone(),
+        Some(f.plan.snapshot.clone()),
+        vec![],
+    )
+    .unwrap();
+    assert_eq!(supplement.preview().items[0].missing_agents, ["cursor"]);
+    f.plan = supplement;
+    let completed = f.install().await;
+    assert_eq!(completed.overall, TaskOverall::Success, "{completed:?}");
+    assert_eq!(
+        fs::read(f.plan.layout.canonical_dir.join("first/SKILL.md")).unwrap(),
+        before
+    );
+    assert!(
+        state::observe(&f.paths, &f.plan.layout, &f.plan.snapshot)
+            .unwrap()
+            .complete
+    );
+}
+
+#[tokio::test]
 async fn regression_pack_completeness_rejects_links_to_other_content() {
     use std::os::unix::fs::symlink;
 
-    for project in [false, true] {
-        let f = Fixture::new(project);
+    for (project, agent, directory) in [
+        (false, "claude-code", ".claude/skills"),
+        (true, "claude-code", ".claude/skills"),
+        (false, "cursor", ".cursor/skills"),
+    ] {
+        let f = Fixture::with_agents(project, &[agent]);
         f.install().await;
         for name in ["first", f.plan.snapshot.workflow_name.as_str()] {
-            let attachment = f.plan.layout.root.join(".claude/skills").join(name);
+            let attachment = f.plan.layout.root.join(directory).join(name);
             let unrelated = f.plan.layout.root.join("unrelated").join(name);
             fs::create_dir_all(&unrelated).unwrap();
             fs::write(unrelated.join("SKILL.md"), "unrelated content").unwrap();
@@ -210,9 +272,22 @@ async fn regression_pack_completeness_rejects_links_to_other_content() {
             let observed = state::observe(&f.paths, &f.plan.layout, &f.plan.snapshot).unwrap();
             let skill = observed.skills.iter().find(|s| s.name == name).unwrap();
             assert!(!observed.complete, "{observed:?}");
-            assert_eq!(skill.missing_agents, ["claude-code"]);
-            assert!(!skill.attached_agents.iter().any(|id| id == "claude-code"));
+            assert_eq!(skill.missing_agents, [agent]);
+            assert!(!skill.attached_agents.iter().any(|id| id == agent));
             assert!(skill.conflict);
+            let error = Plan::build(
+                &f.paths,
+                f.plan.layout.clone(),
+                f.plan.snapshot.clone(),
+                Some(f.plan.snapshot.clone()),
+                vec![],
+            )
+            .unwrap_err();
+            assert_eq!(error.code, crate::error::ErrorCode::SkillConflict);
+            assert_eq!(
+                fs::read_to_string(attachment.join("SKILL.md")).unwrap(),
+                "unrelated content"
+            );
 
             fs::remove_file(&attachment).unwrap();
             symlink(f.plan.layout.canonical_dir.join(name), &attachment).unwrap();

@@ -775,13 +775,13 @@ impl AppError {
             .retryable(true)
     }
 
-    pub fn extra_agent_remove_blocked(projects: &[String]) -> Self {
+    pub fn extra_agent_remove_blocked(blockers: &[String]) -> Self {
         Self::new(
             ErrorCode::ExtraProjectBlocked,
-            "无法删除额外 agent：仍有项目不可用。",
+            "无法删除额外 agent：尚有挂载未能安全清理。",
         )
-        .detail(projects.join("\n"))
-        .hint("请先重新定位或遗忘这些项目，再删除该 agent；它的项目挂载尚未被清理。")
+        .detail(blockers.join("\n"))
+        .hint("请先处理列出的挂载；未受管、副本或损坏挂载可使用「从 Agent 移除」，不可用项目需先重新定位或遗忘。")
     }
 
     pub fn extra_agent_project_dir_blocked(projects: &[String]) -> Self {

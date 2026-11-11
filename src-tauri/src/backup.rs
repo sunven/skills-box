@@ -23,7 +23,7 @@ use crate::time::now_ms;
 use serde::Serialize;
 
 use crate::error::AppError;
-use crate::inventory::{AttachmentLocation, AttachmentMode};
+use crate::inventory::{AttachmentLocation, AttachmentMode, LocatedSkill};
 use crate::paths::AppPaths;
 use crate::security::safe_component;
 
@@ -146,6 +146,48 @@ impl BackupStore {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// One task snapshot protects every retry target together. Each existing
+    /// skill has its normal snapshot under `skills/<name>/`, so retention and
+    /// interruption protection still reference a single parent directory.
+    pub fn create_install(
+        &self,
+        task_id: &str,
+        existing: &[LocatedSkill],
+    ) -> Result<BackupSnapshot, AppError> {
+        let snapshot = self.create(BackupAction::Install, task_id, None, &[], &[])?;
+        let result = (|| {
+            for skill in existing {
+                let directory = snapshot.path.join("skills").join(&skill.name);
+                crate::tasks::install::validate_skill_name(&skill.name)?;
+                fs::create_dir_all(&directory).map_err(|e| io_backup_error(&directory, e))?;
+                let attachments = skill
+                    .attachments
+                    .iter()
+                    .map(BackupAttachment::from)
+                    .collect::<Vec<_>>();
+                let agents = skill
+                    .attachments
+                    .iter()
+                    .map(|a| a.agent_id.clone())
+                    .collect::<Vec<_>>();
+                self.write_snapshot(
+                    &directory,
+                    BackupAction::Install,
+                    &skill.name,
+                    skill.canonical_path.as_deref(),
+                    &attachments,
+                    &agents,
+                )?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            let _ = fs::remove_dir_all(&snapshot.path);
+            return Err(error);
+        }
+        Ok(snapshot)
     }
 
     /// Create a complete snapshot. Any failure aborts the operation and cleans
@@ -377,6 +419,35 @@ mod tests {
     use super::*;
     use crate::error::ErrorCode;
     use std::os::unix::fs::symlink;
+
+    #[test]
+    fn failed_retry_backup_cleans_the_whole_group_without_touching_skills() {
+        let fixture = Fixture::new();
+        let first = LocatedSkill {
+            name: "alpha".into(),
+            primary_path: Some(fixture.canonical.clone()),
+            canonical_path: Some(fixture.canonical.clone()),
+            management: crate::inventory::ManagementState::Managed,
+            lock_entry: None,
+            attachments: vec![],
+        };
+        let second = LocatedSkill {
+            name: "beta".into(),
+            canonical_path: Some(fixture.canonical.with_file_name("missing")),
+            ..first.clone()
+        };
+        let before = fs::read(fixture.canonical.join("SKILL.md")).unwrap();
+        let store = BackupStore::new(&fixture.paths);
+
+        let error = store.create_install("retry", &[first, second]).unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::BackupFailed);
+        assert_eq!(fs::read_dir(store.root()).unwrap().count(), 0);
+        assert_eq!(
+            fs::read(fixture.canonical.join("SKILL.md")).unwrap(),
+            before
+        );
+    }
 
     struct Fixture {
         tmp: tempfile::TempDir,

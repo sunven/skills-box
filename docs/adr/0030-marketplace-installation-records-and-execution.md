@@ -6,6 +6,15 @@ SkillHub installs named releases into namespaced directories and maintains its o
 
 Install and Update use the detected SkillHub CLI with an explicit namespaced coordinate and version in an operation-isolated staging directory. The application verifies the staged skill and publishes its original name to the Canonical store, records the request and observed content, and creates Agent attachments through the existing mutation protocol. Update checks read marketplace metadata and compare platform version labels; same-version content replacement is outside this feature. Local content baselines still detect local modification. Neither a CLI exit code nor a local content hash proves the platform's release content is immutable.
 
+Marketplace and Expert pack publication determine attachment requirements from
+physical directory sharing. The CLI's `universal` flag does not mean that an
+Agent's global directory is the Canonical store: Cursor, for example, has a
+separate global directory. Publication creates missing selected attachments
+through the strict target gate, including for those agents, while shared
+directories require no link. Preview, publication and Pack completeness use
+the same physical attachments. This extends ADR-0005's gate for installation
+publication; standalone Attach/Detach eligibility remains unchanged.
+
 Marketplace browsing and Update checks use read-only source access. Local Attach, Detach and Uninstall use native application operations so they remain available without SkillHub CLI; Install and Update require that CLI. This is a source-specific extension of ADR-0001's execution boundary: existing Git mutations retain their executor, while marketplace installation records and local removal are application-owned. It avoids giving a missing marketplace CLI authority to disable unrelated Git or local operations.
 
 The adapter retains ADR-0003's write ownership, backups, cancellation and verification, ADR-0008's result lifecycle, and ADR-0026's command preview and actual invocation contract. CLI staging failure leaves the existing installation intact; failures after publication begins retain required backups and report observed results under the existing recovery rules. The persistence wire format is an implementation choice constrained by source isolation, atomic record publication and compatibility with existing Git operations.

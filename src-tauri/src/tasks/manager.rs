@@ -2455,6 +2455,9 @@ mod tests {
         let canonical = home.join(".agents/skills/find-skills");
         fs::create_dir_all(&canonical).unwrap();
         fs::write(canonical.join("SKILL.md"), "# old attempt\n").unwrap();
+        let copy = home.join(".claude/skills/find-skills");
+        fs::create_dir_all(&copy).unwrap();
+        fs::write(copy.join("SKILL.md"), "# local copy edits\n").unwrap();
 
         let (sink, _receiver) = sink();
         let error = manager
@@ -2480,6 +2483,16 @@ mod tests {
         assert_eq!(result.overall, TaskOverall::Success);
         assert_eq!(result.skills[0].status, TaskSkillStatus::Installed);
         assert_eq!(executor.call_count(), 1);
+        let backup = PathBuf::from(result.backup_path.expect("retry backup"));
+        assert_eq!(
+            fs::read_to_string(backup.join("skills/find-skills/canonical/SKILL.md")).unwrap(),
+            "# old attempt\n"
+        );
+        assert_eq!(
+            fs::read_to_string(backup.join("skills/find-skills/attachments/claude-code/SKILL.md"))
+                .unwrap(),
+            "# local copy edits\n"
+        );
     }
 
     #[tokio::test]

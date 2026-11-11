@@ -46,6 +46,14 @@ struct CachedCatalog {
     fingerprint: Fingerprint,
 }
 
+/// Local installation identity without content fingerprints or update state.
+/// Discovery needs the directory key and SKILL.md name, not a full skill view.
+pub(crate) struct SkillIdentity {
+    pub name: String,
+    pub management: ManagementState,
+    pub metadata_name: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Fingerprint {
     /// Distinguishes a relocated project even when both roots have identical
@@ -209,6 +217,32 @@ impl ReadModel {
             },
         );
         Ok(snapshot)
+    }
+
+    /// Re-read directory topology and bounded SKILL.md metadata once per
+    /// discovery state request. Fresh detection notices external agent copies;
+    /// resolving roots within this catalog avoids a cache check for every skill.
+    pub(crate) fn skill_identities(&self, scope: &ScopeId) -> Result<Vec<SkillIdentity>, AppError> {
+        let layout = self.layout(scope)?;
+        let catalog = layout.catalog(&self.paths)?;
+        let allowed = layout.allowed_roots();
+        Ok(catalog
+            .names
+            .iter()
+            .filter_map(|name| {
+                let located = inventory::locate_in_catalog(&catalog, name)?;
+                let metadata_name = resolve_root_in_catalog(&catalog, &allowed, name)
+                    .ok()
+                    .and_then(|root| read_skill_md(&root).content)
+                    .and_then(|content| frontmatter::parse(&content).ok().flatten())
+                    .and_then(|metadata| metadata.name);
+                Some(SkillIdentity {
+                    name: located.name,
+                    management: located.management,
+                    metadata_name,
+                })
+            })
+            .collect())
     }
 
     /// Project one skill from the scope's cached catalog; SKILL.md and the

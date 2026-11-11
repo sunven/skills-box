@@ -44,6 +44,16 @@ jobs:
           shared-key: tauri-aarch64-apple-darwin
           cache-on-failure: true
 
+      - name: Test frontend
+        run: pnpm test
+
+      - name: Test release scripts
+        run: pnpm test:release
+
+      - name: Test Rust
+        working-directory: src-tauri
+        run: cargo test --locked
+
       - name: Build and publish
         uses: tauri-apps/tauri-action@v1
         env:

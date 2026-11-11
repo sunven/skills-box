@@ -47,6 +47,29 @@ pub(crate) fn attach_agent_checked(
     agent_id: &str,
     before_write: &dyn Fn() -> Result<(), AppError>,
 ) -> Result<AttachResult, AppError> {
+    attach_checked(paths, layout, skill_id, agent_id, before_write, false)
+}
+
+/// Installation publication may link a universal agent's separate global
+/// directory. The standalone Attach/Detach eligibility remains unchanged.
+pub(crate) fn attach_publication_checked(
+    paths: &AppPaths,
+    layout: &ScopeLayout,
+    skill_id: &str,
+    agent_id: &str,
+    before_write: &dyn Fn() -> Result<(), AppError>,
+) -> Result<AttachResult, AppError> {
+    attach_checked(paths, layout, skill_id, agent_id, before_write, true)
+}
+
+fn attach_checked(
+    paths: &AppPaths,
+    layout: &ScopeLayout,
+    skill_id: &str,
+    agent_id: &str,
+    before_write: &dyn Fn() -> Result<(), AppError>,
+    publication: bool,
+) -> Result<AttachResult, AppError> {
     let name = layout.scope.parse_skill_id(skill_id)?.to_string();
     super::tasks::install::validate_skill_name(&name)?;
     // A corrupt lock for this scope blocks every mutation, including attach.
@@ -63,13 +86,24 @@ pub(crate) fn attach_agent_checked(
     } else {
         layout.install_targets(&crate::inventory::detected_agent_dirs(paths))
     };
-    let resolved = attachment_target::resolve_attach(
-        &layout.canonical_dir,
-        &located,
-        &targets,
-        agent_id,
-        TargetContext::for_layout(layout),
-    )?;
+    let resolved = if publication {
+        attachment_target::resolve_publication_attach(
+            &layout.canonical_dir,
+            &located,
+            &targets,
+            agent_id,
+            TargetContext::for_layout(layout),
+            true,
+        )?
+    } else {
+        attachment_target::resolve_attach(
+            &layout.canonical_dir,
+            &located,
+            &targets,
+            agent_id,
+            TargetContext::for_layout(layout),
+        )?
+    };
     let agent = &resolved.agent;
     let canonical = &resolved.canonical;
     let target = &resolved.target;

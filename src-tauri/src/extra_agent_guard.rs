@@ -34,20 +34,19 @@ fn project_label(entry: &ProjectEntry) -> String {
 /// Scan one project for attachments of `agent_id`. A project lock that cannot
 /// be read is an error: the caller must treat it as "cannot prove absent".
 ///
-/// `detachable_only` is used for removal: only rows that `detach_agent` will
-/// accept are collected, so a read-only (broken/unmanaged/copy-only) row never
-/// aborts cleanup after other mounts were already removed.
+/// Removal requires every attachment to be detachable. Reject unsupported
+/// rows during this read-only scan, before cleanup can remove any other mount.
 fn scan_project(
     paths: &AppPaths,
     project: &crate::projects::Project,
     agent_id: &str,
-    detachable_only: bool,
+    require_detachable: bool,
 ) -> Result<(ScopeLayout, Vec<String>), AppError> {
     let layout = ScopeLayout::project(paths, project.clone());
     let catalog = layout.catalog(paths)?;
     let mut skills = Vec::new();
     for name in &catalog.names {
-        if detachable_only {
+        if require_detachable {
             let Some(located) = inventory::locate_in_catalog(&catalog, name) else {
                 continue;
             };
@@ -64,9 +63,14 @@ fn scan_project(
                 false,
                 Some(attachment.mode),
             );
-            if eligibility == DetachEligibility::Detachable {
-                skills.push(name.clone());
+            if eligibility != DetachEligibility::Detachable {
+                return Err(AppError::extra_agent_remove_blocked(&[format!(
+                    "{}（{}）：请先使用「从 Agent 移除」处理此挂载。",
+                    name,
+                    paths.display(&attachment.path)
+                )]));
             }
+            skills.push(name.clone());
             continue;
         }
         let attached = catalog
@@ -166,7 +170,7 @@ pub fn remove_extra_agent(
                     AppError::extra_agent_remove_blocked(&[format!(
                         "{}：无法检查挂载（{}）",
                         project_label(entry),
-                        error.message
+                        error.detail.as_deref().unwrap_or(&error.message)
                     )])
                 })?;
             Ok(ProjectScan {
@@ -180,17 +184,19 @@ pub fn remove_extra_agent(
     let agents = inventory::detected_agent_dirs(paths);
     let global_layout = ScopeLayout::global(paths, agents.clone());
     let snapshot = inventory::read_with_agents(paths, &agents)?;
-    let global_skills: Vec<String> = snapshot
-        .skills
-        .iter()
-        .filter(|skill| {
-            skill
-                .attachments
-                .iter()
-                .any(|attachment| attachment.agent_id == agent_id && attachment.detachable)
-        })
-        .map(|skill| skill.name.clone())
-        .collect();
+    let mut global_skills = Vec::new();
+    for skill in &snapshot.skills {
+        let Some(attachment) = skill.attachments.iter().find(|a| a.agent_id == agent_id) else {
+            continue;
+        };
+        if !attachment.detachable {
+            return Err(AppError::extra_agent_remove_blocked(&[format!(
+                "全局 {}（{}）：请先使用「从 Agent 移除」处理此挂载。",
+                skill.name, attachment.path
+            )]));
+        }
+        global_skills.push(skill.name.clone());
+    }
 
     let mut detached = Vec::new();
     for name in global_skills {
@@ -368,6 +374,66 @@ mod tests {
         assert!(fs::symlink_metadata(&global_link).is_err());
         assert!(fs::symlink_metadata(&project_link).is_err());
         assert!(extras::find(&fixture.paths, "acme").is_none());
+    }
+
+    #[test]
+    fn unsupported_attachments_block_definition_removal_before_any_detach() {
+        for project in [false, true] {
+            for mode in ["unmanaged", "copy-only", "broken"] {
+                let fixture = Fixture::new();
+                fixture.attach_global();
+                fixture.attach_project();
+                let root = if project {
+                    fixture.project_root()
+                } else {
+                    fixture.paths.home().to_path_buf()
+                };
+                let leftover = root.join(".acme/skills/leftover");
+                let canonical = root.join(".agents/skills/leftover");
+                if mode == "broken" {
+                    write_file(&canonical.join("SKILL.md"), &skill_md("leftover"));
+                    std::os::unix::fs::symlink(root.join("missing"), &leftover).unwrap();
+                } else {
+                    write_file(&leftover.join("SKILL.md"), &skill_md("leftover"));
+                }
+                if mode != "unmanaged" {
+                    let lock = if project {
+                        root.join("skills-lock.json")
+                    } else {
+                        fixture.paths.lock_path()
+                    };
+                    let mut value: serde_json::Value =
+                        serde_json::from_slice(&fs::read(&lock).unwrap()).unwrap();
+                    value["skills"]["leftover"] = value["skills"]["alpha"].clone();
+                    fs::write(lock, value.to_string()).unwrap();
+                }
+                let config = fs::read(fixture.paths.agents_config_path()).unwrap();
+
+                let error = remove_extra_agent(&fixture.paths, &fixture.registry, "acme")
+                    .expect_err(&format!("project={project}, mode={mode}"));
+
+                assert_eq!(error.code, crate::error::ErrorCode::ExtraProjectBlocked);
+                assert!(
+                    error
+                        .detail
+                        .as_deref()
+                        .unwrap_or_default()
+                        .contains("leftover")
+                );
+                assert_eq!(
+                    fs::read(fixture.paths.agents_config_path()).unwrap(),
+                    config
+                );
+                assert!(fixture.paths.home().join(".acme/skills/alpha").is_symlink());
+                assert!(
+                    fixture
+                        .project_root()
+                        .join(".acme/skills/alpha")
+                        .is_symlink()
+                );
+                assert!(fs::symlink_metadata(&leftover).is_ok());
+            }
+        }
     }
 
     #[test]

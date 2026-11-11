@@ -132,7 +132,15 @@ pub fn resolve_attach(
     agent_id: &str,
     context: TargetContext<'_>,
 ) -> Result<ResolvedAttachment, AppError> {
-    resolve_attach_inner(canonical_dir, located, agents, agent_id, context, true)
+    resolve_attach_inner(
+        canonical_dir,
+        located,
+        agents,
+        agent_id,
+        context,
+        true,
+        false,
+    )
 }
 
 /// Copy to project previews an attachment before its canonical folder is
@@ -144,7 +152,37 @@ pub(crate) fn resolve_copy_attach(
     agent_id: &str,
     context: TargetContext<'_>,
 ) -> Result<ResolvedAttachment, AppError> {
-    resolve_attach_inner(canonical_dir, located, agents, agent_id, context, false)
+    resolve_attach_inner(
+        canonical_dir,
+        located,
+        agents,
+        agent_id,
+        context,
+        false,
+        false,
+    )
+}
+
+/// Marketplace and pack publication own all selected physical attachments.
+/// A CLI `universal` flag does not prove that a global agent directory shares
+/// the canonical store. Keep the strict path/occupancy checks for these targets.
+pub(crate) fn resolve_publication_attach(
+    canonical_dir: &Path,
+    located: &LocatedSkill,
+    agents: &[AgentDir],
+    agent_id: &str,
+    context: TargetContext<'_>,
+    require_canonical: bool,
+) -> Result<ResolvedAttachment, AppError> {
+    resolve_attach_inner(
+        canonical_dir,
+        located,
+        agents,
+        agent_id,
+        context,
+        require_canonical,
+        true,
+    )
 }
 
 fn resolve_attach_inner(
@@ -154,6 +192,7 @@ fn resolve_attach_inner(
     agent_id: &str,
     context: TargetContext<'_>,
     require_canonical: bool,
+    allow_universal: bool,
 ) -> Result<ResolvedAttachment, AppError> {
     let skill_id = located.name.as_str();
     let canonical = managed_canonical(located, skill_id)?;
@@ -166,7 +205,11 @@ fn resolve_attach_inner(
     }
 
     let agent = find_agent(agents, agent_id)?;
-    ensure_not_universal(agent, canonical_dir)?;
+    if (!allow_universal && agent.universal)
+        || inventory::same_dir(&agent.skills_dir, canonical_dir)
+    {
+        return Err(AppError::agent_native(&agent.display_name));
+    }
     context.ensure_inside(&agent.skills_dir)?;
     if let Some(existing) = located
         .attachments

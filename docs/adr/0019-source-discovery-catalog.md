@@ -8,6 +8,13 @@ A scope-owned catalog would repeat source reads and fragment discovery history w
 
 This adds an upstream discovery view without merging installed inventories or weakening Project access revocation. Discovery history and acknowledgements survive source inactivity; reminder counts are shared across scopes, and ignored discoveries are restored as acknowledged. Live installation records and Project revisions determine source eligibility, so old catalog state cannot restore access to a forgotten Project. The complete design was confirmed on 2026-11-02.
 
+Scheduling and source-result publication refresh only live scope records and
+associations. State polling uses a lightweight Read model projection of local
+directory keys, management state and bounded `SKILL.md` names, once per scope.
+It does not compute or write content baselines. Directory detection and metadata
+remain fresh on each state request, including external agent copies and edits;
+source revocation still runs before every upstream result is published.
+
 
 The catalog contents come from the shared pinned CLI read-only preview seam.
 Native authenticated GitHub commit queries and HTTPS Git HEAD queries decide

@@ -205,6 +205,61 @@ async fn previews(transport: &FakeTransport, count: usize) {
     .unwrap();
 }
 #[tokio::test]
+async fn polling_keeps_installation_identity_fresh_without_computing_content_baselines() {
+    let f = Fixture::new(&["acme/skills"]);
+    let canonical = f.paths.canonical_skills_dir().join("installed-0");
+    fs::create_dir_all(&canonical).unwrap();
+    let markdown = "---\nname: Installed 0\ndescription: Test\n---\n";
+    fs::write(canonical.join("SKILL.md"), markdown).unwrap();
+    fs::write(
+        canonical.join("large-reference.txt"),
+        vec![b'a'; 1024 * 1024],
+    )
+    .unwrap();
+    f.names(&["Installed 0"], 1);
+    f.scan().await;
+    let baselines = crate::baseline::BaselineStore::new(&f.paths);
+    assert!(
+        baselines.load("installed-0").is_none(),
+        "source scanning must not fingerprint installed content"
+    );
+
+    for _ in 0..3 {
+        assert!(!f.service.start(false).unwrap().running);
+        let state = f.service.get_state();
+        assert_eq!(
+            state.skills[0].installations[0].status,
+            InstallationStatus::Installed
+        );
+        assert!(
+            baselines.load("installed-0").is_none(),
+            "polling must not create content baselines"
+        );
+    }
+
+    // SKILL.md edits and newly detected agent copies must remain visible on
+    // the next poll, even though content fingerprints are no longer needed.
+    fs::write(canonical.join("SKILL.md"), "---\nname: Different\n---\n").unwrap();
+    assert_eq!(
+        f.service.get_state().skills[0].installations[0].status,
+        InstallationStatus::Conflict
+    );
+    fs::remove_dir_all(&canonical).unwrap();
+    assert_eq!(
+        f.service.get_state().skills[0].installations[0].status,
+        InstallationStatus::Stale
+    );
+    let copy = f.paths.home().join(".claude/skills/installed-0");
+    fs::create_dir_all(&copy).unwrap();
+    fs::write(copy.join("SKILL.md"), markdown).unwrap();
+    assert_eq!(
+        f.service.get_state().skills[0].installations[0].status,
+        InstallationStatus::Installed
+    );
+    assert!(baselines.load("installed-0").is_none());
+}
+
+#[tokio::test]
 async fn first_baseline_cache_manual_check_failure_revalidation_and_restart() {
     let f = Fixture::new(&["acme/skills"]);
     f.scan().await;
@@ -567,9 +622,16 @@ async fn projection_uses_lock_and_physical_presence_for_managed_conflict_unmanag
     )
     .unwrap();
     f.service.refresh();
+    let identities = f
+        .service
+        .inner
+        .read_model
+        .skill_identities(&ScopeId::Global)
+        .unwrap();
     assert_eq!(
         installation(
             &f.service.lock().projections[0],
+            Some(&identities),
             "acme/skills",
             "installed-0"
         ),

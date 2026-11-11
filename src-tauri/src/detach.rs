@@ -174,7 +174,7 @@ pub(crate) fn detach_agent_checked(
                 return Err(error);
             }
 
-            let dependents = find_copy_dependents(&layout.agents, canonical, target)?;
+            let dependents = find_copy_dependents(&layout.agents, &layout.canonical_dir, target)?;
             if !dependents.is_empty() {
                 let list = dependents
                     .iter()
@@ -552,6 +552,23 @@ mod tests {
                 })
                 .unwrap_or_default()
         }
+    }
+
+    #[test]
+    fn copy_detach_blocks_canonical_dependents_without_a_shared_agent() {
+        let fixture = Fixture::without_shared_agent();
+        fixture.managed_skill("alpha");
+        let copy = fixture.copy(&fixture.claude, "alpha");
+        fixture.link(&fixture.canonical_root, "dependent", &copy);
+        let lock_before = fs::read(fixture.paths.lock_path()).unwrap();
+
+        let error = fixture.detach("alpha", "claude-code").unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::AgentDependencyConflict);
+        assert!(copy.join("SKILL.md").is_file());
+        assert!(fixture.canonical_root.join("dependent/SKILL.md").is_file());
+        assert_eq!(fs::read(fixture.paths.lock_path()).unwrap(), lock_before);
+        assert!(fixture.backup_dirs().is_empty());
     }
 
     #[test]

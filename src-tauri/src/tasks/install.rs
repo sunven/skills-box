@@ -1,5 +1,5 @@
 //! Install execution: request validation, the pinned CLI command, its
-//! `--json` result parser, the pre-spawn lock snapshot, and the post-install
+//! `--json` result parser, the pre-spawn backup, and the post-install
 //! verifier.
 //!
 //! The CLI's `installed` status is never trusted on its own: after the process
@@ -18,7 +18,7 @@ use crate::agents::catalog;
 #[cfg(test)]
 use crate::agents::{DetectionContext, resolve_global_skills_dir};
 use crate::attachment_target::{self, AgentDirectoryState, TargetState};
-use crate::backup::{BackupAction, BackupStore};
+use crate::backup::BackupStore;
 use crate::baseline::{BaselineStore, write_warning};
 use crate::cli::{CliRuntime, ScopedCli};
 #[cfg(test)]
@@ -62,6 +62,14 @@ pub struct InstallTarget {
     pub display_name: String,
     pub universal: bool,
     pub skills_dir: PathBuf,
+}
+
+impl InstallTarget {
+    /// Native publication follows physical directories; the CLI's universal
+    /// flag alone does not imply that a global target shares the canonical store.
+    pub fn needs_attachment(&self, canonical_dir: &std::path::Path) -> bool {
+        !crate::inventory::same_dir(&self.skills_dir, canonical_dir)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -612,22 +620,24 @@ pub fn parse_install_output(raw: &str) -> InstallOutput {
     InstallOutput::Results(results)
 }
 
-/// Snapshot the scope lock into `backups/<ms>-install-<task>/` before the CLI
-/// runs. Install is task-scoped, so the snapshot is lock-only (no canonical or
-/// attachments) and carries the same manifest as every other backup. A missing
-/// lock is a normal fresh-machine state and is recorded as absent.
-pub fn snapshot_lock(
+/// Snapshot the scope lock and any existing retry targets before the CLI runs.
+/// Fresh installs pass no retry names and keep their historical lock-only backup.
+pub fn snapshot_install(
     paths: &AppPaths,
     layout: &crate::scope_layout::ScopeLayout,
     task_id: &str,
+    retry_names: &[String],
 ) -> Result<PathBuf, AppError> {
-    let snapshot = BackupStore::for_layout(paths, layout).create(
-        BackupAction::Install,
-        task_id,
-        None,
-        &[],
-        &[],
-    )?;
+    let existing = if retry_names.is_empty() {
+        Vec::new()
+    } else {
+        let catalog = layout.catalog(paths)?;
+        retry_names
+            .iter()
+            .filter_map(|name| crate::inventory::locate_in_catalog(&catalog, name))
+            .collect()
+    };
+    let snapshot = BackupStore::for_layout(paths, layout).create_install(task_id, &existing)?;
     Ok(snapshot.path)
 }
 
@@ -847,12 +857,17 @@ impl MutationAction for InstallAction {
         {
             return Err(conflict);
         }
-        let snapshot = snapshot_lock(&self.paths, &self.layout, &self.task_id)?;
+        let snapshot = snapshot_install(
+            &self.paths,
+            &self.layout,
+            &self.task_id,
+            if plan.retry { &plan.skills } else { &[] },
+        )?;
         Ok(Preflight {
             snapshot: snapshot.clone(),
             post_message: Some(ProgressMessage {
                 phase: TaskPhase::Preparing,
-                message: format!("已快照 lock：{}", self.paths.display(&snapshot)),
+                message: format!("已创建安装备份：{}", self.paths.display(&snapshot)),
                 skill: None,
                 completed: 0,
             }),
@@ -1704,7 +1719,7 @@ mod tests {
         fs::write(paths.lock_path(), r#"{"version":3,"skills":{}}"#).unwrap();
 
         let global = crate::scope_layout::ScopeLayout::global(&paths, Vec::new());
-        let global_snapshot = super::snapshot_lock(&paths, &global, "task-global").unwrap();
+        let global_snapshot = super::snapshot_install(&paths, &global, "task-global", &[]).unwrap();
         assert_eq!(global_snapshot.parent().unwrap(), paths.backups_dir());
         assert!(global_snapshot.join("skill-lock.json").is_file());
         assert!(!global_snapshot.to_string_lossy().contains("project-"));
@@ -1723,13 +1738,59 @@ mod tests {
             check_revision: "initial".into(),
         };
         let layout = crate::scope_layout::ScopeLayout::project(&paths, project);
-        let project_snapshot = super::snapshot_lock(&paths, &layout, "task-project").unwrap();
+        let project_snapshot =
+            super::snapshot_install(&paths, &layout, "task-project", &[]).unwrap();
         let project_root = paths
             .backups_dir()
             .join(format!("project-{}", layout.scope.project_id().unwrap()));
         assert_eq!(project_snapshot.parent().unwrap(), project_root);
         assert!(project_snapshot.join("skills-lock.json").is_file());
         assert!(!project_snapshot.join("skill-lock.json").exists());
+
+        // A single retry can replace several skills. Their backups must stay
+        // separate from one another and from identically named global skills.
+        for scope in [&global, &layout] {
+            for name in ["alpha", "beta"] {
+                let canonical = scope.canonical_dir.join(name);
+                fs::create_dir_all(&canonical).unwrap();
+                fs::write(
+                    canonical.join("SKILL.md"),
+                    format!("{} {name}", scope.scope.as_string()),
+                )
+                .unwrap();
+            }
+        }
+        for scope in [&global, &layout] {
+            let backup = super::snapshot_install(
+                &paths,
+                scope,
+                "task-retry",
+                &["alpha".into(), "beta".into()],
+            )
+            .unwrap();
+            for name in ["alpha", "beta"] {
+                let child = backup.join("skills").join(name);
+                assert_eq!(
+                    fs::read_to_string(child.join("canonical/SKILL.md")).unwrap(),
+                    format!("{} {name}", scope.scope.as_string())
+                );
+                let manifest: serde_json::Value = serde_json::from_slice(
+                    &fs::read(child.join(crate::backup::BACKUP_MANIFEST_FILE)).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(manifest["scope"], scope.scope.as_string());
+                assert_eq!(manifest["skill"], name);
+                assert!(
+                    child
+                        .join(if scope.is_global() {
+                            "skill-lock.json"
+                        } else {
+                            "skills-lock.json"
+                        })
+                        .is_file()
+                );
+            }
+        }
     }
 
     #[test]

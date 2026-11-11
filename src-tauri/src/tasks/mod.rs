@@ -20,7 +20,7 @@ pub mod update;
 pub use conflicts::{ConflictInfo, ConflictProvider, InventoryConflictProvider, find_conflicts};
 pub use install::{
     CliSkillResult, CliSkillStatus, INSTALL_TIMEOUT, InstallOutput, InstallPlan, InstallRequest,
-    InstallTarget, InstallVerification, UNIVERSAL_AGENT_ID, parse_install_output, snapshot_lock,
+    InstallTarget, InstallVerification, UNIVERSAL_AGENT_ID, parse_install_output, snapshot_install,
     validate_request, validate_skill_name, validate_skill_names, verify_install,
 };
 pub use manager::{

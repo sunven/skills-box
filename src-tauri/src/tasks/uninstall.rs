@@ -227,8 +227,8 @@ pub fn remove_extra_attachments(plan: &UninstallPlan, warnings: &mut Vec<AppErro
             continue;
         }
         match attachment.mode {
-            AttachmentMode::Native | AttachmentMode::Broken => continue,
-            AttachmentMode::Link | AttachmentMode::Copy => {}
+            AttachmentMode::Native => continue,
+            AttachmentMode::Link | AttachmentMode::Copy | AttachmentMode::Broken => {}
         }
         match fs::symlink_metadata(&attachment.path) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -2000,6 +2000,29 @@ mod execution_tests {
         assert!(fixture.canonical.is_dir());
         assert!(fixture.claude.join("alpha").is_dir());
         assert!(receiver.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn managed_uninstall_removes_extra_links_that_were_already_broken() {
+        let fixture = ExecFixture::new();
+        let extra_dir = fixture.home.join(".codex/skills");
+        fs::create_dir_all(&extra_dir).unwrap();
+        let missing = fixture.home.join("missing-skill");
+        let link = extra_dir.join("alpha");
+        symlink(&missing, &link).unwrap();
+        fixture.executor.push(RemoveResponse::success(
+            SUCCESS,
+            remove_all_post(fixture.home.clone(), fixture.paths.clone(), "alpha"),
+        ));
+
+        let (_, event) = run_task(&fixture.manager, "alpha").await;
+
+        let result = event.result.unwrap();
+        assert_eq!(result.overall, TaskOverall::Success, "{result:?}");
+        assert!(fs::symlink_metadata(&link).is_err());
+        assert!(!missing.exists());
+        assert!(!fixture.canonical.exists());
+        assert_eq!(fixture.executor.calls().len(), 1);
     }
 
     #[tokio::test]

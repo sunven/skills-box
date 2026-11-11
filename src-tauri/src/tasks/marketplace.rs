@@ -157,13 +157,18 @@ impl Plan {
             } else {
                 layout.install_targets(&crate::inventory::detected_agent_dirs(paths))
             };
-            for target in self.targets.iter().filter(|t| !t.universal) {
-                crate::attachment_target::resolve_copy_attach(
+            for target in self
+                .targets
+                .iter()
+                .filter(|t| t.needs_attachment(&layout.canonical_dir))
+            {
+                crate::attachment_target::resolve_publication_attach(
                     &layout.canonical_dir,
                     &located,
                     &agents,
                     &target.id,
                     crate::attachment_target::TargetContext::for_layout(layout),
+                    false,
                 )?;
             }
         }
@@ -351,14 +356,18 @@ pub(crate) fn publish_staged(
             }
         }
     }
-    for target in plan.targets.iter().filter(|t| !t.universal) {
+    for target in plan
+        .targets
+        .iter()
+        .filter(|t| t.needs_attachment(&layout.canonical_dir))
+    {
         let destination = target.skills_dir.join(plan.name());
         if fs::symlink_metadata(&destination).is_ok_and(|m| m.file_type().is_symlink())
             && fs::canonicalize(&destination).ok() == fs::canonicalize(&canonical).ok()
         {
             continue;
         }
-        crate::attach::attach_agent_checked(
+        crate::attach::attach_publication_checked(
             paths,
             &layout,
             &layout.scope.skill_id(plan.name()),

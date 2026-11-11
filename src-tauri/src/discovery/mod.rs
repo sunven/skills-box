@@ -15,7 +15,7 @@ use crate::{
     paths::AppPaths,
     process::CancelToken,
     projects::ProjectRegistry,
-    read_model::ReadModel,
+    read_model::{ReadModel, SkillIdentity},
     scope::ScopeId,
     scope_layout::ScopeLayout,
     tasks::{TaskManager, parser::ParsedSkill},
@@ -156,8 +156,6 @@ struct Projection {
     scope: ScopeId,
     label: String,
     entries: Option<Vec<crate::lock::LockEntry>>,
-    skills: Option<Vec<crate::inventory::InventorySkill>>,
-    metadata_names: BTreeMap<String, String>,
 }
 struct RuntimeState {
     history: Result<History, AppError>,
@@ -268,8 +266,8 @@ impl DiscoveryService {
         state.write_error = None;
         Ok(())
     }
-    /// Local collection only. No network/CLI work holds this mutex or a
-    /// Mutation permit. Failed scope reads retain only the matching revision.
+    /// Refresh source associations from installation records, without scanning
+    /// skill content. Failed scope reads retain only the matching revision.
     pub fn refresh(&self) {
         let mut state = self.lock();
         if state.closed || state.history.is_err() {
@@ -322,39 +320,10 @@ impl DiscoveryService {
                     None
                 }
             };
-            let skills = if entries.is_some() {
-                match self.inner.read_model.snapshot(&scope) {
-                    Ok(s) => Some(s.skills),
-                    Err(error) => {
-                        warnings.push(format!("{label} 安装状态未知：{}", diagnostic(&error)));
-                        None
-                    }
-                }
-            } else {
-                None
-            };
-            let metadata_names = skills
-                .as_ref()
-                .map(|skills| {
-                    skills
-                        .iter()
-                        .filter_map(|skill| {
-                            let root =
-                                self.inner.read_model.resolve_root(&scope, &skill.id).ok()?;
-                            let content = crate::detail::read_skill_md(&root).content?;
-                            let metadata =
-                                crate::inventory::frontmatter::parse(&content).ok()??;
-                            Some((skill.name.clone(), name_identity(&metadata.name?)))
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
             projections.push(Projection {
                 scope,
                 label,
                 entries,
-                skills,
-                metadata_names,
             });
         }
         let mut associations: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
@@ -411,6 +380,31 @@ impl DiscoveryService {
     pub fn get_state(&self) -> DiscoveryState {
         self.refresh();
         let state = self.lock();
+        let mut warnings = state.warnings.clone();
+        // Scheduling and source publication only need lock records. Build the
+        // lightweight installation projection once when the UI requests state.
+        let projections = state
+            .projections
+            .iter()
+            .map(|projection| {
+                let identities = if projection.entries.is_some() {
+                    match self.inner.read_model.skill_identities(&projection.scope) {
+                        Ok(skills) => Some(skills),
+                        Err(error) => {
+                            warnings.push(format!(
+                                "{} 安装状态未知：{}",
+                                projection.label,
+                                diagnostic(&error)
+                            ));
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+                (projection, identities)
+            })
+            .collect::<Vec<_>>();
         let now = (self.inner.clock)();
         let credential = self.inner.api.credential_context().ok();
         let mut sources = vec![];
@@ -441,13 +435,12 @@ impl DiscoveryService {
                 });
                 for (name, catalog) in &record.catalog {
                     let h = &record.history[name];
-                    let installations = state
-                        .projections
+                    let installations = projections
                         .iter()
-                        .map(|p| ScopeInstallation {
+                        .map(|(p, identities)| ScopeInstallation {
                             scope: p.scope.clone(),
                             label: p.label.clone(),
-                            status: installation(p, source, name),
+                            status: installation(p, identities.as_deref(), source, name),
                         })
                         .collect();
                     skills.push(DiscoveredSkill {
@@ -474,7 +467,7 @@ impl DiscoveryService {
             skills,
             unread_count,
             progress: state.progress.clone(),
-            warnings: state.warnings.clone(),
+            warnings,
             error: state
                 .history
                 .as_ref()
@@ -880,8 +873,13 @@ fn install_directory_name(name: &str) -> String {
         name.chars().take(255).collect()
     }
 }
-fn installation(p: &Projection, source: &str, name: &str) -> InstallationStatus {
-    let (Some(entries), Some(skills)) = (&p.entries, &p.skills) else {
+fn installation(
+    p: &Projection,
+    skills: Option<&[SkillIdentity]>,
+    source: &str,
+    name: &str,
+) -> InstallationStatus {
+    let (Some(entries), Some(skills)) = (&p.entries, skills) else {
         return InstallationStatus::Unknown;
     };
     let disk_name = install_directory_name(name);
@@ -889,7 +887,9 @@ fn installation(p: &Projection, source: &str, name: &str) -> InstallationStatus 
         .iter()
         .filter(|s| {
             name_identity(&s.name) == name
-                || p.metadata_names.get(&s.name).is_some_and(|n| n == name)
+                || s.metadata_name
+                    .as_deref()
+                    .is_some_and(|n| name_identity(n) == name)
                 || s.name == disk_name
         })
         .collect();
@@ -899,7 +899,10 @@ fn installation(p: &Projection, source: &str, name: &str) -> InstallationStatus 
     if let Some(skill) = matches.first() {
         let entry = entries.iter().find(|e| e.name == skill.name);
         let same_name = name_identity(&skill.name) == name
-            || p.metadata_names.get(&skill.name).is_some_and(|n| n == name);
+            || skill
+                .metadata_name
+                .as_deref()
+                .is_some_and(|n| name_identity(n) == name);
         return if same_name
             && skill.management != crate::inventory::ManagementState::Unmanaged
             && entry.is_some_and(|e| {
