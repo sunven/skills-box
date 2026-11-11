@@ -1,4 +1,4 @@
-import type { MarketplaceCoordinate, MarketplaceListing, MarketplaceDetail, MarketplaceCli, MarketplacePreview } from "./marketplace";
+import type { MarketplaceCoordinate, MarketplaceListing, MarketplaceDetail, MarketplaceCli, MarketplacePreview, MarketplaceSort } from "./marketplace";
 import type { BatchRequest, BatchPreview, BatchConfirmation, StaleRecord } from "./batch";
 import type { CliCommandRequest, CliCommandPreview, CliCommandRecord } from "./cli-commands";
 import type {
@@ -547,7 +547,7 @@ export function listStaleRecords(scope: ScopeId): Promise<StaleRecord[]> {
   return invoke<StaleRecord[]>(API_COMMANDS.listStaleRecords, { scope });
 }
 
-export function listMarketplaceSkills(keyword: string, page: number): Promise<MarketplaceListing> { return invoke(API_COMMANDS.listMarketplaceSkills, { keyword, page }); }
+export function listMarketplaceSkills(keyword: string, page: number, sort: MarketplaceSort): Promise<MarketplaceListing> { return invoke(API_COMMANDS.listMarketplaceSkills, { keyword, page, sort }); }
 export function getMarketplaceSkill(coordinate: MarketplaceCoordinate): Promise<MarketplaceDetail> { return invoke(API_COMMANDS.getMarketplaceSkill, { coordinate }); }
 export function getMarketplaceCli(): Promise<MarketplaceCli> { return invoke(API_COMMANDS.getMarketplaceCli); }
 export function prepareMarketplaceInstall(scope: ScopeId, coordinate: MarketplaceCoordinate, agents: string[]): Promise<MarketplacePreview> { return invoke(API_COMMANDS.prepareMarketplaceInstall, { scope, coordinate, agents }); }

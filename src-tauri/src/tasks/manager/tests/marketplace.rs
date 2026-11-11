@@ -129,6 +129,8 @@ fn pinned_marketplace_update_retains_the_confirmed_release_without_git_runtime()
                 description: "description".into(),
                 version: "2.0.0".into(),
                 official_url: record.coordinate.url(),
+                stars: None,
+                downloads: None,
             },
             original_name: Some(item.name.clone()),
             markdown: "---\nname: market-skill\n---\nnew release".into(),

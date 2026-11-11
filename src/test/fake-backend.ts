@@ -1,4 +1,4 @@
-import type { MarketplaceCoordinate, MarketplaceListing, MarketplaceDetail, MarketplaceCli, MarketplacePreview } from "../lib/marketplace";
+import type { MarketplaceCoordinate, MarketplaceListing, MarketplaceDetail, MarketplaceCli, MarketplacePreview, MarketplaceSort } from "../lib/marketplace";
 import { marketplaceAddress } from "../lib/marketplace";
 import { marketplaceSkill, marketplaceCli } from "./marketplace-fixtures";
 import type {
@@ -70,7 +70,7 @@ type Factory<T> = T | (() => T);
 type MaybePromise<T> = T | Promise<T>;
 
 export interface FakeCommandContract {
-  list_marketplace_skills: { args: { keyword: string; page: number }; result: MarketplaceListing };
+  list_marketplace_skills: { args: { keyword: string; page: number; sort: MarketplaceSort }; result: MarketplaceListing };
   get_marketplace_skill: { args: { coordinate: MarketplaceCoordinate }; result: MarketplaceDetail };
   get_marketplace_cli: { args: Record<string, never>; result: MarketplaceCli };
   prepare_marketplace_install: { args: { scope: ScopeId; coordinate: MarketplaceCoordinate; agents: string[] }; result: MarketplacePreview };
@@ -1745,7 +1745,7 @@ export function createFakeBackend(
         data.githubSettings.effectiveSource === "anonymous" ? 59 : 4_999,
       resetAtEpochMs: Date.now() + 3_600_000,
     }),
-    list_marketplace_skills: ({ keyword, page }) => ({ skills: page === 1 && `${marketplaceSkill.name} ${marketplaceSkill.description}`.toLowerCase().includes(keyword.toLowerCase()) ? [marketplaceSkill] : [], total: keyword && !`${marketplaceSkill.name} ${marketplaceSkill.description}`.toLowerCase().includes(keyword.toLowerCase()) ? 0 : 1, page, pageSize: 20 }),
+    list_marketplace_skills: ({ keyword, page }) => ({ skills: page === 1 && `${marketplaceSkill.name} ${marketplaceSkill.description}`.toLowerCase().includes(keyword.toLowerCase()) ? [marketplaceSkill] : [], total: keyword && !`${marketplaceSkill.name} ${marketplaceSkill.description}`.toLowerCase().includes(keyword.toLowerCase()) ? 0 : 1, page, pageSize: 24 }),
     get_marketplace_skill: ({ coordinate }) => ({ ...marketplaceSkill, coordinate }),
     get_marketplace_cli: () => marketplaceCli,
     prepare_marketplace_install: ({ scope, coordinate, agents }) => {

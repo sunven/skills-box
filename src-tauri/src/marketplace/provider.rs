@@ -1,7 +1,7 @@
 //! Anonymous official SkillHub catalog. No CLI dependency or ambient source configuration.
 use super::{Coordinate, MarketplaceSource, original_name, validate_version};
 use crate::error::AppError;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     io::{Cursor, Read},
@@ -10,6 +10,17 @@ use std::{
 
 const API: &str = "https://api.skillhub.cn";
 const MAX_PACKAGE: usize = 32 * 1024 * 1024;
+const PAGE_SIZE: u32 = 24;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Sort {
+    Score,
+    Trending,
+    Downloads,
+    UpdatedAt,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Listing {
@@ -27,6 +38,8 @@ pub struct Summary {
     pub description: String,
     pub version: String,
     pub official_url: String,
+    pub stars: Option<u64>,
+    pub downloads: Option<u64>,
 }
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -64,17 +77,78 @@ fn coordinate(v: &Value) -> Result<Coordinate, AppError> {
     }
     Ok(value)
 }
-pub async fn list(keyword: &str, page: u32) -> Result<Listing, AppError> {
+fn summary(v: &Value) -> Result<Summary, AppError> {
+    let c = coordinate(v)?;
+    Ok(Summary {
+        official_url: c.url(),
+        coordinate: c,
+        name: text(v, &["name", "slug"]).into(),
+        publisher: text(v, &["ownerName"]).into(),
+        description: text(v, &["description_zh", "description"]).into(),
+        version: text(v, &["version"]).into(),
+        stars: v["stars"].as_u64(),
+        downloads: v["downloads"].as_u64(),
+    })
+}
+
+// SkillHub's trending tab searches and paginates its showcase, preserving rank order.
+fn trending_listing(value: &Value, keyword: &str, page: u32) -> Result<Listing, AppError> {
+    let keyword = keyword.trim().to_lowercase();
+    let matches: Vec<_> = value["skills"]
+        .as_array()
+        .ok_or_else(|| AppError::marketplace_unavailable("榜单响应缺少 skills"))?
+        .iter()
+        .filter(|skill| {
+            keyword.is_empty()
+                || ["name", "slug", "description", "description_zh", "ownerName"]
+                    .iter()
+                    .filter_map(|key| skill[*key].as_str())
+                    .chain(skill["namespace"]["handle"].as_str())
+                    .chain(
+                        skill["tags"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(Value::as_str),
+                    )
+                    .any(|field| field.to_lowercase().contains(&keyword))
+        })
+        .collect();
+    Ok(Listing {
+        total: matches.len() as u64,
+        skills: matches
+            .into_iter()
+            .skip(((page - 1) * PAGE_SIZE) as usize)
+            .take(PAGE_SIZE as usize)
+            .map(summary)
+            .collect::<Result<_, _>>()?,
+        page,
+        page_size: PAGE_SIZE,
+    })
+}
+
+pub async fn list(keyword: &str, page: u32, sort: Sort) -> Result<Listing, AppError> {
     if page == 0 || page > 100_000 || keyword.len() > 400 {
         return Err(AppError::marketplace_unavailable("无效的分页或关键词"));
     }
-    let value: Value = client()?
-        .get(format!("{API}/api/skills"))
-        .query(&[
+    let client = client()?;
+    let request = if sort == Sort::Trending {
+        client.get(format!("{API}/api/v1/showcase/trending"))
+    } else {
+        let sort_by = match sort {
+            Sort::Downloads => "downloads",
+            Sort::UpdatedAt => "updated_at",
+            _ => "score",
+        };
+        client.get(format!("{API}/api/skills")).query(&[
             ("page", page.to_string()),
-            ("pageSize", "20".into()),
+            ("pageSize", PAGE_SIZE.to_string()),
             ("keyword", keyword.trim().into()),
+            ("sortBy", sort_by.into()),
+            ("order", "desc".into()),
         ])
+    };
+    let value: Value = request
         .send()
         .await
         .and_then(reqwest::Response::error_for_status)
@@ -82,6 +156,9 @@ pub async fn list(keyword: &str, page: u32) -> Result<Listing, AppError> {
         .json()
         .await
         .map_err(AppError::marketplace_unavailable)?;
+    if sort == Sort::Trending {
+        return trending_listing(&value, keyword, page);
+    }
     if value["code"] != 0 {
         return Err(AppError::marketplace_unavailable(text(
             &value,
@@ -93,17 +170,7 @@ pub async fn list(keyword: &str, page: u32) -> Result<Listing, AppError> {
         .as_array()
         .ok_or_else(|| AppError::marketplace_unavailable("目录响应缺少 skills"))?
         .iter()
-        .map(|v| {
-            let c = coordinate(v)?;
-            Ok(Summary {
-                official_url: c.url(),
-                coordinate: c,
-                name: text(v, &["name", "slug"]).into(),
-                publisher: text(v, &["ownerName"]).into(),
-                description: text(v, &["description_zh", "description"]).into(),
-                version: text(v, &["version"]).into(),
-            })
-        })
+        .map(summary)
         .collect::<Result<Vec<_>, AppError>>()?;
     Ok(Listing {
         skills,
@@ -111,7 +178,7 @@ pub async fn list(keyword: &str, page: u32) -> Result<Listing, AppError> {
             .as_u64()
             .ok_or_else(|| AppError::marketplace_unavailable("目录响应缺少 total"))?,
         page,
-        page_size: 20,
+        page_size: PAGE_SIZE,
     })
 }
 async fn metadata(c: &Coordinate) -> Result<Value, AppError> {
@@ -167,6 +234,8 @@ pub async fn detail(c: &Coordinate) -> Result<Detail, AppError> {
                 }
             },
             version: version.into(),
+            stars: skill["stats"]["stars"].as_u64(),
+            downloads: skill["stats"]["downloads"].as_u64(),
         },
         markdown,
         original_name: name,
@@ -238,13 +307,81 @@ pub(crate) fn markdown_from_zip(bytes: &[u8]) -> Result<String, AppError> {
 mod tests {
     use super::*;
     #[tokio::test]
+    #[ignore = "read-only official API sorting smoke test; requires network"]
+    async fn skillhub_live_sorted_catalogs() {
+        for sort in [
+            Sort::Score,
+            Sort::Trending,
+            Sort::Downloads,
+            Sort::UpdatedAt,
+        ] {
+            let first = list("", 1, sort).await.unwrap();
+            assert_eq!(first.skills.len(), PAGE_SIZE as usize);
+            assert!(first.total >= PAGE_SIZE as u64);
+            assert!(first.skills[0].stars.is_some());
+            assert!(first.skills[0].downloads.is_some());
+            let second = list("", 2, sort).await.unwrap();
+            assert_eq!(second.page, 2);
+            assert_ne!(first.skills[0].coordinate, second.skills[0].coordinate);
+            let searched = list(&first.skills[0].name, 1, sort).await.unwrap();
+            assert!(
+                searched
+                    .skills
+                    .iter()
+                    .any(|skill| skill.coordinate == first.skills[0].coordinate)
+            );
+        }
+    }
+
+    #[test]
+    fn trending_search_filters_before_pagination_and_preserves_rank() {
+        let skills: Vec<_> = (0..65)
+            .map(|i| {
+                serde_json::json!({
+                    "name": format!("Skill {i}"),
+                    "description_zh": if i % 2 == 0 { "清理代码" } else { "other" },
+                    "tags": ["Refactor"],
+                    "stars": if i == 0 { Some(0) } else { None },
+                    "downloads": if i == 0 { Some(11_384_000) } else { None },
+                    "namespace": {
+                        "handle": "publisher",
+                        "publicSlug": format!("skill-{i}"),
+                        "canonicalName": format!("@publisher/skill-{i}")
+                    }
+                })
+            })
+            .collect();
+        let value = serde_json::json!({"skills": skills, "total": 100});
+        let first = trending_listing(&value, " 清理 ", 1).unwrap();
+        assert_eq!(first.total, 33);
+        assert_eq!(first.skills.len(), 24);
+        assert_eq!(first.skills[0].stars, Some(0));
+        assert_eq!(first.skills[0].downloads, Some(11_384_000));
+        assert_eq!(first.skills[1].stars, None);
+        assert_eq!(first.skills[1].downloads, None);
+        assert_eq!(first.skills[23].name, "Skill 46");
+        let second = trending_listing(&value, "清理", 2).unwrap();
+        assert_eq!(second.skills.len(), 9);
+        assert_eq!(second.skills[0].name, "Skill 48");
+        assert_eq!(second.page, 2);
+        assert_eq!(second.page_size, 24);
+        assert_eq!(trending_listing(&value, " REFACTOR ", 1).unwrap().total, 65);
+        assert_eq!(trending_listing(&value, "publisher", 1).unwrap().total, 65);
+        assert_eq!(trending_listing(&value, "missing", 1).unwrap().total, 0);
+        assert!(trending_listing(&value, "", 4).unwrap().skills.is_empty());
+        assert!(trending_listing(&serde_json::json!({}), "", 1).is_err());
+    }
+
+    #[tokio::test]
     #[ignore = "read-only official API smoke test; requires network"]
     async fn skillhub_live_catalog_and_exact_release_preview() {
-        let catalog = list("", 1).await.unwrap();
+        let catalog = list("", 1, Sort::Score).await.unwrap();
         assert!(!catalog.skills.is_empty());
         let c = Coordinate::from_canonical("@tencent-adm/ima-skills").unwrap();
         let detail = detail(&c).await.unwrap();
         assert_eq!(detail.summary.coordinate, c);
+        assert!(detail.summary.stars.is_some());
+        assert!(detail.summary.downloads.is_some());
         assert!(detail.original_name.is_some(), "{:?}", detail.install_error);
         assert!(!detail.markdown.is_empty());
         assert!(

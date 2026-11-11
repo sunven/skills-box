@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, ArrowRight, ExternalLink, Search, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Download, ExternalLink, Search, Star, X } from "lucide-react";
 import {
   asAppError,
   fallbackError,
@@ -13,9 +13,11 @@ import {
 import {
   marketplaceAddress,
   marketplaceKey,
+  marketplaceSortOptions,
   type MarketplaceCoordinate,
   type MarketplaceListing,
   type MarketplacePreview,
+  type MarketplaceSort,
 } from "../lib/marketplace";
 import type { AppError, InventorySnapshot, ScopeId } from "../lib/types";
 import { useMutation, taskEventDriver } from "../lib/mutation";
@@ -32,6 +34,34 @@ import {
 } from "./cli-command-display";
 import { MarketplaceCliHelp } from "./marketplace-cli-help";
 
+const compactCount = new Intl.NumberFormat("zh-CN", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+const exactCount = new Intl.NumberFormat("zh-CN");
+
+function MarketplaceStats({ stars, downloads }: {
+  stars: number | null;
+  downloads: number | null;
+}) {
+  return (
+    <div className="marketplace-stats">
+      {[
+        { label: "收藏", count: stars, Icon: Star },
+        { label: "下载量", count: downloads, Icon: Download },
+      ].map(({ label, count, Icon }) => {
+        const description = `${label}：${count === null ? "平台未提供" : exactCount.format(count)}`;
+        return (
+          <span key={label} aria-label={description} title={description}>
+            <Icon aria-hidden="true" />
+            {count === null ? "—" : compactCount.format(count)}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 interface Props {
   scope: ScopeId;
   snapshot?: InventorySnapshot;
@@ -40,15 +70,19 @@ interface Props {
 }
 export function MarketplacePage({ scope, snapshot, disabled, onView }: Props) {
   const [input, setInput] = useState("");
-  const [search, setSearch] = useState({ keyword: "", page: 1 });
+  const [search, setSearch] = useState<{
+    keyword: string;
+    page: number;
+    sort: MarketplaceSort;
+  }>({ keyword: "", page: 1, sort: "score" });
   const [selected, setSelected] = useState<MarketplaceCoordinate | null>(null);
   const previous = useRef<{
     search: typeof search;
     listing: MarketplaceListing;
   } | null>(null);
   const catalog = useQuery({
-    queryKey: ["marketplace", "list", search.keyword, search.page],
-    queryFn: () => listMarketplaceSkills(search.keyword, search.page),
+    queryKey: ["marketplace", "list", search.keyword, search.page, search.sort],
+    queryFn: () => listMarketplaceSkills(search.keyword, search.page, search.sort),
     retry: false,
     staleTime: 60_000,
   });
@@ -58,6 +92,9 @@ export function MarketplacePage({ scope, snapshot, disabled, onView }: Props) {
   const fallback = catalog.isError && !catalog.data ? previous.current : null;
   const listing = catalog.data ?? fallback?.listing;
   const shownSearch = fallback?.search ?? search;
+  const shownSortLabel = marketplaceSortOptions.find(
+    (option) => option.value === shownSearch.sort,
+  )!.label;
   return (
     <main className="discovery-page" aria-labelledby="marketplace-title">
       <div className="discovery-content">
@@ -71,11 +108,24 @@ export function MarketplacePage({ scope, snapshot, disabled, onView }: Props) {
           </div>
           <span className="badge">来源 · SkillHub</span>
         </div>
+        <div className="marketplace-sort" role="group" aria-label="技能排序">
+          {marketplaceSortOptions.map((option) => (
+            <Button
+              key={option.value}
+              type="button"
+              variant="ghost"
+              aria-pressed={search.sort === option.value}
+              onClick={() => setSearch((s) => ({ ...s, sort: option.value, page: 1 }))}
+            >
+              {option.label}
+            </Button>
+          ))}
+        </div>
         <form
           className="discovery-controls"
           onSubmit={(e) => {
             e.preventDefault();
-            setSearch({ keyword: input.trim(), page: 1 });
+            setSearch((s) => ({ ...s, keyword: input.trim(), page: 1 }));
           }}
         >
           <label className="discovery-search">
@@ -104,7 +154,7 @@ export function MarketplacePage({ scope, snapshot, disabled, onView }: Props) {
             <p>
               SkillHub 请求失败。
               {listing
-                ? `保留上次成功结果：${shownSearch.keyword || "默认目录"}，第 ${shownSearch.page} 页。`
+                ? `保留上次成功结果：${shownSearch.keyword || "默认目录"}，第 ${shownSearch.page} 页（${shownSortLabel}）。`
                 : "尚无可显示的结果。"}
             </p>
             <p>{asAppError(catalog.error)?.detail}</p>
@@ -124,7 +174,7 @@ export function MarketplacePage({ scope, snapshot, disabled, onView }: Props) {
               {shownSearch.keyword
                 ? `搜索「${shownSearch.keyword}」`
                 : "默认目录"}{" "}
-              · 共 {listing.total.toLocaleString()} 项 · 第 {listing.page} 页
+              · {shownSortLabel} · 共 {listing.total.toLocaleString()} 项 · 第 {listing.page} 页
             </p>
             <div className="marketplace-grid">
               {listing.skills.map((skill) => {
@@ -150,6 +200,7 @@ export function MarketplacePage({ scope, snapshot, disabled, onView }: Props) {
                     <p className="marketplace-description">
                       {skill.description || "平台未提供描述。"}
                     </p>
+                    <MarketplaceStats stars={skill.stars} downloads={skill.downloads} />
                     <div className="flex items-center justify-between gap-2 mt-auto">
                       <span className="text-xs text-muted-foreground">
                         {skill.publisher || skill.coordinate.namespace}

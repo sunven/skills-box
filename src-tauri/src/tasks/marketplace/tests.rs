@@ -51,6 +51,8 @@ impl Fixture {
                 description: "description".into(),
                 version: "1.0.0".into(),
                 official_url: coordinate.url(),
+                stars: None,
+                downloads: None,
             },
             markdown: "---\nname: original-name\ndescription: test\n---\n# Test\n".into(),
             original_name: Some("original-name".into()),

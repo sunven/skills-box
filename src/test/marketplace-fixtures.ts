@@ -10,6 +10,8 @@ export const marketplaceSkill: MarketplaceDetail = {
   description: "整理项目笔记、检索知识并记录决策。",
   version: "1.2.0",
   officialUrl: "https://skillhub.cn/skills/example/workspace-notes",
+  stars: 109,
+  downloads: 11_384_000,
   originalName: "workspace-notes",
   markdown:
     "---\nname: workspace-notes\ndescription: 项目笔记\n---\n# Workspace Notes\n\n整理项目笔记和记录决策。\n\n## 运行要求\n使用技能前，请选择笔记目录。",

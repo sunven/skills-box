@@ -41,6 +41,70 @@ async function openDetail() {
 }
 
 describe("SkillHub marketplace", () => {
+  it("keeps search and sorting across pages, resets the page on sort changes, and separates caches", async () => {
+    const backend = setup({
+      commands: {
+        list_marketplace_skills: ({ keyword, page, sort }) => ({
+          skills: [{ ...marketplaceSkill, name: `${keyword || "catalog"}-${sort}-${page}` }],
+          total: 49,
+          page,
+          pageSize: 24,
+        }),
+      },
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "技能市场" }));
+    await screen.findByRole("button", { name: "catalog-score-1" });
+    const sorts = screen.getByRole("group", { name: "技能排序" });
+    expect(within(sorts).getByRole("button", { name: "全部" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索 SkillHub" }), {
+      target: { value: "simplify" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+    await screen.findByRole("button", { name: "simplify-score-1" });
+    fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+    await screen.findByRole("button", { name: "simplify-score-2" });
+    for (const [label, sort] of [["近期飙升", "trending"], ["下载量", "downloads"], ["最近上新", "updated_at"]]) {
+      fireEvent.click(within(sorts).getByRole("button", { name: label }));
+      await screen.findByRole("button", { name: `simplify-${sort}-1` });
+      expect(backend.callsOf("list_marketplace_skills").slice(-1)[0]?.payload).toEqual({ keyword: "simplify", page: 1, sort });
+      expect(within(sorts).getByRole("button", { name: label })).toHaveAttribute("aria-pressed", "true");
+    }
+    fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+    await screen.findByRole("button", { name: "simplify-updated_at-2" });
+    const calls = backend.count("list_marketplace_skills");
+    fireEvent.click(within(sorts).getByRole("button", { name: "全部" }));
+    await screen.findByRole("button", { name: "simplify-score-1" });
+    expect(backend.count("list_marketplace_skills")).toBe(calls);
+    fireEvent.click(screen.getByRole("button", { name: "刷新目录" }));
+    await waitFor(() => expect(backend.count("list_marketplace_skills")).toBe(calls + 1));
+    expect(backend.callsOf("list_marketplace_skills").slice(-1)[0]?.payload).toEqual({ keyword: "simplify", page: 1, sort: "score" });
+  });
+
+  it("ignores late sort responses and identifies the retained sorting when another sort fails", async () => {
+    let release: ((value: { skills: (typeof marketplaceSkill)[]; total: number; page: number; pageSize: number }) => void) | undefined;
+    setup({
+      commands: {
+        list_marketplace_skills: ({ page, sort }) => {
+          if (sort === "trending") return new Promise((resolve) => { release = resolve; });
+          if (sort === "updated_at") throw { code: "marketplace.unavailable", message: "请求失败", retryable: true };
+          return { skills: [{ ...marketplaceSkill, name: sort === "score" ? marketplaceSkill.name : "downloads result" }], total: 25, page, pageSize: 24 };
+        },
+      },
+    });
+    await openMarket();
+    const sorts = screen.getByRole("group", { name: "技能排序" });
+    fireEvent.click(within(sorts).getByRole("button", { name: "近期飙升" }));
+    await waitFor(() => expect(release).toBeDefined());
+    fireEvent.click(within(sorts).getByRole("button", { name: "下载量" }));
+    await screen.findByRole("button", { name: "downloads result" });
+    release!({ skills: [{ ...marketplaceSkill, name: "late trending" }], total: 1, page: 1, pageSize: 24 });
+    fireEvent.click(within(sorts).getByRole("button", { name: "最近上新" }));
+    expect(await screen.findByText(/保留上次成功结果：默认目录，第 1 页（下载量）/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "downloads result" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "late trending" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "下一页" })).toBeDisabled();
+  });
+
   it("browses without Node or SkillHub CLI and gives CLI-only guidance at installation", async () => {
     const missing = {
       code: "marketplace.cli_unavailable",
@@ -284,7 +348,7 @@ describe("SkillHub marketplace", () => {
               message: "请求失败",
               retryable: true,
             };
-          return { skills: [marketplaceSkill], total: 21, page, pageSize: 20 };
+          return { skills: [marketplaceSkill], total: 25, page, pageSize: 24 };
         },
       },
     });
@@ -365,9 +429,9 @@ describe("SkillHub marketplace", () => {
             skills: [
               { ...marketplaceSkill, name: keyword || marketplaceSkill.name },
             ],
-            total: 21,
+            total: 25,
             page,
-            pageSize: 20,
+            pageSize: 24,
           };
         },
       },
@@ -390,7 +454,7 @@ describe("SkillHub marketplace", () => {
       skills: [{ ...marketplaceSkill, name: "late result" }],
       total: 1,
       page: 1,
-      pageSize: 20,
+      pageSize: 24,
     });
     await waitFor(() =>
       expect(

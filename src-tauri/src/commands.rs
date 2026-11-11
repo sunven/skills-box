@@ -877,8 +877,9 @@ pub fn invalidate_discovery_source(
 pub async fn list_marketplace_skills(
     keyword: String,
     page: u32,
+    sort: crate::marketplace::provider::Sort,
 ) -> Result<crate::marketplace::provider::Listing, AppError> {
-    crate::marketplace::provider::list(&keyword, page).await
+    crate::marketplace::provider::list(&keyword, page, sort).await
 }
 #[tauri::command]
 pub async fn get_marketplace_skill(
