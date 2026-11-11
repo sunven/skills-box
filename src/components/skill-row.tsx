@@ -1,3 +1,4 @@
+import { PackLinks } from "./expert-pack-context";
 import { SelectionCheckbox } from "./selection-checkbox";
 import { memo } from "react";
 import {
@@ -130,7 +131,7 @@ export const SkillRow = memo(function SkillRow({
       >
         <div className="min-w-0">
           <div className="skill-name-line">
-            <span className="skill-name">{skill.name}</span>
+            <span className="skill-name">{skill.name}</span><PackLinks name={skill.name} textOnly />
             {skill.management === "copy_only" ? (
               <span className="skill-note">仅副本</span>
             ) : null}

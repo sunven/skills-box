@@ -599,6 +599,7 @@ export function refreshMutationQueries(
       updateCheckLifecycle(queryClient).start(scope, scope === "global" ? undefined : project?.checkRevision ?? "initial", rows.map((r) => r.skillId));
     }
   }
+  void queryClient.invalidateQueries({ queryKey: ["expertPacks", "local", scope] });
   const plan = mutationRefreshPlan(options.action, scope, options.skillId);
   for (const queryKey of plan.invalidate) {
     void queryClient.invalidateQueries({ queryKey });

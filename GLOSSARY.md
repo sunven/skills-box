@@ -32,6 +32,26 @@ _Avoid_: cache, source directory
 A folder identified by its `SKILL.md` and name, containing reusable instructions for coding agents.
 _Avoid_: package, plugin
 
+**Expert pack**:
+A published collection of member skills and a workflow skill that coordinates them for a task. The Chinese UI labels it 「专家包」.
+_Avoid_: plugin, skill bundle
+
+**Pack workflow**:
+The Skill that serves as an Expert pack's entry point and describes how its Pack members work together.
+_Avoid_: master skill, workflow engine
+
+**Pack member**:
+A Skill included in an Expert pack for use by its Pack workflow.
+_Avoid_: sub-agent, bundled plugin
+
+**Pack snapshot**:
+The published and installed workflow content, member identities and member versions confirmed for one Expert pack installation. It remains the reference for that installation when the published pack or local members later change.
+_Avoid_: pack release, package version
+
+**Forget expert pack**:
+Remove an Expert pack's grouping and associations in one Scope while retaining its Skills, Agent attachments and independent source records. The Chinese UI labels it 「忘记专家包」.
+_Avoid_: uninstall pack, delete pack
+
 **Skill content**:
 The files and directories inside a skill folder other than its `SKILL.md` entry point, such as references, scripts, and assets.
 _Avoid_: resources, bundled files
@@ -69,7 +89,7 @@ Reinstall a missing Skill from the Source recorded in its Lock entry. The Chines
 _Avoid_: repair, backup restore
 
 **Source**:
-The upstream origin a skill is installed from, either a Git source or a published skill offered by a Marketplace source.
+The upstream origin a skill is installed from, either a Git source or a published Skill or Expert pack offered by a Marketplace source.
 _Avoid_: repo, registry
 
 **Git source**:
@@ -81,11 +101,11 @@ The app's entry for obtaining skills from Marketplace sources. The Chinese UI la
 _Avoid_: skill store, source discovery
 
 **Marketplace detail**:
-The published description and release information for one skill offered by a Marketplace source, distinct from management of its local installation. The Chinese UI labels it 「市场详情」.
+The published description and any release information for one Skill or Expert pack offered by a Marketplace source, distinct from management of its local installation. The Chinese UI labels it 「市场详情」.
 _Avoid_: installed skill detail, installation record
 
 **Marketplace source**:
-A service that offers published skills for installation through the Skill marketplace, such as SkillHub.
+A service that offers published Skills or Expert packs for installation through the Skill marketplace, such as SkillHub.
 _Avoid_: marketplace instance, Git source
 
 **Marketplace coordinate**:

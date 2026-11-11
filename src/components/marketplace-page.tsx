@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { ExpertPackPage } from "./expert-pack-page";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, ArrowRight, Search } from "lucide-react";
 import { asAppError, listMarketplaceCategories, listMarketplaceSkills } from "../lib/api";
@@ -10,6 +11,7 @@ import { MarketplaceStats } from "./marketplace-stats";
 import { MarketplaceDetailPage } from "./marketplace-detail-page";
 
 interface Props {
+  initialPack?: { slug: string; key: number };
   scope: ScopeId;
   scopeLabel: string;
   onInstallOpenChange: (open: boolean) => void;
@@ -17,7 +19,7 @@ interface Props {
   disabled: boolean;
   onView: (name: string) => void;
 }
-export function MarketplacePage({ scope, scopeLabel, snapshot, disabled, onView, onInstallOpenChange }: Props) {
+function MarketplaceSkillsPage({ scope, scopeLabel, snapshot, disabled, onView, onInstallOpenChange }: Props) {
   const [input, setInput] = useState("");
   const [search, setSearch] = useState<{
     keyword: string;
@@ -294,4 +296,21 @@ export function MarketplacePage({ scope, scopeLabel, snapshot, disabled, onView,
     ) : null}
     </>
   );
+}
+
+export function MarketplacePage(props: Props) {
+  const [tab, setTab] = useState<"skills" | "packs">(props.initialPack ? "packs" : "skills");
+  const [installOpen, setInstallOpen] = useState(false);
+  const notifyInstallOpen = props.onInstallOpenChange;
+  const onInstallOpenChange = useCallback((open: boolean) => {
+    setInstallOpen(open);
+    notifyInstallOpen(open);
+  }, [notifyInstallOpen]);
+  return <div className="marketplace-workspace">
+    <div className="marketplace-kind-tabs" role="group" aria-label="市场类型" inert={installOpen}>
+      <Button variant="ghost" aria-pressed={tab === "skills"} onClick={() => setTab("skills")}>技能</Button>
+      <Button variant="ghost" aria-pressed={tab === "packs"} onClick={() => setTab("packs")}>专家包</Button>
+    </div>
+    {tab === "skills" ? <MarketplaceSkillsPage {...props} onInstallOpenChange={onInstallOpenChange} /> : <ExpertPackPage key={props.initialPack?.key ?? "catalog"} {...props} initialSlug={props.initialPack?.slug} onInstallOpenChange={onInstallOpenChange} />}
+  </div>;
 }

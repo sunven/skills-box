@@ -188,7 +188,10 @@ pub fn read_lock(layout: &ScopeLayout) -> Result<Vec<u8>, AppError> {
         .parent()
         .ok_or_else(|| AppError::path_invalid("Lock 没有父目录。"))?;
     readable_directory(parent, layout)?;
-    if !layout.lock_path.exists() && crate::marketplace::records::path(&layout.lock_path).exists() {
+    if !layout.lock_path.exists()
+        && (crate::marketplace::records::path(&layout.lock_path).exists()
+            || crate::expert_packs::records::path(&layout.lock_path).exists())
+    {
         return Ok(format!(
             "{{\"version\":{},\"skills\":{{}}}}",
             if layout.is_global() { 3 } else { 1 }
@@ -248,7 +251,7 @@ pub fn list(paths: &AppPaths, layout: &ScopeLayout) -> Result<Vec<StaleRecord>, 
                 .map(|e| e.detail.unwrap_or(e.message))
         });
         let restore_reason = clean_reason.clone().or_else(|| {
-            if entry.source_type == "skillhub" {
+            if crate::expert_packs::is_native_source(&entry.source_type) {
                 return Some("请先清理市场记录，再到技能市场重新安装。".into());
             }
             crate::update_target::resolve(entry)
@@ -297,7 +300,7 @@ pub fn inspect(
         let dirs = absence(paths, layout, name)?;
         let baseline = baseline_bytes(paths, layout, name)?;
         if action == BatchAction::Restore {
-            if entry.source_type == "skillhub" {
+            if crate::expert_packs::is_native_source(&entry.source_type) {
                 return Err(AppError::batch_target_changed(
                     "请先清理市场记录，再到技能市场重新安装。",
                 ));
@@ -483,19 +486,40 @@ pub fn clean(
     if target
         .lock_entry
         .as_ref()
-        .is_some_and(|e| e.source_type == "skillhub")
+        .is_some_and(|e| crate::expert_packs::is_native_source(&e.source_type))
     {
-        let current = crate::marketplace::records::Records::read(&layout.lock_path)?;
-        if current
-            .skills
-            .get(&target.target.name)
-            .map(|r| r.entry())
+        if target
+            .lock_entry
             .as_ref()
-            != target.lock_entry.as_ref()
+            .is_some_and(|e| e.source_type == "skillhub-pack")
         {
-            return Err(AppError::batch_target_changed("市场记录已变化。"));
+            let current = crate::expert_packs::records::Records::read(&layout.lock_path)?;
+            if current
+                .workflows
+                .get(&target.target.name)
+                .map(|r| r.entry())
+                .as_ref()
+                != target.lock_entry.as_ref()
+            {
+                return Err(AppError::batch_target_changed("工作流记录已变化。"));
+            }
+            crate::expert_packs::records::Records::remove_workflow(
+                &layout.lock_path,
+                &target.target.name,
+            )?;
+        } else {
+            let current = crate::marketplace::records::Records::read(&layout.lock_path)?;
+            if current
+                .skills
+                .get(&target.target.name)
+                .map(|r| r.entry())
+                .as_ref()
+                != target.lock_entry.as_ref()
+            {
+                return Err(AppError::batch_target_changed("市场记录已变化。"));
+            }
+            crate::marketplace::records::Records::remove(&layout.lock_path, &target.target.name)?;
         }
-        crate::marketplace::records::Records::remove(&layout.lock_path, &target.target.name)?;
         if layout.lock()?.contains(&target.target.name) {
             return Err(AppError::verify_failed("市场记录清理后仍然存在。"));
         }
@@ -556,7 +580,7 @@ pub fn advance(
         .iter()
         .find(|t| t.target.name == name)
         .and_then(|t| t.lock_entry.as_ref())
-        .is_some_and(|e| e.source_type == "skillhub");
+        .is_some_and(|e| crate::expert_packs::is_native_source(&e.source_type));
     let expected = if market {
         before.clone()
     } else if plan.preview.action == BatchAction::CleanRecords && succeeded {

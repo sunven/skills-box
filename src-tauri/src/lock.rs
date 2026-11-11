@@ -179,6 +179,13 @@ impl ScopedLock {
                 )));
             }
         }
+        for (name, record) in crate::expert_packs::records::Records::read(path)?.workflows {
+            if entries.insert(name.clone(), record.entry()).is_some() {
+                return Err(AppError::lock_corrupt(format!(
+                    "工作流与其他技能记录同名：{name}"
+                )));
+            }
+        }
         Ok(Self { entries })
     }
     pub(crate) fn entries(&self) -> &BTreeMap<String, LockEntry> {

@@ -13,6 +13,7 @@ pub mod detail;
 pub mod discovery;
 pub mod env;
 pub mod error;
+pub mod expert_packs;
 pub mod extra_agent_guard;
 mod fsutil;
 pub mod git_tree;
@@ -236,6 +237,12 @@ pub fn run() {
             commands::get_environment,
             commands::get_cli_commands,
             commands::preview_cli_commands,
+            commands::list_expert_packs,
+            commands::get_expert_pack,
+            commands::list_local_packs,
+            commands::prepare_pack_install,
+            commands::start_pack_install,
+            commands::forget_expert_pack,
             commands::list_marketplace_skills,
             commands::list_marketplace_categories,
             commands::get_marketplace_skill,

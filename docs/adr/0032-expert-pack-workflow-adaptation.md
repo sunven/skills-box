@@ -1,0 +1,9 @@
+# Pack workflows retain their source and expose a local member-name mapping
+
+Status: accepted
+
+Observed public SkillHub workflows can lack Skill name/description fields and refer to marketplace slugs that differ from the members' declared Skill names. Skills Box may fill missing entry metadata and add an explicit mapping from the workflow's member references to local Skill names, while preserving the official workflow body and an original copy. The installation preview shows the resulting entry content. Members continue to use their original Skill names under ADR-0030; the application does not introduce renamed member installations to accommodate workflow prose.
+
+The entry keeps an existing valid official Skill name; if absent it uses the pack slug. A missing description is derived from the official name and summary. Invalid or contradictory identity, unparseable content, unresolved member identity/version and occupied local names prevent installation instead of causing guessed replacements. Both the original document and the previewed installed entry are retained, so completion restores the confirmed adaptation rather than regenerating it from current upstream content.
+
+This deliberately extends ADR-0030's exact-source-content rule for the Pack workflow: the installed workflow is an explicitly previewed adaptation of retained source content, not an assertion that its bytes equal the upstream document. This avoids discarding incomplete-but-adaptable workflows while making the change inspectable and preserving the original. It does not establish runtime compatibility across Agents. The [specification](../../.scratch/skillhub-packs/spec.md) contains full identity and rejection rules. Adaptation was accepted in Q12 and its boundaries in Q19–Q20 on 2026-11-11; examples and coverage are in the [official-contract investigation](../../.scratch/skillhub-packs/research/01-official-contract.md).

@@ -350,7 +350,7 @@ impl TaskManager {
                 && (plan.preview.action == BatchAction::Update
                     || t.lock_entry
                         .as_ref()
-                        .is_some_and(|e| e.source_type != "skillhub"))
+                        .is_some_and(|e| !crate::expert_packs::is_native_source(&e.source_type)))
         });
         let runtime = if needs_cli {
             Some(self.inner.runtime.cli_runtime().await?)
@@ -376,10 +376,9 @@ impl TaskManager {
                         .and_then(|e| e.command)
                 }
                 BatchAction::Uninstall
-                    if target
-                        .lock_entry
-                        .as_ref()
-                        .is_some_and(|e| e.source_type != "skillhub") =>
+                    if target.lock_entry.as_ref().is_some_and(|e| {
+                        !crate::expert_packs::is_native_source(&e.source_type)
+                    }) =>
                 {
                     Some(crate::cli::commands::display_command(
                         &crate::cli::ScopedCli::new(

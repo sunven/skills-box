@@ -377,7 +377,7 @@ describe("mutation refresh", () => {
     );
 
     expect(onEnvironmentRecheck).toHaveBeenCalledTimes(1);
-    expect(invalidate).not.toHaveBeenCalled();
+    expect(invalidate).toHaveBeenCalledExactlyOnceWith({ queryKey: ["expertPacks", "local", GLOBAL_SCOPE] });
   });
 
   it("does not patch the update report for non-update actions", () => {

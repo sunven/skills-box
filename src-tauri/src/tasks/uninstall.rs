@@ -51,6 +51,7 @@ pub struct UninstallPlan {
     pub management: ManagementState,
     pub marketplace: bool,
     marketplace_record: Option<crate::marketplace::records::Installation>,
+    workflow_record: Option<crate::expert_packs::records::WorkflowInstallation>,
     /// Shared canonical folder; absent when only Agent attachments exist.
     pub canonical: Option<PathBuf>,
     /// Every physical attachment, sorted by agent id and path.
@@ -151,7 +152,7 @@ pub fn plan_uninstall(
     let marketplace = located
         .lock_entry
         .as_ref()
-        .is_some_and(|e| e.source_type == "skillhub");
+        .is_some_and(|e| crate::expert_packs::is_native_source(&e.source_type));
     let mut native_path_state = Vec::new();
     if marketplace || located.management == ManagementState::Unmanaged {
         for path in canonical
@@ -194,6 +195,10 @@ pub fn plan_uninstall(
         marketplace,
         marketplace_record: crate::marketplace::records::Records::read(&layout.lock_path)?
             .skills
+            .get(&located.name)
+            .cloned(),
+        workflow_record: crate::expert_packs::records::Records::read(&layout.lock_path)?
+            .workflows
             .get(&located.name)
             .cloned(),
         canonical,
@@ -457,7 +462,12 @@ impl MutationAction for UninstallAction {
             Some(plan.name.as_str()),
         );
         let outcome = remove_unmanaged_paths(plan).and_then(|()| {
-            if plan.marketplace {
+            if plan.workflow_record.is_some() {
+                crate::expert_packs::records::Records::remove_workflow(
+                    &self.layout.lock_path,
+                    &plan.name,
+                )?;
+            } else if plan.marketplace {
                 crate::marketplace::records::Records::remove(&self.layout.lock_path, &plan.name)?;
             }
             reporter.progress(

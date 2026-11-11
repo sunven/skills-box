@@ -94,7 +94,7 @@ pub fn plan(
                 .lock_entry
                 .clone()
                 .ok_or_else(|| AppError::skill_unmanaged(name))?;
-            if entry.source_type == "skillhub" {
+            if crate::expert_packs::is_native_source(&entry.source_type) {
                 return Err(AppError::batch_target_changed(
                     "市场技能暂不支持复制到项目，请在技能市场选择目标项目独立安装。",
                 ));

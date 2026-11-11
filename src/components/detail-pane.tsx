@@ -1,3 +1,4 @@
+import { PackLinks } from "./expert-pack-context";
 import {
   Activity,
   lazy,
@@ -431,7 +432,7 @@ export const DetailPane = memo(function DetailPane({
           </Button>
           <div className="detail-heading">
             <div className="detail-title-line">
-              <h2 className="detail-title">{detailView.name}</h2>
+              <h2 className="detail-title">{detailView.name}</h2><PackLinks name={detailView.name} />
               <UpdateStatus
                 skill={{ ...skill, updateResult: updateInfo ?? undefined }}
                 testId="detail-update-badge"
@@ -475,7 +476,7 @@ export const DetailPane = memo(function DetailPane({
               className="detail-update-summary"
               data-testid="detail-update-summary"
             >
-              {management !== "managed" ? (
+              {skill.sourceType === "skillhub-pack" ? <p className="text-[12px] text-muted-foreground">专家包工作流使用已确认的安装快照，不提供上游更新。</p> : management !== "managed" ? (
                 <p className="text-[12px] leading-relaxed text-muted-foreground">
                   {management === "copy_only"
                     ? "仅副本 skill 不提供更新检查。"
@@ -512,7 +513,7 @@ export const DetailPane = memo(function DetailPane({
                     <ArrowUpCircle className="size-3.5" aria-hidden="true" />
                   </Button>
                 ) : null}
-                {management === "managed" && onCheckUpdates ? (
+                {management === "managed" && skill.sourceType !== "skillhub-pack" && onCheckUpdates ? (
                   <Button
                     variant="outline"
                     size="icon"

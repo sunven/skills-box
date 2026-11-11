@@ -146,3 +146,124 @@ async fn skillhub_install_update_and_native_uninstall_use_the_confirmed_release(
     assert!(!paths.lock_path().exists());
     println!("Confirmed version {target}; native uninstall passed after removing sandbox CLI.");
 }
+
+#[tokio::test]
+#[ignore = "official SkillHub pack + supplied CLI kit; writes only temporary HOME"]
+async fn expert_pack_install_supplement_and_forget_keep_independent_skills() {
+    let kit = PathBuf::from(
+        std::env::var_os("SKILLS_BOX_TEST_SKILLHUB_KIT").expect("set official CLI kit"),
+    );
+    let tmp = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(tmp.path()).unwrap();
+    let paths = AppPaths::new(root.join("home"), root.join("data"));
+    paths.ensure_dirs().unwrap();
+    let bin = paths.home().join(".local/bin");
+    fs::create_dir_all(&bin).unwrap();
+    for (source, target) in [
+        ("skills_store_cli.py", "skillhub"),
+        ("skills_upgrade.py", "skills_upgrade.py"),
+        ("version.json", "version.json"),
+        ("metadata.json", "metadata.json"),
+    ] {
+        fs::copy(kit.join(source), bin.join(target)).unwrap();
+    }
+    fs::create_dir_all(paths.home().join(".claude/skills")).unwrap();
+    fs::create_dir_all(paths.home().join(".codex")).unwrap();
+    let manager = TaskManager::new(
+        Arc::new(NoGitRuntime),
+        Arc::new(TokioExecutor),
+        Arc::new(InventoryConflictProvider::new(paths.clone())),
+        paths.clone(),
+        TaskManagerConfig::default(),
+    );
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(bin.join("skillhub"), fs::Permissions::from_mode(0o700)).unwrap();
+    let preview = manager
+        .prepare_pack(
+            ScopeId::Global,
+            "hr-resume-screening".into(),
+            vec!["claude-code".into(), "codex".into()],
+        )
+        .await
+        .unwrap();
+    println!(
+        "Resolved {} members: {:?}",
+        preview.snapshot.members.len(),
+        preview
+            .snapshot
+            .members
+            .iter()
+            .map(|m| (m.coordinate.canonical(), &m.name, &m.version))
+            .collect::<Vec<_>>()
+    );
+    let snapshot = preview.snapshot.clone();
+    assert!(snapshot.members.iter().any(|m| m.coordinate.slug != m.name));
+    let (sink, receiver) = events();
+    manager
+        .start_pack(ScopeId::Global, preview.commands.id, sink)
+        .await
+        .unwrap();
+    let installed = completed(receiver).await;
+    assert_eq!(installed.overall, TaskOverall::Success, "{installed:?}");
+    let local = manager.local_packs(ScopeId::Global).await.unwrap();
+    assert!(local[0].complete);
+    assert_eq!(local[0].snapshot, snapshot);
+    // Native detach followed by snapshot-based completion never invokes a download.
+    fs::remove_file(
+        paths
+            .home()
+            .join(".claude/skills")
+            .join(&snapshot.members[0].name),
+    )
+    .unwrap();
+    assert!(!manager.local_packs(ScopeId::Global).await.unwrap()[0].complete);
+    fs::remove_file(bin.join("skillhub")).unwrap();
+    let preview = manager
+        .prepare_pack(ScopeId::Global, snapshot.slug.clone(), vec![])
+        .await
+        .unwrap();
+    assert!(preview.commands.entries.iter().all(|e| e.command.is_none()));
+    let (sink, receiver) = events();
+    manager
+        .start_pack(ScopeId::Global, preview.commands.id, sink)
+        .await
+        .unwrap();
+    assert_eq!(completed(receiver).await.overall, TaskOverall::Success);
+    manager
+        .forget_pack(ScopeId::Global, snapshot.slug.clone())
+        .await
+        .unwrap();
+    assert!(
+        manager
+            .local_packs(ScopeId::Global)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let workflows =
+        skills_box_lib::expert_packs::records::Records::read(&paths.lock_path()).unwrap();
+    assert!(workflows.workflows.contains_key(&snapshot.workflow_name));
+    for name in snapshot.names() {
+        assert!(
+            paths
+                .canonical_skills_dir()
+                .join(name)
+                .join("SKILL.md")
+                .is_file()
+        );
+    }
+    let (sink, receiver) = events();
+    manager
+        .start_uninstall(ScopeId::Global, snapshot.workflow_name.clone(), sink)
+        .await
+        .unwrap();
+    assert_eq!(completed(receiver).await.overall, TaskOverall::Success);
+    assert_eq!(
+        Records::read(&paths.lock_path()).unwrap().skills.len(),
+        snapshot.members.len()
+    );
+    assert!(!paths.lock_path().exists());
+    println!(
+        "Pack installed, completed missing attachment without CLI, forgotten and workflow uninstalled; member records retained."
+    );
+}

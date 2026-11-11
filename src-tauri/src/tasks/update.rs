@@ -130,6 +130,13 @@ pub fn plan_updates(
             });
             continue;
         };
+        if entry.source_type == "skillhub-pack" {
+            plan.skipped.push(UpdateSkip {
+                name: name.clone(),
+                error: AppError::skill_source_unresolvable(name, "专家包工作流不支持上游更新"),
+            });
+            continue;
+        }
         let marketplace_record = crate::marketplace::records::Records::read(&layout.lock_path)?
             .skills
             .get(name)

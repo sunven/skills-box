@@ -57,7 +57,7 @@ createFakeBackend({
     }) } : undefined,
     detail: (skillId, current) => {
       const installed = current.skills.find((skill) => skill.id === skillId || skill.name === skillId);
-      return installed?.sourceType === "skillhub" ? detailForSkill(installed) : skillDetail(skillId);
+      return ["skillhub", "skillhub-pack"].includes(installed?.sourceType ?? "") ? detailForSkill(installed!) : skillDetail(skillId);
     },
     listDir: listSkillDir,
     readFile: readSkillFile,

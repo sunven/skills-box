@@ -168,7 +168,7 @@ export function applyUpdateReport(
     (report?.skills ?? []).map((result) => [result.name, result]),
   );
   return skills.map((skill) => {
-    if (skill.management !== "managed") {
+    if (skill.management !== "managed" || skill.sourceType === "skillhub-pack") {
       // Copy-only and unmanaged rows can never be update candidates.
       return { ...skill, update: "unknown" };
     }
@@ -340,7 +340,7 @@ export function computeUpdateSummary(skills: UpdateViewSkill[]): UpdateSummary {
   const skipped: UpdateSkipItem[] = [];
 
   for (const skill of skills) {
-    if (skill.management === "unmanaged") continue;
+    if (skill.management === "unmanaged" || skill.sourceType === "skillhub-pack") continue;
     if (skill.management === "copy_only") {
       skipped.push(skip(skill, "copy_only", "仅副本没有 canonical 目录，不可更新。"));
       continue;

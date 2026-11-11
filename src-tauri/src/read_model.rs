@@ -53,6 +53,7 @@ struct Fingerprint {
     root: Option<PathBuf>,
     lock: FileStamp,
     marketplace: FileStamp,
+    packs: FileStamp,
     extras: FileStamp,
     canonical: DirStamp,
     agents: Vec<DirStamp>,
@@ -102,6 +103,7 @@ impl Fingerprint {
             root: layout.project.as_ref().map(|_| layout.root.clone()),
             lock: FileStamp::capture(&layout.lock_path),
             marketplace: FileStamp::capture(&crate::marketplace::records::path(&layout.lock_path)),
+            packs: FileStamp::capture(&crate::expert_packs::records::path(&layout.lock_path)),
             extras: FileStamp::capture(&paths.agents_config_path()),
             canonical: DirStamp::capture(&layout.canonical_dir),
             agents: layout

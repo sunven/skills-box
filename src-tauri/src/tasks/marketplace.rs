@@ -232,6 +232,14 @@ pub(crate) fn publish(
     plan: &Plan,
     output: &ExecOutput,
 ) -> Result<Vec<AppError>, AppError> {
+    let root = validate_staged(plan, output)?;
+    publish_staged(paths, plan, &root)
+}
+
+pub(crate) fn validate_staged(
+    plan: &Plan,
+    output: &ExecOutput,
+) -> Result<std::path::PathBuf, AppError> {
     plan.stage.check()?;
     if !output.success() {
         return Err(AppError::cli_exit_nonzero(format!(
@@ -295,6 +303,14 @@ pub(crate) fn publish(
             "下载内容与确认版本的 SKILL.md 不一致，请刷新详情。",
         ));
     }
+    Ok(root)
+}
+
+pub(crate) fn publish_staged(
+    paths: &AppPaths,
+    plan: &Plan,
+    root: &std::path::Path,
+) -> Result<Vec<AppError>, AppError> {
     let registry = crate::projects::ProjectRegistry::new(paths.clone());
     let layout = ScopeLayout::resolve_detected(paths, &registry, &plan.layout.scope)?;
     plan.check(paths, &layout)?;

@@ -1,3 +1,4 @@
+import type { PackListing, PackDetail, PackPreview, LocalPack } from "./expert-packs";
 import type { MarketplaceCoordinate, MarketplaceListing, MarketplaceDetail, MarketplaceCli, MarketplacePreview, MarketplaceSort, MarketplaceCategory, MarketplaceApiKeyFilter, MarketplaceFiles } from "./marketplace";
 import type { BatchRequest, BatchPreview, BatchConfirmation, StaleRecord } from "./batch";
 import type { CliCommandRequest, CliCommandPreview, CliCommandRecord } from "./cli-commands";
@@ -38,6 +39,12 @@ import { GLOBAL_SCOPE } from "./types";
 
 /** Every IPC command the frontend may invoke. */
 export const API_COMMANDS = {
+  listExpertPacks: "list_expert_packs",
+  getExpertPack: "get_expert_pack",
+  listLocalPacks: "list_local_packs",
+  preparePackInstall: "prepare_pack_install",
+  startPackInstall: "start_pack_install",
+  forgetExpertPack: "forget_expert_pack",
   listMarketplaceSkills: "list_marketplace_skills",
   listMarketplaceCategories: "list_marketplace_categories",
   getMarketplaceSkill: "get_marketplace_skill",
@@ -564,4 +571,14 @@ export function prepareMarketplaceInstall(scope: ScopeId, coordinate: Marketplac
 export function startMarketplaceInstall(scope: ScopeId, previewId: string, onEvent: (event: TaskEvent) => void): Promise<string> {
   const channel = new Channel<TaskEvent>(); channel.onmessage = onEvent;
   return invoke(API_COMMANDS.startMarketplaceInstall, { scope, previewId, onEvent: channel });
+}
+
+export function listExpertPacks(keyword: string, page: number): Promise<PackListing> { return invoke(API_COMMANDS.listExpertPacks, { keyword, page }); }
+export function getExpertPack(slug: string): Promise<PackDetail> { return invoke(API_COMMANDS.getExpertPack, { slug }); }
+export function listLocalPacks(scope: ScopeId): Promise<LocalPack[]> { return invoke(API_COMMANDS.listLocalPacks, { scope }); }
+export function preparePackInstall(scope: ScopeId, slug: string, agents: string[]): Promise<PackPreview> { return invoke(API_COMMANDS.preparePackInstall, { scope, slug, agents }); }
+export function forgetExpertPack(scope: ScopeId, slug: string): Promise<void> { return invoke(API_COMMANDS.forgetExpertPack, { scope, slug }); }
+export function startPackInstall(scope: ScopeId, previewId: string, onEvent: (event: TaskEvent) => void): Promise<string> {
+  const channel = new Channel<TaskEvent>(); channel.onmessage = onEvent;
+  return invoke(API_COMMANDS.startPackInstall, { scope, previewId, onEvent: channel });
 }

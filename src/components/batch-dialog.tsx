@@ -1,3 +1,4 @@
+import { AffectedPacks } from "./expert-pack-context";
 import { useMemo, useRef, useState } from "react";
 import { AlertTriangle, FolderOpen, Loader2, X } from "lucide-react";
 import { Button } from "./ui/button";
@@ -148,6 +149,7 @@ export function BatchDialog({
           </Button>
         </div>
         <div className="modal-body" tabIndex={0}>
+          {["uninstall", "uninstall_agents", "detach"].includes(action) && <AffectedPacks skillIds={skillIds} />}
           <ActualCliCommands taskId={taskId} />
           {!running && !viewingResult ? (
             <>

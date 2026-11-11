@@ -30,6 +30,7 @@ use super::update as update_task;
 
 pub(crate) mod batch;
 mod cli_preview;
+mod expert_packs;
 mod marketplace;
 mod scoped_mutation;
 
@@ -279,6 +280,7 @@ struct Inner {
     mutation_slots: Arc<Semaphore>,
     config: TaskManagerConfig,
     batch_previews: Mutex<HashMap<String, super::batch::BatchPlan>>,
+    pack_previews: Mutex<HashMap<String, super::expert_packs::Plan>>,
     marketplace_previews: Mutex<HashMap<String, super::marketplace::Plan>>,
     update_previews: Mutex<HashMap<String, (crate::scope::ScopeId, super::update::UpdatePlan)>>,
     shutting_down: AtomicBool,
@@ -424,6 +426,7 @@ impl TaskManager {
                 mutation_slots: Arc::new(Semaphore::new(1)),
                 config,
                 batch_previews: Mutex::new(HashMap::new()),
+                pack_previews: Mutex::new(HashMap::new()),
                 marketplace_previews: Mutex::new(HashMap::new()),
                 update_previews: Mutex::new(HashMap::new()),
                 shutting_down: AtomicBool::new(false),
@@ -2722,7 +2725,21 @@ mod tests {
         assert_eq!(final_event.phase, TaskPhase::Completed);
 
         {
-            let _change = manager.begin_registry_change().unwrap();
+            // The finishing worker emits the event while it still owns the
+            // permit. Wait for its return instead of racing that final drop.
+            let _change = tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    match manager.begin_registry_change() {
+                        Ok(guard) => break guard,
+                        Err(error) if error.code == ErrorCode::TaskBusy => {
+                            tokio::task::yield_now().await
+                        }
+                        Err(error) => panic!("unexpected refusal: {error}"),
+                    }
+                }
+            })
+            .await
+            .expect("completed worker releases the write slot");
             projects
                 .relocate(&entry.project.id.to_string(), new_root.to_str().unwrap())
                 .unwrap();

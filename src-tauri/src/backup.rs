@@ -215,6 +215,15 @@ impl BackupStore {
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
             Err(e) => return Err(io_backup_error(&market, e)),
         }
+        let packs = crate::expert_packs::records::path(&self.lock_path);
+        match fs::copy(
+            &packs,
+            directory.join(crate::expert_packs::records::FILE_NAME),
+        ) {
+            Ok(_) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(io_backup_error(&packs, e)),
+        }
         let canonical_present = match canonical {
             Some(source) => {
                 ensure_directory(source)?;

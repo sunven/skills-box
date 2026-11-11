@@ -1,3 +1,5 @@
+import type { PackListing, PackDetail, PackPreview, LocalPack, PackSnapshot } from "../lib/expert-packs";
+import { expertPack, packSnapshot } from "./expert-pack-fixtures";
 import type { MarketplaceCoordinate, MarketplaceListing, MarketplaceDetail, MarketplaceCli, MarketplacePreview, MarketplaceSort, MarketplaceCategory, MarketplaceApiKeyFilter, MarketplaceFiles } from "../lib/marketplace";
 import { marketplaceAddress } from "../lib/marketplace";
 import { marketplaceSkill, marketplaceCli, marketplaceCategories, marketplaceFiles, marketplaceFileContent } from "./marketplace-fixtures";
@@ -70,6 +72,12 @@ type Factory<T> = T | (() => T);
 type MaybePromise<T> = T | Promise<T>;
 
 export interface FakeCommandContract {
+  list_expert_packs: { args: { keyword: string; page: number }; result: PackListing };
+  get_expert_pack: { args: { slug: string }; result: PackDetail };
+  list_local_packs: { args: { scope: ScopeId }; result: LocalPack[] };
+  prepare_pack_install: { args: { scope: ScopeId; slug: string; agents: string[] }; result: PackPreview };
+  start_pack_install: { args: { scope: ScopeId; previewId: string; onEvent: Channel<TaskEvent> }; result: string };
+  forget_expert_pack: { args: { scope: ScopeId; slug: string }; result: void };
   list_marketplace_categories: { args: Record<string, never>; result: MarketplaceCategory[] };
   list_marketplace_skills: { args: { keyword: string; page: number; sort: MarketplaceSort; category: string; apiKey: MarketplaceApiKeyFilter }; result: MarketplaceListing };
   get_marketplace_skill: { args: { coordinate: MarketplaceCoordinate }; result: MarketplaceDetail };
@@ -437,6 +445,22 @@ export function createFakeBackend(
   const autoTasks = Boolean(options.autoTasks);
   let taskCounter = 0;
   let cliRecords: CliCommandRecord[] = [];
+  const savedPacks = new Map<ScopeId, Map<string, PackSnapshot>>();
+  const packPreviews = new Map<string, { scope: ScopeId; preview: PackPreview }>();
+  const packTasks = new Map<string, { scope: ScopeId; preview: PackPreview }>();
+  function localPacks(scope: ScopeId): LocalPack[] {
+    const inventory = snapshotFor(scope);
+    return [...(savedPacks.get(scope)?.values() ?? [])].map((saved) => {
+      const skills = [ ...saved.members.map((m) => m.name), saved.workflowName ].map((name) => {
+        const skill = inventory.skills.find((s) => s.name === name);
+        const attachedAgents = skill?.attachments.map((a) => a.agentId) ?? [];
+        const missingAgents = saved.agents.filter((id) => !attachedAgents.includes(id));
+        const original = saved.members.find((m) => m.name === name);
+        return { name, present: !!skill, missingAgents, attachedAgents, version: skill?.sourceVersion ?? null, versionChanged: !!original && !!skill?.sourceVersion && skill.sourceVersion !== original.version, modified: skill?.localModification === "modified", conflict: false };
+      });
+      return { snapshot: saved, complete: skills.every((s) => s.present && !s.missingAgents.length), skills };
+    });
+  }
   const taskCommands = new Map<string, { scope: ScopeId; commands: string[] }>();
   const publishCommand = (record: CliCommandRecord) => {
     cliRecords = mergeCommandRecord(cliRecords, record);
@@ -477,7 +501,7 @@ export function createFakeBackend(
     } else {
       const skill = snapshot.skills.find((skill) => skill.id === request.skill || skill.name === request.skill);
       const name = skill?.name ?? request.skill.split("/").slice(-1)[0]!;
-      entries = [{ name, command: skill?.management === "unmanaged" || skill?.sourceType === "skillhub" ? null : commandFor(scope, ["remove", ...globalArgs, "-s", name, "-y"]), reason: null }];
+      entries = [{ name, command: skill?.management === "unmanaged" || ["skillhub", "skillhub-pack"].includes(skill?.sourceType ?? "") ? null : commandFor(scope, ["remove", ...globalArgs, "-s", name, "-y"]), reason: null }];
     }
     return { id: JSON.stringify([scope, request.action, entries]), entries, ...(Object.keys(marketplaceVersions).length ? { marketplaceVersions } : {}) };
   };
@@ -537,6 +561,19 @@ export function createFakeBackend(
           event.phase === "cancelled"
         )
           batchRuns.delete(task.taskId);
+        const pack = packTasks.get(task.taskId);
+        if (pack && event.result) {
+          const saved = pack.preview.snapshot;
+          const installed = event.result.skills.filter((s) => s.status === "installed").map((s) => s.name);
+          installInto(pack.scope, installed);
+          const inventory = snapshotFor(pack.scope);
+          setSnapshot({ ...inventory, skills: inventory.skills.map((s) => {
+            if (!installed.includes(s.name)) return s;
+            const member = saved.members.find((m) => m.name === s.name);
+            return { ...s, sourceType: member ? "skillhub" : "skillhub-pack", source: member ? marketplaceAddress(member.coordinate) : saved.slug, sourceVersion: member?.version ?? null,
+              attachments: saved.agents.map((id) => ({ agentId: id, agentName: inventory.installTargets.find((a) => a.id === id)?.displayName ?? id, mode: "link" as const, path: `~/.${id}/skills/${s.name}`, detachable: true })) };
+          }) }, pack.scope);
+        }
         const market = marketTasks.get(task.taskId);
         if (market && event.result?.overall === "success") {
           const detail = market.preview.detail;
@@ -1296,7 +1333,7 @@ export function createFakeBackend(
           if (request.targetKeys && !request.targetKeys.includes(key)) continue;
           const agent = projectAgents.find((a) => a.id === agentId);
           const reason = !skill ? "技能已不存在。"
-            : skill.sourceType === "skillhub" ? "市场技能请从技能市场选择项目进行独立安装。"
+            : ["skillhub", "skillhub-pack"].includes(skill.sourceType ?? "") ? "市场技能请从技能市场选择项目进行独立安装。"
             : skill.management !== "managed" || !skill.canonicalPath ? "仅受管且有共享目录的技能可复制。"
             : conflict ? "项目已有同名技能，内容不同，不覆盖。"
             : !agentId ? existing ? "项目已有相同内容，复用，不重复复制。" : null
@@ -1349,6 +1386,7 @@ export function createFakeBackend(
             (result) => result.name === skill.name,
           );
           target.reason =
+            skill.sourceType === "skillhub-pack" ? "专家包工作流不支持上游更新。" :
             skill.sourceType === "skillhub" ? "市场技能请单独更新，或使用更新全部。" :
             skill.management === "copy_only"
               ? "仅副本不可更新。"
@@ -1748,6 +1786,28 @@ export function createFakeBackend(
         data.githubSettings.effectiveSource === "anonymous" ? 59 : 4_999,
       resetAtEpochMs: Date.now() + 3_600_000,
     }),
+    list_expert_packs: ({ keyword, page }) => ({ packs: page === 1 && `${expertPack.displayName} ${expertPack.summary}`.includes(keyword) ? [expertPack] : [], total: `${expertPack.displayName} ${expertPack.summary}`.includes(keyword) ? 1 : 0, page, pageSize: 24 }),
+    get_expert_pack: ({ slug }) => ({ ...expertPack, slug }),
+    list_local_packs: ({ scope }) => localPacks(scope),
+    forget_expert_pack: ({ scope, slug }) => { savedPacks.get(scope)?.delete(slug); },
+    prepare_pack_install: ({ scope, agents }) => {
+      const saved = savedPacks.get(scope)?.get(expertPack.slug);
+      const snapshot = saved ?? packSnapshot(agents);
+      const id = `pack-${scope}-${packPreviews.size}`;
+      const preview: PackPreview = { snapshot, supplement: !!saved, items: [...snapshot.members.map((m) => ({ name: m.name, action: snapshotFor(scope).skills.some((s) => s.name === m.name) ? "reuse" as const : "install" as const, version: m.version, snapshotVersion: m.version, missingAgents: snapshot.agents })), { name: snapshot.workflowName, action: "install", version: null, snapshotVersion: null, missingAgents: snapshot.agents }], commands: { id, entries: snapshot.members.map((m) => ({ name: m.name, command: `skillhub --skip-self-upgrade install ${m.coordinate.slug}@${m.version} --namespace ${m.coordinate.namespace} --dir /tmp/pack-${id} --json`, reason: "暂存并校验确认版本" })) } };
+      packPreviews.set(id, { scope, preview }); return preview;
+    },
+    start_pack_install: ({ scope, previewId, onEvent }) => {
+      const plan = packPreviews.get(previewId);
+      if (!plan || plan.scope !== scope) throw { code: "cli.command_changed", message: "请重新预览", retryable: true } satisfies AppError;
+      const task = makeTask("start_pack_install", onEvent);
+      if (!savedPacks.has(scope)) savedPacks.set(scope, new Map());
+      savedPacks.get(scope)!.set(plan.preview.snapshot.slug, plan.preview.snapshot);
+      packTasks.set(task.taskId, plan);
+      taskCommands.set(task.taskId, { scope, commands: plan.preview.commands.entries.flatMap((e) => e.command ? [e.command] : []) });
+      scheduleAutoTask(task, "install", plan.preview.items.map((i) => i.name), scope);
+      return task.taskId;
+    },
     list_marketplace_categories: () => marketplaceCategories,
     list_marketplace_skills: ({ keyword, page, category, apiKey }) => {
       const matches = apiKey !== "required" && (!category || category === "knowledge-management") && `${marketplaceSkill.name} ${marketplaceSkill.description}`.toLowerCase().includes(keyword.toLowerCase());

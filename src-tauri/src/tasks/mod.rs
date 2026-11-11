@@ -4,6 +4,7 @@ pub mod batch;
 mod batch_execution;
 pub mod conflicts;
 pub(crate) mod copy_to_project;
+pub mod expert_packs;
 pub mod install;
 pub mod manager;
 pub mod marketplace;

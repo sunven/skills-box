@@ -65,6 +65,7 @@ export function SkillRowMenu({
       reason:
         scopeReason ??
         managementReason ??
+        (skill.sourceType === "skillhub-pack" ? "专家包工作流不支持上游更新" : null) ??
         (checkingUpdates ? "正在检查更新，请稍候" : null),
     },
     {

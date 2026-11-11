@@ -416,7 +416,16 @@ pub fn inspect(
             if located
                 .lock_entry
                 .as_ref()
-                .is_some_and(|e| e.source_type == "skillhub")
+                .is_some_and(|e| e.source_type == "skillhub-pack")
+            {
+                return Err(AppError::batch_target_changed(
+                    "专家包工作流不支持上游更新。",
+                ));
+            }
+            if located
+                .lock_entry
+                .as_ref()
+                .is_some_and(|e| crate::expert_packs::is_native_source(&e.source_type))
             {
                 return Err(AppError::batch_target_changed(
                     "SkillHub 技能请使用单项更新或「更新全部」，以确认平台目标版本。",

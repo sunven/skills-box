@@ -392,3 +392,131 @@ async fn the_owned_scope_covers_execution_and_releases_after_cancellation() {
     assert!(manager.interrupted_report().is_none());
     assert_eq!(fixture.executor.call_count(), 0);
 }
+
+struct PackDownloadGate;
+#[async_trait::async_trait]
+impl crate::process::ProcessExecutor for PackDownloadGate {
+    async fn run(
+        &self,
+        _: crate::process::CommandSpec,
+        cancel: crate::process::CancelToken,
+    ) -> Result<crate::process::ExecOutput, crate::process::ExecError> {
+        cancel.cancelled().await;
+        Err(crate::process::ExecError::Cancelled)
+    }
+}
+
+#[tokio::test]
+async fn pack_holds_one_registered_task_and_write_permit_until_cancelled_download_finishes() {
+    use crate::expert_packs::{Member, Snapshot};
+    use crate::marketplace::{Coordinate, runtime::Runtime};
+    use crate::tasks::marketplace::{Plan as Download, StagingDirectory};
+    let fixture = Fixture::new();
+    let paths = fixture.manager.inner.paths.clone();
+    fs::create_dir_all(paths.home().join(".claude/skills")).unwrap();
+    let manager = TaskManager::new(
+        Arc::new(PendingRuntime),
+        Arc::new(PackDownloadGate),
+        Arc::new(InventoryConflictProvider::new(paths.clone())),
+        paths.clone(),
+        TaskManagerConfig::default(),
+    );
+    let layout = manager.scope_layout(&ScopeId::Global).unwrap();
+    let member = Member {
+        reference: "member".into(),
+        coordinate: Coordinate::from_canonical("@publisher/member").unwrap(),
+        name: "member".into(),
+        version: "1.0.0".into(),
+        markdown: "---\nname: member\n---\nMember".into(),
+    };
+    let (name, content) = crate::expert_packs::workflow::adapt(
+        "pack",
+        "Pack",
+        "workflow",
+        "# Workflow",
+        std::slice::from_ref(&member),
+    )
+    .unwrap();
+    let agents = vec!["claude-code".into()];
+    let (_, targets) =
+        crate::tasks::install::validate_selected_agents(&paths, &layout, &agents).unwrap();
+    let download = Download {
+        detail: member.detail(),
+        runtime: Runtime {
+            program: "/fake/skillhub".into(),
+            env: Default::default(),
+        },
+        stage: StagingDirectory::new().unwrap(),
+        layout: layout.clone(),
+        targets,
+        previous: None,
+        previous_paths: None,
+        previous_fingerprint: None,
+        created_at: crate::time::now_ms(),
+    };
+    let snapshot = Snapshot {
+        slug: "pack".into(),
+        display_name: "Pack".into(),
+        summary: "workflow".into(),
+        original_workflow: "# Workflow".into(),
+        workflow_name: name,
+        installed_workflow: content,
+        members: vec![member],
+        agents,
+        installed_at: 1,
+    };
+    let plan =
+        crate::tasks::expert_packs::Plan::build(&paths, layout, snapshot, None, vec![download])
+            .unwrap();
+    let preview_id = plan.preview().commands.id;
+    let prepared = manager
+        .plan_scoped_mutation(ScopeId::Global, MutationKind::Install, move |_, _| Ok(plan))
+        .await
+        .unwrap()
+        .with_command_preview(Some(preview_id))
+        .await
+        .unwrap();
+    let (sink, mut events) = Fixture::sink();
+    let id = prepared.start_pack(sink).unwrap();
+    let event = tokio::time::timeout(Duration::from_secs(3), events.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(event.phase, TaskPhase::RunningCli);
+    assert_eq!(manager.active_mutation().unwrap().task_id, id);
+    assert_eq!(
+        manager.begin_registry_change().unwrap_err().code,
+        ErrorCode::TaskBusy
+    );
+    assert_eq!(
+        manager
+            .forget_pack(ScopeId::Global, "pack".into())
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::TaskBusy
+    );
+    manager.cancel_task(&id).unwrap();
+    let final_event = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let event = events.recv().await.unwrap();
+            if event.phase.is_final() {
+                break event;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        final_event.result.unwrap().overall,
+        crate::tasks::TaskOverall::Cancelled
+    );
+    let _guard = available(&manager).await;
+    assert!(!paths.canonical_skills_dir().join("member").exists());
+    assert!(
+        crate::expert_packs::records::Records::read(&paths.lock_path())
+            .unwrap()
+            .packs
+            .contains_key("pack")
+    );
+}

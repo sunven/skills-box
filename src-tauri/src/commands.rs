@@ -874,7 +874,8 @@ pub fn invalidate_discovery_source(
 }
 
 #[tauri::command]
-pub async fn list_marketplace_categories() -> Result<Vec<crate::marketplace::provider::Category>, AppError> {
+pub async fn list_marketplace_categories()
+-> Result<Vec<crate::marketplace::provider::Category>, AppError> {
     crate::marketplace::provider::categories().await
 }
 #[tauri::command]
@@ -937,4 +938,54 @@ pub async fn start_marketplace_install(
         .tasks
         .start_marketplace(scope, preview_id, task_event_sink(on_event))
         .await
+}
+
+#[tauri::command]
+pub async fn list_expert_packs(
+    keyword: String,
+    page: u32,
+) -> Result<crate::expert_packs::provider::Listing, AppError> {
+    crate::expert_packs::provider::list(&keyword, page).await
+}
+#[tauri::command]
+pub async fn get_expert_pack(
+    slug: String,
+) -> Result<crate::expert_packs::provider::Detail, AppError> {
+    crate::expert_packs::provider::detail(&slug).await
+}
+#[tauri::command]
+pub async fn list_local_packs(
+    state: State<'_, AppState>,
+    scope: ScopeId,
+) -> Result<Vec<crate::expert_packs::state::LocalPack>, AppError> {
+    state.tasks.local_packs(scope).await
+}
+#[tauri::command]
+pub async fn prepare_pack_install(
+    state: State<'_, AppState>,
+    scope: ScopeId,
+    slug: String,
+    agents: Vec<String>,
+) -> Result<crate::tasks::expert_packs::Preview, AppError> {
+    state.tasks.prepare_pack(scope, slug, agents).await
+}
+#[tauri::command]
+pub async fn start_pack_install(
+    state: State<'_, AppState>,
+    scope: ScopeId,
+    preview_id: String,
+    on_event: Channel<TaskEvent>,
+) -> Result<TaskId, AppError> {
+    state
+        .tasks
+        .start_pack(scope, preview_id, task_event_sink(on_event))
+        .await
+}
+#[tauri::command]
+pub async fn forget_expert_pack(
+    state: State<'_, AppState>,
+    scope: ScopeId,
+    slug: String,
+) -> Result<(), AppError> {
+    state.tasks.forget_pack(scope, slug).await
 }

@@ -212,3 +212,30 @@ impl PlannedMutation<crate::tasks::batch::BatchPlan> {
         Ok(registered.task_id)
     }
 }
+
+impl PlannedMutation<crate::tasks::expert_packs::Plan> {
+    pub(super) fn start_pack(self, sink: EventSink) -> Result<TaskId, AppError> {
+        let registered = self.manager.register_mutation(
+            TaskAction::Install,
+            MutationKind::Install,
+            self.plan.snapshot.names().map(str::to_string).collect(),
+            self.scope.layout.scope.clone(),
+            self.scope.layout.lock_path.to_string_lossy().into_owned(),
+        )?;
+        let mut ctx = self.manager.session_context(&registered, sink.clone());
+        ctx.expected_commands = self.expected_commands;
+        let id = registered.task_id.clone();
+        tokio::spawn(async move {
+            let permit = self.scope.permit;
+            let outcome =
+                crate::tasks::expert_packs::run(self.manager.inner.paths.clone(), ctx, self.plan)
+                    .await;
+            let _ = tokio::task::spawn_blocking(move || {
+                let _permit = permit;
+                self.manager.finish(&id, &sink, outcome);
+            })
+            .await;
+        });
+        Ok(registered.task_id)
+    }
+}

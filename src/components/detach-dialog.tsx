@@ -1,3 +1,4 @@
+import { AffectedPacks } from "./expert-pack-context";
 import { useRef } from "react";
 import { HardDrive, ShieldAlert, Unlink, X } from "lucide-react";
 import { Button } from "./ui/button";
@@ -102,7 +103,7 @@ export function DetachDialog({
           </Button>
         </div>
 
-        <div className="modal-body">
+        <div className="modal-body"><AffectedPacks names={[skillName]} />
           <dl className="panel-well">
             <div className="kv-row">
               <dt>agent</dt>

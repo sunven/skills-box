@@ -121,7 +121,7 @@ pub struct Detail {
     pub install_error: Option<AppError>,
     pub requirements: Vec<String>,
 }
-fn client() -> Result<reqwest::Client, AppError> {
+pub(crate) fn client() -> Result<reqwest::Client, AppError> {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .https_only(true)
@@ -134,7 +134,7 @@ fn text<'a>(v: &'a Value, keys: &[&str]) -> &'a str {
         .find_map(|key| v.get(key).and_then(Value::as_str).filter(|s| !s.is_empty()))
         .unwrap_or("")
 }
-pub(super) fn coordinate(v: &Value) -> Result<Coordinate, AppError> {
+pub(crate) fn coordinate(v: &Value) -> Result<Coordinate, AppError> {
     let ns = &v["namespace"];
     let value = Coordinate {
         source: MarketplaceSource::Skillhub,

@@ -1,3 +1,4 @@
+import { AffectedPacks } from "./expert-pack-context";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, Trash2, X } from "lucide-react";
 import { Button } from "./ui/button";
@@ -90,7 +91,8 @@ export function UninstallDialog({
   if (!open || !skill) return null;
 
   const attachments = skill.attachments;
-  const unmanaged = skill.management === "unmanaged" || skill.sourceType === "skillhub";
+  const unmanaged = skill.management === "unmanaged";
+  const nativeRemoval = unmanaged || ["skillhub", "skillhub-pack"].includes(skill.sourceType ?? "");
   const canonicalLabel =
     skill.management === "copy_only"
       ? "无 canonical（仅副本）"
@@ -122,7 +124,7 @@ export function UninstallDialog({
               彻底卸载 · {skill.name}
             </h2>
             <p className="modal-sub" data-testid="uninstall-command">
-              {unmanaged
+              {nativeRemoval
                 ? "先备份，再删除所列技能目录与 Agent 挂载；符号链接只删除链接本身。"
                 : "先备份，再卸载技能；CLI 退出后会逐项校验。"}
             </p>
@@ -141,7 +143,7 @@ export function UninstallDialog({
           </Button>
         </div>
 
-        <div className="modal-body">
+        <div className="modal-body"><AffectedPacks names={[skill.name]} />
           {showInitial ? <CliPreviewStatus preview={commandPreview} /> : null}
           <ActualCliCommands taskId={taskId} />
           {showInitial ? (
@@ -197,7 +199,7 @@ export function UninstallDialog({
                       lock 条目
                     </dt>
                     <dd className="mono break-all">
-                      {unmanaged ? "无安装记录" : `lock 条目：${skill.name}`}
+                      {unmanaged ? "无安装记录" : nativeRemoval ? `来源记录：${skill.name}` : `lock 条目：${skill.name}`}
                     </dd>
                   </div>
                   <div>
@@ -255,7 +257,7 @@ export function UninstallDialog({
           {running ? (
             <>
               <MutationProgress
-                phase={unmanaged && phase === "running_cli" ? null : phase}
+                phase={nativeRemoval && phase === "running_cli" ? null : phase}
                 label="正在卸载"
                 message={message}
                 completed={completed}
@@ -266,7 +268,7 @@ export function UninstallDialog({
                 onCancel={() => void handleCancelTask()}
               />
               <p className="mt-2 text-[12px] text-muted-foreground">
-                {unmanaged
+                {nativeRemoval
                   ? "备份完成后、删除开始前可取消；删除开始后不可取消。"
                   : "备份完成后、CLI 启动前可取消；CLI 启动后不可取消。"}
               </p>
@@ -292,7 +294,7 @@ export function UninstallDialog({
         <div className="modal-foot">
           <div className="modal-foot-note">
             {running
-              ? unmanaged
+              ? nativeRemoval
                 ? "卸载进行中；删除开始后不可取消"
                 : "卸载进行中；CLI 启动后不可取消"
               : "危险操作 · 自动备份 · 不自动回滚"}

@@ -1,3 +1,4 @@
+import { ExpertPackProvider } from "./components/expert-pack-context";
 import { MarketplacePage } from "./components/marketplace-page";
 import { BatchDialog, type BatchSelection } from "./components/batch-dialog";
 import { useCliCommandSubscription } from "./hooks/use-cli-commands";
@@ -168,6 +169,7 @@ function App() {
   const [anomaliesOpen, setAnomaliesOpen] = useState(false);
   const [installOpen, setInstallOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [packEntry, setPackEntry] = useState<{ slug: string; key: number } | undefined>();
   const [marketplaceOpen, setMarketplaceOpen] = useState(false);
   const [marketplaceInstallOpen, setMarketplaceInstallOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("github");
@@ -509,6 +511,7 @@ function App() {
   };
 
   return (
+    <ExpertPackProvider scope={scope} onOpen={(slug) => { setPackEntry({ slug, key: Date.now() }); setMarketplaceOpen(true); setSettingsOpen(false); setDiscoveryEntry(null); setDetailEntry(null); }}>
     <div className="app-shell text-foreground">
       {appUpdate.critical ? (
         <p className="notice" role="status">正在安装应用更新并准备重启，暂时无法关闭应用或开始新的写入。</p>
@@ -517,7 +520,7 @@ function App() {
         inert={marketplaceInstallOpen}
         settingsOpen={settingsOpen}
         marketplaceOpen={marketplaceOpen}
-        onOpenMarketplace={() => { setMarketplaceOpen(true); setSettingsOpen(false); setDiscoveryEntry(null); }}
+        onOpenMarketplace={() => { setPackEntry(undefined); setMarketplaceOpen(true); setSettingsOpen(false); setDiscoveryEntry(null); }}
         discoveryOpen={discoveryEntry !== null}
         discoveryCount={discovery.query.data?.unreadCount ?? 0}
         onOpenDiscovery={() => { setMarketplaceOpen(false); setSettingsOpen(false); setDiscoveryEntry({ filter: "uninstalled", source: "all" }); }}
@@ -560,6 +563,8 @@ function App() {
         <SettingsPage onAgentsChanged={handleRecheck} appUpdate={appUpdate} initialSection={settingsSection} />
       ) : marketplaceOpen ? (
         <MarketplacePage
+          key={packEntry?.key ?? "marketplace"}
+          initialPack={packEntry}
           scope={scope}
           scopeLabel={scope === GLOBAL_SCOPE ? "全局" : `项目 · ${activeProject?.displayName ?? "当前项目"}`}
           snapshot={snapshot}
@@ -820,6 +825,7 @@ function App() {
         }}
       />
     </div>
+    </ExpertPackProvider>
   );
 }
 
