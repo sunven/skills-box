@@ -1,4 +1,4 @@
-import type { MarketplaceCli, MarketplaceDetail } from "../lib/marketplace";
+import type { MarketplaceCli, MarketplaceDetail, MarketplaceCategory } from "../lib/marketplace";
 export const marketplaceSkill: MarketplaceDetail = {
   coordinate: {
     source: "skillhub",
@@ -27,3 +27,19 @@ export const marketplaceCli: MarketplaceCli = {
     "curl -fsSL https://skillhub-1388575217.cos.ap-guangzhou.myqcloud.com/install/install.sh | bash -s -- --cli-only",
   instructionsUrl: "https://skillhub.cn/install/skillhub.md",
 };
+
+export const marketplaceCategories: MarketplaceCategory[] = [
+  { key: "pay-skill", name: "Pay Skill" },
+  { key: "office-efficiency", name: "办公效率" },
+  { key: "content-creation", name: "内容创作" },
+  { key: "dev-programming", name: "开发编程" },
+  { key: "data-analysis", name: "数据分析" },
+  { key: "design-media", name: "设计多媒体" },
+  { key: "ai-agent", name: "AI Agent" },
+  { key: "knowledge-management", name: "知识管理" },
+  { key: "business-ops", name: "商业运营" },
+  { key: "education", name: "教育学习" },
+  { key: "professional", name: "行业专业" },
+  { key: "it-ops-security", name: "IT 运维与安全" },
+  { key: "life-service", name: "生活服务" },
+];

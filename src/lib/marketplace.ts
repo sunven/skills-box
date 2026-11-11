@@ -9,6 +9,18 @@ export const marketplaceSortOptions = [
 ] as const;
 export type MarketplaceSort = (typeof marketplaceSortOptions)[number]["value"];
 
+export const marketplaceApiKeyOptions = [
+  { value: "all", label: "不限 API Key" },
+  { value: "required", label: "需要 API Key" },
+  { value: "none", label: "无需 API Key" },
+] as const;
+export type MarketplaceApiKeyFilter = (typeof marketplaceApiKeyOptions)[number]["value"];
+
+export interface MarketplaceCategory {
+  key: string;
+  name: string;
+}
+
 export interface MarketplaceCoordinate {
   source: "skillhub";
   namespace: string;

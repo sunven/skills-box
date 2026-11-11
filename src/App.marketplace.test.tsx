@@ -41,6 +41,170 @@ async function openDetail() {
 }
 
 describe("SkillHub marketplace", () => {
+  it("combines API Key filtering with category, search, sorting and pagination", async () => {
+    const backend = setup({
+      commands: {
+        list_marketplace_skills: ({ keyword, page, sort, category, apiKey }) => ({
+          skills: [{ ...marketplaceSkill, name: keyword || category || apiKey !== "all"
+            ? `${apiKey}-${keyword}-${category}-${sort}-${page}` : marketplaceSkill.name }],
+          total: 49, page, pageSize: 24,
+        }),
+      },
+    });
+    await openMarket();
+    const apiKey = screen.getByRole("combobox", { name: "API Key 筛选" });
+    expect(apiKey).toHaveValue("all");
+    fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+    await waitFor(() => expect(backend.callsOf("list_marketplace_skills").slice(-1)[0].payload.page).toBe(2));
+    fireEvent.change(apiKey, { target: { value: "required" } });
+    await screen.findByRole("button", { name: "required---score-1" });
+    const category = screen.getByRole("combobox", { name: "场景分类" });
+    await within(category).findByRole("option", { name: "开发编程" });
+    fireEvent.change(category, { target: { value: "dev-programming" } });
+    await screen.findByRole("button", { name: "required--dev-programming-score-1" });
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索 SkillHub" }), { target: { value: "notes" } });
+    fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+    await screen.findByRole("button", { name: "required-notes-dev-programming-score-1" });
+    fireEvent.click(screen.getByRole("button", { name: "近期飙升" }));
+    await screen.findByRole("button", { name: "required-notes-dev-programming-trending-1" });
+    fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+    await screen.findByRole("button", { name: "required-notes-dev-programming-trending-2" });
+    fireEvent.change(apiKey, { target: { value: "none" } });
+    await screen.findByRole("button", { name: "none-notes-dev-programming-trending-1" });
+    expect(backend.callsOf("list_marketplace_skills").slice(-1)[0].payload).toEqual({
+      keyword: "notes", page: 1, sort: "trending", category: "dev-programming", apiKey: "none",
+    });
+    const calls = backend.count("list_marketplace_skills");
+    fireEvent.change(apiKey, { target: { value: "required" } });
+    await screen.findByRole("button", { name: "required-notes-dev-programming-trending-1" });
+    expect(backend.count("list_marketplace_skills")).toBe(calls);
+    fireEvent.change(apiKey, { target: { value: "all" } });
+    await screen.findByRole("button", { name: "all-notes-dev-programming-trending-1" });
+  });
+
+  it("ignores late API Key results and identifies the retained filter after failure", async () => {
+    let release: ((value: { skills: (typeof marketplaceSkill)[]; total: number; page: number; pageSize: number }) => void) | undefined;
+    setup({
+      commands: {
+        list_marketplace_skills: ({ apiKey, sort, page }) => {
+          if (sort === "updated_at") throw { code: "marketplace.unavailable", message: "请求失败", retryable: true };
+          if (apiKey === "required") return new Promise((resolve) => { release = resolve; });
+          return { skills: [{ ...marketplaceSkill, name: apiKey === "all" ? marketplaceSkill.name : "无需密钥结果" }], total: 25, page, pageSize: 24 };
+        },
+      },
+    });
+    await openMarket();
+    const apiKey = screen.getByRole("combobox", { name: "API Key 筛选" });
+    fireEvent.change(apiKey, { target: { value: "required" } });
+    await waitFor(() => expect(release).toBeDefined());
+    fireEvent.change(apiKey, { target: { value: "none" } });
+    await screen.findByRole("button", { name: "无需密钥结果" });
+    release!({ skills: [{ ...marketplaceSkill, name: "过期密钥筛选结果" }], total: 1, page: 1, pageSize: 24 });
+    fireEvent.click(screen.getByRole("button", { name: "最近上新" }));
+    expect(await screen.findByText(/保留上次成功结果：默认目录，第 1 页（全部 · 无需 API Key）/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "无需密钥结果" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "过期密钥筛选结果" })).not.toBeInTheDocument();
+  });
+
+  it("combines category, search and sorting, resets pagination and separates category caches", async () => {
+    const backend = setup({
+      commands: {
+        list_marketplace_skills: ({ keyword, page, sort, category }) => ({
+          skills: [{
+            ...marketplaceSkill,
+            name: keyword || category ? `${keyword}-${category}-${sort}-${page}` : marketplaceSkill.name,
+          }],
+          total: 49,
+          page,
+          pageSize: 24,
+        }),
+      },
+    });
+    await openMarket();
+    const category = await screen.findByRole("combobox", { name: "场景分类" });
+    await within(category).findByRole("option", { name: "开发编程" });
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索 SkillHub" }), {
+      target: { value: "notes" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+    await screen.findByRole("button", { name: "notes--score-1" });
+    fireEvent.click(screen.getByRole("button", { name: "下载量" }));
+    await screen.findByRole("button", { name: "notes--downloads-1" });
+    fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+    await screen.findByRole("button", { name: "notes--downloads-2" });
+    fireEvent.change(category, { target: { value: "dev-programming" } });
+    await screen.findByRole("button", { name: "notes-dev-programming-downloads-1" });
+    expect(backend.callsOf("list_marketplace_skills").slice(-1)[0].payload).toEqual({
+      keyword: "notes", page: 1, sort: "downloads", category: "dev-programming", apiKey: "all",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+    await screen.findByRole("button", { name: "notes-dev-programming-downloads-2" });
+    fireEvent.click(screen.getByRole("button", { name: "近期飙升" }));
+    await screen.findByRole("button", { name: "notes-dev-programming-trending-1" });
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索 SkillHub" }), {
+      target: { value: "code" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+    await screen.findByRole("button", { name: "code-dev-programming-trending-1" });
+    expect(backend.callsOf("list_marketplace_skills").slice(-1)[0].payload).toEqual({
+      keyword: "code", page: 1, sort: "trending", category: "dev-programming", apiKey: "all",
+    });
+    fireEvent.change(category, { target: { value: "knowledge-management" } });
+    await screen.findByRole("button", { name: "code-knowledge-management-trending-1" });
+    const calls = backend.count("list_marketplace_skills");
+    fireEvent.change(category, { target: { value: "dev-programming" } });
+    await screen.findByRole("button", { name: "code-dev-programming-trending-1" });
+    expect(backend.count("list_marketplace_skills")).toBe(calls);
+    fireEvent.change(category, { target: { value: "" } });
+    await screen.findByRole("button", { name: "code--trending-1" });
+  });
+
+  it("ignores late category responses and labels the retained category after failure", async () => {
+    let release: ((value: { skills: (typeof marketplaceSkill)[]; total: number; page: number; pageSize: number }) => void) | undefined;
+    setup({
+      commands: {
+        list_marketplace_skills: ({ category, page }) => {
+          if (category === "dev-programming") return new Promise((resolve) => { release = resolve; });
+          if (category === "professional") throw { code: "marketplace.unavailable", message: "请求失败", retryable: true };
+          return { skills: [{ ...marketplaceSkill, name: category ? "知识库结果" : marketplaceSkill.name }], total: 25, page, pageSize: 24 };
+        },
+      },
+    });
+    await openMarket();
+    const category = screen.getByRole("combobox", { name: "场景分类" });
+    await within(category).findByRole("option", { name: "开发编程" });
+    fireEvent.change(category, { target: { value: "dev-programming" } });
+    await waitFor(() => expect(release).toBeDefined());
+    fireEvent.change(category, { target: { value: "knowledge-management" } });
+    await screen.findByRole("button", { name: "知识库结果" });
+    release!({ skills: [{ ...marketplaceSkill, name: "过期分类结果" }], total: 1, page: 1, pageSize: 24 });
+    fireEvent.change(category, { target: { value: "professional" } });
+    expect(await screen.findByText(/保留上次成功结果：默认目录，第 1 页（全部 · 知识管理）/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "知识库结果" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "过期分类结果" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "下一页" })).toBeDisabled();
+  });
+
+  it("keeps the catalog available when categories fail and allows retry", async () => {
+    let fail = true;
+    setup({
+      commands: {
+        list_marketplace_categories: (args, fake) => {
+          if (fail) throw { code: "marketplace.unavailable", message: "分类请求失败", retryable: true };
+          return fake.dispatch("list_marketplace_categories", args);
+        },
+      },
+    });
+    await openMarket();
+    expect(await screen.findByText("场景分类加载失败。")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "场景分类" })).toBeDisabled();
+    fail = false;
+    fireEvent.click(screen.getByRole("button", { name: "重试分类" }));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "场景分类" })).toBeEnabled());
+    expect(screen.getByRole("option", { name: "开发编程" })).toBeInTheDocument();
+    expect(screen.queryByText("场景分类加载失败。")).not.toBeInTheDocument();
+  });
+
   it("keeps search and sorting across pages, resets the page on sort changes, and separates caches", async () => {
     const backend = setup({
       commands: {
@@ -66,7 +230,7 @@ describe("SkillHub marketplace", () => {
     for (const [label, sort] of [["近期飙升", "trending"], ["下载量", "downloads"], ["最近上新", "updated_at"]]) {
       fireEvent.click(within(sorts).getByRole("button", { name: label }));
       await screen.findByRole("button", { name: `simplify-${sort}-1` });
-      expect(backend.callsOf("list_marketplace_skills").slice(-1)[0]?.payload).toEqual({ keyword: "simplify", page: 1, sort });
+      expect(backend.callsOf("list_marketplace_skills").slice(-1)[0]?.payload).toEqual({ keyword: "simplify", page: 1, sort, category: "", apiKey: "all" });
       expect(within(sorts).getByRole("button", { name: label })).toHaveAttribute("aria-pressed", "true");
     }
     fireEvent.click(screen.getByRole("button", { name: "下一页" }));
@@ -77,7 +241,7 @@ describe("SkillHub marketplace", () => {
     expect(backend.count("list_marketplace_skills")).toBe(calls);
     fireEvent.click(screen.getByRole("button", { name: "刷新目录" }));
     await waitFor(() => expect(backend.count("list_marketplace_skills")).toBe(calls + 1));
-    expect(backend.callsOf("list_marketplace_skills").slice(-1)[0]?.payload).toEqual({ keyword: "simplify", page: 1, sort: "score" });
+    expect(backend.callsOf("list_marketplace_skills").slice(-1)[0]?.payload).toEqual({ keyword: "simplify", page: 1, sort: "score", category: "", apiKey: "all" });
   });
 
   it("ignores late sort responses and identifies the retained sorting when another sort fails", async () => {

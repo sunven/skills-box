@@ -874,12 +874,18 @@ pub fn invalidate_discovery_source(
 }
 
 #[tauri::command]
+pub async fn list_marketplace_categories() -> Result<Vec<crate::marketplace::provider::Category>, AppError> {
+    crate::marketplace::provider::categories().await
+}
+#[tauri::command]
 pub async fn list_marketplace_skills(
     keyword: String,
     page: u32,
     sort: crate::marketplace::provider::Sort,
+    category: String,
+    api_key: crate::marketplace::provider::ApiKeyFilter,
 ) -> Result<crate::marketplace::provider::Listing, AppError> {
-    crate::marketplace::provider::list(&keyword, page, sort).await
+    crate::marketplace::provider::list(&keyword, page, sort, &category, api_key).await
 }
 #[tauri::command]
 pub async fn get_marketplace_skill(

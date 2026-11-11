@@ -1,4 +1,4 @@
-import type { MarketplaceCoordinate, MarketplaceListing, MarketplaceDetail, MarketplaceCli, MarketplacePreview, MarketplaceSort } from "./marketplace";
+import type { MarketplaceCoordinate, MarketplaceListing, MarketplaceDetail, MarketplaceCli, MarketplacePreview, MarketplaceSort, MarketplaceCategory, MarketplaceApiKeyFilter } from "./marketplace";
 import type { BatchRequest, BatchPreview, BatchConfirmation, StaleRecord } from "./batch";
 import type { CliCommandRequest, CliCommandPreview, CliCommandRecord } from "./cli-commands";
 import type {
@@ -39,6 +39,7 @@ import { GLOBAL_SCOPE } from "./types";
 /** Every IPC command the frontend may invoke. */
 export const API_COMMANDS = {
   listMarketplaceSkills: "list_marketplace_skills",
+  listMarketplaceCategories: "list_marketplace_categories",
   getMarketplaceSkill: "get_marketplace_skill",
   getMarketplaceCli: "get_marketplace_cli",
   prepareMarketplaceInstall: "prepare_marketplace_install",
@@ -547,7 +548,8 @@ export function listStaleRecords(scope: ScopeId): Promise<StaleRecord[]> {
   return invoke<StaleRecord[]>(API_COMMANDS.listStaleRecords, { scope });
 }
 
-export function listMarketplaceSkills(keyword: string, page: number, sort: MarketplaceSort): Promise<MarketplaceListing> { return invoke(API_COMMANDS.listMarketplaceSkills, { keyword, page, sort }); }
+export function listMarketplaceCategories(): Promise<MarketplaceCategory[]> { return invoke(API_COMMANDS.listMarketplaceCategories); }
+export function listMarketplaceSkills(keyword: string, page: number, sort: MarketplaceSort, category: string, apiKey: MarketplaceApiKeyFilter): Promise<MarketplaceListing> { return invoke(API_COMMANDS.listMarketplaceSkills, { keyword, page, sort, category, apiKey }); }
 export function getMarketplaceSkill(coordinate: MarketplaceCoordinate): Promise<MarketplaceDetail> { return invoke(API_COMMANDS.getMarketplaceSkill, { coordinate }); }
 export function getMarketplaceCli(): Promise<MarketplaceCli> { return invoke(API_COMMANDS.getMarketplaceCli); }
 export function prepareMarketplaceInstall(scope: ScopeId, coordinate: MarketplaceCoordinate, agents: string[]): Promise<MarketplacePreview> { return invoke(API_COMMANDS.prepareMarketplaceInstall, { scope, coordinate, agents }); }

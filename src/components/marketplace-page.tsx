@@ -5,6 +5,7 @@ import {
   asAppError,
   fallbackError,
   getMarketplaceSkill,
+  listMarketplaceCategories,
   listMarketplaceSkills,
   openExternalUrl,
   prepareMarketplaceInstall,
@@ -12,12 +13,14 @@ import {
 } from "../lib/api";
 import {
   marketplaceAddress,
+  marketplaceApiKeyOptions,
   marketplaceKey,
   marketplaceSortOptions,
   type MarketplaceCoordinate,
   type MarketplaceListing,
   type MarketplacePreview,
   type MarketplaceSort,
+  type MarketplaceApiKeyFilter,
 } from "../lib/marketplace";
 import type { AppError, InventorySnapshot, ScopeId } from "../lib/types";
 import { useMutation, taskEventDriver } from "../lib/mutation";
@@ -74,15 +77,23 @@ export function MarketplacePage({ scope, snapshot, disabled, onView }: Props) {
     keyword: string;
     page: number;
     sort: MarketplaceSort;
-  }>({ keyword: "", page: 1, sort: "score" });
+    category: string;
+    apiKey: MarketplaceApiKeyFilter;
+  }>({ keyword: "", page: 1, sort: "score", category: "", apiKey: "all" });
   const [selected, setSelected] = useState<MarketplaceCoordinate | null>(null);
   const previous = useRef<{
     search: typeof search;
     listing: MarketplaceListing;
   } | null>(null);
+  const categories = useQuery({
+    queryKey: ["marketplace", "categories"],
+    queryFn: listMarketplaceCategories,
+    retry: false,
+    staleTime: 600_000,
+  });
   const catalog = useQuery({
-    queryKey: ["marketplace", "list", search.keyword, search.page, search.sort],
-    queryFn: () => listMarketplaceSkills(search.keyword, search.page, search.sort),
+    queryKey: ["marketplace", "list", search.keyword, search.page, search.sort, search.category, search.apiKey],
+    queryFn: () => listMarketplaceSkills(search.keyword, search.page, search.sort, search.category, search.apiKey),
     retry: false,
     staleTime: 60_000,
   });
@@ -94,6 +105,12 @@ export function MarketplacePage({ scope, snapshot, disabled, onView }: Props) {
   const shownSearch = fallback?.search ?? search;
   const shownSortLabel = marketplaceSortOptions.find(
     (option) => option.value === shownSearch.sort,
+  )!.label;
+  const shownCategoryLabel = categories.data?.find(
+    (category) => category.key === shownSearch.category,
+  )?.name ?? shownSearch.category;
+  const shownApiKeyLabel = marketplaceApiKeyOptions.find(
+    (option) => option.value === shownSearch.apiKey,
   )!.label;
   return (
     <main className="discovery-page" aria-labelledby="marketplace-title">
@@ -108,19 +125,59 @@ export function MarketplacePage({ scope, snapshot, disabled, onView }: Props) {
           </div>
           <span className="badge">来源 · SkillHub</span>
         </div>
-        <div className="marketplace-sort" role="group" aria-label="技能排序">
-          {marketplaceSortOptions.map((option) => (
-            <Button
-              key={option.value}
-              type="button"
-              variant="ghost"
-              aria-pressed={search.sort === option.value}
-              onClick={() => setSearch((s) => ({ ...s, sort: option.value, page: 1 }))}
+        <div className="marketplace-toolbar">
+          <div className="marketplace-sort" role="group" aria-label="技能排序">
+            {marketplaceSortOptions.map((option) => (
+              <Button
+                key={option.value}
+                type="button"
+                variant="ghost"
+                aria-pressed={search.sort === option.value}
+                onClick={() => setSearch((s) => ({ ...s, sort: option.value, page: 1 }))}
+              >
+                {option.label}
+              </Button>
+            ))}
+          </div>
+          <div className="marketplace-filters">
+            <select
+              className="marketplace-filter-select"
+              aria-label="场景分类"
+              value={search.category}
+              disabled={!categories.data}
+              onChange={(e) => {
+                const category = e.target.value;
+                setSearch((s) => ({ ...s, category, page: 1 }));
+              }}
             >
-              {option.label}
-            </Button>
-          ))}
+              <option value="">{categories.isPending ? "正在加载分类…" : "所有场景分类"}</option>
+              {categories.data?.map((category) => (
+                <option key={category.key} value={category.key}>{category.name}</option>
+              ))}
+            </select>
+            <select
+              className="marketplace-filter-select"
+              aria-label="API Key 筛选"
+              value={search.apiKey}
+              onChange={(e) => {
+                const apiKey = e.target.value as MarketplaceApiKeyFilter;
+                setSearch((s) => ({ ...s, apiKey, page: 1 }));
+              }}
+            >
+              {marketplaceApiKeyOptions.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </div>
         </div>
+        {categories.isError ? (
+          <div className="notice" role="alert">
+            <p>场景分类加载失败。</p>
+            <Button variant="outline" size="sm" onClick={() => void categories.refetch()}>
+              重试分类
+            </Button>
+          </div>
+        ) : null}
         <form
           className="discovery-controls"
           onSubmit={(e) => {
@@ -154,7 +211,7 @@ export function MarketplacePage({ scope, snapshot, disabled, onView }: Props) {
             <p>
               SkillHub 请求失败。
               {listing
-                ? `保留上次成功结果：${shownSearch.keyword || "默认目录"}，第 ${shownSearch.page} 页（${shownSortLabel}）。`
+                ? `保留上次成功结果：${shownSearch.keyword || "默认目录"}，第 ${shownSearch.page} 页（${shownSortLabel}${shownSearch.category ? ` · ${shownCategoryLabel}` : ""}${shownSearch.apiKey !== "all" ? ` · ${shownApiKeyLabel}` : ""}）。`
                 : "尚无可显示的结果。"}
             </p>
             <p>{asAppError(catalog.error)?.detail}</p>
@@ -175,6 +232,8 @@ export function MarketplacePage({ scope, snapshot, disabled, onView }: Props) {
                 ? `搜索「${shownSearch.keyword}」`
                 : "默认目录"}{" "}
               · {shownSortLabel} · 共 {listing.total.toLocaleString()} 项 · 第 {listing.page} 页
+              {shownSearch.category ? ` · ${shownCategoryLabel}` : ""}
+              {shownSearch.apiKey !== "all" ? ` · ${shownApiKeyLabel}` : ""}
             </p>
             <div className="marketplace-grid">
               {listing.skills.map((skill) => {
@@ -203,8 +262,7 @@ export function MarketplacePage({ scope, snapshot, disabled, onView }: Props) {
                     <MarketplaceStats stars={skill.stars} downloads={skill.downloads} />
                     <div className="flex items-center justify-between gap-2 mt-auto">
                       <span className="text-xs text-muted-foreground">
-                        {skill.publisher || skill.coordinate.namespace}
-                        {skill.version ? ` · ${skill.version}` : ""}
+                        {skill.version}
                       </span>
                       {installed ? (
                         <Button
@@ -230,7 +288,7 @@ export function MarketplacePage({ scope, snapshot, disabled, onView }: Props) {
             </div>
             {listing.skills.length === 0 ? (
               <p className="discovery-empty">
-                没有找到相关技能，请换个关键词。
+                没有找到相关技能，请调整搜索词或筛选条件。
               </p>
             ) : null}
             <div className="flex justify-between items-center mt-4">

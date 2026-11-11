@@ -21,6 +21,76 @@ pub enum Sort {
     UpdatedAt,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiKeyFilter {
+    All,
+    Required,
+    None,
+}
+
+impl ApiKeyFilter {
+    fn matches(self, labels: &Value) -> bool {
+        let required = labels["requires_api_key"] == "true";
+        match self {
+            Self::All => true,
+            Self::Required => required,
+            Self::None => !required,
+        }
+    }
+
+    fn labels(self) -> Option<&'static str> {
+        match self {
+            Self::All => None,
+            Self::Required => Some("requires_api_key:true"),
+            Self::None => Some("requires_api_key:false"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Category {
+    pub key: String,
+    pub name: String,
+}
+
+pub async fn categories() -> Result<Vec<Category>, AppError> {
+    let value: Value = client()?
+        .get(format!("{API}/api/v1/categories"))
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(AppError::marketplace_unavailable)?
+        .json()
+        .await
+        .map_err(AppError::marketplace_unavailable)?;
+    parse_categories(&value)
+}
+
+fn parse_categories(value: &Value) -> Result<Vec<Category>, AppError> {
+    let mut items: Vec<_> = value["items"]
+        .as_array()
+        .ok_or_else(|| AppError::marketplace_unavailable("分类响应缺少 items"))?
+        .iter()
+        .filter(|item| item["active"] == true)
+        .collect();
+    items.sort_by_key(|item| item["sortOrder"].as_i64().unwrap_or(i64::MAX));
+    items
+        .into_iter()
+        .map(|item| {
+            let key = text(item, &["key"]);
+            let name = text(item, &["name"]);
+            if key.is_empty() || name.is_empty() {
+                return Err(AppError::marketplace_unavailable("分类缺少标识或名称"));
+            }
+            Ok(Category {
+                key: key.into(),
+                name: name.into(),
+            })
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Listing {
@@ -92,13 +162,25 @@ fn summary(v: &Value) -> Result<Summary, AppError> {
 }
 
 // SkillHub's trending tab searches and paginates its showcase, preserving rank order.
-fn trending_listing(value: &Value, keyword: &str, page: u32) -> Result<Listing, AppError> {
+fn trending_listing(
+    value: &Value,
+    keyword: &str,
+    page: u32,
+    category: &str,
+    api_key: ApiKeyFilter,
+) -> Result<Listing, AppError> {
     let keyword = keyword.trim().to_lowercase();
     let matches: Vec<_> = value["skills"]
         .as_array()
         .ok_or_else(|| AppError::marketplace_unavailable("榜单响应缺少 skills"))?
         .iter()
         .filter(|skill| {
+            if !category.is_empty() && skill["category"].as_str() != Some(category) {
+                return false;
+            }
+            if !api_key.matches(&skill["labels"]) {
+                return false;
+            }
             keyword.is_empty()
                 || ["name", "slug", "description", "description_zh", "ownerName"]
                     .iter()
@@ -127,8 +209,14 @@ fn trending_listing(value: &Value, keyword: &str, page: u32) -> Result<Listing, 
     })
 }
 
-pub async fn list(keyword: &str, page: u32, sort: Sort) -> Result<Listing, AppError> {
-    if page == 0 || page > 100_000 || keyword.len() > 400 {
+pub async fn list(
+    keyword: &str,
+    page: u32,
+    sort: Sort,
+    category: &str,
+    api_key: ApiKeyFilter,
+) -> Result<Listing, AppError> {
+    if page == 0 || page > 100_000 || keyword.len() > 400 || category.len() > 200 {
         return Err(AppError::marketplace_unavailable("无效的分页或关键词"));
     }
     let client = client()?;
@@ -140,13 +228,18 @@ pub async fn list(keyword: &str, page: u32, sort: Sort) -> Result<Listing, AppEr
             Sort::UpdatedAt => "updated_at",
             _ => "score",
         };
-        client.get(format!("{API}/api/skills")).query(&[
+        let mut request = client.get(format!("{API}/api/skills")).query(&[
             ("page", page.to_string()),
             ("pageSize", PAGE_SIZE.to_string()),
             ("keyword", keyword.trim().into()),
             ("sortBy", sort_by.into()),
             ("order", "desc".into()),
-        ])
+            ("category", category.into()),
+        ]);
+        if let Some(labels) = api_key.labels() {
+            request = request.query(&[("labels", labels)]);
+        }
+        request
     };
     let value: Value = request
         .send()
@@ -157,7 +250,7 @@ pub async fn list(keyword: &str, page: u32, sort: Sort) -> Result<Listing, AppEr
         .await
         .map_err(AppError::marketplace_unavailable)?;
     if sort == Sort::Trending {
-        return trending_listing(&value, keyword, page);
+        return trending_listing(&value, keyword, page, category, api_key);
     }
     if value["code"] != 0 {
         return Err(AppError::marketplace_unavailable(text(
@@ -306,6 +399,115 @@ pub(crate) fn markdown_from_zip(bytes: &[u8]) -> Result<String, AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn api_key_filter_uses_platform_labels_before_pagination() {
+        let skills: Vec<_> = (0..100).map(|i| serde_json::json!({
+            "name": format!("Skill {i}"),
+            "description": "Code",
+            "category": if i % 2 == 0 { "dev-programming" } else { "office-efficiency" },
+            "labels": match i % 4 {
+                0 | 1 => serde_json::json!({"requires_api_key": "true"}),
+                2 => serde_json::json!({"requires_api_key": "false"}),
+                _ => serde_json::json!({})
+            },
+            "namespace": {"handle": "publisher", "publicSlug": format!("skill-{i}"), "canonicalName": format!("@publisher/skill-{i}")}
+        })).collect();
+        let value = serde_json::json!({"skills": skills});
+        let required =
+            trending_listing(&value, "code", 2, "dev-programming", ApiKeyFilter::Required).unwrap();
+        assert_eq!(required.total, 25);
+        assert_eq!(required.skills.len(), 1);
+        assert_eq!(required.skills[0].name, "Skill 96");
+        let none = trending_listing(&value, "", 2, "", ApiKeyFilter::None).unwrap();
+        assert_eq!(none.total, 50);
+        assert_eq!(none.skills[0].name, "Skill 50");
+        assert_eq!(none.skills[1].name, "Skill 51");
+        assert_eq!(
+            trending_listing(&value, "", 1, "", ApiKeyFilter::All)
+                .unwrap()
+                .total,
+            100
+        );
+        assert_eq!(
+            trending_listing(&value, "no match", 1, "", ApiKeyFilter::Required)
+                .unwrap()
+                .total,
+            0
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "read-only official API Key filter smoke test; requires network"]
+    async fn skillhub_live_api_key_filtered_catalogs() {
+        for sort in [Sort::Score, Sort::Trending] {
+            for filter in [ApiKeyFilter::Required, ApiKeyFilter::None] {
+                let filtered = list("", 1, sort, "", filter).await.unwrap();
+                assert!(!filtered.skills.is_empty());
+                assert!(
+                    filtered.total
+                        < list("", 1, sort, "", ApiKeyFilter::All)
+                            .await
+                            .unwrap()
+                            .total
+                );
+                let metadata = metadata(&filtered.skills[0].coordinate).await.unwrap();
+                assert!(filter.matches(&metadata["skill"]["labels"]));
+                let combined = list("", 1, sort, "dev-programming", filter).await.unwrap();
+                assert!(combined.total <= filtered.total);
+                if let Some(skill) = combined.skills.first() {
+                    let observed = super::metadata(&skill.coordinate).await.unwrap();
+                    assert!(filter.matches(&observed["skill"]["labels"]));
+                    assert_eq!(observed["skill"]["category"], "dev-programming");
+                } else {
+                    assert_eq!(combined.total, 0);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn categories_follow_platform_order_and_exclude_inactive_entries() {
+        let value = serde_json::json!({"items": [
+            {"key": "dev-programming", "name": "开发编程", "active": true, "sortOrder": 30},
+            {"key": "old", "name": "已停用", "active": false, "sortOrder": 0},
+            {"key": "office-efficiency", "name": "办公效率", "active": true, "sortOrder": 10}
+        ]});
+        let result = parse_categories(&value).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].key, "office-efficiency");
+        assert_eq!(result[1].name, "开发编程");
+        assert!(parse_categories(&serde_json::json!({})).is_err());
+        assert!(parse_categories(&serde_json::json!({"items": [{"active": true}]})).is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "read-only official category API smoke test; requires network"]
+    async fn skillhub_live_categories_and_filtered_catalogs() {
+        let categories = categories().await.unwrap();
+        assert!(categories.iter().any(|c| c.key == "dev-programming"));
+        for sort in [
+            Sort::Score,
+            Sort::Downloads,
+            Sort::UpdatedAt,
+            Sort::Trending,
+        ] {
+            let filtered = list("", 1, sort, "dev-programming", ApiKeyFilter::All)
+                .await
+                .unwrap();
+            assert!(!filtered.skills.is_empty());
+            assert!(filtered.skills.len() <= PAGE_SIZE as usize);
+            if sort != Sort::Trending {
+                assert!(
+                    filtered.total
+                        < list("", 1, sort, "", ApiKeyFilter::All)
+                            .await
+                            .unwrap()
+                            .total
+                );
+            }
+        }
+    }
+
     #[tokio::test]
     #[ignore = "read-only official API sorting smoke test; requires network"]
     async fn skillhub_live_sorted_catalogs() {
@@ -315,15 +517,17 @@ mod tests {
             Sort::Downloads,
             Sort::UpdatedAt,
         ] {
-            let first = list("", 1, sort).await.unwrap();
+            let first = list("", 1, sort, "", ApiKeyFilter::All).await.unwrap();
             assert_eq!(first.skills.len(), PAGE_SIZE as usize);
             assert!(first.total >= PAGE_SIZE as u64);
             assert!(first.skills[0].stars.is_some());
             assert!(first.skills[0].downloads.is_some());
-            let second = list("", 2, sort).await.unwrap();
+            let second = list("", 2, sort, "", ApiKeyFilter::All).await.unwrap();
             assert_eq!(second.page, 2);
             assert_ne!(first.skills[0].coordinate, second.skills[0].coordinate);
-            let searched = list(&first.skills[0].name, 1, sort).await.unwrap();
+            let searched = list(&first.skills[0].name, 1, sort, "", ApiKeyFilter::All)
+                .await
+                .unwrap();
             assert!(
                 searched
                     .skills
@@ -340,6 +544,7 @@ mod tests {
                 serde_json::json!({
                     "name": format!("Skill {i}"),
                     "description_zh": if i % 2 == 0 { "清理代码" } else { "other" },
+                    "category": if i % 2 == 0 { "dev-programming" } else { "office-efficiency" },
                     "tags": ["Refactor"],
                     "stars": if i == 0 { Some(0) } else { None },
                     "downloads": if i == 0 { Some(11_384_000) } else { None },
@@ -352,7 +557,7 @@ mod tests {
             })
             .collect();
         let value = serde_json::json!({"skills": skills, "total": 100});
-        let first = trending_listing(&value, " 清理 ", 1).unwrap();
+        let first = trending_listing(&value, " 清理 ", 1, "", ApiKeyFilter::All).unwrap();
         assert_eq!(first.total, 33);
         assert_eq!(first.skills.len(), 24);
         assert_eq!(first.skills[0].stars, Some(0));
@@ -360,22 +565,61 @@ mod tests {
         assert_eq!(first.skills[1].stars, None);
         assert_eq!(first.skills[1].downloads, None);
         assert_eq!(first.skills[23].name, "Skill 46");
-        let second = trending_listing(&value, "清理", 2).unwrap();
+        let second = trending_listing(&value, "清理", 2, "", ApiKeyFilter::All).unwrap();
         assert_eq!(second.skills.len(), 9);
         assert_eq!(second.skills[0].name, "Skill 48");
         assert_eq!(second.page, 2);
         assert_eq!(second.page_size, 24);
-        assert_eq!(trending_listing(&value, " REFACTOR ", 1).unwrap().total, 65);
-        assert_eq!(trending_listing(&value, "publisher", 1).unwrap().total, 65);
-        assert_eq!(trending_listing(&value, "missing", 1).unwrap().total, 0);
-        assert!(trending_listing(&value, "", 4).unwrap().skills.is_empty());
-        assert!(trending_listing(&serde_json::json!({}), "", 1).is_err());
+        assert_eq!(
+            trending_listing(&value, " REFACTOR ", 1, "", ApiKeyFilter::All)
+                .unwrap()
+                .total,
+            65
+        );
+        assert_eq!(
+            trending_listing(&value, "publisher", 1, "", ApiKeyFilter::All)
+                .unwrap()
+                .total,
+            65
+        );
+        assert_eq!(
+            trending_listing(&value, "missing", 1, "", ApiKeyFilter::All)
+                .unwrap()
+                .total,
+            0
+        );
+        assert!(
+            trending_listing(&value, "", 4, "", ApiKeyFilter::All)
+                .unwrap()
+                .skills
+                .is_empty()
+        );
+        assert!(trending_listing(&serde_json::json!({}), "", 1, "", ApiKeyFilter::All).is_err());
+        let filtered =
+            trending_listing(&value, "", 2, "dev-programming", ApiKeyFilter::All).unwrap();
+        assert_eq!(filtered.total, 33);
+        assert_eq!(filtered.skills.len(), 9);
+        assert_eq!(filtered.skills[0].name, "Skill 48");
+        assert_eq!(
+            trending_listing(&value, "other", 1, "dev-programming", ApiKeyFilter::All)
+                .unwrap()
+                .total,
+            0
+        );
+        assert_eq!(
+            trending_listing(&value, "", 1, "office-efficiency", ApiKeyFilter::All)
+                .unwrap()
+                .total,
+            32
+        );
     }
 
     #[tokio::test]
     #[ignore = "read-only official API smoke test; requires network"]
     async fn skillhub_live_catalog_and_exact_release_preview() {
-        let catalog = list("", 1, Sort::Score).await.unwrap();
+        let catalog = list("", 1, Sort::Score, "", ApiKeyFilter::All)
+            .await
+            .unwrap();
         assert!(!catalog.skills.is_empty());
         let c = Coordinate::from_canonical("@tencent-adm/ima-skills").unwrap();
         let detail = detail(&c).await.unwrap();
