@@ -562,6 +562,14 @@ pub async fn preview_batch(
     scope: ScopeId,
     request: crate::tasks::batch::BatchRequest,
 ) -> Result<crate::tasks::batch::BatchPreview, AppError> {
+    preview_batch_for_state(&state, scope, request).await
+}
+
+async fn preview_batch_for_state(
+    state: &AppState,
+    scope: ScopeId,
+    request: crate::tasks::batch::BatchRequest,
+) -> Result<crate::tasks::batch::BatchPreview, AppError> {
     let (updates, checked_records) = if request.action == crate::tasks::batch::BatchAction::Update {
         let names = request
             .skill_ids
@@ -577,9 +585,10 @@ pub async fn preview_batch(
                 state: None,
             },
             ScopeId::Project(_) => {
+                // Project checks accept composite IDs, not the parsed directory names.
                 state
                     .project_updates
-                    .check(scope.clone(), Some(names), None)
+                    .check(scope.clone(), Some(request.skill_ids.clone()), None)
                     .await?
             }
         };
@@ -737,9 +746,46 @@ pub fn app_data_dir(paths: &AppPaths, kind: &str) -> Result<PathBuf, AppError> {
 }
 
 #[cfg(test)]
+mod batch_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::error::ErrorCode;
+
+    #[tokio::test]
+    async fn project_batch_update_preview_preserves_scoped_skill_ids() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(tmp.path().join("home"), tmp.path().join("data"));
+        paths.ensure_dirs().unwrap();
+        let state = AppState::new(paths);
+        let root = tmp.path().join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        let scope = state
+            .projects
+            .add(root.to_str().unwrap())
+            .unwrap()
+            .project
+            .scope();
+        let skill_id = scope.skill_id("bmad");
+        let preview = preview_batch_for_state(
+            &state,
+            scope.clone(),
+            crate::tasks::batch::BatchRequest {
+                action: crate::tasks::batch::BatchAction::Update,
+                skill_ids: vec![skill_id.clone()],
+                agent_ids: Vec::new(),
+                target_keys: None,
+                project_root: None,
+            },
+        )
+        .await
+        .expect("a project skill must reach batch preview without a scope error");
+        assert_eq!(preview.scope, scope);
+        assert_eq!(preview.targets.len(), 1);
+        assert_eq!(preview.targets[0].skill_id, skill_id);
+        assert_eq!(preview.targets[0].reason.as_deref(), Some("技能已不存在。"));
+    }
 
     #[test]
     fn app_data_kinds_map_to_their_directories() {
