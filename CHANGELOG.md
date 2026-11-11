@@ -2,11 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.6] - 2026-11-11
+
+### Bug Fixes
+
+- Use Skills Box in release titles
+- Harden skill mutations and preserve operation results
+
+### Features
+
+- Add marketplace sorting and skill statistics
+- Add marketplace category and API key filters
+- Add marketplace detail page and file browsing
+- Support SkillHub expert pack installation
+- Toggle expert pack workflow preview and source
+
 ## [0.1.5] - 2026-11-09
 
 ### Bug Fixes
 
 - Align application update error messages
+
+### Features
+
+- Add SkillHub skill marketplace
 
 ## [0.1.4] - 2026-11-09
 
@@ -23,7 +42,6 @@ All notable changes to this project will be documented in this file.
 
 ### Refactor
 
-- Consolidate duplicated helpers and shared UI state
 - Isolate batch target execution and state
 - Isolate batch operation preview and retry flow
 - Share update check attempt scheduling
@@ -44,6 +62,10 @@ All notable changes to this project will be documented in this file.
 - Display actual skills CLI commands and use latest version
 - Support independent WorkBuddy project skills
 - Clean stale records and restore missing skills
+
+### Refactor
+
+- Consolidate duplicated helpers and shared UI state
 
 ## [0.1.2] - 2026-11-04
 
