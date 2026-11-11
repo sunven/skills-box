@@ -18,11 +18,13 @@ use crate::paths::AppPaths;
 use crate::project_path::{self, Existence};
 use crate::projects::{Project, ProjectRegistry};
 use crate::scope_layout::ScopeLayout;
+use crate::update::content_hash::HashVersion;
 
 #[derive(Debug, Clone)]
 pub struct CopyPlan {
     pub layout: ScopeLayout,
     root_identity: String,
+    hash_version: HashVersion,
     skills: BTreeMap<String, CopySkill>,
 }
 
@@ -56,6 +58,9 @@ pub fn plan(
     ensure_inside(&layout, &layout.canonical_dir)?;
     ensure_lock_path(&layout)?;
     let destination_lock = layout.lock()?;
+    let hash_version = HashVersion::for_project_lock(
+        crate::project_lock::ProjectLockFile::read(&layout.lock_path)?.version(),
+    );
     if request.skill_ids.is_empty() || request.skill_ids.len() > 10_000 {
         return Err(AppError::skill_invalid_name("请选择要复制的技能。"));
     }
@@ -138,7 +143,7 @@ pub fn plan(
             copied_entry.plugin_name = None;
             copied_entry.source_base_url = None;
             copied_entry.well_known_digest = None;
-            copied_entry.skill_folder_hash = comparable_hash(canonical)?;
+            copied_entry.skill_folder_hash = comparable_hash(canonical, hash_version)?;
             Ok(CopySkill {
                 source: canonical.clone(),
                 source_identity: identity(canonical)?,
@@ -222,7 +227,11 @@ pub fn plan(
     let revision = format!(
         "{:x}",
         Sha256::digest(
-            format!("{:?}|{:?}|{:?}|{root_identity}", project, targets, skills).as_bytes()
+            format!(
+                "{:?}|{:?}|{:?}|{root_identity}|{hash_version:?}",
+                project, targets, skills
+            )
+            .as_bytes()
         )
     );
     let preview = BatchPreview {
@@ -246,6 +255,7 @@ pub fn plan(
         copy: Some(CopyPlan {
             layout,
             root_identity,
+            hash_version,
             skills,
         }),
     })
@@ -275,8 +285,8 @@ fn reason(error: &AppError) -> String {
         .unwrap_or_else(|| error.message.clone())
 }
 
-fn comparable_hash(root: &Path) -> Result<String, AppError> {
-    match crate::update::content_hash::folder_hash(root) {
+fn comparable_hash(root: &Path, version: HashVersion) -> Result<String, AppError> {
+    match version.folder_hash(root) {
         Ok(hash) => Ok(hash),
         // The existing Project checker refuses paths it cannot sort like the
         // CLI. Retain the source and readable content without inventing a hash.
@@ -441,6 +451,12 @@ pub fn verify(
     }
     ensure_inside(&current, &current.canonical_dir)?;
     ensure_lock_path(&current)?;
+    if HashVersion::for_project_lock(
+        crate::project_lock::ProjectLockFile::read(&current.lock_path)?.version(),
+    ) != copy.hash_version
+    {
+        return Err(AppError::batch_target_changed("项目锁版本与确认时不同。"));
+    }
     let name = &target.target.name;
     let skill = copy
         .skills
@@ -536,7 +552,7 @@ pub fn execute(
     if tree_fingerprint(staged.path())? != skill.content {
         return Err(AppError::batch_target_changed("复制期间全局内容已变化。"));
     }
-    let hash = comparable_hash(staged.path())?;
+    let hash = comparable_hash(staged.path(), copy.hash_version)?;
     if hash != skill.entry.skill_folder_hash {
         return Err(AppError::batch_target_changed("复制版本与确认时不同。"));
     }

@@ -367,6 +367,7 @@ impl UpdateService {
                         name: target.name.clone(),
                         skill_path: target.skill_path.clone(),
                         lock_hash: target.lock_hash.clone(),
+                        hash_version: content_hash::HashVersion::Legacy,
                     },
                     &acquired.archive,
                 );

@@ -1304,6 +1304,57 @@ async fn copy_to_project_baseline_failure_restores_records_and_removes_its_copy(
 }
 
 #[tokio::test]
+async fn copy_to_project_preserves_v2_lock_and_records_a_portable_hash() {
+    let f = Fixture::new();
+    let root = f.project_root();
+    fs::write(
+        root.join("skills-lock.json"),
+        r#"{"version":2,"future":true,"skills":{}}"#,
+    )
+    .unwrap();
+    fs::write(
+        f.paths.canonical_skills_dir().join("alpha/说明.md"),
+        "中文说明\r\n",
+    )
+    .unwrap();
+    let preview = f.preview(f.copy_request(&root, &["alpha"], &[])).await;
+    assert!(preview.targets[0].eligible);
+    assert!(preview.targets[0].reason.is_none());
+    let result = f.execute_preview(&preview).await;
+    assert_eq!(statuses(&result), vec![BatchStatus::Success]);
+    let raw: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("skills-lock.json")).unwrap()).unwrap();
+    assert_eq!(raw["version"], 2);
+    assert_eq!(raw["future"], true);
+    let portable = crate::update::content_hash::HashVersion::Portable;
+    assert_eq!(
+        raw["skills"]["alpha"]["computedHash"],
+        portable
+            .folder_hash(&root.join(".agents/skills/alpha"))
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn copy_to_project_rejects_a_lock_version_change_after_confirmation() {
+    let f = Fixture::new();
+    let root = f.project_root();
+    let preview = f.preview(f.copy_request(&root, &["alpha"], &[])).await;
+    fs::write(
+        root.join("skills-lock.json"),
+        r#"{"version":2,"skills":{}}"#,
+    )
+    .unwrap();
+    let error = f
+        .manager
+        .start_batch(ScopeId::Global, Fixture::confirmation(&preview), sink().0)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::BatchPreviewExpired);
+    assert!(!root.join(".agents/skills/alpha").exists());
+}
+
+#[tokio::test]
 async fn copy_to_project_keeps_readable_unicode_files_without_inventing_a_version() {
     let f = Fixture::new();
     let root = f.project_root();

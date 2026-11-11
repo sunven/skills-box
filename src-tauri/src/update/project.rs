@@ -326,7 +326,10 @@ fn collect_targets(
         if selected.is_some_and(|names| !names.contains(&entry.name)) {
             continue;
         }
-        match checkable_target(entry) {
+        match checkable_target(
+            entry,
+            content_hash::HashVersion::for_project_lock(lock.version()),
+        ) {
             Ok((target, source, reference)) => {
                 let key = GroupKey {
                     source: crate::tasks::source::source_identity(&source),
@@ -350,7 +353,10 @@ fn collect_targets(
 
 /// Validation order mirrors the global check: source type, fingerprint domain,
 /// skillPath, then the shared source/ref resolver (ADR 0009).
-fn checkable_target(entry: &LockEntry) -> Result<(ProjectTarget, String, Option<String>), String> {
+fn checkable_target(
+    entry: &LockEntry,
+    hash_version: content_hash::HashVersion,
+) -> Result<(ProjectTarget, String, Option<String>), String> {
     if !crate::update_target::supported_type(&entry.source_type) {
         return Err("仅支持公开 HTTPS Git 来源，无法检查更新。".to_string());
     }
@@ -385,6 +391,7 @@ fn checkable_target(entry: &LockEntry) -> Result<(ProjectTarget, String, Option<
             name: target.name,
             skill_path,
             lock_hash: hash.to_string(),
+            hash_version,
         },
         target.source,
         target.reference,
@@ -607,6 +614,45 @@ mod tests {
                 check_revision: "initial".into(),
             },
         )
+    }
+
+    #[tokio::test]
+    async fn v2_project_check_uses_portable_hash_without_reporting_a_false_update() {
+        // Generated with skills@1.8.1's hashSkillFiles over scoped_archive's alpha files.
+        const V2_ALPHA_HASH: &str =
+            "eabee9c9688de20f902ce3c991a708ff4a4c96efa79a0f90fe249d5845e5d3b6";
+        let root = project_root();
+        let raw = serde_json::json!({
+            "version": 2,
+            "skills": {
+                "alpha": entry("acme/skills", "github", "alpha/SKILL.md", V2_ALPHA_HASH),
+                "beta": entry("acme/skills", "github", "beta/SKILL.md", V2_ALPHA_HASH)
+            }
+        })
+        .to_string();
+        fs::write(root.path().join("skills-lock.json"), &raw).unwrap();
+        let client = FakeArchiveClient::default().with_group(
+            "acme/skills",
+            Some("main"),
+            COMMIT_A,
+            scoped_archive(),
+        );
+        let (service, _tmp) = service(
+            client,
+            Arc::new(TestClock::new(1_000)),
+            ProjectCheckConfig::default(),
+        );
+
+        let report = service.check(&layout(root.path()), None).await.unwrap();
+        let alpha = report.skills.iter().find(|s| s.name == "alpha").unwrap();
+        let beta = report.skills.iter().find(|s| s.name == "beta").unwrap();
+        assert_eq!(alpha.state, UpdateState::Current);
+        assert_eq!(alpha.remote_hash.as_deref(), Some(V2_ALPHA_HASH));
+        assert_eq!(beta.state, UpdateState::Update);
+        assert_eq!(
+            fs::read_to_string(root.path().join("skills-lock.json")).unwrap(),
+            raw
+        );
     }
 
     #[tokio::test]

@@ -10,6 +10,7 @@ pub(crate) struct ContentTarget {
     pub name: String,
     pub skill_path: String,
     pub lock_hash: String,
+    pub hash_version: content_hash::HashVersion,
 }
 
 pub(crate) struct Evaluation {
@@ -30,8 +31,8 @@ pub(crate) fn evaluate_target(target: &ContentTarget, archive: &SourceArchive) -
             note: Some("来源中已找不到记录的 skillPath，可能已被删除或移动。".to_string()),
         };
     };
-    let entries = archive.files_under(&folder);
-    match content_hash::hash_entries(entries) {
+    let entries = archive.hash_files_under(&folder, target.hash_version);
+    match entries.and_then(|entries| target.hash_version.hash_entries(entries)) {
         Ok(remote_hash) => {
             let state = if remote_hash.eq_ignore_ascii_case(&target.lock_hash) {
                 UpdateState::Current

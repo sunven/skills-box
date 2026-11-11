@@ -167,6 +167,26 @@ fn modes(skill: &skills_box_lib::inventory::InventorySkill) -> Vec<(String, Atta
 }
 
 #[test]
+fn v2_project_inventory_and_detail_read_managed_skills_without_rewriting_the_lock() {
+    let fixture = Fixture::new();
+    fixture.canonical_skill(&fixture.root, "alpha", "project alpha");
+    let raw = json!({"version": 2, "skills": {"alpha": project_lock_entry("alpha")}}).to_string();
+    fixture.write_lock_raw(&fixture.root, &raw);
+
+    let snapshot = fixture.snapshot();
+    assert_eq!(
+        skill(&snapshot, "alpha").management,
+        ManagementState::Managed
+    );
+    assert_eq!(fixture.detail("alpha").name, "alpha");
+    assert!(fixture.registry.list().projects[0].lock_error.is_none());
+    assert_eq!(
+        fs::read_to_string(fixture.root.join("skills-lock.json")).unwrap(),
+        raw
+    );
+}
+
+#[test]
 fn project_inventory_covers_canonical_catalog_and_extra_dirs_with_all_management_states() {
     let fixture = Fixture::new();
     fixture.write_lock(
@@ -853,7 +873,7 @@ fn scope_errors_are_isolated_and_unavailable_or_forgotten_roots_revoke_reads() {
     );
 
     // Unsupported version: project-specific error code, still isolated.
-    fixture.write_lock_raw(&fixture.root, r#"{"version":2,"skills":{}}"#);
+    fixture.write_lock_raw(&fixture.root, r#"{"version":3,"skills":{}}"#);
     let error = fixture.model.snapshot(&fixture.scope).unwrap_err();
     assert_eq!(error.code, ErrorCode::ProjectLockUnsupported);
     assert!(fixture.model.snapshot(&ScopeId::global()).is_ok());

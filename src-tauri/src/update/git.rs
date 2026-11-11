@@ -261,20 +261,18 @@ fn pack_checkout(
         };
         let gzip = flate2::write::GzEncoder::new(writer, flate2::Compression::default());
         let mut tar = tar::Builder::new(gzip);
+        tar.follow_symlinks(false);
         let mut total = 0u64;
         let mut count = 0usize;
         for entry in walkdir::WalkDir::new(root)
             .into_iter()
-            .filter_entry(|entry| {
-                entry.depth() == 0
-                    || !matches!(entry.file_name().to_str(), Some(".git" | "node_modules"))
-            })
+            .filter_entry(|entry| entry.depth() == 0 || entry.file_name() != ".git")
         {
             if cancel.is_cancelled() {
                 return Err(io::Error::other("来源读取已取消"));
             }
             let entry = entry?;
-            if !entry.file_type().is_file() {
+            if !entry.file_type().is_file() && !entry.file_type().is_symlink() {
                 continue;
             }
             let size = entry.metadata()?.len();
@@ -393,10 +391,17 @@ mod tests {
                 .unwrap();
         assert!(archive.contains_file("references/guide.md"));
         assert!(!archive.contains_file("linked.md"));
-        assert_eq!(archive.files.len(), 3);
+        assert_eq!(archive.files.len(), 4);
         assert_eq!(
             super::super::content_hash::hash_entries(archive.files_under("")).unwrap(),
             super::super::content_hash::folder_hash(temp.path()).unwrap()
+        );
+        let portable = super::super::content_hash::HashVersion::Portable;
+        assert_eq!(
+            portable
+                .hash_entries(archive.hash_files_under("", portable).unwrap())
+                .unwrap(),
+            portable.folder_hash(temp.path()).unwrap()
         );
         assert!(
             pack_checkout(
@@ -419,6 +424,56 @@ mod tests {
                 &CancelToken::new()
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn portable_archive_hash_matches_disk_with_nested_links_and_skill_boundaries() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("skills/alpha");
+        for (path, content) in [
+            ("skills/alpha/SKILL.md", "skill\r\n"),
+            ("skills/alpha/references/nested/guide.md", "guide\n"),
+            ("skills/alpha/references/other.md", "other\n"),
+            ("skills/alpha/metadata.json", "excluded"),
+            ("skills/alpha/node_modules/dep/index.js", "included"),
+            ("skills/alpha/__pycache__/cache.pyc", "excluded"),
+            ("skills/beta/secret.md", "outside skill"),
+        ] {
+            let full = temp.path().join(path);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, content).unwrap();
+        }
+        for (name, target) in [
+            ("linked.md", "SKILL.md"),
+            ("alias", "references/nested"),
+            ("indirect.md", "alias/../other.md"),
+            ("cycle", "."),
+            ("references/back", ".."),
+            ("outside.md", "../beta/secret.md"),
+            ("broken.md", "missing"),
+            ("loop-a", "loop-b"),
+            ("loop-b", "loop-a"),
+        ] {
+            symlink(target, root.join(name)).unwrap();
+        }
+        let raw =
+            pack_checkout(temp.path(), ArchiveLimits::default(), &CancelToken::new()).unwrap();
+        let archive =
+            super::super::archive::SourceArchive::from_tar_gz(&raw, ArchiveLimits::default())
+                .unwrap();
+        let portable = super::super::content_hash::HashVersion::Portable;
+        let files = archive.hash_files_under("skills/alpha", portable).unwrap();
+        assert!(files.iter().any(|(path, _)| path == "indirect.md"));
+        assert!(
+            files
+                .iter()
+                .all(|(path, _)| path != "outside.md" && path != "broken.md")
+        );
+        assert_eq!(
+            portable.hash_entries(files).unwrap(),
+            portable.folder_hash(&root).unwrap()
         );
     }
 

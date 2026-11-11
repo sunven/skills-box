@@ -152,7 +152,7 @@ fn entry_error(name: &str, detail: impl AsRef<str>) -> AppError {
 }
 
 /// One Scope's Lock entry. Global scopes use the strict v3 lock; Project roots
-/// use the v1 `skills-lock.json`. Both normalize to the shared [`LockEntry`]
+/// use the v1/v2 `skills-lock.json`. Both normalize to the shared [`LockEntry`]
 /// shape, so callers never branch on the scope to read entries.
 #[derive(Debug)]
 pub(crate) struct ScopedLock {

@@ -1,6 +1,6 @@
-//! CLI-identical content fingerprint for a skill folder.
+//! CLI-identical content fingerprints for legacy and portable project locks.
 //!
-//! Project locks store `computedHash`, the skills CLI's SHA-256 over a skill
+//! V1 project locks store `computedHash`, the skills CLI's SHA-256 over a skill
 //! folder: every regular file (excluding `.git` and `node_modules`), relative
 //! paths with `/`, sorted with JavaScript `localeCompare` (the CLI sorts with
 //! `a.relativePath.localeCompare(b.relativePath)`), then update SHA-256 with
@@ -10,12 +10,157 @@
 //! the subset that covers ASCII paths (punctuation < digits < letters, case as
 //! a tie-break) and refuses non-ASCII paths: hashing them with a different
 //! order would produce a false "update available".
+//!
+//! V2 uses UTF-8 byte order, `path NUL length NUL content` framing, normalized
+//! text line endings and the installer's exclusions (skills@1.8.1 skill-hash.ts).
 
 use std::cmp::Ordering;
 use std::fs;
 use std::path::Path;
 
 use sha2::{Digest, Sha256};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HashVersion {
+    Legacy,
+    Portable,
+}
+
+impl HashVersion {
+    pub fn for_project_lock(version: u64) -> Self {
+        match version {
+            1 => Self::Legacy,
+            2 => Self::Portable,
+            _ => unreachable!("project lock version must be validated before hashing"),
+        }
+    }
+
+    pub fn folder_hash(self, root: &Path) -> Result<String, FolderHashError> {
+        if self == Self::Legacy {
+            return folder_hash(root);
+        }
+        let root = fs::canonicalize(root).map_err(|e| FolderHashError::Io(e.to_string()))?;
+        let mut files = Vec::new();
+        collect_portable_files(&root, &root, &mut Vec::new(), &mut files)?;
+        let entries = files
+            .into_iter()
+            .map(|(path, full)| {
+                fs::read(full)
+                    .map(|content| (path, content))
+                    .map_err(|e| FolderHashError::Io(e.to_string()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.hash_entries(entries)
+    }
+
+    pub fn hash_entries(self, entries: Vec<(String, Vec<u8>)>) -> Result<String, FolderHashError> {
+        if self == Self::Legacy {
+            return hash_entries(entries);
+        }
+        let mut entries: Vec<_> = entries
+            .into_iter()
+            .filter_map(|(path, content)| {
+                let path = path.replace('\\', "/");
+                (!self.excludes_path(&path)).then(|| (path, normalize_line_endings(content)))
+            })
+            .collect();
+        entries.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+        let mut hash = Sha256::new();
+        for (path, content) in entries {
+            hash.update(path.as_bytes());
+            hash.update(b"\0");
+            hash.update(content.len().to_string().as_bytes());
+            hash.update(b"\0");
+            hash.update(content);
+        }
+        Ok(hex(&hash.finalize()))
+    }
+
+    pub(crate) fn excludes_path(self, path: &str) -> bool {
+        let mut parts = path.split('/').peekable();
+        while let Some(part) = parts.next() {
+            let directory = parts.peek().is_some();
+            if match self {
+                Self::Legacy => directory && matches!(part, ".git" | "node_modules"),
+                Self::Portable => {
+                    part == "metadata.json"
+                        || directory && matches!(part, ".git" | "__pycache__" | "__pypackages__")
+                }
+            } {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+fn normalize_line_endings(content: Vec<u8>) -> Vec<u8> {
+    if content.contains(&0) {
+        return content;
+    }
+    let mut normalized = Vec::with_capacity(content.len());
+    let mut bytes = content.into_iter().peekable();
+    while let Some(byte) = bytes.next() {
+        if byte == b'\r' && bytes.peek() == Some(&b'\n') {
+            continue;
+        }
+        normalized.push(byte);
+    }
+    normalized
+}
+
+fn collect_portable_files(
+    root: &Path,
+    current: &Path,
+    ancestors: &mut Vec<std::path::PathBuf>,
+    files: &mut Vec<(String, std::path::PathBuf)>,
+) -> Result<(), FolderHashError> {
+    let real = fs::canonicalize(current).map_err(|e| FolderHashError::Io(e.to_string()))?;
+    if ancestors.contains(&real) {
+        return Ok(());
+    }
+    ancestors.push(real);
+    for entry in fs::read_dir(current).map_err(|e| FolderHashError::Io(e.to_string()))? {
+        let entry = entry.map_err(|e| FolderHashError::Io(e.to_string()))?;
+        let path = entry.path();
+        let relative = path
+            .strip_prefix(root)
+            .unwrap()
+            .to_str()
+            .ok_or_else(|| FolderHashError::UnsupportedPath(path.display().to_string()))?
+            .to_string();
+        let kind = entry
+            .file_type()
+            .map_err(|e| FolderHashError::Io(e.to_string()))?;
+        let directory = if kind.is_symlink() {
+            let Ok(target) = fs::canonicalize(&path) else {
+                continue;
+            };
+            if !target.starts_with(root) {
+                continue;
+            }
+            fs::metadata(target)
+                .map_err(|e| FolderHashError::Io(e.to_string()))?
+                .is_dir()
+        } else if kind.is_dir() || kind.is_file() {
+            kind.is_dir()
+        } else {
+            continue;
+        };
+        if HashVersion::Portable.excludes_path(&relative)
+            || directory && HashVersion::Portable.excludes_path(&format!("{relative}/"))
+        {
+            continue;
+        }
+        if directory {
+            collect_portable_files(root, &path, ancestors, files)?;
+        } else {
+            files.push((relative, path));
+        }
+    }
+    ancestors.pop();
+    Ok(())
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FolderHashError {
@@ -51,6 +196,7 @@ pub fn folder_hash(root: &Path) -> Result<String, FolderHashError> {
 /// SHA-256 over already-extracted files. Paths are relative to the skill
 /// folder and use `/` separators.
 pub fn hash_entries(mut entries: Vec<(String, Vec<u8>)>) -> Result<String, FolderHashError> {
+    entries.retain(|(path, _)| !HashVersion::Legacy.excludes_path(path));
     for (path, _) in &entries {
         if !is_orderable_ascii(path) {
             return Err(FolderHashError::UnsupportedPath(format!(
@@ -275,6 +421,78 @@ mod tests {
     fn refuses_non_ascii_paths_instead_of_hashing_a_different_order() {
         let result = hash_entries(vec![("技能.md".to_string(), b"x".to_vec())]);
         assert!(matches!(result, Err(FolderHashError::UnsupportedPath(_))));
+    }
+
+    #[test]
+    fn portable_hash_matches_skills_1_8_1_golden_vector_on_disk_and_in_archives() {
+        // Generated by the upstream skill-hash.ts hashSkillFiles function.
+        const GOLDEN: &str = "5085663b5fef087e834c7c84d936dc8d7d39aee1a1ff9acc81213f8690e28f74";
+        let entries: Vec<(String, Vec<u8>)> = vec![
+            ("SKILL.md".into(), b"alpha\r\n".to_vec()),
+            ("README.md".into(), b"readme\n".to_vec()),
+            ("a-lower.md".into(), b"lower\n".to_vec()),
+            ("A.md".into(), b"upper\n".to_vec()),
+            ("技能.md".into(), "内容\r\n".as_bytes().to_vec()),
+            ("assets/logo.bin".into(), vec![0, 13, 10, 255]),
+            (
+                "node_modules/dep/index.js".into(),
+                b"module.exports=1;\n".to_vec(),
+            ),
+            ("metadata.json".into(), b"excluded".to_vec()),
+            ("references/metadata.json/data".into(), b"excluded".to_vec()),
+            (".git/config".into(), b"excluded".to_vec()),
+            ("__pycache__/a.pyc".into(), b"excluded".to_vec()),
+            ("__pypackages__/a.py".into(), b"excluded".to_vec()),
+        ];
+        let tmp = tempfile::tempdir().unwrap();
+        for (path, content) in &entries {
+            let full = tmp.path().join(path);
+            fs::create_dir_all(full.parent().unwrap()).unwrap();
+            fs::write(full, content).unwrap();
+        }
+        assert_eq!(
+            HashVersion::Portable.folder_hash(tmp.path()).unwrap(),
+            GOLDEN
+        );
+        assert_eq!(HashVersion::Portable.hash_entries(entries).unwrap(), GOLDEN);
+    }
+
+    #[test]
+    fn portable_framing_distinguishes_path_and_content_boundaries() {
+        let a = vec![("a".into(), b"bc".to_vec())];
+        let b = vec![("ab".into(), b"c".to_vec())];
+        assert_eq!(
+            hash_entries(a.clone()).unwrap(),
+            hash_entries(b.clone()).unwrap()
+        );
+        assert_ne!(
+            HashVersion::Portable.hash_entries(a).unwrap(),
+            HashVersion::Portable.hash_entries(b).unwrap()
+        );
+    }
+
+    #[test]
+    fn portable_folder_hash_follows_internal_links_and_skips_cycles_and_escapes() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("alpha");
+        write(&root.join("SKILL.md"), "alpha\n");
+        write(&root.join("references/guide.md"), "guide\n");
+        write(&tmp.path().join("outside.md"), "outside\n");
+        symlink("SKILL.md", root.join("linked.md")).unwrap();
+        symlink("references", root.join("alias")).unwrap();
+        symlink(".", root.join("cycle")).unwrap();
+        symlink("../outside.md", root.join("external.md")).unwrap();
+        symlink("absent", root.join("broken.md")).unwrap();
+        let expected = HashVersion::Portable
+            .hash_entries(vec![
+                ("SKILL.md".into(), b"alpha\n".to_vec()),
+                ("references/guide.md".into(), b"guide\n".to_vec()),
+                ("linked.md".into(), b"alpha\n".to_vec()),
+                ("alias/guide.md".into(), b"guide\n".to_vec()),
+            ])
+            .unwrap();
+        assert_eq!(HashVersion::Portable.folder_hash(&root).unwrap(), expected);
     }
 
     #[test]

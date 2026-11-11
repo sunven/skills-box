@@ -174,7 +174,7 @@ impl MarkerStore {
         let (lock_path, lock_schema) = match recorded_lock {
             Some(path) => {
                 let schema = match mutation.as_ref().map(|mutation| &mutation.scope) {
-                    Some(crate::scope::ScopeId::Project(_)) => lock_health::LockSchema::ProjectV1,
+                    Some(crate::scope::ScopeId::Project(_)) => lock_health::LockSchema::Project,
                     _ => lock_health::LockSchema::GlobalV3,
                 };
                 (PathBuf::from(path), schema)

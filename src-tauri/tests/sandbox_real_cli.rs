@@ -1126,7 +1126,8 @@ fn real_cli_project_scope_add_and_remove_stay_inside_the_project() {
     let lock = sbx
         .read_project_lock(&project)
         .expect("project add must write skills-lock.json");
-    assert_eq!(lock["version"].as_u64(), Some(1), "project lock is v1");
+    let lock_version = lock["version"].as_u64().expect("project lock version");
+    assert!(skills_box_lib::project_lock::PROJECT_LOCK_VERSIONS.contains(&lock_version));
     let entry = lock["skills"]
         .get("code-review")
         .unwrap_or_else(|| panic!("project lock is missing code-review: {lock}"));
@@ -1148,15 +1149,17 @@ fn real_cli_project_scope_add_and_remove_stay_inside_the_project() {
         Some(hash),
         "add --json hash must match the project lock computedHash"
     );
-    let local_hash = skills_box_lib::update::content_hash::folder_hash(
-        &project.join(".agents/skills/code-review"),
-    )
-    .expect("hash the installed project skill");
+    let local_hash =
+        skills_box_lib::update::content_hash::HashVersion::for_project_lock(lock_version)
+            .folder_hash(&project.join(".agents/skills/code-review"))
+            .expect("hash the installed project skill");
     assert_eq!(
         local_hash, hash,
         "app folder_hash must match the pinned CLI computedHash"
     );
-    sbx.summary_line(&format!("PASS project-add: paths + v1 lock ({hash})"));
+    sbx.summary_line(&format!(
+        "PASS project-add: paths + v{lock_version} lock ({hash})"
+    ));
 
     // A second project installs a different skill so removal can prove
     // isolation between projects.

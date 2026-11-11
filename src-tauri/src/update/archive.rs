@@ -6,7 +6,7 @@
 //! the archive once per commit and acquisition method. Archives are size- and time-capped and
 //! cached by commit under app data `cache/archives/`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -29,7 +29,7 @@ pub const ARCHIVE_MAX_UNCOMPRESSED_BYTES: u64 = 256 * 1024 * 1024;
 pub const ARCHIVE_MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
 pub const ARCHIVE_MAX_FILES: usize = 20_000;
 pub const ARCHIVE_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
-pub const ARCHIVE_CACHE_VERSION: u32 = 1;
+pub const ARCHIVE_CACHE_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ArchiveLimits {
@@ -82,11 +82,18 @@ impl From<GitHubFetchError> for ArchiveError {
 }
 
 /// Files of one commit, keyed by repository-relative path with `/`
-/// separators. Directory entries, symlinks and installer exclusions are
-/// dropped while parsing, so the map is exactly what the CLI hashes.
+/// separators. Keep symlinks and files needed by either hash version; each
+/// skill's hash applies its own exclusions and link containment boundary.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SourceArchive {
     pub files: BTreeMap<String, Vec<u8>>,
+    symlinks: BTreeMap<String, String>,
+}
+
+#[derive(Default)]
+struct HashFiles {
+    entries: Vec<(String, Vec<u8>)>,
+    bytes: u64,
 }
 
 impl SourceArchive {
@@ -97,6 +104,7 @@ impl SourceArchive {
         let mut decoder = flate2::read::GzDecoder::new(raw);
         let mut archive = tar::Archive::new(&mut decoder);
         let mut files = BTreeMap::new();
+        let mut symlinks = BTreeMap::new();
         let mut total: u64 = 0;
         for entry in archive.entries().map_err(|error| ArchiveError::Invalid {
             detail: error.to_string(),
@@ -104,7 +112,8 @@ impl SourceArchive {
             let mut entry = entry.map_err(|error| ArchiveError::Invalid {
                 detail: error.to_string(),
             })?;
-            if !entry.header().entry_type().is_file() {
+            let kind = entry.header().entry_type();
+            if !kind.is_file() && !kind.is_symlink() {
                 continue;
             }
             let path = entry.path().map_err(|error| ArchiveError::Invalid {
@@ -116,10 +125,18 @@ impl SourceArchive {
             if is_installer_exclusion(&relative) {
                 continue;
             }
-            if files.len() >= limits.max_files {
+            if files.len() + symlinks.len() >= limits.max_files {
                 return Err(ArchiveError::TooManyFiles {
                     limit: limits.max_files,
                 });
+            }
+            if kind.is_symlink() {
+                if let Some(target) = entry.link_name().map_err(|e| ArchiveError::Invalid {
+                    detail: e.to_string(),
+                })? {
+                    symlinks.insert(relative, target.to_string_lossy().to_string());
+                }
+                continue;
             }
             let size = entry.size();
             if size > limits.max_file_bytes {
@@ -141,7 +158,7 @@ impl SourceArchive {
                 })?;
             files.insert(relative, content);
         }
-        Ok(Self { files })
+        Ok(Self { files, symlinks })
     }
 
     /// Files below `folder` with the folder prefix removed, ready for
@@ -174,6 +191,109 @@ impl SourceArchive {
         let prefix = format!("{folder}/");
         self.files.keys().any(|path| path.starts_with(&prefix))
     }
+
+    pub(crate) fn hash_files_under(
+        &self,
+        folder: &str,
+        version: super::content_hash::HashVersion,
+    ) -> Result<Vec<(String, Vec<u8>)>, super::content_hash::FolderHashError> {
+        if version == super::content_hash::HashVersion::Legacy {
+            return Ok(self.files_under(folder));
+        }
+        let mut children: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for path in self.files.keys().chain(self.symlinks.keys()) {
+            let mut parent = String::new();
+            for name in path.split('/') {
+                children
+                    .entry(parent.clone())
+                    .or_default()
+                    .insert(name.to_string());
+                parent = join_archive_path(&parent, name);
+            }
+        }
+        let mut files = HashFiles::default();
+        self.collect_hash_files(folder, "", folder, &children, &mut Vec::new(), &mut files)?;
+        Ok(files.entries)
+    }
+
+    fn collect_hash_files(
+        &self,
+        physical: &str,
+        relative: &str,
+        root: &str,
+        children: &BTreeMap<String, BTreeSet<String>>,
+        ancestors: &mut Vec<String>,
+        files: &mut HashFiles,
+    ) -> Result<(), super::content_hash::FolderHashError> {
+        use super::content_hash::{FolderHashError, HashVersion};
+        if ancestors.iter().any(|path| path == physical) {
+            return Ok(());
+        }
+        ancestors.push(physical.to_string());
+        for name in children.get(physical).into_iter().flatten() {
+            let path = join_archive_path(relative, name);
+            if HashVersion::Portable.excludes_path(&path) {
+                continue;
+            }
+            let Some(target) = self.resolve_link(&join_archive_path(physical, name), root) else {
+                continue;
+            };
+            if let Some(content) = self.files.get(&target) {
+                // A directory alias can multiply otherwise bounded input.
+                if files.entries.len() >= ARCHIVE_MAX_FILES
+                    || files.bytes + content.len() as u64 > ARCHIVE_MAX_UNCOMPRESSED_BYTES
+                {
+                    return Err(FolderHashError::Io(
+                        "来源符号链接展开超过大小或文件数量上限".into(),
+                    ));
+                }
+                files.bytes += content.len() as u64;
+                files.entries.push((path, content.clone()));
+            } else if !HashVersion::Portable.excludes_path(&format!("{path}/")) {
+                self.collect_hash_files(&target, &path, root, children, ancestors, files)?;
+            }
+        }
+        ancestors.pop();
+        Ok(())
+    }
+
+    fn resolve_link(&self, path: &str, root: &str) -> Option<String> {
+        let mut pending: VecDeque<String> = path.split('/').map(str::to_string).collect();
+        let mut resolved = Vec::new();
+        let mut links = 0;
+        while let Some(component) = pending.pop_front() {
+            match component.as_str() {
+                "" | "." => continue,
+                ".." => {
+                    resolved.pop()?;
+                    continue;
+                }
+                _ => resolved.push(component),
+            }
+            if let Some(target) = self.symlinks.get(&resolved.join("/")) {
+                links += 1;
+                if links > 40 || target.starts_with('/') {
+                    return None;
+                }
+                resolved.pop();
+                for part in target.split('/').rev() {
+                    pending.push_front(part.to_string());
+                }
+            }
+        }
+        let path = resolved.join("/");
+        (root.is_empty() || path == root || path.starts_with(&format!("{root}/"))).then_some(path)
+    }
+}
+
+fn join_archive_path(parent: &str, name: &str) -> String {
+    if parent.is_empty() {
+        name.to_string()
+    } else if name.is_empty() {
+        parent.to_string()
+    } else {
+        format!("{parent}/{name}")
+    }
 }
 
 fn strip_archive_root(path: &Path) -> Option<String> {
@@ -197,8 +317,7 @@ fn strip_archive_root(path: &Path) -> Option<String> {
 }
 
 fn is_installer_exclusion(path: &str) -> bool {
-    path.split('/')
-        .any(|part| part == ".git" || part == "node_modules")
+    path.split('/').any(|part| part == ".git")
 }
 
 /// Resolve a commit and download the matching archive. One implementation is
@@ -567,7 +686,7 @@ mod tests {
     const COMMIT: &str = "1aee802d9139d4df84d017de44fb1b37a7b614e9";
 
     #[test]
-    fn parses_a_codeload_archive_strips_the_root_and_installer_exclusions() {
+    fn parses_a_codeload_archive_and_retains_files_needed_by_either_hash_version() {
         let raw = tar_gz(&[
             ("acme-skills-abc123/SKILL.md", b"hello"),
             ("acme-skills-abc123/references/guide.md", b"guide"),
@@ -578,7 +697,11 @@ mod tests {
         let archive = SourceArchive::from_tar_gz(&raw, ArchiveLimits::default()).unwrap();
         assert_eq!(
             archive.files.keys().cloned().collect::<Vec<_>>(),
-            vec!["SKILL.md", "references/guide.md"]
+            vec![
+                "SKILL.md",
+                "node_modules/dep/index.js",
+                "references/guide.md"
+            ]
         );
         assert_eq!(archive.files["SKILL.md"], b"hello");
         assert_eq!(

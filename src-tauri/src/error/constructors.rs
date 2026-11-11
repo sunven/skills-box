@@ -339,15 +339,15 @@ impl AppError {
         .hint("原文件未被覆盖；请修复或移除应用数据中的 projects.json 后重试。")
     }
 
-    /// Project locks are v1; the global `lock.unsupported_version` copy names
+    /// Project locks are v1/v2; the global `lock.unsupported_version` copy names
     /// the wrong version and path, so project scopes get their own code.
     pub fn project_lock_unsupported_version(version: u64) -> Self {
         Self::new(
             ErrorCode::ProjectLockUnsupported,
-            format!("项目 Skill lock 版本不受支持（v{version}），需要 v1。"),
+            format!("项目 Skill lock 版本不受支持（v{version}），支持 v1、v2。"),
         )
         .detail(format!("version = {version}"))
-        .hint("请使用 skills@latest 在项目根重新生成 skills-lock.json。")
+        .hint("请更新 Skills Box 以读取此版本的项目锁文件。")
     }
 
     /// Same `lock.corrupt` family as the global lock so the frontend keeps one

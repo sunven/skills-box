@@ -4,7 +4,7 @@
 //! tells the environment banner or the startup interruption report whether the
 //! lock is missing (normal on a fresh machine), valid for its schema, corrupt,
 //! or an unsupported version. Global scopes use the v3 lock; Project roots use
-//! the v1 `skills-lock.json`.
+//! the v1/v2 `skills-lock.json`.
 
 use std::path::Path;
 
@@ -45,35 +45,35 @@ impl LockHealth {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LockSchema {
     GlobalV3,
-    ProjectV1,
+    Project,
 }
 
 impl LockSchema {
-    fn expected_version(self) -> u64 {
+    fn supports_version(self, version: u64) -> bool {
         match self {
-            Self::GlobalV3 => 3,
-            Self::ProjectV1 => crate::project_lock::PROJECT_LOCK_VERSION,
+            Self::GlobalV3 => version == 3,
+            Self::Project => crate::project_lock::PROJECT_LOCK_VERSIONS.contains(&version),
         }
     }
 
     fn corrupt(self, detail: impl Into<String>) -> AppError {
         match self {
             Self::GlobalV3 => AppError::lock_corrupt(detail),
-            Self::ProjectV1 => AppError::project_lock_corrupt(detail),
+            Self::Project => AppError::project_lock_corrupt(detail),
         }
     }
 
     fn unsupported(self, version: u64) -> AppError {
         match self {
             Self::GlobalV3 => AppError::lock_unsupported_version(version),
-            Self::ProjectV1 => AppError::project_lock_unsupported_version(version),
+            Self::Project => AppError::project_lock_unsupported_version(version),
         }
     }
 
     fn read_failed(self, detail: impl Into<String>) -> AppError {
         match self {
             Self::GlobalV3 => AppError::lock_read_failed(detail),
-            Self::ProjectV1 => AppError::project_lock_read_failed(detail),
+            Self::Project => AppError::project_lock_read_failed(detail),
         }
     }
 }
@@ -126,7 +126,7 @@ pub fn inspect_path(path: &Path, display: &str, schema: LockSchema) -> LockHealt
     };
 
     let version = value.get("version").and_then(serde_json::Value::as_u64);
-    if version != Some(schema.expected_version()) {
+    if !version.is_some_and(|version| schema.supports_version(version)) {
         let status = if version.is_some() {
             LockStatus::Unsupported
         } else {
@@ -244,19 +244,22 @@ mod tests {
     }
 
     #[test]
-    fn valid_project_v1_lock_is_healthy() {
+    fn valid_project_v1_and_v2_locks_are_healthy() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("skills-lock.json");
-        std::fs::write(
-            &path,
-            r#"{"version":1,"skills":{"alpha":{"source":"a/b"}}}"#,
-        )
-        .unwrap();
-        let health = inspect_path(&path, "project-lock", LockSchema::ProjectV1);
-        assert_eq!(health.status, LockStatus::Ok);
-        assert_eq!(health.version, Some(1));
-        assert_eq!(health.skill_count, Some(1));
-        assert!(health.healthy());
+        for version in [1, 2] {
+            std::fs::write(
+                &path,
+                serde_json::json!({"version":version,"skills":{"alpha":{"source":"a/b"}}})
+                    .to_string(),
+            )
+            .unwrap();
+            let health = inspect_path(&path, "project-lock", LockSchema::Project);
+            assert_eq!(health.status, LockStatus::Ok, "v{version}");
+            assert_eq!(health.version, Some(version));
+            assert_eq!(health.skill_count, Some(1));
+            assert!(health.healthy());
+        }
     }
 
     #[test]
@@ -264,7 +267,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("skills-lock.json");
         std::fs::write(&path, r#"{"version":3,"skills":{}}"#).unwrap();
-        let health = inspect_path(&path, "project-lock", LockSchema::ProjectV1);
+        let health = inspect_path(&path, "project-lock", LockSchema::Project);
         assert_eq!(health.status, LockStatus::Unsupported);
         assert!(!health.healthy());
         assert_eq!(
@@ -278,7 +281,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("skills-lock.json");
         std::fs::write(&path, b"{not json").unwrap();
-        let health = inspect_path(&path, "project-lock", LockSchema::ProjectV1);
+        let health = inspect_path(&path, "project-lock", LockSchema::Project);
         assert_eq!(health.status, LockStatus::Corrupt);
         assert_eq!(health.error.as_ref().unwrap().code, ErrorCode::LockCorrupt);
         assert!(health.error.as_ref().unwrap().message.contains("项目"));

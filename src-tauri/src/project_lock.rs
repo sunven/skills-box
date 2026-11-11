@@ -1,10 +1,10 @@
-//! Strict read-only model for a project root's `skills-lock.json` (v1).
+//! Strict read-only model for a project root's `skills-lock.json` (v1/v2).
 //!
 //! Project locks differ from the global v3 lock: they store a SHA-256
 //! `computedHash` instead of a Git tree hash, and carry no install/update
-//! timestamps or mount list. The CLI tolerates a missing or broken project
-//! lock by treating it as empty; skills-box must not, because an empty list
-//! would silently hide a corrupted project. A missing lock is still normal.
+//! timestamps or mount list. V1 uses the legacy locale-dependent hash; v2 uses
+//! the portable hash introduced in skills@1.8.1. A broken lock must not become
+//! an empty inventory. A missing lock is still normal.
 //!
 //! Entries are normalized into the shared `LockEntry` shape so inventory,
 //! detail and update-target code do not branch on the lock version. Timestamps
@@ -16,11 +16,21 @@ use std::path::Path;
 use crate::error::AppError;
 use crate::lock::LockEntry;
 
-pub const PROJECT_LOCK_VERSION: u64 = 1;
+pub const PROJECT_LOCK_VERSIONS: &[u64] = &[1, 2];
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectLockFile {
+    version: u64,
     entries: BTreeMap<String, LockEntry>,
+}
+
+impl Default for ProjectLockFile {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            entries: BTreeMap::new(),
+        }
+    }
 }
 
 impl ProjectLockFile {
@@ -47,7 +57,7 @@ impl ProjectLockFile {
         let Some(version) = version.as_u64() else {
             return Err(AppError::project_lock_corrupt("version 字段不是整数"));
         };
-        if version != PROJECT_LOCK_VERSION {
+        if !PROJECT_LOCK_VERSIONS.contains(&version) {
             return Err(AppError::project_lock_unsupported_version(version));
         }
 
@@ -62,7 +72,11 @@ impl ProjectLockFile {
         for (name, raw_entry) in skills {
             entries.insert(name.clone(), parse_entry(name, raw_entry)?);
         }
-        Ok(Self { entries })
+        Ok(Self { version, entries })
+    }
+
+    pub fn version(&self) -> u64 {
+        self.version
     }
 
     pub fn get(&self, name: &str) -> Option<&LockEntry> {
@@ -187,6 +201,26 @@ mod tests {
     }
 
     #[test]
+    fn reads_v2_project_lock_without_rejecting_its_version() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("skills-lock.json");
+        let mut skill = entry();
+        skill.as_object_mut().unwrap().remove("ref");
+        let raw = serde_json::json!({
+            "version": 2,
+            "skills": { "alpha": skill }
+        });
+        std::fs::write(&path, raw.to_string()).unwrap();
+
+        let lock = ProjectLockFile::read(&path).unwrap();
+        let alpha = lock.get("alpha").unwrap();
+        assert_eq!(alpha.source, "acme/skills");
+        assert_eq!(alpha.skill_path.as_deref(), Some("skills/alpha/SKILL.md"));
+        assert_eq!(alpha.skill_folder_hash, skill["computedHash"]);
+        assert!(alpha.reference.is_none());
+    }
+
+    #[test]
     fn optional_fields_may_be_absent_or_null() {
         let mut minimal = serde_json::json!({
             "source": "acme/skills",
@@ -220,12 +254,13 @@ mod tests {
     }
 
     #[test]
-    fn only_version_one_is_supported() {
-        for version in [0, 2, 3] {
+    fn unknown_versions_are_rejected() {
+        for version in [0, 3, 99] {
             let raw = format!(r#"{{"version":{version},"skills":{{}}}}"#);
             let error = ProjectLockFile::parse(&raw).unwrap_err();
             assert_eq!(error.code, ErrorCode::ProjectLockUnsupported);
             assert!(error.message.contains("v1"));
+            assert!(error.message.contains("v2"));
             assert!(error.message.contains(&format!("v{version}")));
         }
     }
