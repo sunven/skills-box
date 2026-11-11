@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.7] - 2026-11-11
+
+### Bug Fixes
+
+- Support v2 project locks and portable content hashes
+
 ## [0.1.6] - 2026-11-11
 
 ### Bug Fixes
