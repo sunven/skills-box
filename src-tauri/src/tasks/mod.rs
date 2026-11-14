@@ -10,6 +10,7 @@ pub mod manager;
 pub mod marketplace;
 pub mod parser;
 pub mod preview;
+mod publication;
 mod session;
 pub mod source;
 pub mod summary;

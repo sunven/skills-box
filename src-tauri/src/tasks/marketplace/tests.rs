@@ -1,5 +1,6 @@
 use super::*;
 use crate::{
+    baseline::BaselineStore,
     cli::CliRuntimeProvider,
     marketplace::{Coordinate, provider::Summary},
     process::{CancelToken, ExecError, ProcessExecutor},
@@ -220,15 +221,229 @@ async fn marketplace_install_is_managed_scoped_and_preserves_confirmed_version_w
     }
 }
 
+#[tokio::test]
+async fn publication_baseline_and_attachment_failures_preserve_results_and_backups() {
+    use std::os::unix::fs::PermissionsExt;
+
+    for project in [false, true] {
+        for updating in [false, true] {
+            for baseline_failure in [false, true] {
+                for attachment_failure in [false, true] {
+                    let mut f = Fixture::new(project);
+                    let name = "original-name";
+                    let canonical = f.plan.layout.canonical_dir.join(name);
+                    let agent_dir = &f.plan.targets[0].skills_dir;
+                    fs::create_dir_all(agent_dir).unwrap();
+                    let attachment = agent_dir.join(name);
+                    if updating {
+                        publish(&f.paths, &f.plan, &f.downloaded(&f.plan))
+                            .result
+                            .unwrap();
+                        // Exercise replacement of a Copy attachment, including
+                        // failure during its removal after the new baseline.
+                        fs::remove_file(&attachment).unwrap();
+                        crate::backup::copy_tree(&canonical, &attachment).unwrap();
+                        // A new request resolves the current layout, including
+                        // project Agent directories created by the first install.
+                        let registry = crate::projects::ProjectRegistry::new(f.paths.clone());
+                        f.plan.layout = ScopeLayout::resolve_detected(
+                            &f.paths,
+                            &registry,
+                            &f.plan.layout.scope,
+                        )
+                        .unwrap();
+                    }
+                    let plan = if updating { f.update() } else { f.plan.clone() };
+                    let update_plan = updating.then(|| {
+                        let mut update = crate::tasks::update::plan_updates(
+                            &f.paths,
+                            &f.plan.layout,
+                            &[name.into()],
+                        )
+                        .unwrap();
+                        update.items[0].marketplace_plan = Some(plan.clone());
+                        update
+                    });
+                    let baselines = BaselineStore::for_scope(&f.paths, &plan.layout.scope);
+                    if baseline_failure {
+                        baselines.clear(name).unwrap();
+                        fs::create_dir_all(baselines.baseline_path(name)).unwrap();
+                    }
+                    let permissions = fs::metadata(agent_dir).unwrap().permissions();
+                    if attachment_failure {
+                        fs::set_permissions(agent_dir, fs::Permissions::from_mode(0o555)).unwrap();
+                        let probe = agent_dir.join("permission-probe");
+                        if fs::write(&probe, "probe").is_ok() {
+                            fs::remove_file(probe).unwrap();
+                            fs::set_permissions(agent_dir, permissions).unwrap();
+                            continue; // A privileged process bypasses directory permissions.
+                        }
+                    }
+                    let context = ctx(
+                        &plan,
+                        f.downloaded(&plan),
+                        if updating {
+                            TaskAction::Update
+                        } else {
+                            TaskAction::Install
+                        },
+                    );
+                    let outcome = if let Some(update_plan) = update_plan {
+                        session::run(
+                            context,
+                            crate::tasks::update::UpdateAction::new(
+                                f.paths.clone(),
+                                f.plan.layout.clone(),
+                                Duration::from_secs(5),
+                            ),
+                            update_plan,
+                        )
+                        .await
+                    } else {
+                        session::run(
+                            context,
+                            Action {
+                                paths: f.paths.clone(),
+                                layout: plan.layout.clone(),
+                            },
+                            plan.clone(),
+                        )
+                        .await
+                    };
+                    fs::set_permissions(agent_dir, permissions).unwrap();
+                    let FinishOutcome::Completed(mut result, _) = outcome else {
+                        panic!("{outcome:?}");
+                    };
+                    let baseline_warnings: Vec<_> = result
+                        .warnings
+                        .iter()
+                        .filter(|warning| {
+                            warning.code == crate::error::ErrorCode::BaselineWriteFailed
+                        })
+                        .collect();
+                    assert_eq!(
+                        baseline_warnings.len(),
+                        usize::from(baseline_failure),
+                        "{result:?}"
+                    );
+                    if baseline_failure {
+                        assert!(baselines.load(name).is_none());
+                    } else {
+                        let baseline = baselines.load(name).unwrap();
+                        assert!(baseline.verified);
+                        assert_eq!(
+                            baseline.content_hash,
+                            fingerprint_folder(&canonical).unwrap().content_hash
+                        );
+                    }
+                    assert_eq!(
+                        fs::read_to_string(canonical.join("SKILL.md")).unwrap(),
+                        plan.detail.markdown,
+                        "project={project} updating={updating} baseline_failure={baseline_failure} attachment_failure={attachment_failure}: {result:?}"
+                    );
+                    assert_eq!(
+                        Records::read(&plan.layout.lock_path).unwrap().skills[name].version,
+                        plan.detail.summary.version
+                    );
+                    assert_eq!(
+                        result.overall,
+                        if attachment_failure {
+                            TaskOverall::Failed
+                        } else {
+                            TaskOverall::Success
+                        },
+                        "{result:?}"
+                    );
+                    if attachment_failure {
+                        assert_eq!(
+                            result.skills[0].error.as_ref().unwrap().code,
+                            crate::error::ErrorCode::AgentAttachFailed
+                        );
+                    } else {
+                        assert!(attachment.is_symlink());
+                    }
+                    // Exercise the same retention policy used when TaskManager
+                    // finishes: warnings alone do not protect successful backups.
+                    let backup = PathBuf::from(result.skills[0].backup_path.as_ref().unwrap());
+                    crate::settings::SettingsService::new(f.paths.clone(), None)
+                        .save_data_preferences(crate::settings::DataPreferences {
+                            retain_backups: false,
+                            ..Default::default()
+                        })
+                        .unwrap();
+                    crate::app_data::finish_successful_backups(&f.paths, &mut result, &[]);
+                    assert_eq!(backup.exists(), attachment_failure, "{result:?}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn publication_record_failure_stops_before_baseline_and_attachments() {
+    use std::os::unix::fs::PermissionsExt;
+
+    for project in [false, true] {
+        let f = Fixture::new(project);
+        let output = f.downloaded(&f.plan);
+        let root = validate_staged(&f.plan, &output).unwrap();
+        fs::create_dir_all(&f.plan.layout.canonical_dir).unwrap();
+        let record_dir = f.plan.layout.lock_path.parent().unwrap();
+        let permissions = fs::metadata(record_dir).unwrap().permissions();
+        fs::set_permissions(record_dir, fs::Permissions::from_mode(0o555)).unwrap();
+        let probe = record_dir.join("permission-probe");
+        if fs::write(&probe, "probe").is_ok() {
+            fs::remove_file(probe).unwrap();
+            fs::set_permissions(record_dir, permissions).unwrap();
+            continue;
+        }
+        let outcome = publication::publish(
+            &f.paths,
+            Publication::Marketplace {
+                plan: &f.plan,
+                root: &root,
+            },
+        );
+        fs::set_permissions(record_dir, permissions).unwrap();
+        assert_eq!(
+            outcome.result.unwrap_err().code,
+            crate::error::ErrorCode::LockReadFailed
+        );
+        assert!(outcome.warnings.is_empty());
+        assert!(
+            f.plan
+                .layout
+                .canonical_dir
+                .join(f.plan.name())
+                .join("SKILL.md")
+                .is_file()
+        );
+        assert!(
+            Records::read(&f.plan.layout.lock_path)
+                .unwrap()
+                .skills
+                .is_empty()
+        );
+        assert!(
+            BaselineStore::for_scope(&f.paths, &f.plan.layout.scope)
+                .load(f.plan.name())
+                .is_none()
+        );
+        assert!(!f.plan.targets[0].skills_dir.join(f.plan.name()).exists());
+    }
+}
+
 #[test]
 fn marketplace_staging_failure_and_local_races_preserve_existing_installation() {
     let f = Fixture::new(false);
-    publish(&f.paths, &f.plan, &f.downloaded(&f.plan)).unwrap();
+    publish(&f.paths, &f.plan, &f.downloaded(&f.plan))
+        .result
+        .unwrap();
     let update = f.update();
     let old = fs::read(f.plan.layout.canonical_dir.join("original-name/SKILL.md")).unwrap();
     let mut failed = f.downloaded(&update);
     failed.code = Some(1);
-    assert!(publish(&f.paths, &update, &failed).is_err());
+    assert!(publish(&f.paths, &update, &failed).result.is_err());
     assert_eq!(
         fs::read(f.plan.layout.canonical_dir.join("original-name/SKILL.md")).unwrap(),
         old
@@ -238,7 +453,11 @@ fn marketplace_staging_failure_and_local_races_preserve_existing_installation() 
         "edited",
     )
     .unwrap();
-    assert!(publish(&f.paths, &update, &f.downloaded(&update)).is_err());
+    assert!(
+        publish(&f.paths, &update, &f.downloaded(&update))
+            .result
+            .is_err()
+    );
     assert_eq!(
         Records::read(&f.plan.layout.lock_path).unwrap().skills["original-name"].version,
         "1.0.0"
@@ -248,7 +467,9 @@ fn marketplace_staging_failure_and_local_races_preserve_existing_installation() 
 #[tokio::test]
 async fn marketplace_update_uses_pinned_command_and_uninstalls_natively_with_record_backup() {
     let f = Fixture::new(false);
-    publish(&f.paths, &f.plan, &f.downloaded(&f.plan)).unwrap();
+    publish(&f.paths, &f.plan, &f.downloaded(&f.plan))
+        .result
+        .unwrap();
     let update = f.update();
     let mut plan =
         crate::tasks::update::plan_updates(&f.paths, &f.plan.layout, &["original-name".into()])
@@ -314,7 +535,9 @@ fn marketplace_rejects_names_conflicting_with_unmanaged_or_stale_installations_a
     fs::write(canonical.join("SKILL.md"), &f.plan.detail.markdown).unwrap();
     assert!(f.plan.check(&f.paths, &f.plan.layout).is_err());
     fs::remove_dir_all(&canonical).unwrap();
-    publish(&f.paths, &f.plan, &f.downloaded(&f.plan)).unwrap();
+    publish(&f.paths, &f.plan, &f.downloaded(&f.plan))
+        .result
+        .unwrap();
     fs::remove_file(f.plan.targets[0].skills_dir.join(f.plan.name())).unwrap();
     fs::remove_dir_all(&canonical).unwrap();
     assert!(f.plan.check(&f.paths, &f.plan.layout).is_err());
@@ -337,7 +560,7 @@ fn marketplace_rejects_forged_success_wrong_content_and_symlink_packages_before_
             "requested-version" => fs::write(f.plan.stage.path().join(".skills_store_lock.json"), r#"{"skills":{"@publisher/public-slug":{"zip_url":"https://api.skillhub.cn/api/v1/download?slug=public-slug&namespace=publisher&version=latest"}}}"#).unwrap(),
             _ => std::os::unix::fs::symlink("/tmp", root.join("escape")).unwrap(),
         }
-        assert!(publish(&f.paths, &f.plan, &output).is_err());
+        assert!(publish(&f.paths, &f.plan, &output).result.is_err());
         assert!(
             Records::read(&f.plan.layout.lock_path)
                 .unwrap()
@@ -351,7 +574,9 @@ fn marketplace_rejects_forged_success_wrong_content_and_symlink_packages_before_
 #[test]
 fn marketplace_record_changes_invalidate_inventory_and_stale_cleanup_never_writes_git_lock() {
     let f = Fixture::new(false);
-    publish(&f.paths, &f.plan, &f.downloaded(&f.plan)).unwrap();
+    publish(&f.paths, &f.plan, &f.downloaded(&f.plan))
+        .result
+        .unwrap();
     let read = crate::read_model::ReadModel::new(f.paths.clone());
     assert_eq!(
         read.snapshot(&ScopeId::Global).unwrap().skills[0]

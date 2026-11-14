@@ -3,17 +3,17 @@
 use super::{
     install::InstallTarget,
     manager::{TaskAction, TaskPhase, TaskSkillResult, TaskSkillStatus},
+    publication::{self, Publication},
     session::*,
 };
 use crate::{
     backup::{BackupAction, BackupStore},
-    baseline::{BaselineStore, fingerprint_folder},
+    baseline::fingerprint_folder,
     cli::{
         CliRuntime,
         preview::{CliCommandEntry, CliCommandPreview, CommandPlan},
     },
     error::AppError,
-    inventory::AttachmentMode,
     marketplace::{
         provider::Detail,
         records::{Installation, Records},
@@ -185,7 +185,7 @@ impl Plan {
         }
         Ok(())
     }
-    fn installation(&self, hash: String) -> Installation {
+    pub(super) fn installation(&self, hash: String) -> Installation {
         let now = httpdate::fmt_http_date(std::time::SystemTime::now());
         Installation {
             name: self.name().into(),
@@ -232,13 +232,11 @@ pub struct Preview {
     pub commands: CliCommandPreview,
 }
 
-pub(crate) fn publish(
-    paths: &AppPaths,
-    plan: &Plan,
-    output: &ExecOutput,
-) -> Result<Vec<AppError>, AppError> {
-    let root = validate_staged(plan, output)?;
-    publish_staged(paths, plan, &root)
+pub(super) fn publish(paths: &AppPaths, plan: &Plan, output: &ExecOutput) -> publication::Outcome {
+    match validate_staged(plan, output) {
+        Ok(root) => publication::publish(paths, Publication::Marketplace { plan, root: &root }),
+        Err(error) => Err(error).into(),
+    }
 }
 
 pub(crate) fn validate_staged(
@@ -311,87 +309,6 @@ pub(crate) fn validate_staged(
     Ok(root)
 }
 
-pub(crate) fn publish_staged(
-    paths: &AppPaths,
-    plan: &Plan,
-    root: &std::path::Path,
-) -> Result<Vec<AppError>, AppError> {
-    let registry = crate::projects::ProjectRegistry::new(paths.clone());
-    let layout = ScopeLayout::resolve_detected(paths, &registry, &plan.layout.scope)?;
-    plan.check(paths, &layout)?;
-    fs::create_dir_all(&layout.canonical_dir)
-        .map_err(|e| AppError::verify_failed(e.to_string()))?;
-    // Copy onto the target volume before replacing anything. Publication is
-    // no-overwrite rename; the completed backup survives subsequent failures.
-    let publication = tempfile::Builder::new()
-        .prefix(".marketplace-")
-        .tempdir_in(&layout.canonical_dir)
-        .map_err(|e| AppError::verify_failed(e.to_string()))?;
-    let candidate = publication.path().join("candidate");
-    crate::backup::copy_tree(&root, &candidate)
-        .map_err(|e| AppError::verify_failed(e.to_string()))?;
-    plan.check(paths, &layout)?;
-    let canonical = layout.canonical_dir.join(plan.name());
-    if plan.previous.is_some() {
-        crate::fsutil::rename_directory_new(&canonical, &publication.path().join("previous"))
-            .map_err(|e| AppError::verify_failed(e.to_string()))?;
-    }
-    crate::fsutil::rename_directory_new(&candidate, &canonical)
-        .map_err(|e| AppError::verify_failed(e.to_string()))?;
-    let hash = fingerprint_folder(&canonical).map_err(AppError::skill_fingerprint_failed)?;
-    let installed = plan.installation(hash.content_hash.clone());
-    let mut records = Records::read(&layout.lock_path)?;
-    if records.skills.get(plan.name()) != plan.previous.as_ref() {
-        return Err(AppError::verify_failed(
-            "安装记录在发布期间变化，已保留备份。",
-        ));
-    }
-    records.skills.insert(plan.name().into(), installed.clone());
-    records.save(&layout.lock_path)?;
-    if let Some(previous) = &plan.previous_paths {
-        for attachment in &previous.attachments {
-            if attachment.mode == AttachmentMode::Copy {
-                fs::remove_dir_all(&attachment.path)
-                    .map_err(|e| AppError::agent_attach_failed(e.to_string()))?;
-            }
-        }
-    }
-    for target in plan
-        .targets
-        .iter()
-        .filter(|t| t.needs_attachment(&layout.canonical_dir))
-    {
-        let destination = target.skills_dir.join(plan.name());
-        if fs::symlink_metadata(&destination).is_ok_and(|m| m.file_type().is_symlink())
-            && fs::canonicalize(&destination).ok() == fs::canonicalize(&canonical).ok()
-        {
-            continue;
-        }
-        crate::attach::attach_publication_checked(
-            paths,
-            &layout,
-            &layout.scope.skill_id(plan.name()),
-            &target.id,
-            &|| layout.ensure_mutation_ready(),
-        )?;
-    }
-    if Records::read(&layout.lock_path)?.skills.get(plan.name()) != Some(&installed)
-        || crate::marketplace::original_name(
-            &fs::read_to_string(canonical.join("SKILL.md"))
-                .map_err(|e| AppError::verify_failed(e.to_string()))?,
-        )? != plan.name()
-    {
-        return Err(AppError::verify_failed("市场安装后校验失败"));
-    }
-    let mut warnings = vec![];
-    if let Err(e) =
-        BaselineStore::for_scope(paths, &layout.scope).record(plan.name(), &canonical, &hash, true)
-    {
-        warnings.push(crate::baseline::write_warning(e));
-    }
-    Ok(warnings)
-}
-
 pub(crate) struct Action {
     pub paths: AppPaths,
     pub layout: ScopeLayout,
@@ -459,9 +376,10 @@ impl MutationAction for Action {
             Some(plan.name()),
         );
         let result = publish(&self.paths, plan, &output);
-        let (status, error, warnings) = match result {
-            Ok(warnings) => (TaskSkillStatus::Installed, None, warnings),
-            Err(e) => (TaskSkillStatus::Failed, Some(e), vec![]),
+        let warnings = result.warnings;
+        let (status, error) = match result.result {
+            Ok(()) => (TaskSkillStatus::Installed, None),
+            Err(e) => (TaskSkillStatus::Failed, Some(e)),
         };
         let backup = self.paths.display(&preflight.snapshot);
         let _ = crate::logs::OperationLog::for_scope(&self.paths, &self.layout.scope).append(

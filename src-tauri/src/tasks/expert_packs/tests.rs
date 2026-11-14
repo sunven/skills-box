@@ -1,5 +1,6 @@
 use super::*;
 use crate::{
+    baseline::BaselineStore,
     cli::CliRuntimeProvider,
     expert_packs::{Member, state},
     marketplace::{Coordinate, runtime::Runtime},
@@ -206,6 +207,200 @@ fn result(outcome: FinishOutcome) -> crate::tasks::TaskResult {
 }
 
 #[tokio::test]
+async fn publication_member_and_workflow_failures_retain_warnings_content_and_prior_attachments() {
+    use std::os::unix::fs::PermissionsExt;
+
+    for project in [false, true] {
+        for name in ["first", "pack"] {
+            for baseline_failure in [false, true] {
+                for attachment_failure in [false, true] {
+                    let f = Fixture::with_agents(
+                        project,
+                        if project {
+                            &["claude-code"]
+                        } else {
+                            &["cursor", "claude-code"]
+                        },
+                    );
+                    let baselines = BaselineStore::for_scope(&f.paths, &f.plan.layout.scope);
+                    if baseline_failure {
+                        fs::create_dir_all(baselines.baseline_path(name)).unwrap();
+                    }
+                    let agent_dir = f.plan.layout.root.join(".claude/skills");
+                    fs::create_dir_all(&agent_dir).unwrap();
+                    let permissions = fs::metadata(&agent_dir).unwrap().permissions();
+                    if attachment_failure {
+                        fs::set_permissions(&agent_dir, fs::Permissions::from_mode(0o555)).unwrap();
+                        let probe = agent_dir.join("permission-probe");
+                        let writable = fs::write(&probe, "probe").is_ok();
+                        fs::set_permissions(&agent_dir, permissions.clone()).unwrap();
+                        if writable {
+                            fs::remove_file(probe).unwrap();
+                            continue;
+                        }
+                    }
+                    let mut ctx = f.ctx(None);
+                    let blocked = agent_dir.clone();
+                    let restore = permissions.clone();
+                    ctx.sink = Arc::new(move |event| {
+                        if attachment_failure && event.message == format!("正在安装 {name}…")
+                        {
+                            fs::set_permissions(&blocked, fs::Permissions::from_mode(0o555))
+                                .unwrap();
+                        } else if event.message.starts_with("已处理 ") {
+                            fs::set_permissions(&blocked, restore.clone()).unwrap();
+                        }
+                    });
+                    let mut result = result(run(f.paths.clone(), ctx, f.plan.clone()).await);
+                    fs::set_permissions(&agent_dir, permissions).unwrap();
+                    assert_eq!(
+                        result.warnings.len(),
+                        usize::from(baseline_failure),
+                        "{result:?}"
+                    );
+                    if baseline_failure {
+                        assert_eq!(
+                            result.warnings[0].code,
+                            crate::error::ErrorCode::BaselineWriteFailed
+                        );
+                        assert!(baselines.load(name).is_none());
+                    } else {
+                        let baseline = baselines.load(name).unwrap();
+                        assert!(baseline.verified);
+                        assert_eq!(
+                            baseline.content_hash,
+                            fingerprint_folder(&f.plan.layout.canonical_dir.join(name))
+                                .unwrap()
+                                .content_hash
+                        );
+                    }
+                    assert!(
+                        f.plan
+                            .layout
+                            .canonical_dir
+                            .join(name)
+                            .join("SKILL.md")
+                            .is_file()
+                    );
+                    if name == "pack" {
+                        assert!(
+                            Records::read(&f.plan.layout.lock_path)
+                                .unwrap()
+                                .workflows
+                                .contains_key(name)
+                        );
+                    } else {
+                        assert!(
+                            crate::marketplace::records::Records::read(&f.plan.layout.lock_path)
+                                .unwrap()
+                                .skills
+                                .contains_key(name)
+                        );
+                    }
+                    assert_eq!(
+                        result.overall,
+                        if attachment_failure {
+                            TaskOverall::Partial
+                        } else {
+                            TaskOverall::Success
+                        },
+                        "{result:?}"
+                    );
+                    let row = result.skills.iter().find(|row| row.name == name).unwrap();
+                    assert_eq!(
+                        row.status,
+                        if attachment_failure {
+                            TaskSkillStatus::Failed
+                        } else {
+                            TaskSkillStatus::Installed
+                        }
+                    );
+                    assert_eq!(agent_dir.join(name).is_symlink(), !attachment_failure);
+                    if attachment_failure {
+                        assert_eq!(
+                            row.error.as_ref().unwrap().code,
+                            crate::error::ErrorCode::AgentAttachFailed
+                        );
+                        if name == "first" {
+                            assert_eq!(result.skills[1].status, TaskSkillStatus::Installed);
+                            assert_eq!(result.skills[2].status, TaskSkillStatus::Skipped);
+                        }
+                    }
+                    if !project {
+                        assert!(
+                            f.paths
+                                .home()
+                                .join(".cursor/skills")
+                                .join(name)
+                                .is_symlink(),
+                            "earlier attachments survive"
+                        );
+                    }
+                    let backup = PathBuf::from(row.backup_path.as_ref().unwrap());
+                    crate::settings::SettingsService::new(f.paths.clone(), None)
+                        .save_data_preferences(crate::settings::DataPreferences {
+                            retain_backups: false,
+                            ..Default::default()
+                        })
+                        .unwrap();
+                    crate::app_data::finish_successful_backups(&f.paths, &mut result, &[]);
+                    assert_eq!(backup.exists(), attachment_failure, "{result:?}");
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn publication_workflow_record_failure_stops_before_baseline_and_attachments() {
+    use std::os::unix::fs::PermissionsExt;
+
+    for project in [false, true] {
+        let f = Fixture::new(project);
+        fs::create_dir_all(&f.plan.layout.canonical_dir).unwrap();
+        let record_dir = f.plan.layout.lock_path.parent().unwrap().to_path_buf();
+        let permissions = fs::metadata(&record_dir).unwrap().permissions();
+        fs::set_permissions(&record_dir, fs::Permissions::from_mode(0o555)).unwrap();
+        let probe = record_dir.join("permission-probe");
+        let writable = fs::write(&probe, "probe").is_ok();
+        fs::set_permissions(&record_dir, permissions.clone()).unwrap();
+        if writable {
+            fs::remove_file(probe).unwrap();
+            continue;
+        }
+        let mut ctx = f.ctx(None);
+        let blocked = record_dir.clone();
+        ctx.sink = Arc::new(move |event| {
+            if event.message == "正在安装 pack…" {
+                fs::set_permissions(&blocked, fs::Permissions::from_mode(0o555)).unwrap();
+            }
+        });
+        let result = result(run(f.paths.clone(), ctx, f.plan.clone()).await);
+        fs::set_permissions(&record_dir, permissions).unwrap();
+        assert_eq!(result.overall, TaskOverall::Partial, "{result:?}");
+        assert_eq!(
+            result.skills[2].error.as_ref().unwrap().code,
+            crate::error::ErrorCode::LockReadFailed
+        );
+        assert!(result.warnings.is_empty());
+        assert!(f.plan.layout.canonical_dir.join("pack/SKILL.md").is_file());
+        assert!(
+            Records::read(&f.plan.layout.lock_path)
+                .unwrap()
+                .workflows
+                .is_empty()
+        );
+        assert!(
+            BaselineStore::for_scope(&f.paths, &f.plan.layout.scope)
+                .load("pack")
+                .is_none()
+        );
+        assert!(!f.plan.layout.root.join(".claude/skills/pack").exists());
+        assert!(PathBuf::from(result.skills[2].backup_path.as_ref().unwrap()).is_dir());
+    }
+}
+
+#[tokio::test]
 async fn cursor_pack_install_and_supplement_create_required_global_attachments() {
     let mut f = Fixture::with_agents(false, &["cursor", "codex"]);
 
@@ -226,7 +421,23 @@ async fn cursor_pack_install_and_supplement_create_required_global_attachments()
     );
 
     fs::remove_file(cursor.join("first")).unwrap();
+    fs::remove_file(cursor.join("pack")).unwrap();
     let before = fs::read(f.plan.layout.canonical_dir.join("first/SKILL.md")).unwrap();
+    let baselines = BaselineStore::for_scope(&f.paths, &f.plan.layout.scope);
+    let baseline_bytes: Vec<_> = f
+        .plan
+        .snapshot
+        .names()
+        .map(|name| {
+            (
+                name.to_string(),
+                fs::read(baselines.baseline_path(name)).unwrap(),
+            )
+        })
+        .collect();
+    let records = fs::read(crate::expert_packs::records::path(&f.plan.layout.lock_path)).unwrap();
+    let member_records =
+        fs::read(crate::marketplace::records::path(&f.plan.layout.lock_path)).unwrap();
     let supplement = Plan::build(
         &f.paths,
         f.plan.layout.clone(),
@@ -236,12 +447,24 @@ async fn cursor_pack_install_and_supplement_create_required_global_attachments()
     )
     .unwrap();
     assert_eq!(supplement.preview().items[0].missing_agents, ["cursor"]);
+    assert_eq!(supplement.preview().items[2].missing_agents, ["cursor"]);
     f.plan = supplement;
     let completed = f.install().await;
     assert_eq!(completed.overall, TaskOverall::Success, "{completed:?}");
     assert_eq!(
         fs::read(f.plan.layout.canonical_dir.join("first/SKILL.md")).unwrap(),
         before
+    );
+    for (name, bytes) in baseline_bytes {
+        assert_eq!(fs::read(baselines.baseline_path(&name)).unwrap(), bytes);
+    }
+    assert_eq!(
+        fs::read(crate::expert_packs::records::path(&f.plan.layout.lock_path)).unwrap(),
+        records
+    );
+    assert_eq!(
+        fs::read(crate::marketplace::records::path(&f.plan.layout.lock_path)).unwrap(),
+        member_records
     );
     assert!(
         state::observe(&f.paths, &f.plan.layout, &f.plan.snapshot)

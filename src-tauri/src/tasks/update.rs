@@ -490,15 +490,10 @@ impl MutationAction for UpdateAction {
             Some(item.name.as_str()),
         );
         let verification = if let Some(plan) = &item.marketplace_plan {
-            match super::marketplace::publish(&self.paths, plan, &output) {
-                Ok(warnings) => UpdateVerification {
-                    result: Ok(()),
-                    warnings,
-                },
-                Err(error) => UpdateVerification {
-                    result: Err(error),
-                    warnings: vec![],
-                },
+            let outcome = super::marketplace::publish(&self.paths, plan, &output);
+            UpdateVerification {
+                result: outcome.result,
+                warnings: outcome.warnings,
             }
         } else {
             verify_update(&self.layout, item, &output)
@@ -512,6 +507,7 @@ impl MutationAction for UpdateAction {
             Err(error) => (TaskSkillStatus::Failed, Some(error)),
         };
         if status == TaskSkillStatus::Updated
+            && item.marketplace_plan.is_none()
             && let Err(error) = BaselineStore::for_scope(&self.paths, &self.layout.scope)
                 .record_from_dir(&item.name, &item.canonical, true)
         {

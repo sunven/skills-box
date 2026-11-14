@@ -1,19 +1,15 @@
 //! A pack owns one mutation permit across staging, sequential publication and workflow completion.
-use super::{install::InstallTarget, marketplace, uninstall::UninstallPlan};
+use super::{install::InstallTarget, marketplace, publication, uninstall::UninstallPlan};
 use crate::{
     attachment_target::{ResolvedAttachment, TargetContext},
     backup::{BackupAction, BackupStore},
-    baseline::{BaselineStore, fingerprint_folder},
+    baseline::fingerprint_folder,
     cli::{
         CliRuntime,
         preview::{CliCommandEntry, CliCommandPreview, CommandPlan},
     },
     error::AppError,
-    expert_packs::{
-        Snapshot,
-        records::{Records, WorkflowInstallation},
-        state::clean_content,
-    },
+    expert_packs::{Snapshot, records::Records, state::clean_content},
     inventory::{LocatedSkill, ManagementState},
     lock::LockEntry,
     paths::AppPaths,
@@ -413,74 +409,6 @@ impl CommandPlan for Plan {
     }
 }
 
-fn attach(paths: &AppPaths, plan: &Plan, unit: &Unit) -> Result<(), AppError> {
-    let layout = &plan.layout;
-    for target in plan
-        .targets
-        .iter()
-        .filter(|t| t.needs_attachment(&layout.canonical_dir))
-    {
-        let path = target.skills_dir.join(&unit.name);
-        if fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink())
-            && fs::canonicalize(&path).ok()
-                == fs::canonicalize(layout.canonical_dir.join(&unit.name)).ok()
-        {
-            continue;
-        }
-        crate::attach::attach_publication_checked(
-            paths,
-            layout,
-            &layout.scope.skill_id(&unit.name),
-            &target.id,
-            &|| plan.check_scope(layout),
-        )?;
-    }
-    Ok(())
-}
-fn publish_workflow(paths: &AppPaths, plan: &Plan, unit: &Unit) -> Result<Vec<AppError>, AppError> {
-    let layout = &plan.layout;
-    if unit.expected.is_none() {
-        fs::create_dir_all(&layout.canonical_dir)
-            .map_err(|e| AppError::verify_failed(e.to_string()))?;
-        let stage = tempfile::Builder::new()
-            .prefix(".pack-")
-            .tempdir_in(&layout.canonical_dir)
-            .map_err(|e| AppError::verify_failed(e.to_string()))?;
-        let candidate = stage.path().join("candidate");
-        fs::create_dir(&candidate)
-            .and_then(|()| {
-                fs::write(
-                    candidate.join("SKILL.md"),
-                    &plan.snapshot.installed_workflow,
-                )
-            })
-            .map_err(|e| AppError::verify_failed(e.to_string()))?;
-        plan.check_unit(paths, layout, unit)?;
-        let canonical = layout.canonical_dir.join(&unit.name);
-        crate::fsutil::rename_directory_new(&candidate, &canonical)
-            .map_err(|e| AppError::verify_failed(e.to_string()))?;
-        let hash = fingerprint_folder(&canonical).map_err(AppError::skill_fingerprint_failed)?;
-        let mut records = Records::read(&layout.lock_path)?;
-        records.workflows.insert(
-            unit.name.clone(),
-            WorkflowInstallation {
-                name: unit.name.clone(),
-                slug: plan.snapshot.slug.clone(),
-                markdown: plan.snapshot.installed_workflow.clone(),
-                content_hash: hash.content_hash.clone(),
-                installed_at: httpdate::fmt_http_date(std::time::SystemTime::now()),
-            },
-        );
-        records.save(&layout.lock_path)?;
-        // Establish the independent baseline before attachments so partial installs remain managed.
-        BaselineStore::for_scope(paths, &layout.scope)
-            .record(&unit.name, &canonical, &hash, true)
-            .map_err(crate::baseline::write_warning)?;
-    }
-    attach(paths, plan, unit)?;
-    Ok(vec![])
-}
-
 pub(super) async fn run(
     paths: AppPaths,
     ctx: super::session::SessionContext,
@@ -669,11 +597,29 @@ pub(super) async fn run(
                     {
                         return Err(AppError::verify_failed("暂存内容已变化，成员未发布。"));
                     }
-                    marketplace::publish_staged(&worker_paths, download, root)
+                    Ok(publication::publish(
+                        &worker_paths,
+                        publication::Publication::Marketplace {
+                            plan: download,
+                            root,
+                        },
+                    ))
                 } else if worker_unit.name == worker_plan.snapshot.workflow_name {
-                    publish_workflow(&worker_paths, &worker_plan, &worker_unit)
+                    Ok(publication::publish(
+                        &worker_paths,
+                        publication::Publication::Workflow {
+                            plan: &worker_plan,
+                            unit: &worker_unit,
+                        },
+                    ))
                 } else {
-                    attach(&worker_paths, &worker_plan, &worker_unit).map(|()| vec![])
+                    Ok(publication::Outcome::from(publication::attach(
+                        &worker_paths,
+                        layout,
+                        &worker_unit.name,
+                        &worker_plan.targets,
+                        &|| worker_plan.check_scope(layout),
+                    )))
                 }
             })();
             let critical = worker_plan.check_scope(layout).is_err()
@@ -690,11 +636,10 @@ pub(super) async fn run(
             backup_path = backup.clone();
         }
         rows[i].backup_path = backup.clone();
-        match result {
-            Ok(unit_warnings) => {
-                warnings.extend(unit_warnings);
-                rows[i].status = TaskSkillStatus::Installed;
-            }
+        let publication = result.unwrap_or_else(|error| Err(error).into());
+        warnings.extend(publication.warnings);
+        match publication.result {
+            Ok(()) => rows[i].status = TaskSkillStatus::Installed,
             Err(e) => {
                 rows[i].status = TaskSkillStatus::Failed;
                 rows[i].error = Some(e);

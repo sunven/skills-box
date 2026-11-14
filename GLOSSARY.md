@@ -140,6 +140,10 @@ _Avoid_: backup snapshot, installed skill copy
 Add a skill from a source to the canonical store and attach it to the selected agents.
 _Avoid_: add, sync
 
+**Skill publication**:
+The local part of an Install or Update that places prepared Skill content in a Scope's Canonical store, records its Source and Baseline fingerprint, and establishes the required Agent attachments.
+_Avoid_: download, marketplace release
+
 **Install preview**:
 The read-only list of skills discovered in a source before installation.
 _Avoid_: scan, listing
