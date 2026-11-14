@@ -1,18 +1,12 @@
-import { QueryClient } from "@tanstack/react-query";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   initialMutationState,
   mutationHeading,
-  mutationRefreshPlan,
   mutationRunReducer,
   normalizePromiseResult,
   normalizeTaskResult,
-  refreshMutationQueries,
 } from "./mutation";
-import type { MutationResultView } from "./mutation";
-import type { ScopeId, TaskResult, UpdateCheckReport } from "./types";
-import { GLOBAL_SCOPE } from "./types";
-import { updateReportQueryKey } from "./update-view";
+import type { TaskResult } from "./types";
 
 function taskResult(
   overall: TaskResult["overall"],
@@ -27,32 +21,6 @@ function taskResult(
     finishedAtEpochMs: 2,
     backupPath: "/tmp/backups/task",
     logPath: "/tmp/logs/operations.jsonl",
-  };
-}
-
-function updateReport(): UpdateCheckReport {
-  return {
-    skills: [
-      {
-        name: "alpha",
-        source: "acme/skills",
-        ref: null,
-        lockHash: "old",
-        remoteHash: "new",
-        state: "update",
-        cached: false,
-        lastSuccessAtEpochMs: 1,
-        previousState: null,
-        error: null,
-        note: null,
-      },
-    ],
-    sources: [],
-    checkedAtEpochMs: 1,
-    lastSuccessAtEpochMs: 1,
-    skippedSourceCount: 0,
-    cachedSourceCount: 0,
-    warnings: [],
   };
 }
 
@@ -224,187 +192,5 @@ describe("mutation lifecycle", () => {
 
     state = mutationRunReducer(state, { type: "startError", error: null });
     expect(state.startError).toBeNull();
-  });
-});
-
-describe("mutation refresh", () => {
-  it("scopes refresh keys to both the scope and the mutated skill", () => {
-    expect(mutationRefreshPlan("attach", GLOBAL_SCOPE, "alpha")).toEqual({
-      invalidate: [
-        ["inventory", GLOBAL_SCOPE],
-        ["skill", GLOBAL_SCOPE, "alpha"],
-        ["skill-dir", GLOBAL_SCOPE, "alpha"],
-        ["skill-file", GLOBAL_SCOPE, "alpha"],
-      ],
-      remove: [],
-    });
-    expect(mutationRefreshPlan("update", GLOBAL_SCOPE, "alpha")).toEqual({
-      invalidate: [
-        ["inventory", GLOBAL_SCOPE],
-        ["skill", GLOBAL_SCOPE],
-        ["updateReport", GLOBAL_SCOPE],
-        ["skill-dir", GLOBAL_SCOPE, "alpha"],
-        ["skill-file", GLOBAL_SCOPE, "alpha"],
-      ],
-      remove: [],
-    });
-    expect(mutationRefreshPlan("manage_add", GLOBAL_SCOPE)).toEqual({
-      invalidate: [],
-      remove: [],
-    });
-    expect(mutationRefreshPlan("preview", GLOBAL_SCOPE)).toEqual({
-      invalidate: [],
-      remove: [],
-    });
-  });
-
-  it("removes a forgotten project's scope caches instead of refetching them", () => {
-    const project: ScopeId =
-      "project:11111111-1111-4111-8111-111111111111";
-
-    const relocate = mutationRefreshPlan("project_relocate", project);
-    expect(relocate.invalidate).toEqual(
-      expect.arrayContaining([
-        ["projects"],
-        ["inventory", project],
-        ["skill", project],
-        ["updateReport", project],
-        ["updateCheckState", project],
-        ["updateCheckStates"],
-        ["lastFullCheck", project],
-        ["lastFullAttempt", project],
-      ]),
-    );
-    expect(relocate.remove).toEqual([]);
-
-    const forget = mutationRefreshPlan("project_forget", project);
-    expect(forget.invalidate).toEqual([
-      ["projects"],
-      ["updateCheckStates"],
-    ]);
-    expect(forget.remove).toEqual(
-      expect.arrayContaining([
-        ["inventory", project],
-        ["skill", project],
-        ["updateReport", project],
-        ["updateCheckState", project],
-        ["lastFullCheck", project],
-        ["lastFullAttempt", project],
-      ]),
-    );
-  });
-
-  it("patches updated skills to current before invalidating the report", () => {
-    const client = new QueryClient();
-    client.setQueryData(updateReportQueryKey(GLOBAL_SCOPE), updateReport());
-    const invalidate = vi
-      .spyOn(client, "invalidateQueries")
-      .mockResolvedValue(undefined);
-    const result: MutationResultView = {
-      outcome: "success",
-      warnings: [],
-      rows: [
-        {
-          name: "alpha",
-          status: "success",
-          statusLabel: "已更新",
-          taskStatus: "updated",
-        },
-      ],
-    };
-
-    refreshMutationQueries(
-      client,
-      { action: "update", scope: GLOBAL_SCOPE },
-      result,
-    );
-
-    const report = client.getQueryData<UpdateCheckReport>(
-      updateReportQueryKey(GLOBAL_SCOPE),
-    );
-    expect(report?.skills[0]).toMatchObject({
-      state: "current",
-      lockHash: "new",
-    });
-    expect(invalidate).toHaveBeenCalledWith({
-      queryKey: ["inventory", GLOBAL_SCOPE],
-    });
-    expect(invalidate).toHaveBeenCalledWith({
-      queryKey: ["updateReport", GLOBAL_SCOPE],
-    });
-    expect(invalidate).toHaveBeenCalledWith({
-      queryKey: ["skill-dir", GLOBAL_SCOPE],
-    });
-    expect(invalidate).toHaveBeenCalledWith({
-      queryKey: ["skill-file", GLOBAL_SCOPE],
-    });
-  });
-
-  it("uses the result scope for project cache cleanup", () => {
-    const client = new QueryClient();
-    const invalidate = vi
-      .spyOn(client, "invalidateQueries")
-      .mockResolvedValue(undefined);
-    const remove = vi
-      .spyOn(client, "removeQueries")
-      .mockImplementation(() => {});
-    const project: ScopeId =
-      "project:11111111-1111-4111-8111-111111111111";
-
-    refreshMutationQueries(
-      client,
-      { action: "project_forget", scope: GLOBAL_SCOPE },
-      { outcome: "success", warnings: [], rows: [], scope: project },
-    );
-
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["projects"] });
-    expect(remove).toHaveBeenCalledWith({
-      queryKey: ["inventory", project],
-    });
-  });
-
-  it("routes manage actions through the environment recheck", () => {
-    const client = new QueryClient();
-    const invalidate = vi
-      .spyOn(client, "invalidateQueries")
-      .mockResolvedValue(undefined);
-    const onEnvironmentRecheck = vi.fn();
-
-    refreshMutationQueries(
-      client,
-      { action: "manage_remove", scope: GLOBAL_SCOPE, onEnvironmentRecheck },
-      null,
-    );
-
-    expect(onEnvironmentRecheck).toHaveBeenCalledTimes(1);
-    expect(invalidate).toHaveBeenCalledExactlyOnceWith({ queryKey: ["expertPacks", "local", GLOBAL_SCOPE] });
-  });
-
-  it("does not patch the update report for non-update actions", () => {
-    const client = new QueryClient();
-    client.setQueryData(updateReportQueryKey(GLOBAL_SCOPE), updateReport());
-    vi.spyOn(client, "invalidateQueries").mockResolvedValue(undefined);
-
-    refreshMutationQueries(
-      client,
-      { action: "uninstall", scope: GLOBAL_SCOPE },
-      {
-        outcome: "success",
-        warnings: [],
-        rows: [
-          {
-            name: "alpha",
-            status: "success",
-            statusLabel: "已卸载",
-            taskStatus: "removed",
-          },
-        ],
-      },
-    );
-
-    const report = client.getQueryData<UpdateCheckReport>(
-      updateReportQueryKey(GLOBAL_SCOPE),
-    );
-    expect(report?.skills[0]?.state).toBe("update");
   });
 });

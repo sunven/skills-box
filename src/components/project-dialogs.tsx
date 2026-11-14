@@ -48,6 +48,10 @@ export function ProjectDialogs({
   const [picking, setPicking] = useState(false);
   const [error, setError] = useState<AppError | null>(null);
   const entryRef = useRef<ProjectEntry | null>(null);
+  const mode = state?.mode ?? null;
+  const project = state?.mode === "relocate" || state?.mode === "forget"
+    ? state.project
+    : null;
   const addMutation = useMutation({
     action: "project_add",
     scope: GLOBAL_SCOPE,
@@ -56,21 +60,17 @@ export function ProjectDialogs({
   });
   const relocateMutation = useMutation({
     action: "project_relocate",
-    scope: GLOBAL_SCOPE,
+    scope: project ? projectScope(project.id) : GLOBAL_SCOPE,
     fallbackFailure: "保存项目失败。",
     fallbackStart: "保存项目失败。",
   });
   const forgetMutation = useMutation({
     action: "project_forget",
-    scope: GLOBAL_SCOPE,
+    scope: project ? projectScope(project.id) : GLOBAL_SCOPE,
     fallbackFailure: "遗忘项目失败。",
     fallbackStart: "遗忘项目失败。",
   });
 
-  const mode = state?.mode ?? null;
-  const project = state?.mode === "relocate" || state?.mode === "forget"
-    ? state.project
-    : null;
   const busy =
     picking ||
     addMutation.state.running ||

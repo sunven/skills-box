@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { act, renderHook } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   API_COMMANDS,
   startInstall,
@@ -88,6 +88,191 @@ const launchInstall: TaskEventDriver["launch"] = (onEvent) =>
   );
 
 describe("mutation lifecycle", () => {
+  it.each(["task", "promise"] as const)(
+    "uses submitted refresh context for a pending %s after options change",
+    async (kind) => {
+      const reply = deferred<PromiseMutationResult>();
+      const fixture = setup();
+      const initialOptions: MutationOptions = {
+        ...options("attach"), scope: "project:one", skillId: "alpha",
+      };
+      const hook = renderHook((props) => useMutation(props), {
+        ...fixture, initialProps: initialOptions,
+      });
+      for (const scope of ["global", "project:one", "project:two"]) {
+        for (const id of ["alpha", "beta"]) {
+          fixture.client.setQueryData(["skill", scope, id], { id });
+          fixture.client.setQueryData(["skill-file", scope, id, "index.md"], { id });
+        }
+      }
+      let finished!: ReturnType<MutationHandle["start"]>;
+      if (kind === "task") {
+        ({ finished } = await startTask(hook.result.current, fixture.backend));
+      } else {
+        act(() => {
+          finished = hook.result.current.start(promiseDriver({
+            total: 1, message: "挂载中", indeterminate: true, run: () => reply.promise,
+          }));
+        });
+      }
+      hook.rerender({ ...options("uninstall"), scope: "project:two", skillId: "beta" });
+      await act(async () => {
+        if (kind === "task") fixture.backend.lastTask!.emit({
+          taskId: fixture.backend.lastTask!.taskId, phase: "failed", message: "失败",
+        });
+        else reply.reject(new Error("failed"));
+        await finished;
+      });
+      await expect(finished).resolves.toBeNull();
+      for (const query of fixture.client.getQueryCache().getAll()) {
+        const [, scope, id] = query.queryKey;
+        expect(query.state.isInvalidated, JSON.stringify(query.queryKey))
+          .toBe(scope === "project:one" && id === "alpha");
+      }
+    },
+  );
+
+  it.each(["task", "promise"] as const)(
+    "prefers the returned Scope while retaining the submitted action for a %s",
+    async (kind) => {
+      const reply = deferred<PromiseMutationResult>();
+      const fixture = setup();
+      const hook = renderHook((props) => useMutation(props), {
+        ...fixture, initialProps: { ...options("attach"), skillId: "alpha" },
+      });
+      for (const scope of ["global", "project:one", "project:two"]) {
+        fixture.client.setQueryData(["skill", scope, "alpha"], {});
+        fixture.client.setQueryData(["skill", scope, "beta"], {});
+      }
+      let finished!: ReturnType<MutationHandle["start"]>;
+      if (kind === "task") {
+        ({ finished } = await startTask(hook.result.current, fixture.backend));
+      } else act(() => {
+        finished = hook.result.current.start(promiseDriver({
+          total: 1, message: "挂载中", indeterminate: true, run: () => reply.promise,
+        }));
+      });
+      hook.rerender({ ...options("uninstall"), scope: "project:two", skillId: "beta" });
+      await act(async () => {
+        if (kind === "task") fixture.backend.lastTask!.emit({
+          taskId: fixture.backend.lastTask!.taskId, phase: "completed", message: "完成",
+          result: { ...taskResult("success"), scope: "project:one" },
+        });
+        else reply.resolve({ rows: [], scope: "project:one" });
+        await finished;
+      });
+      for (const query of fixture.client.getQueryCache().getAll()) {
+        const [, scope, id] = query.queryKey;
+        expect(query.state.isInvalidated, JSON.stringify(query.queryKey))
+          .toBe(scope === "project:one" && id === "alpha");
+      }
+    },
+  );
+
+  it("retains the submitted environment callback when a native action settles", async () => {
+    const fixture = setup();
+    const reply = deferred<PromiseMutationResult>();
+    const original = vi.fn();
+    const next = vi.fn();
+    const hook = renderHook((props) => useMutation(props), {
+      ...fixture, initialProps: { ...options("manage_add"), onEnvironmentRecheck: original },
+    });
+    let finished!: ReturnType<MutationHandle["start"]>;
+    act(() => {
+      finished = hook.result.current.start(promiseDriver({
+        total: 1, message: "添加中", indeterminate: true, run: () => reply.promise,
+      }));
+    });
+    hook.rerender({ ...options("manage_remove"), onEnvironmentRecheck: next });
+    await act(async () => { reply.resolve({ rows: [] }); await finished; });
+    expect(original).toHaveBeenCalledOnce();
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it.each(["completed", "failed", "cancelled"] as const)(
+    "keeps Preview %s cache-free through the task driver",
+    async (phase) => {
+      const fixture = setup();
+      const hook = renderHook(() => useMutation(options("preview")), fixture);
+      const keys = [
+        ["inventory", "global"], ["expertPacks", "local", "global"],
+        ["discovery"], ["updateReport", "global"],
+        ["skill-file", "global", "alpha", "index.md"],
+      ];
+      keys.forEach((key) => fixture.client.setQueryData(key, []));
+      const before = fixture.client.getQueryCache().getAll().map((query) => query.state);
+      const run = await startTask(hook.result.current, fixture.backend,
+        (onEvent) => startPreview("acme/skills", onEvent));
+      await act(async () => {
+        run.task.emit({
+          taskId: run.task.taskId, phase, message: "预览结束",
+          result: phase === "failed" ? undefined : taskResult(phase === "cancelled" ? "cancelled" : "success"),
+        });
+        await run.finished;
+      });
+      expect(fixture.client.getQueryCache().getAll().map((query) => query.state)).toEqual(before);
+    },
+  );
+
+  it.each(["task", "promise"] as const)(
+    "ignores refresh from superseded and reset %s runs",
+    async (kind) => {
+      const fixture = setup();
+      const hook = renderHook((props) => useMutation(props), {
+        ...fixture, initialProps: { ...options("attach"), scope: "project:one" as const },
+      });
+      for (const scope of ["global", "project:one", "project:two"]) {
+        fixture.client.setQueryData(["inventory", scope], []);
+        fixture.client.setQueryData(["expertPacks", "local", scope], []);
+      }
+      const before = fixture.client.getQueryCache().getAll().map((query) => query.state);
+      const replies = [deferred<PromiseMutationResult>(), deferred<PromiseMutationResult>()];
+      const runs: Awaited<ReturnType<typeof startTask>>[] = [];
+      const finished: ReturnType<MutationHandle["start"]>[] = [];
+      for (let i = 0; i < 2; i++) {
+        if (kind === "task") {
+          const run = await startTask(hook.result.current, fixture.backend);
+          runs.push(run);
+          finished.push(run.finished);
+        } else act(() => {
+          finished.push(hook.result.current.start(promiseDriver({
+            total: 1, message: "挂载中", indeterminate: true, run: () => replies[i].promise,
+          })));
+        });
+      }
+      await expect(finished[0]).resolves.toBeNull();
+      const complete = async (i: number) => {
+        if (kind === "task") runs[i].task.emit({
+          taskId: runs[i].task.taskId, phase: "completed", message: "完成", result: taskResult("success"),
+        });
+        else { replies[i].resolve({ rows: [] }); await replies[i].promise; }
+      };
+      await act(async () => complete(0));
+      expect(hook.result.current.state.running).toBe(true);
+      act(() => hook.result.current.reset());
+      await expect(finished[1]).resolves.toBeNull();
+      await act(async () => complete(1));
+      expect(hook.result.current.state.result).toBeNull();
+      expect(fixture.client.getQueryCache().getAll().map((query) => query.state)).toEqual(before);
+    },
+  );
+
+  it("does not refresh when a task launch rejects", async () => {
+    const fixture = setup();
+    const hook = renderHook(() => useMutation(options("install")), fixture);
+    fixture.client.setQueryData(["inventory", "global"], []);
+    fixture.client.setQueryData(["expertPacks", "local", "global"], []);
+    const before = fixture.client.getQueryCache().getAll().map((query) => query.state);
+    await act(async () => {
+      const result = await hook.result.current.start(taskEventDriver({
+        total: 1, message: "准备中", launch: async () => { throw new Error("launch failed"); },
+      }));
+      expect(result).toBeNull();
+    });
+    expect(hook.result.current.state.startError).not.toBeNull();
+    expect(fixture.client.getQueryCache().getAll().map((query) => query.state)).toEqual(before);
+  });
+
   it.each(["rejected", "failed"] as const)("ignores an old %s cancellation after reset and a new start", async (replyKind) => {
     const reply = deferred<CancelAck>();
     const fixture = setup({ cancel_task: () => reply.promise });
@@ -165,6 +350,7 @@ describe("mutation lifecycle", () => {
     const fixture = setup({ cancel_task: () => reply.promise });
     const hook = renderHook(() => useMutation(options("preview")), fixture);
     fixture.client.setQueryData(["inventory", "global"], { skills: [] });
+    fixture.client.setQueryData(["expertPacks", "local", "global"], []);
     const run = await startTask(
       hook.result.current,
       fixture.backend,
@@ -189,6 +375,9 @@ describe("mutation lifecycle", () => {
     ]);
     expect(
       fixture.client.getQueryState(["inventory", "global"])?.isInvalidated,
+    ).toBe(false);
+    expect(
+      fixture.client.getQueryState(["expertPacks", "local", "global"])?.isInvalidated,
     ).toBe(false);
 
     await act(async () => {

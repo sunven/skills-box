@@ -1,10 +1,8 @@
 import {
-  staleRecordsQueryKey,
   batchTargetLabel,
   BATCH_SUCCESS_LABELS,
   type BatchResult,
 } from "./batch";
-import { discoveryQueryKey } from "./discovery";
 //! One mutation surface for task state, results and refresh.
 //!
 //! CLI actions stream `TaskEvent`s and native actions complete a promise, but
@@ -16,22 +14,8 @@ import { discoveryQueryKey } from "./discovery";
 import { useCallback, useReducer, useRef } from "react";
 import type { MutableRefObject } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { asAppError, cancelTask, fallbackError } from "./api";
 import { TASK_SKILL_STATUS_LABELS } from "./task-labels";
-import { inventoryQueryKey } from "../hooks/use-inventory";
-import { projectForScope, projectsQueryKey } from "./scope";
-import { skillQueryKey, skillQueryPrefix } from "../hooks/use-skill-detail";
-import {
-  skillDirQueryPrefix,
-  skillFileQueryPrefix,
-} from "../hooks/use-skill-content";
-import {
-  lastFullAttemptQueryKey,
-  lastFullCheckQueryKey,
-  updateCheckStateQueryKey,
-  updateCheckStatesQueryKey,
-} from "../hooks/use-updates";
 import type {
   AppError,
   MutationKind,
@@ -40,11 +24,9 @@ import type {
   TaskPhase,
   TaskResult,
   TaskSkillStatus,
-  UpdateCheckReport,
-  ProjectList,
 } from "./types";
-import { updateCheckLifecycle } from "./update-check-lifecycle";
-import { markSkillsCurrent, updateReportQueryKey } from "./update-view";
+import { refreshMutationQueries } from "./mutation-refresh";
+import type { MutationRefreshOptions } from "./mutation-refresh";
 
 export const MUTATION_KIND_LABELS: Record<MutationKind, string> = {
   install: "安装",
@@ -437,181 +419,6 @@ export function mutationRunReducer(
   }
 }
 
-export interface MutationRefreshPlan {
-  invalidate: QueryKey[];
-  remove: QueryKey[];
-}
-
-/**
- * Cache policy after an action settles. Attach/detach stay scoped to the
- * mutated skill so an open drawer does not refetch every detail. Forgetting a
- * project removes its scope caches instead of refetching a scope that no
- * longer exists.
- */
-export function mutationRefreshPlan(
-  action: MutationAction,
-  scope: ScopeId,
-  skillId?: string,
-): MutationRefreshPlan {
-  const invalidate = (keys: QueryKey[]): MutationRefreshPlan => ({
-    invalidate: keys,
-    remove: [],
-  });
-  switch (action) {
-    case "clean_records":
-    case "restore":
-      return invalidate([inventoryQueryKey(scope), skillQueryPrefix(scope), staleRecordsQueryKey(scope)]);
-    case "copy_to_project":
-      return invalidate([
-        projectsQueryKey,
-        inventoryQueryKey(scope),
-        skillQueryPrefix(scope),
-        updateReportQueryKey(scope),
-        updateCheckStatesQueryKey,
-      ]);
-    case "install":
-      return invalidate([inventoryQueryKey(scope), skillQueryPrefix(scope)]);
-    case "update":
-      return invalidate([
-        inventoryQueryKey(scope),
-        skillQueryPrefix(scope),
-        updateReportQueryKey(scope),
-        skillDirQueryPrefix(scope, skillId),
-        skillFileQueryPrefix(scope, skillId),
-      ]);
-    case "uninstall":
-      return invalidate([
-        inventoryQueryKey(scope),
-        skillQueryPrefix(scope),
-        updateReportQueryKey(scope),
-      ]);
-    case "uninstall_agents":
-      return invalidate([
-        inventoryQueryKey(scope),
-        skillQueryPrefix(scope),
-        updateReportQueryKey(scope),
-        skillDirQueryPrefix(scope, skillId),
-        skillFileQueryPrefix(scope, skillId),
-      ]);
-    case "attach":
-    case "detach":
-      return invalidate(
-        skillId
-          ? [
-              inventoryQueryKey(scope),
-              skillQueryKey(scope, skillId),
-              skillDirQueryPrefix(scope, skillId),
-              skillFileQueryPrefix(scope, skillId),
-            ]
-          : [
-              inventoryQueryKey(scope),
-              skillQueryPrefix(scope),
-              skillDirQueryPrefix(scope),
-              skillFileQueryPrefix(scope),
-            ],
-      );
-    case "manage_add":
-    case "manage_remove":
-    case "preview":
-      return invalidate([]);
-    case "project_add":
-    case "project_relocate":
-      return invalidate([
-        projectsQueryKey,
-        inventoryQueryKey(scope),
-        skillQueryPrefix(scope),
-        updateReportQueryKey(scope),
-        updateCheckStateQueryKey(scope),
-        updateCheckStatesQueryKey,
-        lastFullCheckQueryKey(scope),
-        lastFullAttemptQueryKey(scope),
-      ]);
-    case "project_forget":
-      return {
-        invalidate: [projectsQueryKey, updateCheckStatesQueryKey],
-        remove: [
-          inventoryQueryKey(scope),
-          skillQueryPrefix(scope),
-          updateReportQueryKey(scope),
-          updateCheckStateQueryKey(scope),
-          lastFullCheckQueryKey(scope),
-          lastFullAttemptQueryKey(scope),
-        ],
-      };
-  }
-}
-
-export interface MutationRefreshOptions {
-  action: MutationAction;
-  /** Every cache entry is scoped; refresh never crosses scopes. */
-  scope: ScopeId;
-  skillId?: string;
-  /** Manage actions must re-run the environment check, not just the caches. */
-  onEnvironmentRecheck?: () => void;
-}
-
-export function refreshMutationQueries(
-  queryClient: QueryClient,
-  options: MutationRefreshOptions,
-  result: MutationResultView | null,
-): void {
-  const scope = result?.scope ?? options.scope;
-  if (result && options.action === "project_relocate" && result.checkRevision) {
-    updateCheckLifecycle(queryClient).invalidate(scope, result.checkRevision);
-  }
-  if (result && options.action === "project_forget") {
-    updateCheckLifecycle(queryClient).invalidate(scope, null);
-  }
-  if (options.action === "update" && result) {
-    const updatedNames = result.rows
-      .filter(
-        (row) =>
-          row.status === "success" &&
-          (row.taskStatus === undefined || row.taskStatus === "updated"),
-      )
-      .map((row) => row.name);
-    if (updatedNames.length > 0) {
-      queryClient.setQueryData<UpdateCheckReport | undefined>(
-        updateReportQueryKey(scope),
-        (previous) => markSkillsCurrent(previous, updatedNames),
-      );
-    }
-  }
-  if (
-    [
-      "install",
-      "clean_records",
-      "restore",
-      "uninstall",
-      "project_add",
-      "project_relocate",
-      "project_forget",
-    ].includes(options.action)
-  ) {
-    void queryClient.invalidateQueries({ queryKey: discoveryQueryKey });
-  }
-  if (result?.batch && (options.action === "clean_records" || options.action === "restore")) {
-    const rows = result.batch.rows.filter((r) => r.status === "success");
-    const names = new Set(rows.map((r) => r.name));
-    queryClient.setQueryData<UpdateCheckReport>(updateReportQueryKey(scope), (previous) => previous ? { ...previous, skills: previous.skills.filter((s) => !names.has(s.name)) } : previous);
-    if (options.action === "restore" && rows.length) {
-      const project = projectForScope(queryClient.getQueryData<ProjectList>(projectsQueryKey), scope);
-      updateCheckLifecycle(queryClient).start(scope, scope === "global" ? undefined : project?.checkRevision ?? "initial", rows.map((r) => r.skillId));
-    }
-  }
-  void queryClient.invalidateQueries({ queryKey: ["expertPacks", "local", scope] });
-  const plan = mutationRefreshPlan(options.action, scope, options.skillId);
-  for (const queryKey of plan.invalidate) {
-    void queryClient.invalidateQueries({ queryKey });
-  }
-  for (const queryKey of plan.remove) {
-    queryClient.removeQueries({ queryKey });
-  }
-  if (options.action === "manage_add" || options.action === "manage_remove") {
-    options.onEnvironmentRecheck?.();
-  }
-}
-
 export interface MutationOptions extends MutationRefreshOptions {
   /** Shown when a task fails or a native promise rejects without an error. */
   fallbackFailure: string;
@@ -657,18 +464,26 @@ export function useMutation(options: MutationOptions): MutationHandle {
   optionsRef.current = options;
 
   const settle = useCallback(
-    (seq: number, result: MutationResultView | null) => {
+    (
+      seq: number,
+      result: MutationResultView | null,
+      refreshOptions: MutationRefreshOptions,
+    ) => {
       if (runSeq.current !== seq) return;
       const resolve = resolverRef.current;
       resolverRef.current = null;
-      refreshMutationQueries(queryClient, optionsRef.current, result);
+      refreshMutationQueries(queryClient, refreshOptions, result);
       resolve?.(result);
     },
     [queryClient],
   );
 
   const handleTaskEvent = useCallback(
-    (seq: number, event: TaskEvent) => {
+    (
+      seq: number,
+      event: TaskEvent,
+      refreshOptions: MutationRefreshOptions,
+    ) => {
       if (runSeq.current !== seq) return;
       optionsRef.current.onEvent?.(event);
       const fallback = optionsRef.current.fallbackFailure;
@@ -686,7 +501,7 @@ export function useMutation(options: MutationOptions): MutationHandle {
             total: event.total,
             result,
           });
-          settle(seq, result);
+          settle(seq, result, refreshOptions);
           return;
         }
         case "failed":
@@ -696,7 +511,7 @@ export function useMutation(options: MutationOptions): MutationHandle {
             message: event.message,
             error: event.error ?? fallbackError(fallback),
           });
-          settle(seq, null);
+          settle(seq, null, refreshOptions);
           return;
         default:
           dispatch({
@@ -714,6 +529,8 @@ export function useMutation(options: MutationOptions): MutationHandle {
   const start = useCallback(
     (driver: MutationDriver): Promise<MutationResultView | null> => {
       const seq = ++runSeq.current;
+      // Refresh belongs to the submitted operation even if the dialog rerenders.
+      const refreshOptions: MutationRefreshOptions = { ...optionsRef.current };
       const previous = resolverRef.current;
       resolverRef.current = null;
       previous?.(null);
@@ -731,7 +548,7 @@ export function useMutation(options: MutationOptions): MutationHandle {
           void (async () => {
             try {
               const taskId = await driver.launch((event) =>
-                handleTaskEvent(seq, event),
+                handleTaskEvent(seq, event, refreshOptions),
               );
               if (runSeq.current !== seq) {
                 void cancelTask(taskId).catch(() => {
@@ -775,7 +592,7 @@ export function useMutation(options: MutationOptions): MutationHandle {
               message: value.message,
               result,
             });
-            settle(seq, result);
+            settle(seq, result, refreshOptions);
           } catch (error) {
             if (runSeq.current !== seq) return;
             dispatch({
@@ -785,7 +602,7 @@ export function useMutation(options: MutationOptions): MutationHandle {
                 asAppError(error) ??
                 fallbackError(optionsRef.current.fallbackFailure),
             });
-            settle(seq, null);
+            settle(seq, null, refreshOptions);
           }
         })();
       });
