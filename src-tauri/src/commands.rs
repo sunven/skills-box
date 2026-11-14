@@ -925,6 +925,20 @@ pub async fn list_marketplace_categories()
     crate::marketplace::provider::categories().await
 }
 #[tauri::command]
+pub async fn list_skills_sh(
+    keyword: String,
+    view: crate::marketplace::skills_sh::View,
+    page: u32,
+) -> Result<crate::marketplace::skills_sh::Listing, AppError> {
+    crate::marketplace::skills_sh::list(&keyword, view, page).await
+}
+#[tauri::command]
+pub async fn get_skills_sh_snapshot(
+    coordinate: crate::marketplace::skills_sh::Coordinate,
+) -> Result<crate::marketplace::skills_sh::Snapshot, AppError> {
+    crate::marketplace::skills_sh::snapshot(&coordinate).await
+}
+#[tauri::command]
 pub async fn list_marketplace_skills(
     keyword: String,
     page: u32,

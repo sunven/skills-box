@@ -1,4 +1,5 @@
 import type { PackListing, PackDetail, PackPreview, LocalPack } from "./expert-packs";
+import type { SkillsShCoordinate, SkillsShListing, SkillsShSnapshot, SkillsShView } from "./skills-sh";
 import type { MarketplaceCoordinate, MarketplaceListing, MarketplaceDetail, MarketplaceCli, MarketplacePreview, MarketplaceSort, MarketplaceCategory, MarketplaceApiKeyFilter, MarketplaceFiles } from "./marketplace";
 import type { BatchRequest, BatchPreview, BatchConfirmation, StaleRecord } from "./batch";
 import type { CliCommandRequest, CliCommandPreview, CliCommandRecord } from "./cli-commands";
@@ -39,6 +40,8 @@ import { GLOBAL_SCOPE } from "./types";
 
 /** Every IPC command the frontend may invoke. */
 export const API_COMMANDS = {
+  listSkillsSh: "list_skills_sh",
+  getSkillsShSnapshot: "get_skills_sh_snapshot",
   listExpertPacks: "list_expert_packs",
   getExpertPack: "get_expert_pack",
   listLocalPacks: "list_local_packs",
@@ -558,6 +561,12 @@ export function listStaleRecords(scope: ScopeId): Promise<StaleRecord[]> {
 }
 
 export function listMarketplaceCategories(): Promise<MarketplaceCategory[]> { return invoke(API_COMMANDS.listMarketplaceCategories); }
+export function listSkillsSh(keyword: string, view: SkillsShView, page: number): Promise<SkillsShListing> {
+  return invoke(API_COMMANDS.listSkillsSh, { keyword, view, page });
+}
+export function getSkillsShSnapshot(coordinate: SkillsShCoordinate): Promise<SkillsShSnapshot> {
+  return invoke(API_COMMANDS.getSkillsShSnapshot, { coordinate });
+}
 export function listMarketplaceSkills(keyword: string, page: number, sort: MarketplaceSort, category: string, apiKey: MarketplaceApiKeyFilter): Promise<MarketplaceListing> { return invoke(API_COMMANDS.listMarketplaceSkills, { keyword, page, sort, category, apiKey }); }
 export function getMarketplaceSkill(coordinate: MarketplaceCoordinate): Promise<MarketplaceDetail> { return invoke(API_COMMANDS.getMarketplaceSkill, { coordinate }); }
 export function listMarketplaceFiles(coordinate: MarketplaceCoordinate, version: string): Promise<MarketplaceFiles> {

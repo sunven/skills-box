@@ -4,6 +4,15 @@
 use super::{AppError, ErrorCode};
 
 impl AppError {
+    pub fn skills_sh_unavailable(detail: impl std::fmt::Display) -> Self {
+        Self::new(
+            ErrorCode::MarketplaceUnavailable,
+            "无法读取 skills.sh 目录或内容快照。",
+        )
+        .detail(detail.to_string())
+        .hint("请检查网络后重试，或打开 skills.sh 官网。")
+        .retryable(true)
+    }
     pub fn marketplace_unavailable(detail: impl std::fmt::Display) -> Self {
         Self::new(
             ErrorCode::MarketplaceUnavailable,

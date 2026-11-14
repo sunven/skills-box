@@ -1,4 +1,5 @@
 import type { DiscoveryInstallSeed } from "../lib/discovery";
+import type { MarketplaceInstallSeed } from "../lib/skills-sh";
 import { useCliCommandPreview } from "../hooks/use-cli-commands";
 import { ActualCliCommands, CliPreviewHelp, CliPreviewStatus, CliRetryControl } from "./cli-command-display";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -15,6 +16,7 @@ import {
   invalidateDiscoverySource,
   startInstall,
   startPreview,
+  openExternalUrl,
 } from "../lib/api";
 import type {
   DetectedAgent,
@@ -33,7 +35,7 @@ import { readInstallSourceHistory, rememberInstallSource } from "../lib/install-
 
 interface InstallWizardProps {
   open: boolean;
-  seed?: DiscoveryInstallSeed | null;
+  seed?: DiscoveryInstallSeed | MarketplaceInstallSeed | null;
   scope: ScopeId;
   /** Active project for project scope; null for global. */
   project?: ProjectEntry | null;
@@ -144,6 +146,7 @@ export function InstallWizard({
   const lastInstallRef = useRef<string[] | null>(null);
 
   const seedRef = useRef(seed);
+  const marketplaceSeed = seed && "origin" in seed ? seed : null;
   seedRef.current = seed;
   const [seedIssue, setSeedIssue] = useState<string | null>(null);
   const [step, setStep] = useState<Step>(1);
@@ -177,15 +180,17 @@ export function InstallWizard({
         const matches = resultPreview.skills.filter((s) => s.name.toLowerCase() === intent.name.toLowerCase());
         if (resultPreview.parseFailed || matches.length !== 1 || resultPreview.noSkills) {
           setSelected(new Set());
-          setSeedIssue("此发现项在实际预览中已不存在或无法按名称区分。请关闭向导并重新检查上游。");
+          setSeedIssue("origin" in intent
+            ? "此市场条目在 Git 预览中不存在、已改名或无法按名称唯一区分。请重新预览或查看上游。"
+            : "此发现项在实际预览中已不存在或无法按名称区分。请关闭向导并重新检查上游。");
           setStep(2);
-          void invalidateDiscoverySource(intent.source).catch(() => {
+          if (!("origin" in intent)) void invalidateDiscoverySource(intent.source).catch(() => {
             setSeedIssue("此发现项无法安装，且目录失效标记保存失败。请修复发现记录后重新检查上游。");
           });
           return;
         }
         setSelected(new Set(matches[0].conflict ? [] : [matches[0].name]));
-        setStep(resultPreview.skills.length === 1 && !matches[0].conflict ? 3 : 2);
+        setStep(("origin" in intent || resultPreview.skills.length === 1) && !matches[0].conflict ? 3 : 2);
         return;
       }
       if (resultPreview) {
@@ -310,7 +315,7 @@ export function InstallWizard({
     resetPreviewSelection();
     setSourceInput(seed?.source ?? "");
     if (seed) {
-      void previewMutation.start(taskEventDriver({ total: 1, message: "正在验证发现项…",
+      void previewMutation.start(taskEventDriver({ total: 1, message: "origin" in seed ? "正在验证市场技能的 Git 来源…" : "正在验证发现项…",
         launch: (onEvent) => startPreview(seed.source, onEvent, scope) }));
     }
   }, [open, scope, seed?.source, seed?.name, resetPreviewSelection, previewMutation.reset, previewMutation.start]);
@@ -336,7 +341,9 @@ export function InstallWizard({
     [manualNames, inventoryByName],
   );
 
-  const normalSkills = preview?.skills ?? [];
+  const normalSkills = marketplaceSeed
+    ? seedIssue ? [] : (preview?.skills ?? []).filter((skill) => skill.name.toLowerCase() === marketplaceSeed.name.toLowerCase())
+    : preview?.skills ?? [];
   const searchQuery = skillSearch.trim().toLowerCase();
   const visibleSkills = normalSkills.filter(
     (skill) =>
@@ -509,6 +516,12 @@ export function InstallWizard({
         className="modal-panel max-w-2xl"
       >
         {seedIssue ? <p role="alert" className="notice m-4" data-tone="error">{seedIssue}</p> : null}
+        {marketplaceSeed ? <div className="marketplace-install-context">
+          <p>收录于 skills.sh · {marketplaceSeed.name}</p>
+          <p>按 Git 默认分支安装；实际安装内容可能与市场快照不同。</p>
+          <Button variant="ghost" size="sm" onClick={() => void openExternalUrl(marketplaceSeed.officialUrl)}>官方页面</Button>
+          <Button variant="ghost" size="sm" onClick={() => void openExternalUrl(`https://github.com/${marketplaceSeed.source}`)}>GitHub 仓库</Button>
+        </div> : null}
         <div className="modal-head">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -675,7 +688,7 @@ export function InstallWizard({
               <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[12.5px]">
                 <span className="font-medium">{preview.source}</span>
                 <span className="text-muted-foreground">
-                  · {preview.skills.length} 个 skill
+                  · {normalSkills.length} 个 skill
                 </span>
                 <span
                   role="status"
@@ -685,7 +698,7 @@ export function InstallWizard({
                 </span>
               </div>
 
-              {!preview.noSkills && !preview.parseFailed ? (
+              {!marketplaceSeed && !preview.noSkills && !preview.parseFailed ? (
                 <div className="mt-3 flex flex-wrap items-center gap-1">
                   <Input
                     type="search"

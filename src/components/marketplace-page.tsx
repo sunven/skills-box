@@ -9,8 +9,16 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { MarketplaceStats } from "./marketplace-stats";
 import { MarketplaceDetailPage } from "./marketplace-detail-page";
+import { SkillsShPage } from "./skills-sh-page";
+import { readMarketplaceSource, rememberMarketplaceSource, type MarketplaceInstallSeed, type MarketplaceSourceId } from "../lib/skills-sh";
+import { useMarketplaceSession } from "../hooks/use-marketplace-session";
 
 interface Props {
+  active?: boolean;
+  gitEnabled: boolean;
+  gitInstallOpen: boolean;
+  onRecheck: () => void;
+  onGitInstall: (seed: MarketplaceInstallSeed) => void;
   initialPack?: { slug: string; key: number };
   scope: ScopeId;
   scopeLabel: string;
@@ -19,18 +27,19 @@ interface Props {
   disabled: boolean;
   onView: (name: string) => void;
 }
-function MarketplaceSkillsPage({ scope, scopeLabel, snapshot, disabled, onView, onInstallOpenChange }: Props) {
-  const [input, setInput] = useState("");
-  const [search, setSearch] = useState<{
+function MarketplaceSkillsPage({ active = true, scope, scopeLabel, snapshot, disabled, onView, onInstallOpenChange }: Props) {
+  const [input, setInput] = useMarketplaceSession("skillhub-input", "");
+  const [search, setSearch] = useMarketplaceSession<{
     keyword: string;
     page: number;
     sort: MarketplaceSort;
     category: string;
     apiKey: MarketplaceApiKeyFilter;
-  }>({ keyword: "", page: 1, sort: "score", category: "", apiKey: "all" });
+  }>("skillhub-search", { keyword: "", page: 1, sort: "score", category: "", apiKey: "all" });
   const [selected, setSelected] = useState<MarketplaceSkill | null>(null);
   const listRef = useRef<HTMLElement>(null);
-  const listScroll = useRef(0);
+  const [savedScroll, setSavedScroll] = useMarketplaceSession("skillhub-scroll", 0);
+  const listScroll = useRef(savedScroll);
   const opener = useRef<HTMLButtonElement | null>(null);
   function openDetail(skill: MarketplaceSkill, button: HTMLButtonElement) {
     listScroll.current = listRef.current?.scrollTop ?? 0;
@@ -38,10 +47,12 @@ function MarketplaceSkillsPage({ scope, scopeLabel, snapshot, disabled, onView, 
     setSelected(skill);
   }
   useLayoutEffect(() => {
-    if (!selected && listRef.current) {
+    if (active && !selected && listRef.current) {
       listRef.current.scrollTop = listScroll.current;
-      opener.current?.focus({ preventScroll: true });
     }
+  }, [active, selected]);
+  useLayoutEffect(() => {
+    if (!selected) opener.current?.focus({ preventScroll: true });
   }, [selected]);
   const previous = useRef<{
     search: typeof search;
@@ -50,12 +61,14 @@ function MarketplaceSkillsPage({ scope, scopeLabel, snapshot, disabled, onView, 
   const categories = useQuery({
     queryKey: ["marketplace", "categories"],
     queryFn: listMarketplaceCategories,
+    enabled: active,
     retry: false,
     staleTime: 600_000,
   });
   const catalog = useQuery({
     queryKey: ["marketplace", "list", search.keyword, search.page, search.sort, search.category, search.apiKey],
     queryFn: () => listMarketplaceSkills(search.keyword, search.page, search.sort, search.category, search.apiKey),
+    enabled: active,
     retry: false,
     staleTime: 60_000,
   });
@@ -76,7 +89,8 @@ function MarketplaceSkillsPage({ scope, scopeLabel, snapshot, disabled, onView, 
   )!.label;
   return (
     <>
-    <main ref={listRef} hidden={selected !== null} className="discovery-page" aria-labelledby="marketplace-title">
+    <main ref={listRef} hidden={selected !== null} className="discovery-page" aria-labelledby="marketplace-title"
+      onScroll={(event) => { listScroll.current = event.currentTarget.scrollTop; setSavedScroll(listScroll.current); }}>
       <div className="discovery-content">
         <div className="discovery-heading">
           <div>
@@ -300,17 +314,35 @@ function MarketplaceSkillsPage({ scope, scopeLabel, snapshot, disabled, onView, 
 
 export function MarketplacePage(props: Props) {
   const [tab, setTab] = useState<"skills" | "packs">(props.initialPack ? "packs" : "skills");
+  const [source, setSource] = useState(readMarketplaceSource);
+  const [visited, setVisited] = useState(() => new Set<MarketplaceSourceId>([source]));
   const [installOpen, setInstallOpen] = useState(false);
   const notifyInstallOpen = props.onInstallOpenChange;
   const onInstallOpenChange = useCallback((open: boolean) => {
     setInstallOpen(open);
     notifyInstallOpen(open);
   }, [notifyInstallOpen]);
-  return <div className="marketplace-workspace">
-    <div className="marketplace-kind-tabs" role="group" aria-label="市场类型" inert={installOpen}>
+  const busy = installOpen || props.gitInstallOpen;
+  return <div className="marketplace-workspace" inert={props.gitInstallOpen}>
+    <div className="marketplace-kind-tabs" role="group" aria-label="市场类型" inert={busy}>
       <Button variant="ghost" aria-pressed={tab === "skills"} onClick={() => setTab("skills")}>技能</Button>
       <Button variant="ghost" aria-pressed={tab === "packs"} onClick={() => setTab("packs")}>专家包</Button>
+      {tab === "packs" ? <span className="marketplace-source-label">来源 · SkillHub</span> : null}
     </div>
-    {tab === "skills" ? <MarketplaceSkillsPage {...props} onInstallOpenChange={onInstallOpenChange} /> : <ExpertPackPage key={props.initialPack?.key ?? "catalog"} {...props} initialSlug={props.initialPack?.slug} onInstallOpenChange={onInstallOpenChange} />}
+    <div hidden={tab !== "skills"} className="marketplace-source-panel">
+      <div className="marketplace-source-switch" role="group" aria-label="技能市场来源" inert={busy}>
+        {(["skillhub", "skills-sh"] as const).map((id) => <Button key={id} variant="ghost" size="sm"
+          aria-pressed={source === id} onClick={() => {
+            setSource(id); rememberMarketplaceSource(id); setVisited((previous) => new Set([...previous, id]));
+          }}>{id === "skillhub" ? "SkillHub" : "skills.sh"}</Button>)}
+      </div>
+      {visited.has("skillhub") ? <div hidden={source !== "skillhub"} className="marketplace-source-panel">
+        <MarketplaceSkillsPage {...props} active={tab === "skills" && source === "skillhub"} onInstallOpenChange={onInstallOpenChange} />
+      </div> : null}
+      {visited.has("skills-sh") ? <div hidden={source !== "skills-sh"} className="marketplace-source-panel">
+        <SkillsShPage {...props} active={tab === "skills" && source === "skills-sh"} onInstall={props.onGitInstall} />
+      </div> : null}
+    </div>
+    {tab === "packs" ? <ExpertPackPage key={props.initialPack?.key ?? "catalog"} {...props} initialSlug={props.initialPack?.slug} onInstallOpenChange={onInstallOpenChange} /> : null}
   </div>;
 }

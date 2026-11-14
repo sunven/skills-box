@@ -3,6 +3,7 @@ pub mod files;
 pub mod provider;
 pub mod records;
 pub mod runtime;
+pub mod skills_sh;
 pub mod updates;
 
 use crate::error::AppError;

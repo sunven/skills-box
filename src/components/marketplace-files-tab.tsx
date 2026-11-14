@@ -115,6 +115,14 @@ function Tree({ nodes, selectedPath, expanded, onToggleDir, onSelectFile, depth 
   })}</ul>;
 }
 
+export function MarketplaceFileTree({ files, ...props }: {
+  files: MarketplaceFileEntry[]; selectedPath: string; expanded: Set<string>;
+  onToggleDir: (path: string) => void; onSelectFile: (path: string) => void;
+}) {
+  const nodes = useMemo(() => fileTree(files), [files]);
+  return <Tree nodes={nodes} {...props} />;
+}
+
 function FilePreview({ detail, path, exists, onNavigate }: {
   detail: MarketplaceDetail; path: string; exists: boolean; onNavigate: (path: string) => void;
 }) {

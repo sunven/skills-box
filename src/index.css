@@ -2642,6 +2642,13 @@
 
 /* Expert packs share the marketplace's panels, controls and type scale. */
 .marketplace-workspace { display: flex; flex-direction: column; min-height: 0; flex: 1; overflow: hidden; }
+.marketplace-source-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
+.marketplace-source-panel[hidden] { display: none; }
+.marketplace-source-switch { display: flex; gap: 8px; padding: 8px 24px; border-bottom: 1px solid var(--border); }
+.marketplace-source-switch [aria-pressed="true"] { background: var(--muted); color: var(--foreground); }
+.marketplace-source-label { align-self: center; margin-left: auto; color: var(--muted-foreground); font-size: 12px; }
+.marketplace-snapshot-notice, .marketplace-install-context { padding: 12px 16px; border: 1px solid var(--border); border-radius: 6px; color: var(--muted-foreground); font-size: 12px; line-height: 1.7; }
+.marketplace-install-context { margin: 16px 16px 0; }
 .marketplace-kind-tabs { display: flex; gap: 8px; padding: 10px 24px; border-bottom: 1px solid var(--border); }
 .marketplace-kind-tabs [aria-pressed="true"] { background: var(--muted); color: var(--foreground); }
 .pack-catalog { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); gap: 16px; }

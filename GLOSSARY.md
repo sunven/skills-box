@@ -101,15 +101,19 @@ The app's entry for obtaining skills from Marketplace sources. The Chinese UI la
 _Avoid_: skill store, source discovery
 
 **Marketplace detail**:
-The published description and any release information for one Skill or Expert pack offered by a Marketplace source, distinct from management of its local installation. The Chinese UI labels it 「市场详情」.
+The description, available content and any release information for one Skill or Expert pack listed by a Marketplace source, distinct from management of its local installation. The Chinese UI labels it 「市场详情」.
 _Avoid_: installed skill detail, installation record
 
+**Marketplace snapshot**:
+Skill content captured by a Marketplace source for browsing. It may differ from the current installation Source's content and does not by itself identify a published release.
+_Avoid_: Marketplace version, Pack snapshot
+
 **Marketplace source**:
-A service that offers published Skills or Expert packs for installation through the Skill marketplace, such as SkillHub.
+A service that catalogs Skills or Expert packs for installation through the Skill marketplace, such as SkillHub or skills.sh. It may distribute published releases itself or direct users to a Git source; the catalog service and the installation Source need not be the same.
 _Avoid_: marketplace instance, Git source
 
 **Marketplace coordinate**:
-The identity of a published skill within a Marketplace source, including its publisher namespace and skill identifier. It is distinct from the skill's local name and from any one published version.
+The identity of a skill entry within a Marketplace source, including the source's publisher or upstream namespace and skill identifier. It is distinct from the skill's local name, installation Source and any one published version.
 _Avoid_: installation name, display name
 
 **Marketplace version**:

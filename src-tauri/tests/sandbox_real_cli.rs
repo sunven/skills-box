@@ -1272,6 +1272,111 @@ fn chosen_public_repo_skill_names_pass_ticket_10_validation() {
 }
 
 #[tokio::test]
+#[ignore = "network: skills.sh catalog plus isolated real Git installation"]
+async fn real_skills_sh_selection_installs_in_global_and_project() {
+    use skills_box_lib::marketplace::skills_sh::{self, View};
+    use skills_box_lib::tasks::parser::{PreviewParseOutcome, parse_preview_output};
+
+    let listing = skills_sh::list("find-skills", View::AllTime, 0)
+        .await
+        .unwrap();
+    let selected = listing
+        .skills
+        .iter()
+        .find(|skill| {
+            skill.coordinate.source == "vercel-labs/skills"
+                && skill.coordinate.skill_id == "find-skills"
+        })
+        .expect("real GitHub catalog entry");
+    let source = selected.git_source.as_deref().expect("Git install source");
+    let mut sbx = Sandbox::new();
+    let preview = sbx.cli_retry(&["add", source, "-l", "-g"], "skills-sh-preview", 3);
+    let PreviewParseOutcome::Skills(skills) = parse_preview_output(&preview.stdout) else {
+        panic!("Git preview must parse before installation");
+    };
+    let matches: Vec<_> = skills
+        .iter()
+        .filter(|skill| skill.name.eq_ignore_ascii_case(&selected.name))
+        .collect();
+    assert_eq!(
+        matches.len(),
+        1,
+        "market skill must have one actual Git match"
+    );
+    let name = matches[0].name.as_str();
+    let project = sbx.project_root("skills-sh");
+    fs::create_dir_all(&project).unwrap();
+    let project = fs::canonicalize(project).unwrap();
+
+    for global in [true, false] {
+        let mut args = vec![
+            "add",
+            source,
+            "-s",
+            name,
+            "-a",
+            "claude-code",
+            "-a",
+            "universal",
+            "-y",
+            "--json",
+        ];
+        if global {
+            args.push("-g");
+        }
+        let result = if global {
+            sbx.cli(&args, "skills-sh-global")
+        } else {
+            sbx.cli_in(&project, &args, "skills-sh-project")
+        };
+        let rows = install_json(&result);
+        assert_eq!(rows.len(), 1, "only the selected market skill is installed");
+        assert_eq!(rows[0]["name"], name);
+        assert_eq!(rows[0]["status"], "installed");
+        assert_eq!(rows[0]["scope"], if global { "global" } else { "project" });
+        let canonical = if global {
+            sbx.canonical(name)
+        } else {
+            project.join(".agents/skills").join(name)
+        };
+        assert!(canonical.join("SKILL.md").is_file());
+        let attachment = if global {
+            sbx.agent_skill(".claude", name)
+        } else {
+            project.join(".claude/skills").join(name)
+        };
+        sbx.assert_symlink_to(&attachment, &canonical);
+        let lock = if global {
+            sbx.read_lock().unwrap()
+        } else {
+            sbx.read_project_lock(&project).unwrap()
+        };
+        assert_eq!(lock["skills"].as_object().unwrap().len(), 1);
+        assert_eq!(lock["skills"][name]["source"], source);
+        assert_eq!(lock["skills"][name]["sourceType"], "github");
+        if global {
+            let parsed = skills_box_lib::lock::LockFile::read(&sbx.lock_path()).unwrap();
+            assert_eq!(parsed.get(name).unwrap().source, source);
+        }
+        fs::write(
+            sbx.evidence.join(if global {
+                "skills-sh-global-lock.json"
+            } else {
+                "skills-sh-project-lock.json"
+            }),
+            lock.to_string(),
+        )
+        .unwrap();
+    }
+    assert!(
+        sbx.canonical(name).join("SKILL.md").is_file(),
+        "project install preserves global skill"
+    );
+    sbx.assert_no_forbidden_invocations();
+    sbx.summary_line("PASS skills.sh catalog -> unique Git preview -> global and project single-skill installs, Git records and Claude Code symlinks");
+}
+
+#[tokio::test]
 #[ignore = "network: read-only GitHub update check; run explicitly"]
 async fn real_update_check_is_read_only() {
     let root = env::temp_dir().join(format!(

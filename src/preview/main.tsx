@@ -9,6 +9,7 @@ import { createQueryClient } from "../lib/query-client";
 import { createFakeBackend } from "../test/fake-backend";
 import { initialAppUpdate } from "../lib/app-update";
 import { marketplaceSkill } from "../test/marketplace-fixtures";
+import { skillsShPreview } from "../test/skills-sh-fixtures";
 import {
   environment,
   listSkillDir,
@@ -62,7 +63,7 @@ createFakeBackend({
     listDir: listSkillDir,
     readFile: readSkillFile,
     updateReport,
-    preview: new URLSearchParams(location.search).has("discovery") ? {
+    preview: params.has("skillsSh") ? skillsShPreview : new URLSearchParams(location.search).has("discovery") ? {
       source: "acme/skills", parseFailed: false, noSkills: false,
       skills: ["alpha", "beta", "gamma"].map((name) => ({ name, description: `${name} description` })),
     } : previewSummary,

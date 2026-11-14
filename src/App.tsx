@@ -5,6 +5,7 @@ import { useCliCommandSubscription } from "./hooks/use-cli-commands";
 import { DiscoveryPage } from "./components/discovery-page";
 import { useDiscovery } from "./hooks/use-discovery";
 import type { DiscoveryFilter, DiscoveryInstallSeed } from "./lib/discovery";
+import type { MarketplaceInstallSeed } from "./lib/skills-sh";
 import {
   useCallback,
   useDeferredValue,
@@ -178,7 +179,7 @@ function App() {
     filter: DiscoveryFilter;
     source: string;
   } | null>(null);
-  const [installSeed, setInstallSeed] = useState<DiscoveryInstallSeed | null>(
+  const [installSeed, setInstallSeed] = useState<DiscoveryInstallSeed | MarketplaceInstallSeed | null>(
     null,
   );
   const discovery = useDiscovery(scopeReady && !quitting);
@@ -388,7 +389,7 @@ function App() {
     setStatus(defaults.status);
   }, []);
 
-  const openInstall = useCallback((seed: DiscoveryInstallSeed | null = null) => {
+  const openInstall = useCallback((seed: DiscoveryInstallSeed | MarketplaceInstallSeed | null = null) => {
     setInstallSeed(seed);
     setInstallOpen(true);
   }, []);
@@ -569,6 +570,10 @@ function App() {
           scopeLabel={scope === GLOBAL_SCOPE ? "全局" : `项目 · ${activeProject?.displayName ?? "当前项目"}`}
           snapshot={snapshot}
           disabled={actionsDisabled || !snapshot}
+          gitEnabled={mutationsEnabled}
+          gitInstallOpen={installOpen && installSeed !== null && "origin" in installSeed}
+          onRecheck={handleRecheck}
+          onGitInstall={(seed) => { openInstall(seed); setMarketplaceInstallOpen(true); }}
           onInstallOpenChange={setMarketplaceInstallOpen}
           onView={(name) => { setMarketplaceOpen(false); handleClearFilters(); handleSelectSkill(name); }}
         />
@@ -789,10 +794,11 @@ function App() {
         inventorySkills={view.skills}
         agents={report?.agents ?? EMPTY_DETECTED_AGENTS}
         installTargets={snapshot?.installTargets ?? EMPTY_INVENTORY_AGENTS}
-        onSelectScope={handleSelectScope}
+        onSelectScope={installSeed && "origin" in installSeed ? undefined : handleSelectScope}
         onClose={() => {
           setInstallOpen(false);
           setInstallSeed(null);
+          setMarketplaceInstallOpen(false);
         }}
       />
       <ProjectDialogs
