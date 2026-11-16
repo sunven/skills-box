@@ -9,6 +9,7 @@ import { useModalFocus } from "../hooks/use-modal-focus";
 import { startUninstall } from "../lib/api";
 import type { ScopeId, UpdateViewSkill } from "../lib/types";
 import { ATTACHMENT_LABELS } from "../lib/inventory-view";
+import { isNativeSkillSource } from "../lib/marketplace";
 import { taskEventDriver, useMutation } from "../lib/mutation";
 import { useCliCommandPreview } from "../hooks/use-cli-commands";
 import { ActualCliCommands, CliPreviewHelp, CliPreviewStatus } from "./cli-command-display";
@@ -92,7 +93,7 @@ export function UninstallDialog({
 
   const attachments = skill.attachments;
   const unmanaged = skill.management === "unmanaged";
-  const nativeRemoval = unmanaged || ["skillhub", "skillhub-pack"].includes(skill.sourceType ?? "");
+  const nativeRemoval = unmanaged || isNativeSkillSource(skill.sourceType);
   const canonicalLabel =
     skill.management === "copy_only"
       ? "无 canonical（仅副本）"

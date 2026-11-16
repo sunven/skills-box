@@ -36,6 +36,7 @@ impl Fixture {
             content_hash: "baseline".into(),
             installed_at: "now".into(),
             updated_at: "now".into(),
+            diagnostics: None,
         };
         let mut records = Records::default();
         records.skills.insert(record.name.clone(), record);

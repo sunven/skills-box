@@ -422,14 +422,19 @@ pub fn inspect(
                     "专家包工作流不支持上游更新。",
                 ));
             }
-            if located
+            if let Some(entry) = located
                 .lock_entry
                 .as_ref()
-                .is_some_and(|e| crate::expert_packs::is_native_source(&e.source_type))
+                .filter(|e| crate::expert_packs::is_native_source(&e.source_type))
             {
-                return Err(AppError::batch_target_changed(
-                    "SkillHub 技能请使用单项更新或「更新全部」，以确认平台目标版本。",
-                ));
+                let source = if entry.source_type == "clawhub" {
+                    "ClawHub"
+                } else {
+                    "SkillHub"
+                };
+                return Err(AppError::batch_target_changed(format!(
+                    "{source} 技能请使用单项更新或「更新全部」，以确认平台目标版本。"
+                )));
             }
             let planned = update::plan_updates(paths, layout, &[name.to_string()])?;
             if let Some(skip) = planned.skipped.first() {
@@ -751,4 +756,56 @@ pub fn stops_batch(error: &AppError) -> bool {
             | ErrorCode::EnvCliMissing
             | ErrorCode::CliSpawnFailed
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clawhub_marketplace_updates_are_guided_to_single_or_update_all() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(tmp.path().join("home"), tmp.path().join("data"));
+        paths.ensure_dirs().unwrap();
+        let canonical = paths.canonical_skills_dir().join("market");
+        fs::create_dir_all(&canonical).unwrap();
+        fs::write(canonical.join("SKILL.md"), "---\nname: market\n---\n").unwrap();
+        let record = crate::marketplace::records::Installation {
+            name: "market".into(),
+            coordinate: crate::marketplace::Coordinate::from_canonical_for(
+                crate::marketplace::MarketplaceSource::Clawhub,
+                "@owner/slug",
+            )
+            .unwrap(),
+            version: "1.2.0".into(),
+            content_hash: "hash".into(),
+            installed_at: "now".into(),
+            updated_at: "now".into(),
+            diagnostics: None,
+        };
+        let mut records = crate::marketplace::records::Records::default();
+        records.skills.insert(record.name.clone(), record);
+        records.save(&paths.lock_path()).unwrap();
+        let layout = ScopeLayout::global(&paths, Vec::new());
+        let plan = plan(
+            &paths,
+            &layout,
+            BatchRequest {
+                action: BatchAction::Update,
+                skill_ids: vec![layout.scope.skill_id("market")],
+                agent_ids: Vec::new(),
+                target_keys: None,
+                project_root: None,
+            },
+            "preview".into(),
+            HashMap::new(),
+        )
+        .unwrap();
+        let target = &plan.targets[0].target;
+        assert!(!target.eligible);
+        assert_eq!(
+            target.reason.as_deref(),
+            Some("ClawHub 技能请使用单项更新或「更新全部」，以确认平台目标版本。")
+        );
+    }
 }

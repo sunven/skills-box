@@ -673,3 +673,57 @@ fn copy_tree(source: &Path, destination: &Path) -> std::io::Result<()> {
     fs::set_permissions(destination, fs::metadata(source)?.permissions())?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clawhub_marketplace_skills_cannot_be_copied_to_a_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(tmp.path().join("home"), tmp.path().join("data"));
+        paths.ensure_dirs().unwrap();
+        let canonical = paths.canonical_skills_dir().join("market");
+        fs::create_dir_all(&canonical).unwrap();
+        fs::write(canonical.join("SKILL.md"), "---\nname: market\n---\n").unwrap();
+        let record = crate::marketplace::records::Installation {
+            name: "market".into(),
+            coordinate: crate::marketplace::Coordinate::from_canonical_for(
+                crate::marketplace::MarketplaceSource::Clawhub,
+                "@owner/slug",
+            )
+            .unwrap(),
+            version: "1.2.0".into(),
+            content_hash: "hash".into(),
+            installed_at: "now".into(),
+            updated_at: "now".into(),
+            diagnostics: None,
+        };
+        let mut records = crate::marketplace::records::Records::default();
+        records.skills.insert(record.name.clone(), record);
+        records.save(&paths.lock_path()).unwrap();
+        let source = ScopeLayout::global(&paths, Vec::new());
+        let root = tmp.path().join("project");
+        fs::create_dir_all(&root).unwrap();
+        let plan = plan(
+            &paths,
+            &source,
+            BatchRequest {
+                action: BatchAction::CopyToProject,
+                skill_ids: vec![source.scope.skill_id("market")],
+                agent_ids: Vec::new(),
+                target_keys: None,
+                project_root: Some(root.to_str().unwrap().into()),
+            },
+            "preview".into(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(plan.targets.len(), 1);
+        assert!(!plan.targets[0].target.eligible);
+        assert_eq!(
+            plan.targets[0].target.reason.as_deref(),
+            Some("市场技能暂不支持复制到项目，请在技能市场选择目标项目独立安装。")
+        );
+    }
+}

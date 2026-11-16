@@ -349,6 +349,26 @@ describe("skill detail drawer", () => {
     );
   });
 
+  it("labels ClawHub marketplace records with platform version and content baseline", async () => {
+    const ref = "b4416dddac9b6a0cc5412136e6f0fe34c9583f2405";
+    mockCommands({
+      detail: baseDetail({
+        source: "@aws/agents-build",
+        sourceType: "clawhub",
+        ref,
+        hash: "0123456789abcdef0123456789abcdef01234567",
+      }),
+    });
+    renderApp();
+    await selectAlpha();
+    fireEvent.click(tab("操作"));
+    const pane = detailPane();
+    expect(await pane.findByText("平台版本")).toBeInTheDocument();
+    expect(pane.getByText(ref)).toBeInTheDocument();
+    expect(pane.getByText("安装内容基线")).toBeInTheDocument();
+    expect(pane.queryByText("版本指纹")).not.toBeInTheDocument();
+  });
+
   it("clamps long descriptions to three lines and expands on demand", async () => {
     const longDescription = `长描述：${"这是一段用于验证三行折叠的描述。".repeat(20)}`;
     mockCommands({
