@@ -1,4 +1,4 @@
-import type { ClawHubListing, ClawHubSkill } from "../lib/clawhub";
+import type { ClawHubListing, ClawHubSearch, ClawHubSkill } from "../lib/clawhub";
 
 export const clawhubSkill: ClawHubSkill = {
   coordinate: { source: "clawhub", namespace: "steipete", slug: "weather" },
@@ -43,4 +43,17 @@ export const clawhubPageOne: ClawHubListing = {
 export const clawhubPageTwo: ClawHubListing = {
   skills: [clawhubSkill, clawhubSecondPageSkill],
   nextCursor: null,
+};
+
+/**
+ * Search results arrive already filtered by the backend: the one skills.sh
+ * alias is counted but has no card in this source.
+ */
+export const clawhubSearch: ClawHubSearch = {
+  skills: [clawhubSkill, clawhubSparseSkill],
+  returned: 2,
+  upstreamReturned: 3,
+  limit: 50,
+  filteredAliases: 1,
+  filteredOthers: 0,
 };

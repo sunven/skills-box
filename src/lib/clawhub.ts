@@ -29,6 +29,19 @@ export interface ClawHubListing {
   skills: ClawHubSkill[];
   nextCursor: string | null;
 }
+/**
+ * Keyword search has no cursor. `returned` is what this source displays after
+ * excluding skills.sh aliases; `upstreamReturned` is the raw upstream count;
+ * `limit` is the requested upstream cap.
+ */
+export interface ClawHubSearch {
+  skills: ClawHubSkill[];
+  returned: number;
+  upstreamReturned: number;
+  limit: number;
+  filteredAliases: number;
+  filteredOthers: number;
+}
 
 export const CLAWHUB_OFFICIAL_URL = "https://clawhub.ai/skills";
 export const clawhubIdentity = (coordinate: ClawHubCoordinate | MarketplaceCoordinate) =>

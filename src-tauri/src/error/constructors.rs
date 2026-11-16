@@ -28,6 +28,16 @@ impl AppError {
             .hint("请检查网络后重试，或打开 ClawHub 官网浏览。")
             .retryable(true)
     }
+    /// A caller-side ClawHub search term the app refuses to send upstream.
+    pub fn clawhub_invalid_query(detail: impl std::fmt::Display) -> Self {
+        Self::new(
+            ErrorCode::MarketplaceUnavailable,
+            "ClawHub 搜索关键词无效。",
+        )
+        .detail(detail.to_string())
+        .hint("请输入 1–200 个字符的关键词后再搜索。")
+        .retryable(false)
+    }
     /// A 429 from the anonymous ClawHub API. The retry window is structured so
     /// the UI can back off instead of hammering the endpoint.
     pub fn clawhub_rate_limited(seconds: u64) -> Self {

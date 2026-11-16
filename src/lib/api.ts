@@ -1,6 +1,6 @@
 import type { PackListing, PackDetail, PackPreview, LocalPack } from "./expert-packs";
 import type { SkillsShCoordinate, SkillsShListing, SkillsShSnapshot, SkillsShView } from "./skills-sh";
-import type { ClawHubListing, ClawHubSort } from "./clawhub";
+import type { ClawHubListing, ClawHubSearch, ClawHubSort } from "./clawhub";
 import type { MarketplaceCoordinate, MarketplaceListing, MarketplaceDetail, MarketplaceCli, MarketplacePreview, MarketplaceSort, MarketplaceCategory, MarketplaceApiKeyFilter, MarketplaceFiles } from "./marketplace";
 import type { BatchRequest, BatchPreview, BatchConfirmation, StaleRecord } from "./batch";
 import type { CliCommandRequest, CliCommandPreview, CliCommandRecord } from "./cli-commands";
@@ -44,6 +44,7 @@ export const API_COMMANDS = {
   listSkillsSh: "list_skills_sh",
   getSkillsShSnapshot: "get_skills_sh_snapshot",
   listClawhubSkills: "list_clawhub_skills",
+  searchClawhubSkills: "search_clawhub_skills",
   listExpertPacks: "list_expert_packs",
   getExpertPack: "get_expert_pack",
   listLocalPacks: "list_local_packs",
@@ -576,6 +577,9 @@ export function getSkillsShSnapshot(coordinate: SkillsShCoordinate): Promise<Ski
 }
 export function listClawhubSkills(sort: ClawHubSort, cursor: string | null): Promise<ClawHubListing> {
   return invoke(API_COMMANDS.listClawhubSkills, { sort, cursor });
+}
+export function searchClawhubSkills(query: string): Promise<ClawHubSearch> {
+  return invoke(API_COMMANDS.searchClawhubSkills, { query });
 }
 export function listMarketplaceSkills(keyword: string, page: number, sort: MarketplaceSort, category: string, apiKey: MarketplaceApiKeyFilter): Promise<MarketplaceListing> { return invoke(API_COMMANDS.listMarketplaceSkills, { keyword, page, sort, category, apiKey }); }
 export function getMarketplaceSkill(coordinate: MarketplaceCoordinate): Promise<MarketplaceDetail> { return invoke(API_COMMANDS.getMarketplaceSkill, { coordinate }); }

@@ -62,6 +62,14 @@ static COOLDOWN: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
 static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
 pub(super) async fn get(key: &str, query: &[(&str, String)]) -> Result<Value, AppError> {
+    get_at(PATH, key, query).await
+}
+
+pub(super) async fn get_at(
+    path: &str,
+    key: &str,
+    query: &[(&str, String)],
+) -> Result<Value, AppError> {
     if let Some(remaining) = cooldown_remaining() {
         return Err(AppError::clawhub_rate_limited(remaining.as_secs().max(1)));
     }
@@ -69,7 +77,7 @@ pub(super) async fn get(key: &str, query: &[(&str, String)]) -> Result<Value, Ap
         return Ok(value);
     }
     let mut response = client()?
-        .get(format!("{API}{PATH}"))
+        .get(format!("{API}{path}"))
         .query(query)
         .send()
         .await

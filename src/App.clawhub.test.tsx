@@ -11,6 +11,7 @@ import { skillsShSkill } from "./test/skills-sh-fixtures";
 import {
   clawhubPageOne,
   clawhubPageTwo,
+  clawhubSearch,
   clawhubSkill,
 } from "./test/clawhub-fixtures";
 
@@ -33,6 +34,10 @@ const cardTitles = () =>
   screen.getAllByRole("article").map((card) => within(card).getByRole("heading").textContent);
 const cardFor = (title: string) =>
   screen.getAllByRole("article").find((card) => within(card).queryByRole("heading", { name: title }))!;
+async function searchClawhub(keyword: string) {
+  fireEvent.change(screen.getByLabelText("搜索 ClawHub"), { target: { value: keyword } });
+  fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+}
 
 describe("ClawHub marketplace", () => {
   it("defaults to SkillHub and restores ClawHub from the remembered source after restart", async () => {
@@ -257,5 +262,189 @@ describe("ClawHub marketplace", () => {
     await screen.findByRole("button", { name: marketplaceSkill.name });
     expect(backend.count("list_clawhub_skills")).toBe(0);
     expect(screen.queryByText("@aws/agents-build")).not.toBeInTheDocument();
+  });
+
+  it("searches in upstream order, excludes skills.sh aliases and states the returned limit", async () => {
+    const { backend } = setup();
+    await openClawhub();
+    await screen.findByText("Weather");
+    await searchClawhub("weather");
+
+    await screen.findByText(/搜索「weather」 · 返回 2 项（上游上限 50） · 按上游顺序/);
+    expect(cardTitles()).toEqual(["Weather", "agents-build"]);
+    expect(backend.callsOf("search_clawhub_skills")[0]!.payload).toEqual({ query: "weather" });
+    expect(screen.getByText(/已排除 skills.sh 别名条目；skills.sh 条目请在 skills.sh 来源浏览\/安装。/)).toBeInTheDocument();
+    expect(screen.getByText("本次已排除 1 个 skills.sh 别名条目。")).toBeInTheDocument();
+    const clawhub = within(screen.getByRole("main", { name: "技能市场" }));
+    expect(clawhub.queryByText(/共\s*[\d,]+\s*项/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "加载更多" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: marketplaceSkill.name })).not.toBeInTheDocument();
+  });
+
+  it("states that a full upstream limit is a limited result set, never a full search", async () => {
+    setup({ commands: {
+      search_clawhub_skills: ({ query }) => ({
+        ...clawhubSearch,
+        skills: [{ ...clawhubSkill, name: `hit-${query}` }],
+        returned: 1,
+        upstreamReturned: 50,
+        limit: 50,
+        filteredAliases: 49,
+      }),
+    } });
+    await openClawhub();
+    await searchClawhub("design");
+
+    await screen.findByText("hit-design");
+    expect(screen.getByText(/返回 1 项（上游上限 50）/)).toBeInTheDocument();
+    expect(screen.getByText(/上游仅返回本次上限内的有限结果，不代表全量搜索/)).toBeInTheDocument();
+    expect(screen.getByText("本次已排除 49 个 skills.sh 别名条目。")).toBeInTheDocument();
+  });
+
+  it("shows an explicit empty search state and keeps the alias notice", async () => {
+    setup({ commands: {
+      search_clawhub_skills: () => ({
+        skills: [], returned: 0, upstreamReturned: 0, limit: 50, filteredAliases: 0, filteredOthers: 0,
+      }),
+    } });
+    await openClawhub();
+    await searchClawhub("nothing-matches");
+
+    await screen.findByText("未找到匹配的 ClawHub 技能。请尝试其他关键词。");
+    expect(screen.getByText(/返回 0 项（上游上限 50）/)).toBeInTheDocument();
+    expect(screen.getByText(/已排除 skills.sh 别名条目/)).toBeInTheDocument();
+    expect(screen.queryAllByRole("article")).toHaveLength(0);
+  });
+
+  it("retains the last successful search under its old keyword, then retries without mixing sources", async () => {
+    let broken = false;
+    const { backend } = setup({ commands: {
+      search_clawhub_skills: ({ query }) => {
+        if (query === "broken" && broken) {
+          throw { code: "marketplace.unavailable", message: "无法读取 ClawHub 目录。", detail: "HTTP 503" };
+        }
+        return {
+          ...clawhubSearch,
+          skills: [{ ...clawhubSkill, name: `search-${query}` }],
+          returned: 1, upstreamReturned: 1, filteredAliases: 0,
+        };
+      },
+    } });
+    await openClawhub();
+    await screen.findByText("Weather");
+    await searchClawhub("good");
+    await screen.findByText("search-good");
+
+    broken = true;
+    await searchClawhub("broken");
+    await screen.findByText(/ClawHub 搜索失败。保留上次成功结果：搜索「good」，返回 1 项。/);
+    expect(screen.getByText("search-good")).toBeInTheDocument();
+    expect(screen.queryByText("search-broken")).not.toBeInTheDocument();
+    expect(screen.getByText("HTTP 503")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: marketplaceSkill.name })).not.toBeInTheDocument();
+    expect(screen.queryByText(skillsShSkill.name)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "ClawHub 官网" }));
+    expect(backend.callsOf("open_external_url").slice(-1)[0]!.payload.url).toBe("https://clawhub.ai/skills");
+
+    broken = false;
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    await screen.findByText("search-broken");
+    expect(screen.queryByText(/保留上次成功结果/)).not.toBeInTheDocument();
+  });
+
+  it("shows error, retry and the official link for a search with no prior result", async () => {
+    let broken = true;
+    setup({ commands: {
+      search_clawhub_skills: ({ query }) => {
+        if (broken) throw { code: "marketplace.unavailable", message: "无法读取 ClawHub 目录。", detail: "HTTP 503" };
+        return { ...clawhubSearch, skills: [{ ...clawhubSkill, name: `search-${query}` }], returned: 1, upstreamReturned: 1, filteredAliases: 0 };
+      },
+    } });
+    await openClawhub();
+    await screen.findByText("Weather");
+    await searchClawhub("weather");
+
+    await screen.findByText(/ClawHub 搜索失败。尚无可显示的结果。/);
+    expect(screen.queryAllByRole("article")).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "ClawHub 官网" })).toBeInTheDocument();
+    expect(screen.queryByText(/SkillHub 请求失败/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/skills.sh 请求失败/)).not.toBeInTheDocument();
+
+    broken = false;
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    await screen.findByText("search-weather");
+    expect(screen.queryByText(/尚无可显示的结果/)).not.toBeInTheDocument();
+  });
+
+  it("returns to the list with its sort, loaded pages and scroll when the query is cleared", async () => {
+    const { backend } = setup();
+    await openClawhub();
+    await screen.findByText("Weather");
+    fireEvent.click(screen.getByRole("button", { name: "下载量" }));
+    await waitFor(() => expect(backend.callsOf("list_clawhub_skills").slice(-1)[0]!.payload.sort).toBe("downloads"));
+    fireEvent.click(await screen.findByRole("button", { name: "加载更多" }));
+    await screen.findByText("Browser");
+    const list = screen.getByRole("main", { name: "技能市场" });
+    fireEvent.scroll(list, { target: { scrollTop: 300 } });
+    expect(cardTitles()).toEqual(["Weather", "agents-build", "Browser"]);
+
+    await searchClawhub("weather");
+    await screen.findByText(/搜索「weather」 · 返回 2 项/);
+    expect(cardTitles()).toEqual(["Weather", "agents-build"]);
+    fireEvent.scroll(list, { target: { scrollTop: 120 } });
+
+    fireEvent.change(screen.getByLabelText("搜索 ClawHub"), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+    await waitFor(() => expect(screen.queryByText(/搜索「weather」/)).not.toBeInTheDocument());
+    expect(cardTitles()).toEqual(["Weather", "agents-build", "Browser"]);
+    expect(screen.getByRole("button", { name: "下载量" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByLabelText("搜索 ClawHub")).toHaveValue("");
+    expect(list.scrollTop).toBe(300);
+    expect(screen.queryByText(/正在加载更多/)).not.toBeInTheDocument();
+  });
+
+  it("restores the search query and scroll position within the session", async () => {
+    setup();
+    await openClawhub();
+    await screen.findByText("Weather");
+    await searchClawhub("weather");
+    await screen.findByText(/搜索「weather」 · 返回 2 项/);
+    const list = screen.getByRole("main", { name: "技能市场" });
+    fireEvent.scroll(list, { target: { scrollTop: 140 } });
+
+    fireEvent.click(screen.getByRole("button", { name: "SkillHub" }));
+    await screen.findByRole("button", { name: marketplaceSkill.name });
+    fireEvent.click(screen.getByRole("button", { name: "ClawHub" }));
+
+    expect(screen.getByLabelText("搜索 ClawHub")).toHaveValue("weather");
+    await screen.findByText(/搜索「weather」 · 返回 2 项/);
+    expect(cardTitles()).toEqual(["Weather", "agents-build"]);
+    expect(list.scrollTop).toBe(140);
+  });
+
+  it("shows a distinct rate-limit state for search and backs off retry", async () => {
+    const { backend } = setup({ commands: {
+      search_clawhub_skills: () => {
+        throw {
+          code: "marketplace.rate_limited",
+          message: "ClawHub 请求受限（HTTP 429），已暂停请求。",
+          detail: "上游要求等待约 30 秒后再试。",
+          retryAfterSeconds: 30,
+          retryable: true,
+        };
+      },
+    } });
+    await openClawhub();
+    await screen.findByText("Weather");
+    await searchClawhub("weather");
+
+    await screen.findByText(/ClawHub 搜索受限（HTTP 429）/);
+    expect(screen.getByText(/约 30 秒后重试/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重试" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "ClawHub 官网" })).toBeInTheDocument();
+    const calls = backend.count("search_clawhub_skills");
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    expect(backend.count("search_clawhub_skills")).toBe(calls);
   });
 });
