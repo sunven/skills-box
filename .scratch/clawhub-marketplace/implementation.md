@@ -1,6 +1,6 @@
 # ClawHub 市场来源实施与验收
 
-日期：2026-11-16。范围以实现工单 01–10 为准；已确认规格见 [spec.md](spec.md)，上游契约与 CLI 门槛见 [research](research/)。
+日期：2026-11-16。范围按工单 01–10 记录：01–06 交付，07–09 按门槛停止。已确认规格见 [spec.md](spec.md)，上游契约与 CLI 门槛见 [research](research/)。
 
 ## 环境
 
@@ -40,7 +40,7 @@
 | 文档限流 | 读限制 3000 次/分/IP 写入限流错误提示；下载限制 1200 次/分/IP 只存在于规格与调研，因为应用没有下载通道。未做接近阈值的压力验证，避免对上游制造流量 |
 | Canonical 回链 | `Coordinate::url()` 固定派生 `https://clawhub.ai/<owner>/skills/<slug>`；列表/详情使用该地址，官方列表入口为 `https://clawhub.ai/skills`。测试：`coordinates_parse_display_and_link_per_source`、`parses_live_shaped_items_and_keeps_missing_fields_missing`、live 列表与详情测试，以及前端「ClawHub 页面/ClawHub 官网」断言 |
 | 不暗示背书 | 界面只使用事实性文案（「来源 · ClawHub」「收录于 ClawHub」）和官网回链，没有合作、认证或背书表述；「官方」徽标只在条目自身 `official`/`isOfficial` 为真时显示，不代表 ClawHub 对应用背书 |
-| 不镜像隐藏/私密/审核屏蔽内容 | 详情 404 映射为「条目不存在或不可公开访问」并给官网入口，不缓存缺失结果、不解析 `moderation`/`security`。测试：`clawhub_detail_missing` 路径、`parse_live_detail_and_never_reads_scan_fields`（序列化不含 `moderation`/`security`）及前端缺失详情测试。未找到可用的线上被屏蔽条目 fixture，因此该分支只有构造数据测试 |
+| 不镜像隐藏/私密/审核屏蔽内容 | 详情 404 映射为「条目不存在或不可公开访问」并给官网入口，不缓存缺失结果、不解析 `moderation`/`security`。测试：详情缺失分支（`detail()` 的 404 → `clawhub_detail_missing`）、`parses_live_detail_and_never_reads_scan_fields`（序列化不含 `moderation`/`security`）及前端缺失详情测试。未找到可用的线上被屏蔽条目 fixture，因此该分支只有构造数据测试 |
 | 失败与来源隔离 | 列表失败保留上次成功页与旧排序；搜索失败保留旧关键词结果；详情/版本刷新失败保留同版本旧内容并标注失败；无旧结果时显示错误、重试与官网入口。前端测试覆盖 `App.clawhub.test.tsx` 的旧结果/加载更多/空结果/限流用例和 `App.clawhub-detail.test.tsx` 的缺失/刷新失败用例；错误文案与查询键均按来源命名，未出现跨来源结果或错误 |
 | 扫描字段 | Rust 解析不读取 `scan`/`moderation`/`security`；前端无扫描展示。测试同上，另有详情测试断言页面不含 `scan`/`扫描` 文案 |
 | skills.sh 别名 | 搜索按 `install.kind` 过滤 `skills-sh`，其余未知 kind 排除并计数；列表接口无 kind 字段，无法识别，按规格回退为照常展示、详情时用一次 exact 搜索识别并引导切换来源。测试：`preserves_upstream_order_and_filters_skills_sh_aliases`、live 搜索、`classifies_exact_skills_sh_aliases_without_matching_other_owners`、live 详情与前端别名重定向测试 |
