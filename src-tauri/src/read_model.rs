@@ -608,9 +608,11 @@ impl SkillView {
             description: self.description.clone(),
             source: self.source.clone(),
             source_type: self.source_type.clone(),
-            source_version: matches!(self.source_type.as_deref(), Some("skillhub" | "clawhub"))
-                .then(|| self.reference.clone())
-                .flatten(),
+            source_version: self
+                .source_type
+                .as_deref()
+                .and_then(crate::marketplace::MarketplaceSource::from_key)
+                .and_then(|_| self.reference.clone()),
             management: self.management,
             updated_at: self.updated_at.clone(),
             canonical_path: self.canonical_path.as_ref().map(|path| paths.display(path)),
@@ -1043,32 +1045,23 @@ mod tests {
         let mut records = crate::marketplace::records::Records::default();
         records.skills.insert(
             "alpha".into(),
-            crate::marketplace::records::Installation {
-                name: "alpha".into(),
-                coordinate: crate::marketplace::Coordinate::from_canonical_for(
+            crate::marketplace::records::Installation::fixture(
+                "alpha",
+                crate::marketplace::Coordinate::from_canonical_for(
                     crate::marketplace::MarketplaceSource::Clawhub,
                     "@owner/slug",
                 )
                 .unwrap(),
-                version: "b4416dddac9b6a0cc5412136e6dbf8f07ffdb31c".into(),
-                content_hash: "hash".into(),
-                installed_at: "now".into(),
-                updated_at: "now".into(),
-                diagnostics: None,
-            },
+                "b4416dddac9b6a0cc5412136e6dbf8f07ffdb31c",
+            ),
         );
         records.skills.insert(
             "beta".into(),
-            crate::marketplace::records::Installation {
-                name: "beta".into(),
-                coordinate: crate::marketplace::Coordinate::from_canonical("@publisher/beta")
-                    .unwrap(),
-                version: "2.1.0".into(),
-                content_hash: "hash".into(),
-                installed_at: "now".into(),
-                updated_at: "now".into(),
-                diagnostics: None,
-            },
+            crate::marketplace::records::Installation::fixture(
+                "beta",
+                crate::marketplace::Coordinate::from_canonical("@publisher/beta").unwrap(),
+                "2.1.0",
+            ),
         );
         records.save(&fixture.paths.lock_path()).unwrap();
         let snapshot = fixture.model().snapshot(&ScopeId::global()).unwrap();

@@ -11,16 +11,18 @@ use sha2::{Digest, Sha256};
 use std::{collections::HashSet, time::Duration};
 
 const API: &str = "https://api.skillhub.cn/api/v1/skills";
-const MAX_FILES: usize = 2_000;
+pub(crate) const MAX_FILES: usize = 2_000;
 const MAX_LIST_BYTES: u64 = 2 * 1024 * 1024;
 
+/// One file in a published version. Shared by every marketplace source so the
+/// file tree, preview limits and digest verification stay identical.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Entry {
     pub path: String,
     pub size_bytes: u64,
     #[serde(skip_serializing)]
-    sha256: Option<String>,
+    pub(crate) sha256: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -59,7 +61,10 @@ fn client() -> Result<reqwest::Client, AppError> {
         .map_err(AppError::marketplace_unavailable)
 }
 
-fn validate_path(path: &str) -> Result<(), AppError> {
+/// Remote file paths are literal, relative, slash-separated and bounded. Both
+/// marketplace sources enforce this one rule so a preview can never address
+/// anything outside the reported package or smuggle encoded separators.
+pub(crate) fn validate_path(path: &str) -> Result<(), AppError> {
     if path.is_empty()
         || path.len() > 4096
         || path.trim() != path
@@ -215,10 +220,10 @@ pub async fn read(
         result.status = SkillFileStatus::TooLarge;
         return Ok(result);
     };
-    decode(entry, bytes)
+    decode(entry, bytes).map_err(AppError::marketplace_unavailable)
 }
 
-fn preview_metadata(entry: &Entry) -> SkillFileContent {
+pub(crate) fn preview_metadata(entry: &Entry) -> SkillFileContent {
     let kind = file_kind(&entry.path);
     SkillFileContent {
         path: entry.path.clone(),
@@ -233,7 +238,9 @@ fn preview_metadata(entry: &Entry) -> SkillFileContent {
     }
 }
 
-fn decode(entry: &Entry, bytes: Vec<u8>) -> Result<SkillFileContent, AppError> {
+/// Decode one verified file body. The returned error is a fixed message the
+/// caller maps to its own source-specific unavailable error.
+pub(crate) fn decode(entry: &Entry, bytes: Vec<u8>) -> Result<SkillFileContent, &'static str> {
     let mut result = preview_metadata(entry);
     if bytes.len() as u64 != entry.size_bytes
         || entry
@@ -241,9 +248,7 @@ fn decode(entry: &Entry, bytes: Vec<u8>) -> Result<SkillFileContent, AppError> {
             .as_ref()
             .is_some_and(|hash| !format!("{:x}", Sha256::digest(&bytes)).eq_ignore_ascii_case(hash))
     {
-        return Err(AppError::marketplace_unavailable(
-            "文件内容与该版本的文件列表不一致，请重试",
-        ));
+        return Err("文件内容与该版本的文件列表不一致，请重试");
     }
     if result.kind == SkillFileKind::Image {
         let mime = image_mime(&entry.path).expect("image kind has a supported MIME type");

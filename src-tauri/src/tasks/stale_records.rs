@@ -768,19 +768,15 @@ mod tests {
     #[test]
     fn clawhub_records_are_native_stale_records_with_blocked_restore_and_native_cleanup() {
         let (_tmp, paths, layout) = fixture();
-        let record = crate::marketplace::records::Installation {
-            name: "market".into(),
-            coordinate: crate::marketplace::Coordinate::from_canonical_for(
+        let record = crate::marketplace::records::Installation::fixture(
+            "market",
+            crate::marketplace::Coordinate::from_canonical_for(
                 crate::marketplace::MarketplaceSource::Clawhub,
                 "@owner/slug",
             )
             .unwrap(),
-            version: "b4416dddac9b6a0cc5412136e6dbf8f07ffdb31c".into(),
-            content_hash: "hash".into(),
-            installed_at: "now".into(),
-            updated_at: "now".into(),
-            diagnostics: None,
-        };
+            "b4416dddac9b6a0cc5412136e6dbf8f07ffdb31c",
+        );
         let mut market = crate::marketplace::records::Records::default();
         market.skills.insert(record.name.clone(), record);
         market.save(&paths.lock_path()).unwrap();

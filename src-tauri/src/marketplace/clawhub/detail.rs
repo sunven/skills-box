@@ -7,15 +7,12 @@
 //! overview and file tree can never mix releases.
 
 use super::{client, list};
-use crate::content::{
-    SkillFileContent, SkillFileKind, SkillFileStatus, file_kind, image_mime, limit_for,
-};
+use crate::content::{SkillFileContent, SkillFileStatus};
 use crate::error::AppError;
+use crate::marketplace::files::{self, Entry, MAX_FILES};
 use crate::marketplace::{Coordinate, MarketplaceSource, validate_version};
-use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use serde::Serialize;
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 
 const MAX_CHANGELOG: usize = 100_000;
 const MAX_LICENSE: usize = 200;
@@ -27,7 +24,6 @@ const MAX_CURSOR: usize = 4096;
 const MAX_SEARCH_RESULTS: usize = 100;
 const MAX_SEARCH_KIND: usize = 40;
 const MAX_ALIAS_REFERENCE: usize = 400;
-const MAX_FILES: usize = 2_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -50,11 +46,22 @@ pub struct NativeDetail {
     pub metrics: list::Metrics,
     pub owner_display_name: Option<String>,
     pub latest_version: Option<String>,
-    pub license: Option<String>,
-    pub changelog: Option<String>,
     pub canonical_url: String,
     pub versions: Vec<VersionRef>,
     pub versions_truncated: bool,
+    /// GitHub-backed entries have no ClawHub-hosted versions; their resolver
+    /// reference is diagnostic only because installation is paused.
+    pub resolved_reference: Option<ResolvedReference>,
+}
+
+/// The upstream-resolved GitHub location of a GitHub-backed entry. It is not
+/// a local installation identity and never creates a Git installation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedReference {
+    pub repo: String,
+    pub path: String,
+    pub commit: String,
 }
 
 /// A ClawHub index entry whose install kind is `skills-sh`. It belongs to the
@@ -100,8 +107,20 @@ pub async fn detail(coordinate: &Coordinate) -> Result<Detail, AppError> {
             }
             // A served detail is native even if only the classifier failed.
             let (versions, truncated) = fetch_versions(coordinate).await?;
+            let resolved_reference = if versions.is_empty() {
+                // Diagnostic only (installation is paused). A resolver failure
+                // must not hide the browsable detail, so it degrades to
+                // "reference unavailable" instead of failing the page.
+                resolve_reference(coordinate).await.unwrap_or(None)
+            } else {
+                None
+            };
             Ok(Detail::Native(parse_native(
-                coordinate, &value, versions, truncated,
+                coordinate,
+                &value,
+                versions,
+                truncated,
+                resolved_reference,
             )?))
         }
         Ok(None) => match alias {
@@ -148,7 +167,7 @@ pub async fn read_file(
     version: &str,
     path: &str,
 ) -> Result<SkillFileContent, AppError> {
-    validate_path(path)?;
+    files::validate_path(path)?;
     let listing = version_files(coordinate, version).await?;
     let entry = listing
         .files
@@ -157,7 +176,7 @@ pub async fn read_file(
         .ok_or_else(|| {
             AppError::clawhub_file_missing(path, format!("版本 v{version} 的文件列表中没有该路径"))
         })?;
-    let mut result = preview_metadata(entry);
+    let mut result = files::preview_metadata(entry);
     if entry.size_bytes > result.limit_bytes {
         result.status = SkillFileStatus::TooLarge;
         return Ok(result);
@@ -179,7 +198,9 @@ pub async fn read_file(
             result.status = SkillFileStatus::TooLarge;
             Ok(result)
         }
-        client::Payload::Body(bytes) => decode(entry, bytes),
+        client::Payload::Body(bytes) => {
+            files::decode(entry, bytes).map_err(AppError::clawhub_unavailable)
+        }
     }
 }
 
@@ -212,6 +233,93 @@ async fn classify_alias(coordinate: &Coordinate) -> Result<Option<AliasDetail>, 
     }
 }
 
+/// GitHub-backed entries have no ClawHub-hosted versions; their installation
+/// reference comes from the anonymous resolver. One call per opened detail,
+/// diagnostic only while installation is paused: the result never creates an
+/// install affordance or a Git identity.
+async fn resolve_reference(coordinate: &Coordinate) -> Result<Option<ResolvedReference>, AppError> {
+    let path = format!("/api/v1/skills/{}/install", coordinate.slug);
+    let key = format!("install|{}/{}", coordinate.namespace, coordinate.slug);
+    match client::get_at_optional(
+        &path,
+        &key,
+        &[("ownerHandle", coordinate.namespace.clone())],
+    )
+    .await?
+    {
+        Some(value) => parse_resolved_reference(&value),
+        None => Ok(None),
+    }
+}
+
+/// Parse the resolver shape documented in the ticket 02 research:
+/// `{"ok":true,"installKind":"github","github":{"repo","path","commit",...}}`.
+/// Archive entries and non-GitHub kinds have no GitHub reference.
+fn parse_resolved_reference(value: &Value) -> Result<Option<ResolvedReference>, AppError> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| AppError::clawhub_unavailable("安装解析响应不是对象"))?;
+    if object.get("installKind").and_then(Value::as_str) != Some("github") {
+        return Ok(None);
+    }
+    if object.get("ok").and_then(Value::as_bool) != Some(true) {
+        return Err(AppError::clawhub_unavailable("安装解析响应未成功"));
+    }
+    let github = object
+        .get("github")
+        .filter(|github| github.is_object())
+        .ok_or_else(|| AppError::clawhub_unavailable("安装解析响应缺少 github"))?;
+    let repo = github
+        .get("repo")
+        .and_then(Value::as_str)
+        .filter(|repo| valid_repo(repo))
+        .ok_or_else(|| AppError::clawhub_unavailable("安装解析仓库无效"))?;
+    let path = github
+        .get("path")
+        .and_then(Value::as_str)
+        .filter(|path| valid_repo_path(path))
+        .ok_or_else(|| AppError::clawhub_unavailable("安装解析子路径无效"))?;
+    let commit = github
+        .get("commit")
+        .and_then(Value::as_str)
+        .filter(|commit| crate::marketplace::is_commit(commit))
+        .ok_or_else(|| AppError::clawhub_unavailable("安装解析提交无效"))?;
+    Ok(Some(ResolvedReference {
+        repo: repo.to_string(),
+        path: path.to_string(),
+        commit: commit.to_string(),
+    }))
+}
+
+fn valid_repo(repo: &str) -> bool {
+    repo.len() <= 300
+        && repo.split_once('/').is_some_and(|(owner, name)| {
+            !owner.is_empty()
+                && !name.is_empty()
+                && !name.contains('/')
+                && [owner, name].iter().all(|part| {
+                    !part.starts_with(['.', '-'])
+                        && part.len() <= 100
+                        && part
+                            .bytes()
+                            .all(|c| c.is_ascii_alphanumeric() || b"-_. ".contains(&c))
+                })
+        })
+}
+
+fn valid_repo_path(path: &str) -> bool {
+    !path.is_empty()
+        && path.len() <= 400
+        && !path.starts_with('/')
+        && !path.contains(['\\', ':'])
+        && path.split('/').all(|part| {
+            !part.is_empty()
+                && part != "."
+                && part != ".."
+                && !part.bytes().any(|c| c.is_ascii_control())
+        })
+}
+
 async fn fetch_versions(coordinate: &Coordinate) -> Result<(Vec<VersionRef>, bool), AppError> {
     let path = format!("/api/v1/skills/{}/versions", coordinate.slug);
     let mut versions: Vec<VersionRef> = Vec::new();
@@ -231,7 +339,18 @@ async fn fetch_versions(coordinate: &Coordinate) -> Result<(Vec<VersionRef>, boo
             coordinate.slug,
             cursor.as_deref().unwrap_or("first")
         );
-        let value = client::get_at(&path, &key, &query).await?;
+        // A 404 for the version list means the entry has no ClawHub-hosted
+        // version bundles (GitHub-backed entries are observed in this shape).
+        // Treat it as an empty list so a served native detail is not lost.
+        // A 404 for an explicitly selected version or file stays an error.
+        let value = if page == 0 {
+            match client::get_at_optional(&path, &key, &query).await? {
+                Some(value) => value,
+                None => return Ok((Vec::new(), false)),
+            }
+        } else {
+            client::get_at(&path, &key, &query).await?
+        };
         let (page_versions, next) = parse_version_page(&value)?;
         for version in page_versions {
             if !seen.insert(version.version.clone()) {
@@ -250,61 +369,12 @@ async fn fetch_versions(coordinate: &Coordinate) -> Result<(Vec<VersionRef>, boo
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Entry {
-    pub path: String,
-    pub size_bytes: u64,
-    #[serde(skip_serializing)]
-    sha256: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct VersionFiles {
     pub coordinate: Coordinate,
     pub version: String,
     pub license: Option<String>,
     pub changelog: Option<String>,
     pub files: Vec<Entry>,
-}
-
-fn preview_metadata(entry: &Entry) -> SkillFileContent {
-    let kind = file_kind(&entry.path);
-    SkillFileContent {
-        path: entry.path.clone(),
-        display_path: entry.path.clone(),
-        kind,
-        status: SkillFileStatus::Ok,
-        content: None,
-        data_url: None,
-        size_bytes: Some(entry.size_bytes),
-        limit_bytes: limit_for(kind),
-        error: None,
-    }
-}
-
-fn decode(entry: &Entry, bytes: Vec<u8>) -> Result<SkillFileContent, AppError> {
-    let mut result = preview_metadata(entry);
-    if bytes.len() as u64 != entry.size_bytes
-        || entry
-            .sha256
-            .as_ref()
-            .is_some_and(|hash| !format!("{:x}", Sha256::digest(&bytes)).eq_ignore_ascii_case(hash))
-    {
-        return Err(AppError::clawhub_unavailable(
-            "文件内容与该版本的文件列表不一致，请重试",
-        ));
-    }
-    if result.kind == SkillFileKind::Image {
-        let mime = image_mime(&entry.path).expect("image kind has a supported MIME type");
-        result.data_url = Some(format!("data:{mime};base64,{}", BASE64.encode(bytes)));
-    } else if bytes.contains(&0) {
-        result.status = SkillFileStatus::Binary;
-    } else if let Ok(text) = String::from_utf8(bytes) {
-        result.content = Some(text);
-    } else {
-        result.status = SkillFileStatus::Binary;
-    }
-    Ok(result)
 }
 
 fn parse_version_files(
@@ -383,24 +453,11 @@ fn parse_version_files(
     })
 }
 
-/// Remote file paths are literal, relative, slash-separated and bounded. The
-/// same rules as the SkillHub versioned file browser apply so previews cannot
-/// address anything outside the reported package.
+/// Remote file paths use the shared marketplace rule: literal, relative,
+/// slash-separated and bounded, so previews cannot address anything outside
+/// the reported package.
 fn validate_path(path: &str) -> Result<(), AppError> {
-    if path.is_empty()
-        || path.len() > 4096
-        || path.trim() != path
-        || path
-            .chars()
-            .any(|c| c.is_control() || matches!(c, '\\' | ':'))
-        || path.split('/').count() > 32
-        || path
-            .split('/')
-            .any(|part| part.is_empty() || part == "." || part == ".." || part.len() > 255)
-    {
-        return Err(AppError::clawhub_unavailable("无效的 ClawHub 文件相对路径"));
-    }
-    Ok(())
+    files::validate_path(path)
 }
 
 /// Optional detail text. Unlike the catalog helper, a blank string is a real
@@ -553,6 +610,7 @@ fn parse_native(
     value: &Value,
     versions: Vec<VersionRef>,
     truncated: bool,
+    resolved_reference: Option<ResolvedReference>,
 ) -> Result<NativeDetail, AppError> {
     let object = value
         .as_object()
@@ -597,14 +655,6 @@ fn parse_native(
             Some(version.to_string())
         }
     };
-    let license = latest
-        .map(|latest| optional_text(latest, "license", MAX_LICENSE))
-        .transpose()?
-        .flatten();
-    let changelog = latest
-        .map(|latest| optional_text(latest, "changelog", MAX_CHANGELOG))
-        .transpose()?
-        .flatten();
     // `skill.description` is the full SKILL.md on the live API; `summary` is
     // the short public summary, so the longer body is only a fallback.
     let description = optional_text(skill, "summary", list::MAX_TEXT)?.or(optional_text(
@@ -623,21 +673,68 @@ fn parse_native(
         metrics: list::metrics(skill)?,
         owner_display_name: optional_text(owner, "displayName", list::MAX_NAME)?,
         latest_version,
-        license,
-        changelog,
+        // License and changelog are intentionally version-scoped: they come
+        // from `VersionFiles` for the selected version, never from latest.
         canonical_url: coordinate.url(),
         versions,
         versions_truncated: truncated,
+        resolved_reference,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::content::SkillFileKind;
+    use crate::marketplace::files::decode;
     use serde_json::json;
 
     fn coordinate() -> Coordinate {
         Coordinate::from_canonical_for(MarketplaceSource::Clawhub, "@steipete/weather").unwrap()
+    }
+
+    /// Minimal loopback contract server: exact path match, one request per
+    /// connection, unknown paths answer 404.
+    fn serve_local(routes: Vec<(&str, u16, Value)>) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = format!("http://{}", listener.local_addr().unwrap());
+        let routes: std::collections::HashMap<String, (u16, String)> = routes
+            .into_iter()
+            .map(|(path, status, body)| (path.to_string(), (status, body.to_string())))
+            .collect();
+        std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader, Write};
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let Ok(clone) = stream.try_clone() else {
+                    continue;
+                };
+                let mut reader = BufReader::new(clone);
+                let mut request = String::new();
+                if reader.read_line(&mut request).is_err() {
+                    continue;
+                }
+                loop {
+                    let mut header = String::new();
+                    if reader.read_line(&mut header).is_err()
+                        || header == "\r\n"
+                        || header.is_empty()
+                    {
+                        break;
+                    }
+                }
+                let target = request.split_whitespace().nth(1).unwrap_or("/");
+                let path = target.split('?').next().unwrap_or(target);
+                let (status, body) = routes.get(path).cloned().unwrap_or((404, "{}".to_string()));
+                let reason = if status == 200 { "OK" } else { "Not Found" };
+                let response = format!(
+                    "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nCache-Control: public, max-age=0\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        address
     }
 
     #[test]
@@ -709,6 +806,7 @@ mod tests {
             "a//b",
             "a\\b",
             "a\0b",
+            "%2e%2e/secret",
             "./SKILL.md",
             "https://example.com/a",
             " spaced",
@@ -945,6 +1043,98 @@ mod tests {
         );
     }
 
+    #[test]
+    fn parses_the_github_resolver_reference_as_a_diagnostic_only() {
+        let value = json!({
+            "ok": true,
+            "slug": "agents-build",
+            "installKind": "github",
+            "github": {
+                "repo": "aws/agent-toolkit-for-aws",
+                "path": "plugins/aws-agents/skills/agents-build",
+                "commit": "b4416dddac9b6a0cc5412136e6dbf8f07ffdb31c",
+                "contentHash": "d79709bf46ca8cd0fffe392a914cd56539b4b7c0ff0fe34c9583f24057300195",
+                "sourceUrl": "https://github.com/aws/agent-toolkit-for-aws/tree/b4416dddac9b6a0cc5412136e6dbf8f07ffdb31c/plugins/aws-agents/skills/agents-build"
+            }
+        });
+        let reference = parse_resolved_reference(&value).unwrap().expect("github");
+        assert_eq!(reference.repo, "aws/agent-toolkit-for-aws");
+        assert_eq!(reference.path, "plugins/aws-agents/skills/agents-build");
+        assert_eq!(reference.commit, "b4416dddac9b6a0cc5412136e6dbf8f07ffdb31c");
+
+        // Non-GitHub resolvers carry no GitHub reference and are not an error.
+        assert_eq!(
+            parse_resolved_reference(&json!({"ok": true, "installKind": "archive"})).unwrap(),
+            None
+        );
+        assert_eq!(parse_resolved_reference(&json!({})).unwrap(), None);
+
+        for bad in [
+            json!(null),
+            json!({"ok": false, "installKind": "github"}),
+            json!({"ok": true, "installKind": "github"}),
+            json!({"ok": true, "installKind": "github", "github": {}}),
+            json!({"ok": true, "installKind": "github", "github": {
+                "repo": "aws", "path": "skills/a", "commit": "b4416dddac9b6a0cc5412136e6dbf8f07ffdb31c"
+            }}),
+            json!({"ok": true, "installKind": "github", "github": {
+                "repo": "aws/toolkit", "path": "../escape", "commit": "b4416dddac9b6a0cc5412136e6dbf8f07ffdb31c"
+            }}),
+            json!({"ok": true, "installKind": "github", "github": {
+                "repo": "aws/toolkit", "path": "/absolute", "commit": "b4416dddac9b6a0cc5412136e6dbf8f07ffdb31c"
+            }}),
+            json!({"ok": true, "installKind": "github", "github": {
+                "repo": "aws/toolkit", "path": "skills/a", "commit": "b4416ddd"
+            }}),
+            json!({"ok": true, "installKind": "github", "github": {
+                "repo": "aws/toolkit", "path": "skills/a",
+                "commit": "B4416DDDAC9B6A0CC5412136E6DBF8F07FFDB31C"
+            }}),
+        ] {
+            assert!(parse_resolved_reference(&bad).is_err(), "{bad}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_version_list_404_keeps_the_native_detail_but_selected_versions_still_error() {
+        let base = serve_local(vec![
+            (
+                "/api/v1/skills/weather",
+                200,
+                json!({
+                    "skill": {
+                        "slug": "weather",
+                        "displayName": "Weather",
+                        "summary": "Forecasts.",
+                        "topics": [],
+                        "stats": {"downloads": 1, "installs": 2, "stars": 3}
+                    },
+                    "latestVersion": null,
+                    "owner": {"handle": "steipete", "displayName": "Peter"}
+                }),
+            ),
+            ("/api/v1/search", 200, json!({"results": []})),
+        ]);
+        client::use_test_base(&base);
+        let weather = coordinate();
+        let Detail::Native(detail) = detail(&weather).await.unwrap() else {
+            panic!("a served detail stays native");
+        };
+        assert_eq!(detail.name.as_deref(), Some("Weather"));
+        assert!(detail.versions.is_empty());
+        assert!(detail.resolved_reference.is_none());
+        assert_eq!(
+            detail.canonical_url,
+            "https://clawhub.ai/steipete/skills/weather"
+        );
+
+        // An explicitly selected version is not silently empty.
+        let error = version_files(&weather, "1.0.0").await.unwrap_err();
+        assert_eq!(error.message, "ClawHub 版本 v1.0.0 不可用。");
+        let error = read_file(&weather, "1.0.0", "SKILL.md").await.unwrap_err();
+        assert_eq!(error.message, "ClawHub 版本 v1.0.0 不可用。");
+    }
+
     #[tokio::test]
     #[ignore = "read-only live ClawHub detail/versions/files; requires network"]
     async fn clawhub_live_detail_versions_files_and_alias_contract() {
@@ -1047,6 +1237,7 @@ mod tests {
                 changelog: None,
             }],
             false,
+            None,
         )
         .unwrap();
 
@@ -1070,14 +1261,13 @@ mod tests {
             Some("Peter Steinberger")
         );
         assert_eq!(detail.latest_version.as_deref(), Some("1.0.0"));
-        assert_eq!(detail.license, None);
-        assert_eq!(detail.changelog, None);
         assert_eq!(
             detail.canonical_url,
             "https://clawhub.ai/steipete/skills/weather"
         );
         assert_eq!(detail.versions.len(), 1);
         assert!(!detail.versions_truncated);
+        assert!(detail.resolved_reference.is_none());
 
         let serialized = serde_json::to_value(Detail::Native(detail)).unwrap();
         assert_eq!(serialized["kind"], "native");

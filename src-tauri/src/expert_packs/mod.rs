@@ -20,7 +20,7 @@ pub fn url(slug: &str) -> String {
     format!("https://skillhub.cn/skillsets/{slug}")
 }
 pub fn is_native_source(source: &str) -> bool {
-    matches!(source, "skillhub" | "skillhub-pack" | "clawhub")
+    crate::marketplace::is_native_source_type(source)
 }
 
 #[cfg(test)]

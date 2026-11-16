@@ -7,6 +7,8 @@ export interface MutationErrorProps {
   monoDetail?: boolean;
   showCode?: boolean;
   className?: string;
+  /** Set false when an enclosing notice already owns the alert role. */
+  alertRole?: boolean;
 }
 
 export function MutationError({
@@ -15,11 +17,12 @@ export function MutationError({
   monoDetail = false,
   showCode = false,
   className,
+  alertRole = true,
 }: MutationErrorProps) {
   if (!error) return null;
   return (
     <div
-      role="alert"
+      role={alertRole ? "alert" : undefined}
       data-testid={testId}
       className={cn("notice mt-3", className)}
       data-tone="negative"

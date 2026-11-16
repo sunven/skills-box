@@ -186,15 +186,9 @@ mod tests {
         version: &str,
         content_hash: &str,
     ) -> Installation {
-        Installation {
-            name: name.into(),
-            coordinate,
-            version: version.into(),
-            content_hash: content_hash.into(),
-            installed_at: "now".into(),
-            updated_at: "now".into(),
-            diagnostics: None,
-        }
+        let mut record = Installation::fixture(name, coordinate, version);
+        record.content_hash = content_hash.into();
+        record
     }
 
     fn records() -> Records {

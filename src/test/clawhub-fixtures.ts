@@ -100,14 +100,13 @@ export const clawhubDetail: ClawHubNativeDetail = {
   metrics: { downloads: 1200, installs: 34, stars: 5 },
   ownerDisplayName: "Peter Steinberger",
   latestVersion: clawhubVersionOne,
-  license: "MIT-0",
-  changelog: "1.2.0：新增本地化出行建议。",
   canonicalUrl: "https://clawhub.ai/steipete/skills/weather",
   versions: [
     { version: clawhubVersionOne, createdAt: 1767632598365, changelog: "1.2.0：新增本地化出行建议。" },
     { version: clawhubVersionOld, createdAt: 1767545394459, changelog: "1.0.0：首个公开版本。" },
   ],
   versionsTruncated: false,
+  resolvedReference: null,
 };
 
 const versionTexts: Record<string, Record<string, string>> = {

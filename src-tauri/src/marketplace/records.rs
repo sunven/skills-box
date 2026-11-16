@@ -105,6 +105,22 @@ impl Installation {
         }
     }
 }
+#[cfg(test)]
+impl Installation {
+    /// Minimal valid record for tests that only care about identity and
+    /// lifecycle; no ClawHub diagnostics.
+    pub(crate) fn fixture(name: &str, coordinate: Coordinate, version: &str) -> Self {
+        Self {
+            name: name.into(),
+            coordinate,
+            version: version.into(),
+            content_hash: "hash".into(),
+            installed_at: "now".into(),
+            updated_at: "now".into(),
+            diagnostics: None,
+        }
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Records {
@@ -198,38 +214,29 @@ mod tests {
     use crate::marketplace::MarketplaceSource;
 
     fn skillhub_record(name: &str) -> Installation {
-        Installation {
-            name: name.into(),
-            coordinate: Coordinate::from_canonical("@owner/slug").unwrap(),
-            version: "1.0.0".into(),
-            content_hash: "hash".into(),
-            installed_at: "now".into(),
-            updated_at: "now".into(),
-            diagnostics: None,
-        }
+        Installation::fixture(
+            name,
+            Coordinate::from_canonical("@owner/slug").unwrap(),
+            "1.0.0",
+        )
     }
 
     fn clawhub_record(name: &str) -> Installation {
-        Installation {
-            name: name.into(),
-            coordinate: Coordinate::from_canonical_for(
-                MarketplaceSource::Clawhub,
-                "@aws/agents-build",
-            )
-            .unwrap(),
-            version: "b4416dddac9b6a0cc5412136e6dbf8f07ffdb31c".into(),
-            content_hash: "hash".into(),
-            installed_at: "now".into(),
-            updated_at: "now".into(),
-            diagnostics: Some(ClawhubDiagnostics {
-                repo: Some("aws/agent-toolkit-for-aws".into()),
-                path: Some("plugins/aws-agents/skills/agents-build".into()),
-                commit: Some("b4416dddac9b6a0cc5412136e6dbf8f07ffdb31c".into()),
-                content_hash: Some(
-                    "d79709bf46ca8cd0fffe392a914cd56539b4b7c0ff0fe34c9583f24057300195".into(),
-                ),
-            }),
-        }
+        let mut record = Installation::fixture(
+            name,
+            Coordinate::from_canonical_for(MarketplaceSource::Clawhub, "@aws/agents-build")
+                .unwrap(),
+            "b4416dddac9b6a0cc5412136e6dbf8f07ffdb31c",
+        );
+        record.diagnostics = Some(ClawhubDiagnostics {
+            repo: Some("aws/agent-toolkit-for-aws".into()),
+            path: Some("plugins/aws-agents/skills/agents-build".into()),
+            commit: Some("b4416dddac9b6a0cc5412136e6dbf8f07ffdb31c".into()),
+            content_hash: Some(
+                "d79709bf46ca8cd0fffe392a914cd56539b4b7c0ff0fe34c9583f24057300195".into(),
+            ),
+        });
+        record
     }
 
     #[test]

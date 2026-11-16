@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, ExternalLink, Search } from "lucide-react";
-import { asAppError, getSkillsShSnapshot, listSkillsSh, openExternalUrl } from "../lib/api";
+import { ArrowLeft, Search } from "lucide-react";
+import { asAppError, getSkillsShSnapshot, listSkillsSh } from "../lib/api";
 import { useMarketplaceSession } from "../hooks/use-marketplace-session";
 import { skillsShInstallation, skillsShKey, skillsShViews, type MarketplaceInstallSeed, type SkillsShListing, type SkillsShSkill, type SkillsShSnapshot, type SkillsShView } from "../lib/skills-sh";
 import type { InventorySnapshot } from "../lib/types";
@@ -9,6 +9,7 @@ import { formatBytes, parentDir } from "../lib/skill-content";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { MarketplaceFileTree } from "./marketplace-files-tab";
+import { OfficialLink } from "./official-link";
 import { SkillMarkdown } from "./skill-markdown";
 
 interface Props {
@@ -131,10 +132,6 @@ export function SkillsShPage(props: Props) {
     {selected ? <SkillsShDetail {...props} key={skillsShKey(selected.skill.coordinate)} skill={selected.skill}
       metric={selected.metric} onBack={() => setSelected(null)} /> : null}
   </>;
-}
-
-function OfficialLink({ url, label = "官方页面" }: { url: string; label?: string }) {
-  return <Button variant="ghost" size="sm" onClick={() => void openExternalUrl(url)}><ExternalLink aria-hidden="true" />{label}</Button>;
 }
 
 function SkillsShDetail({ skill, metric, onBack, ...props }: Props & { skill: SkillsShSkill; metric: string; onBack: () => void }) {
