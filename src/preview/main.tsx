@@ -8,6 +8,7 @@ import App from "../App";
 import { createQueryClient } from "../lib/query-client";
 import { createFakeBackend } from "../test/fake-backend";
 import { initialAppUpdate } from "../lib/app-update";
+import { isNativeSkillSource } from "../lib/marketplace";
 import { marketplaceSkill } from "../test/marketplace-fixtures";
 import { skillsShPreview } from "../test/skills-sh-fixtures";
 import {
@@ -58,7 +59,7 @@ createFakeBackend({
     }) } : undefined,
     detail: (skillId, current) => {
       const installed = current.skills.find((skill) => skill.id === skillId || skill.name === skillId);
-      return ["skillhub", "skillhub-pack"].includes(installed?.sourceType ?? "") ? detailForSkill(installed!) : skillDetail(skillId);
+      return isNativeSkillSource(installed?.sourceType) ? detailForSkill(installed!) : skillDetail(skillId);
     },
     listDir: listSkillDir,
     readFile: readSkillFile,

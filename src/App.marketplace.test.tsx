@@ -644,6 +644,37 @@ describe("SkillHub marketplace", () => {
     expect(backend.count("get_marketplace_cli")).toBe(0);
   });
 
+  it("keeps ClawHub batch uninstall available when Node is missing", async () => {
+    const backend = setup({
+      data: {
+        environment: nodeMissingReport(),
+        snapshot: makeSnapshot({
+          skills: [
+            makeSkill({
+              name: "clawhub-skill",
+              sourceType: "clawhub",
+              source: "@aws/agents-build",
+              sourceVersion: "b4416dddac9b6a0cc5412136e6dbf8f07ffdb31c",
+            }),
+          ],
+        }),
+      },
+    });
+    fireEvent.click(
+      await screen.findByRole("checkbox", {
+        name: "选择技能 clawhub-skill",
+      }),
+    );
+    const uninstall = screen.getByRole("button", { name: "批量卸载" });
+    expect(uninstall).toBeEnabled();
+    fireEvent.click(uninstall);
+    fireEvent.click(screen.getByRole("radio", { name: "完全卸载" }));
+    await waitFor(() =>
+      expect(backend.count("preview_batch")).toBeGreaterThan(0),
+    );
+    expect(backend.count("get_marketplace_cli")).toBe(0);
+  });
+
   it("confirms a backend preview with multiple agents and returns a managed installation", async () => {
     const backend = setup({ autoTasks: { delayMs: 5 } });
     const dialog = await openInstallation();

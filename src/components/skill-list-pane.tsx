@@ -1,5 +1,6 @@
 import { SelectionCheckbox } from "./selection-checkbox";
 import { BATCH_ACTION_LABELS } from "../lib/batch";
+import { isNativeSkillSource } from "../lib/marketplace";
 import type { BatchSelection } from "./batch-dialog";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { AlertTriangle, Loader2, Search, X } from "lucide-react";
@@ -348,13 +349,13 @@ export function SkillListPane({
                     actionsDisabled ||
                     batchRunning ||
                     ((action === "update" || action === "uninstall") &&
-                      !batchMutationsEnabled && !(action === "uninstall" && checkedSkills.every((s) => ["skillhub", "skillhub-pack"].includes(s.sourceType ?? "") || s.management === "unmanaged")))
+                      !batchMutationsEnabled && !(action === "uninstall" && checkedSkills.every((s) => isNativeSkillSource(s.sourceType) || s.management === "unmanaged")))
                   }
                   title={
                     actionsDisabled || batchRunning
                       ? "当前无法开始写入操作"
                       : (action === "update" || action === "uninstall") &&
-                          !batchMutationsEnabled && !(action === "uninstall" && checkedSkills.every((s) => ["skillhub", "skillhub-pack"].includes(s.sourceType ?? "") || s.management === "unmanaged"))
+                          !batchMutationsEnabled && !(action === "uninstall" && checkedSkills.every((s) => isNativeSkillSource(s.sourceType) || s.management === "unmanaged"))
                         ? "请先配置可用的执行环境"
                         : undefined
                   }

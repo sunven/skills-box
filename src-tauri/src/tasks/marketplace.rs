@@ -198,6 +198,7 @@ impl Plan {
                 .map(|r| r.installed_at.clone())
                 .unwrap_or_else(|| now.clone()),
             updated_at: now,
+            diagnostics: None,
         }
     }
 }

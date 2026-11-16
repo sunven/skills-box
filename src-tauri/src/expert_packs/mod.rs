@@ -20,7 +20,22 @@ pub fn url(slug: &str) -> String {
     format!("https://skillhub.cn/skillsets/{slug}")
 }
 pub fn is_native_source(source: &str) -> bool {
-    matches!(source, "skillhub" | "skillhub-pack")
+    matches!(source, "skillhub" | "skillhub-pack" | "clawhub")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn marketplace_records_and_pack_workflows_are_native_sources() {
+        for source in ["skillhub", "skillhub-pack", "clawhub"] {
+            assert!(is_native_source(source), "{source}");
+        }
+        for source in ["github", "git", "unmanaged", ""] {
+            assert!(!is_native_source(source), "{source}");
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

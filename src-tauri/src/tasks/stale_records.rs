@@ -766,6 +766,68 @@ mod tests {
     }
 
     #[test]
+    fn clawhub_records_are_native_stale_records_with_blocked_restore_and_native_cleanup() {
+        let (_tmp, paths, layout) = fixture();
+        let record = crate::marketplace::records::Installation {
+            name: "market".into(),
+            coordinate: crate::marketplace::Coordinate::from_canonical_for(
+                crate::marketplace::MarketplaceSource::Clawhub,
+                "@owner/slug",
+            )
+            .unwrap(),
+            version: "b4416dddac9b6a0cc5412136e6dbf8f07ffdb31c".into(),
+            content_hash: "hash".into(),
+            installed_at: "now".into(),
+            updated_at: "now".into(),
+            diagnostics: None,
+        };
+        let mut market = crate::marketplace::records::Records::default();
+        market.skills.insert(record.name.clone(), record);
+        market.save(&paths.lock_path()).unwrap();
+
+        let stale = list(&paths, &layout)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.name == "market")
+            .unwrap();
+        assert_eq!(
+            stale.restore_reason.as_deref(),
+            Some("请先清理市场记录，再到技能市场重新安装。")
+        );
+        let (restore, install) = inspect(
+            &paths,
+            &layout,
+            BatchAction::Restore,
+            &layout.scope.skill_id("market"),
+            "market",
+            &[],
+        )
+        .unwrap();
+        assert!(install.is_none());
+        assert!(!restore.target.eligible);
+        assert_eq!(
+            restore.target.reason.as_deref(),
+            Some("请先清理市场记录，再到技能市场重新安装。")
+        );
+
+        let before_git = read_lock(&layout).unwrap();
+        let plan = plan(&paths, &layout, &["market"]);
+        let target = plan.targets[0].clone();
+        assert!(target.target.eligible, "{:?}", target.target.reason);
+        clean(&paths, &layout, &plan, &target, &|_| {}, &|| {
+            verify(&paths, &layout, &plan, &target)
+        })
+        .unwrap();
+        assert_eq!(read_lock(&layout).unwrap(), before_git);
+        assert!(
+            crate::marketplace::records::Records::read(&layout.lock_path)
+                .unwrap()
+                .skills
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn cleanup_preserves_unknown_fields_files_permissions_and_advances_own_document() {
         let (_tmp, paths, layout) = fixture();
         fs::set_permissions(paths.lock_path(), fs::Permissions::from_mode(0o640)).unwrap();

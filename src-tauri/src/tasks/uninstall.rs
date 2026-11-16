@@ -840,6 +840,44 @@ mod tests {
     }
 
     #[test]
+    fn clawhub_marketplace_uninstall_is_native_and_previews_without_a_cli() {
+        let fixture = Fixture::new();
+        write_lock(&fixture.paths, &["copy-only"]);
+        let record = crate::marketplace::records::Installation {
+            name: "alpha".into(),
+            coordinate: crate::marketplace::Coordinate::from_canonical_for(
+                crate::marketplace::MarketplaceSource::Clawhub,
+                "@owner/slug",
+            )
+            .unwrap(),
+            version: "1.2.0".into(),
+            content_hash: "hash".into(),
+            installed_at: "now".into(),
+            updated_at: "now".into(),
+            diagnostics: None,
+        };
+        let mut records = crate::marketplace::records::Records::default();
+        records.skills.insert(record.name.clone(), record);
+        records.save(&fixture.paths.lock_path()).unwrap();
+
+        let plan = fixture.plan("alpha").unwrap();
+        assert!(plan.marketplace, "ClawHub records uninstall natively");
+        use crate::cli::preview::CommandPlan;
+        assert!(
+            !plan.needs_cli(),
+            "native uninstall must not resolve Node/Git"
+        );
+
+        let layout =
+            crate::scope_layout::ScopeLayout::global(&fixture.paths, fixture.agents.clone());
+        let preview = crate::cli::preview::uninstall_preview(&layout, None, &plan);
+        assert!(
+            preview.entries[0].command.is_none(),
+            "native uninstall must not display a CLI command"
+        );
+    }
+
+    #[test]
     fn managed_skills_plan_canonical_all_attachments_and_universal() {
         let fixture = Fixture::new();
         let plan = fixture.plan("alpha").unwrap();
