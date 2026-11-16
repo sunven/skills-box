@@ -811,7 +811,7 @@ mod tests {
         );
 
         let before_git = read_lock(&layout).unwrap();
-        let mut plan = plan(&paths, &layout, &["market"]);
+        let plan = plan(&paths, &layout, &["market"]);
         let target = plan.targets[0].clone();
         assert!(target.target.eligible, "{:?}", target.target.reason);
         clean(&paths, &layout, &plan, &target, &|_| {}, &|| {
