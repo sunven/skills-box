@@ -938,6 +938,15 @@ pub async fn get_skills_sh_snapshot(
 ) -> Result<crate::marketplace::skills_sh::Snapshot, AppError> {
     crate::marketplace::skills_sh::snapshot(&coordinate).await
 }
+/// Anonymous ClawHub catalog page. Cursor paging only; the response carries
+/// `nextCursor` instead of totals or page numbers.
+#[tauri::command]
+pub async fn list_clawhub_skills(
+    sort: crate::marketplace::clawhub::Sort,
+    cursor: Option<String>,
+) -> Result<crate::marketplace::clawhub::Listing, AppError> {
+    crate::marketplace::clawhub::list(sort, cursor).await
+}
 #[tauri::command]
 pub async fn list_marketplace_skills(
     keyword: String,

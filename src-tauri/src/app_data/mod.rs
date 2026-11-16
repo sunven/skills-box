@@ -27,6 +27,7 @@ pub(crate) fn error(message: impl Into<String>) -> AppError {
         message: message.into(),
         detail: None,
         hint: None,
+        retry_after_seconds: None,
         retryable: true,
     }
 }

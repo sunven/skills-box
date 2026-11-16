@@ -2,6 +2,8 @@ import type { PackListing, PackDetail, PackPreview, LocalPack, PackSnapshot } fr
 import { expertPack, packSnapshot } from "./expert-pack-fixtures";
 import type { SkillsShCoordinate, SkillsShListing, SkillsShSnapshot, SkillsShView } from "../lib/skills-sh";
 import { skillsShSkill, skillsShWebsiteSkill, skillsShSnapshot } from "./skills-sh-fixtures";
+import type { ClawHubListing, ClawHubSort } from "../lib/clawhub";
+import { clawhubPageOne, clawhubPageTwo } from "./clawhub-fixtures";
 import type { MarketplaceCoordinate, MarketplaceListing, MarketplaceDetail, MarketplaceCli, MarketplacePreview, MarketplaceSort, MarketplaceCategory, MarketplaceApiKeyFilter, MarketplaceFiles } from "../lib/marketplace";
 import { isNativeSkillSource, marketplaceAddress } from "../lib/marketplace";
 import { marketplaceSkill, marketplaceCli, marketplaceCategories, marketplaceFiles, marketplaceFileContent } from "./marketplace-fixtures";
@@ -76,6 +78,7 @@ type MaybePromise<T> = T | Promise<T>;
 export interface FakeCommandContract {
   list_skills_sh: { args: { keyword: string; view: SkillsShView; page: number }; result: SkillsShListing };
   get_skills_sh_snapshot: { args: { coordinate: SkillsShCoordinate }; result: SkillsShSnapshot };
+  list_clawhub_skills: { args: { sort: ClawHubSort; cursor: string | null }; result: ClawHubListing };
   list_expert_packs: { args: { keyword: string; page: number }; result: PackListing };
   get_expert_pack: { args: { slug: string }; result: PackDetail };
   list_local_packs: { args: { scope: ScopeId }; result: LocalPack[] };
@@ -1822,6 +1825,7 @@ export function createFakeBackend(
     },
     get_skills_sh_snapshot: ({ coordinate }) => coordinate.source === skillsShSkill.coordinate.source
       ? skillsShSnapshot : { files: null, hash: null },
+    list_clawhub_skills: ({ cursor }) => cursor === "cursor-2" ? clawhubPageTwo : clawhubPageOne,
     list_marketplace_skills: ({ keyword, page, category, apiKey }) => {
       const matches = apiKey !== "required" && (!category || category === "knowledge-management") && `${marketplaceSkill.name} ${marketplaceSkill.description}`.toLowerCase().includes(keyword.toLowerCase());
       return { skills: page === 1 && matches ? [marketplaceSkill] : [], total: matches ? 1 : 0, page, pageSize: 24 };

@@ -66,6 +66,8 @@ export interface AppError {
   message: string;
   detail?: string;
   hint?: string;
+  /** Server-requested wait before retrying (ClawHub `Retry-After`). */
+  retryAfterSeconds?: number;
   retryable: boolean;
 }
 

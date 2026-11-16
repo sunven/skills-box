@@ -31,11 +31,13 @@ export function skillsShInstallation(skill: SkillsShSkill, snapshot?: InventoryS
   return { installed, collision: installed ? undefined : sameName };
 }
 
-export type MarketplaceSourceId = "skillhub" | "skills-sh";
+export type MarketplaceSourceId = "skillhub" | "skills-sh" | "clawhub";
 const SOURCE_KEY = "skills-box.marketplace-source";
 export function readMarketplaceSource(): MarketplaceSourceId {
-  try { return localStorage.getItem(SOURCE_KEY) === "skills-sh" ? "skills-sh" : "skillhub"; }
-  catch { return "skillhub"; }
+  try {
+    const saved = localStorage.getItem(SOURCE_KEY);
+    return saved === "skills-sh" || saved === "clawhub" ? saved : "skillhub";
+  } catch { return "skillhub"; }
 }
 export function rememberMarketplaceSource(source: MarketplaceSourceId) {
   try { localStorage.setItem(SOURCE_KEY, source); } catch { /* Session selection still works. */ }

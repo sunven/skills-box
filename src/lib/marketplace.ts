@@ -22,7 +22,7 @@ export interface MarketplaceCategory {
 }
 
 export interface MarketplaceCoordinate {
-  source: "skillhub";
+  source: "skillhub" | "clawhub";
   namespace: string;
   slug: string;
 }
