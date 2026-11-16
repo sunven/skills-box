@@ -938,6 +938,49 @@ pub async fn get_skills_sh_snapshot(
 ) -> Result<crate::marketplace::skills_sh::Snapshot, AppError> {
     crate::marketplace::skills_sh::snapshot(&coordinate).await
 }
+/// Anonymous ClawHub catalog page. Cursor paging only; the response carries
+/// `nextCursor` instead of totals or page numbers.
+#[tauri::command]
+pub async fn list_clawhub_skills(
+    sort: crate::marketplace::clawhub::Sort,
+    cursor: Option<String>,
+) -> Result<crate::marketplace::clawhub::Listing, AppError> {
+    crate::marketplace::clawhub::list(sort, cursor).await
+}
+/// Anonymous ClawHub keyword search. Results keep upstream order and exclude
+/// skills.sh alias entries; there is no cursor, so the response carries the
+/// returned count and the requested upstream limit.
+#[tauri::command]
+pub async fn search_clawhub_skills(
+    query: String,
+) -> Result<crate::marketplace::clawhub::Search, AppError> {
+    crate::marketplace::clawhub::search(&query).await
+}
+/// One ClawHub entry with its version list. skills.sh alias entries come back
+/// as a redirect target instead of content and never offer ClawHub install.
+#[tauri::command]
+pub async fn get_clawhub_skill_detail(
+    coordinate: crate::marketplace::Coordinate,
+) -> Result<crate::marketplace::clawhub::Detail, AppError> {
+    crate::marketplace::clawhub::detail(&coordinate).await
+}
+/// Files packaged in one explicit ClawHub version.
+#[tauri::command]
+pub async fn list_clawhub_version_files(
+    coordinate: crate::marketplace::Coordinate,
+    version: String,
+) -> Result<crate::marketplace::clawhub::VersionFiles, AppError> {
+    crate::marketplace::clawhub::version_files(&coordinate, &version).await
+}
+/// Read-only preview of one file in one explicit ClawHub version.
+#[tauri::command]
+pub async fn read_clawhub_version_file(
+    coordinate: crate::marketplace::Coordinate,
+    version: String,
+    path: String,
+) -> Result<crate::content::SkillFileContent, AppError> {
+    crate::marketplace::clawhub::read_file(&coordinate, &version, &path).await
+}
 #[tauri::command]
 pub async fn list_marketplace_skills(
     keyword: String,

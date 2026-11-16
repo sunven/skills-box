@@ -22,6 +22,65 @@ impl AppError {
         .hint("请检查网络并刷新详情后重试。")
         .retryable(true)
     }
+    pub fn clawhub_unavailable(detail: impl std::fmt::Display) -> Self {
+        Self::new(ErrorCode::MarketplaceUnavailable, "无法读取 ClawHub 目录。")
+            .detail(detail.to_string())
+            .hint("请检查网络后重试，或打开 ClawHub 官网浏览。")
+            .retryable(true)
+    }
+    /// A caller-side ClawHub search term the app refuses to send upstream.
+    pub fn clawhub_invalid_query(detail: impl std::fmt::Display) -> Self {
+        Self::new(
+            ErrorCode::MarketplaceUnavailable,
+            "ClawHub 搜索关键词无效。",
+        )
+        .detail(detail.to_string())
+        .hint("请输入 1–200 个字符的关键词后再搜索。")
+        .retryable(false)
+    }
+    /// A 429 from the anonymous ClawHub API. The retry window is structured so
+    /// the UI can back off instead of hammering the endpoint.
+    pub fn clawhub_rate_limited(seconds: u64) -> Self {
+        Self::new(
+            ErrorCode::MarketplaceRateLimited,
+            "ClawHub 请求受限（HTTP 429），已暂停请求。",
+        )
+        .detail(format!("上游要求等待约 {seconds} 秒后再试。"))
+        .hint("已按 Retry-After 退避；ClawHub 文档限制每个 IP 每分钟 3000 次读取，请稍后重试或打开官网浏览。")
+        .retry_after(seconds)
+        .retryable(true)
+    }
+    /// The ClawHub detail endpoint has no public record for this coordinate.
+    /// Never conflated with a network failure or another source.
+    pub fn clawhub_detail_missing(detail: impl std::fmt::Display) -> Self {
+        Self::new(
+            ErrorCode::MarketplaceUnavailable,
+            "ClawHub 条目不存在或不可公开访问。",
+        )
+        .detail(detail.to_string())
+        .hint("可打开 ClawHub 页面确认条目是否已下架或被审核屏蔽；若刚发布，请稍后重试。")
+        .retryable(false)
+    }
+    /// A ClawHub version that the registry no longer serves.
+    pub fn clawhub_version_missing(version: &str, detail: impl std::fmt::Display) -> Self {
+        Self::new(
+            ErrorCode::MarketplaceUnavailable,
+            format!("ClawHub 版本 v{version} 不可用。"),
+        )
+        .detail(detail.to_string())
+        .hint("请选择其他版本，或打开 ClawHub 页面查看。")
+        .retryable(false)
+    }
+    /// A path that is not part of the requested ClawHub version.
+    pub fn clawhub_file_missing(path: &str, detail: impl std::fmt::Display) -> Self {
+        Self::new(
+            ErrorCode::MarketplaceUnavailable,
+            format!("ClawHub 版本中没有文件 {path}。"),
+        )
+        .detail(detail.to_string())
+        .hint("请从该版本的文件树选择其他文件，或打开 ClawHub 页面查看。")
+        .retryable(false)
+    }
     pub fn marketplace_cli_unavailable(detail: impl std::fmt::Display) -> Self {
         Self::new(
             ErrorCode::MarketplaceCliUnavailable,

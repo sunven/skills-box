@@ -198,7 +198,31 @@ impl Plan {
                 .map(|r| r.installed_at.clone())
                 .unwrap_or_else(|| now.clone()),
             updated_at: now,
+            diagnostics: None,
         }
+    }
+}
+impl publication::MarketplaceInstallation for Plan {
+    fn scope(&self) -> &crate::scope::ScopeId {
+        &self.layout.scope
+    }
+    fn name(&self) -> &str {
+        Plan::name(self)
+    }
+    fn targets(&self) -> &[InstallTarget] {
+        &self.targets
+    }
+    fn previous(&self) -> Option<&Installation> {
+        self.previous.as_ref()
+    }
+    fn previous_paths(&self) -> Option<&super::uninstall::UninstallPlan> {
+        self.previous_paths.as_ref()
+    }
+    fn check(&self, paths: &AppPaths, layout: &ScopeLayout) -> Result<(), AppError> {
+        Plan::check(self, paths, layout)
+    }
+    fn installation(&self, content_hash: String) -> Installation {
+        Plan::installation(self, content_hash)
     }
 }
 impl CommandPlan for Plan {

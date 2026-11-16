@@ -608,9 +608,11 @@ impl SkillView {
             description: self.description.clone(),
             source: self.source.clone(),
             source_type: self.source_type.clone(),
-            source_version: (self.source_type.as_deref() == Some("skillhub"))
-                .then(|| self.reference.clone())
-                .flatten(),
+            source_version: self
+                .source_type
+                .as_deref()
+                .and_then(crate::marketplace::MarketplaceSource::from_key)
+                .and_then(|_| self.reference.clone()),
             management: self.management,
             updated_at: self.updated_at.clone(),
             canonical_path: self.canonical_path.as_ref().map(|path| paths.display(path)),
@@ -1032,6 +1034,51 @@ mod tests {
         assert_eq!(global.skills.len(), 1);
         assert_eq!(global.skills[0].id, "global");
         assert_eq!(model.build_count(), 2);
+    }
+
+    #[test]
+    fn inventory_reports_the_recorded_reference_for_both_marketplace_sources() {
+        let fixture = Fixture::new();
+        let beta = fixture.paths.canonical_skills_dir().join("beta");
+        fs::create_dir_all(&beta).unwrap();
+        fs::write(beta.join("SKILL.md"), "---\nname: beta\n---\n").unwrap();
+        let mut records = crate::marketplace::records::Records::default();
+        records.skills.insert(
+            "alpha".into(),
+            crate::marketplace::records::Installation::fixture(
+                "alpha",
+                crate::marketplace::Coordinate::from_canonical_for(
+                    crate::marketplace::MarketplaceSource::Clawhub,
+                    "@owner/slug",
+                )
+                .unwrap(),
+                "b4416dddac9b6a0cc5412136e6dbf8f07ffdb31c",
+            ),
+        );
+        records.skills.insert(
+            "beta".into(),
+            crate::marketplace::records::Installation::fixture(
+                "beta",
+                crate::marketplace::Coordinate::from_canonical("@publisher/beta").unwrap(),
+                "2.1.0",
+            ),
+        );
+        records.save(&fixture.paths.lock_path()).unwrap();
+        let snapshot = fixture.model().snapshot(&ScopeId::global()).unwrap();
+        let skill = |name: &str| {
+            snapshot
+                .skills
+                .iter()
+                .find(|skill| skill.name == name)
+                .unwrap()
+        };
+        assert_eq!(skill("alpha").source_type.as_deref(), Some("clawhub"));
+        assert_eq!(
+            skill("alpha").source_version.as_deref(),
+            Some("b4416dddac9b6a0cc5412136e6dbf8f07ffdb31c")
+        );
+        assert_eq!(skill("beta").source_type.as_deref(), Some("skillhub"));
+        assert_eq!(skill("beta").source_version.as_deref(), Some("2.1.0"));
     }
 
     #[test]

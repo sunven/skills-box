@@ -22,7 +22,7 @@ export interface MarketplaceCategory {
 }
 
 export interface MarketplaceCoordinate {
-  source: "skillhub";
+  source: "skillhub" | "clawhub";
   namespace: string;
   slug: string;
 }
@@ -73,3 +73,11 @@ export const marketplaceKey = (coordinate: MarketplaceCoordinate) =>
   `${coordinate.source}:@${coordinate.namespace}/${coordinate.slug}`;
 export const marketplaceAddress = (coordinate: MarketplaceCoordinate) =>
   `@${coordinate.namespace}/${coordinate.slug}`;
+
+/** Sources whose installations are app-owned marketplace records with a pinned reference. */
+export const isMarketplaceRecordSource = (sourceType?: string | null) =>
+  sourceType === "skillhub" || sourceType === "clawhub";
+
+/** Sources removed natively without a CLI: marketplace records and pack workflows. */
+export const isNativeSkillSource = (sourceType?: string | null) =>
+  isMarketplaceRecordSource(sourceType) || sourceType === "skillhub-pack";

@@ -1,5 +1,6 @@
 import type { PackListing, PackDetail, PackPreview, LocalPack } from "./expert-packs";
 import type { SkillsShCoordinate, SkillsShListing, SkillsShSnapshot, SkillsShView } from "./skills-sh";
+import type { ClawHubCoordinate, ClawHubDetail, ClawHubListing, ClawHubSearch, ClawHubSort, ClawHubVersionFiles } from "./clawhub";
 import type { MarketplaceCoordinate, MarketplaceListing, MarketplaceDetail, MarketplaceCli, MarketplacePreview, MarketplaceSort, MarketplaceCategory, MarketplaceApiKeyFilter, MarketplaceFiles } from "./marketplace";
 import type { BatchRequest, BatchPreview, BatchConfirmation, StaleRecord } from "./batch";
 import type { CliCommandRequest, CliCommandPreview, CliCommandRecord } from "./cli-commands";
@@ -42,6 +43,11 @@ import { GLOBAL_SCOPE } from "./types";
 export const API_COMMANDS = {
   listSkillsSh: "list_skills_sh",
   getSkillsShSnapshot: "get_skills_sh_snapshot",
+  listClawhubSkills: "list_clawhub_skills",
+  searchClawhubSkills: "search_clawhub_skills",
+  getClawhubSkillDetail: "get_clawhub_skill_detail",
+  listClawhubVersionFiles: "list_clawhub_version_files",
+  readClawhubVersionFile: "read_clawhub_version_file",
   listExpertPacks: "list_expert_packs",
   getExpertPack: "get_expert_pack",
   listLocalPacks: "list_local_packs",
@@ -481,6 +487,7 @@ export function asAppError(error: unknown): AppError | null {
       message?: unknown;
       detail?: unknown;
       hint?: unknown;
+      retryAfterSeconds?: unknown;
       retryable?: unknown;
     };
     if (typeof candidate.message === "string") {
@@ -490,6 +497,10 @@ export function asAppError(error: unknown): AppError | null {
         detail:
           typeof candidate.detail === "string" ? candidate.detail : undefined,
         hint: typeof candidate.hint === "string" ? candidate.hint : undefined,
+        retryAfterSeconds:
+          typeof candidate.retryAfterSeconds === "number"
+            ? candidate.retryAfterSeconds
+            : undefined,
         retryable:
           typeof candidate.retryable === "boolean"
             ? candidate.retryable
@@ -566,6 +577,21 @@ export function listSkillsSh(keyword: string, view: SkillsShView, page: number):
 }
 export function getSkillsShSnapshot(coordinate: SkillsShCoordinate): Promise<SkillsShSnapshot> {
   return invoke(API_COMMANDS.getSkillsShSnapshot, { coordinate });
+}
+export function listClawhubSkills(sort: ClawHubSort, cursor: string | null): Promise<ClawHubListing> {
+  return invoke(API_COMMANDS.listClawhubSkills, { sort, cursor });
+}
+export function searchClawhubSkills(query: string): Promise<ClawHubSearch> {
+  return invoke(API_COMMANDS.searchClawhubSkills, { query });
+}
+export function getClawhubSkillDetail(coordinate: ClawHubCoordinate): Promise<ClawHubDetail> {
+  return invoke(API_COMMANDS.getClawhubSkillDetail, { coordinate });
+}
+export function listClawhubVersionFiles(coordinate: ClawHubCoordinate, version: string): Promise<ClawHubVersionFiles> {
+  return invoke(API_COMMANDS.listClawhubVersionFiles, { coordinate, version });
+}
+export function readClawhubVersionFile(coordinate: ClawHubCoordinate, version: string, path: string): Promise<SkillFileContent> {
+  return invoke(API_COMMANDS.readClawhubVersionFile, { coordinate, version, path });
 }
 export function listMarketplaceSkills(keyword: string, page: number, sort: MarketplaceSort, category: string, apiKey: MarketplaceApiKeyFilter): Promise<MarketplaceListing> { return invoke(API_COMMANDS.listMarketplaceSkills, { keyword, page, sort, category, apiKey }); }
 export function getMarketplaceSkill(coordinate: MarketplaceCoordinate): Promise<MarketplaceDetail> { return invoke(API_COMMANDS.getMarketplaceSkill, { coordinate }); }

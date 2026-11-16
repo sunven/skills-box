@@ -25,6 +25,7 @@ import { Button } from "./ui/button";
 import { AttachDialog } from "./attach-dialog";
 import { DetachDialog } from "./detach-dialog";
 import { asAppError, detachAgent } from "../lib/api";
+import { isMarketplaceRecordSource } from "../lib/marketplace";
 import { agentInitials } from "../lib/agent-style";
 import { agentLogoUrl } from "../lib/agent-logos";
 import { promiseDriver, useMutation } from "../lib/mutation";
@@ -844,7 +845,7 @@ export const DetailPane = memo(function DetailPane({
                       </span>
                     ) : null}
                   </MetaRow>
-                  <MetaRow label={detail.sourceType === "skillhub" ? "平台版本" : "ref"}>{detail.ref ?? "—"}</MetaRow>
+                  <MetaRow label={isMarketplaceRecordSource(detail.sourceType) ? "平台版本" : "ref"}>{detail.ref ?? "—"}</MetaRow>
                   <MetaRow label="skillPath" mono>
                     <span
                       className="path-value"
@@ -874,7 +875,7 @@ export const DetailPane = memo(function DetailPane({
                   <MetaRow label="目录修改时间">
                     {formatEpochMs(detail.directoryMtimeEpochMs)}
                   </MetaRow>
-                  <MetaRow label={detail.sourceType === "skillhub" ? "安装内容基线" : "版本指纹"} mono>
+                  <MetaRow label={isMarketplaceRecordSource(detail.sourceType) ? "安装内容基线" : "版本指纹"} mono>
                     {detail.hash ? <HashValue hash={detail.hash} /> : "—"}
                   </MetaRow>
                   <MetaRow label="本地改动">

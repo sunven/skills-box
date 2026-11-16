@@ -4,7 +4,7 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] Selecting ClawHub and restarting restores that source; list position and sort restore within the session; other sources keep their own state.
 - [ ] The three documented sorts return upstream order; "load more" appends the next cursor page without duplicates or reordering.
@@ -14,3 +14,7 @@
 - [ ] The implementation records whether the list endpoint includes skills.sh aliases; when they cannot be identified there, the detail-time redirect rule applies.
 - [ ] Malformed or oversized responses and unexpected fields are rejected without crashing; tests cover parsing, pagination, empty and failure states.
 - [ ] The fake backend and UI tests cover switching, persistence and failure retention.
+
+## Comments
+
+- 2026-11-16: Resolved on `integration/clawhub-marketplace`. ClawHub is the third source with the three documented sorts, cursor-only "load more", owner-qualified cards, ClawHub metrics/official flag with missing fields marked, persisted source choice and per-source session position, stale retention with old sort context, distinct 429/backoff and canonical official link; no fake totals. The list endpoint cannot identify skills.sh aliases (documented in the module; detail-time redirect covers it). Feature `d9c8ccd`, merge `2270690`; live list contract passed; full suites green.

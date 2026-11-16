@@ -2,8 +2,10 @@ import type { PackListing, PackDetail, PackPreview, LocalPack, PackSnapshot } fr
 import { expertPack, packSnapshot } from "./expert-pack-fixtures";
 import type { SkillsShCoordinate, SkillsShListing, SkillsShSnapshot, SkillsShView } from "../lib/skills-sh";
 import { skillsShSkill, skillsShWebsiteSkill, skillsShSnapshot } from "./skills-sh-fixtures";
+import type { ClawHubCoordinate, ClawHubDetail, ClawHubListing, ClawHubSearch, ClawHubSort, ClawHubVersionFiles } from "../lib/clawhub";
+import { clawhubAliasDetail, clawhubDetail, clawhubFileContent, clawhubPageOne, clawhubPageTwo, clawhubSearch, clawhubVersionFilesFixture } from "./clawhub-fixtures";
 import type { MarketplaceCoordinate, MarketplaceListing, MarketplaceDetail, MarketplaceCli, MarketplacePreview, MarketplaceSort, MarketplaceCategory, MarketplaceApiKeyFilter, MarketplaceFiles } from "../lib/marketplace";
-import { marketplaceAddress } from "../lib/marketplace";
+import { isNativeSkillSource, marketplaceAddress } from "../lib/marketplace";
 import { marketplaceSkill, marketplaceCli, marketplaceCategories, marketplaceFiles, marketplaceFileContent } from "./marketplace-fixtures";
 import type {
   StaleRecord,
@@ -76,6 +78,11 @@ type MaybePromise<T> = T | Promise<T>;
 export interface FakeCommandContract {
   list_skills_sh: { args: { keyword: string; view: SkillsShView; page: number }; result: SkillsShListing };
   get_skills_sh_snapshot: { args: { coordinate: SkillsShCoordinate }; result: SkillsShSnapshot };
+  list_clawhub_skills: { args: { sort: ClawHubSort; cursor: string | null }; result: ClawHubListing };
+  search_clawhub_skills: { args: { query: string }; result: ClawHubSearch };
+  get_clawhub_skill_detail: { args: { coordinate: ClawHubCoordinate }; result: ClawHubDetail };
+  list_clawhub_version_files: { args: { coordinate: ClawHubCoordinate; version: string }; result: ClawHubVersionFiles };
+  read_clawhub_version_file: { args: { coordinate: ClawHubCoordinate; version: string; path: string }; result: SkillFileContent };
   list_expert_packs: { args: { keyword: string; page: number }; result: PackListing };
   get_expert_pack: { args: { slug: string }; result: PackDetail };
   list_local_packs: { args: { scope: ScopeId }; result: LocalPack[] };
@@ -505,7 +512,7 @@ export function createFakeBackend(
     } else {
       const skill = snapshot.skills.find((skill) => skill.id === request.skill || skill.name === request.skill);
       const name = skill?.name ?? request.skill.split("/").slice(-1)[0]!;
-      entries = [{ name, command: skill?.management === "unmanaged" || ["skillhub", "skillhub-pack"].includes(skill?.sourceType ?? "") ? null : commandFor(scope, ["remove", ...globalArgs, "-s", name, "-y"]), reason: null }];
+      entries = [{ name, command: skill?.management === "unmanaged" || isNativeSkillSource(skill?.sourceType) ? null : commandFor(scope, ["remove", ...globalArgs, "-s", name, "-y"]), reason: null }];
     }
     return { id: JSON.stringify([scope, request.action, entries]), entries, ...(Object.keys(marketplaceVersions).length ? { marketplaceVersions } : {}) };
   };
@@ -1338,7 +1345,7 @@ export function createFakeBackend(
           if (request.targetKeys && !request.targetKeys.includes(key)) continue;
           const agent = projectAgents.find((a) => a.id === agentId);
           const reason = !skill ? "技能已不存在。"
-            : ["skillhub", "skillhub-pack"].includes(skill.sourceType ?? "") ? "市场技能请从技能市场选择项目进行独立安装。"
+            : isNativeSkillSource(skill.sourceType) ? "市场技能请从技能市场选择项目进行独立安装。"
             : skill.management !== "managed" || !skill.canonicalPath ? "仅受管且有共享目录的技能可复制。"
             : conflict ? "项目已有同名技能，内容不同，不覆盖。"
             : !agentId ? existing ? "项目已有相同内容，复用，不重复复制。" : null
@@ -1392,6 +1399,7 @@ export function createFakeBackend(
           );
           target.reason =
             skill.sourceType === "skillhub-pack" ? "专家包工作流不支持上游更新。" :
+            skill.sourceType === "clawhub" ? "ClawHub 技能请使用单项更新或「更新全部」，以确认平台目标版本。" :
             skill.sourceType === "skillhub" ? "市场技能请单独更新，或使用更新全部。" :
             skill.management === "copy_only"
               ? "仅副本不可更新。"
@@ -1821,6 +1829,13 @@ export function createFakeBackend(
     },
     get_skills_sh_snapshot: ({ coordinate }) => coordinate.source === skillsShSkill.coordinate.source
       ? skillsShSnapshot : { files: null, hash: null },
+    list_clawhub_skills: ({ cursor }) => cursor === "cursor-2" ? clawhubPageTwo : clawhubPageOne,
+    search_clawhub_skills: () => clawhubSearch,
+    get_clawhub_skill_detail: ({ coordinate }) => coordinate.namespace === "anthropics" && coordinate.slug === "debug"
+      ? clawhubAliasDetail
+      : { ...clawhubDetail, coordinate, canonicalUrl: `https://clawhub.ai/${coordinate.namespace}/skills/${coordinate.slug}` },
+    list_clawhub_version_files: ({ coordinate, version }) => ({ ...clawhubVersionFilesFixture(version), coordinate }),
+    read_clawhub_version_file: ({ version, path }) => clawhubFileContent(version, path),
     list_marketplace_skills: ({ keyword, page, category, apiKey }) => {
       const matches = apiKey !== "required" && (!category || category === "knowledge-management") && `${marketplaceSkill.name} ${marketplaceSkill.description}`.toLowerCase().includes(keyword.toLowerCase());
       return { skills: page === 1 && matches ? [marketplaceSkill] : [], total: matches ? 1 : 0, page, pageSize: 24 };
