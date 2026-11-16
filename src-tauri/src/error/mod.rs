@@ -22,6 +22,10 @@ pub struct AppError {
     pub detail: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
+    /// Server-requested wait before retrying (ClawHub `Retry-After`). The
+    /// frontend disables retry for this window instead of retrying immediately.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_after_seconds: Option<u64>,
     pub retryable: bool,
 }
 
@@ -32,6 +36,7 @@ impl AppError {
             message: message.into(),
             detail: None,
             hint: None,
+            retry_after_seconds: None,
             retryable: false,
         }
     }
@@ -43,6 +48,11 @@ impl AppError {
 
     pub fn hint(mut self, hint: impl Into<String>) -> Self {
         self.hint = Some(hint.into());
+        self
+    }
+
+    pub fn retry_after(mut self, seconds: u64) -> Self {
+        self.retry_after_seconds = Some(seconds);
         self
     }
 
@@ -241,5 +251,17 @@ mod tests {
         assert_eq!(json["retryable"], false);
         assert!(json.get("detail").is_none());
         assert!(json.get("hint").is_none());
+        assert!(json.get("retryAfterSeconds").is_none());
+    }
+
+    #[test]
+    fn rate_limit_errors_carry_the_server_retry_window() {
+        let err = AppError::clawhub_rate_limited(17);
+        assert_eq!(err.code, ErrorCode::MarketplaceRateLimited);
+        assert_eq!(err.code.as_str(), "marketplace.rate_limited");
+        assert_eq!(err.retry_after_seconds, Some(17));
+        assert!(err.retryable);
+        let json = serde_json::to_value(&err).unwrap();
+        assert_eq!(json["retryAfterSeconds"], 17);
     }
 }

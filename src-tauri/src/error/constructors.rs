@@ -22,6 +22,24 @@ impl AppError {
         .hint("请检查网络并刷新详情后重试。")
         .retryable(true)
     }
+    pub fn clawhub_unavailable(detail: impl std::fmt::Display) -> Self {
+        Self::new(ErrorCode::MarketplaceUnavailable, "无法读取 ClawHub 目录。")
+            .detail(detail.to_string())
+            .hint("请检查网络后重试，或打开 ClawHub 官网浏览。")
+            .retryable(true)
+    }
+    /// A 429 from the anonymous ClawHub API. The retry window is structured so
+    /// the UI can back off instead of hammering the endpoint.
+    pub fn clawhub_rate_limited(seconds: u64) -> Self {
+        Self::new(
+            ErrorCode::MarketplaceRateLimited,
+            "ClawHub 请求受限（HTTP 429），已暂停请求。",
+        )
+        .detail(format!("上游要求等待约 {seconds} 秒后再试。"))
+        .hint("已按 Retry-After 退避；ClawHub 文档限制每个 IP 每分钟 3000 次读取，请稍后重试或打开官网浏览。")
+        .retry_after(seconds)
+        .retryable(true)
+    }
     pub fn marketplace_cli_unavailable(detail: impl std::fmt::Display) -> Self {
         Self::new(
             ErrorCode::MarketplaceCliUnavailable,

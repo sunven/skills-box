@@ -10,6 +10,7 @@ import { Input } from "./ui/input";
 import { MarketplaceStats } from "./marketplace-stats";
 import { MarketplaceDetailPage } from "./marketplace-detail-page";
 import { SkillsShPage } from "./skills-sh-page";
+import { ClawHubPage } from "./clawhub-page";
 import { readMarketplaceSource, rememberMarketplaceSource, type MarketplaceInstallSeed, type MarketplaceSourceId } from "../lib/skills-sh";
 import { useMarketplaceSession } from "../hooks/use-marketplace-session";
 
@@ -331,16 +332,19 @@ export function MarketplacePage(props: Props) {
     </div>
     <div hidden={tab !== "skills"} className="marketplace-source-panel">
       <div className="marketplace-source-switch" role="group" aria-label="技能市场来源" inert={busy}>
-        {(["skillhub", "skills-sh"] as const).map((id) => <Button key={id} variant="ghost" size="sm"
+        {(["skillhub", "skills-sh", "clawhub"] as const).map((id) => <Button key={id} variant="ghost" size="sm"
           aria-pressed={source === id} onClick={() => {
             setSource(id); rememberMarketplaceSource(id); setVisited((previous) => new Set([...previous, id]));
-          }}>{id === "skillhub" ? "SkillHub" : "skills.sh"}</Button>)}
+          }}>{id === "skillhub" ? "SkillHub" : id === "skills-sh" ? "skills.sh" : "ClawHub"}</Button>)}
       </div>
       {visited.has("skillhub") ? <div hidden={source !== "skillhub"} className="marketplace-source-panel">
         <MarketplaceSkillsPage {...props} active={tab === "skills" && source === "skillhub"} onInstallOpenChange={onInstallOpenChange} />
       </div> : null}
       {visited.has("skills-sh") ? <div hidden={source !== "skills-sh"} className="marketplace-source-panel">
         <SkillsShPage {...props} active={tab === "skills" && source === "skills-sh"} onInstall={props.onGitInstall} />
+      </div> : null}
+      {visited.has("clawhub") ? <div hidden={source !== "clawhub"} className="marketplace-source-panel">
+        <ClawHubPage active={tab === "skills" && source === "clawhub"} />
       </div> : null}
     </div>
     {tab === "packs" ? <ExpertPackPage key={props.initialPack?.key ?? "catalog"} {...props} initialSlug={props.initialPack?.slug} onInstallOpenChange={onInstallOpenChange} /> : null}
