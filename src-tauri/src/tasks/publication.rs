@@ -1,19 +1,44 @@
 //! Local Skill publication. Callers own preparation, backups and task lifetime.
-use super::{expert_packs, install::InstallTarget, marketplace};
+use super::{expert_packs, install::InstallTarget, uninstall::UninstallPlan};
 use crate::{
     baseline::{BaselineStore, fingerprint_folder},
     error::AppError,
     expert_packs::records::{Records as PackRecords, WorkflowInstallation},
     inventory::AttachmentMode,
-    marketplace::records::Records as MarketplaceRecords,
+    marketplace::records::{Installation, Records as MarketplaceRecords},
     paths::AppPaths,
+    scope::ScopeId,
     scope_layout::ScopeLayout,
 };
 use std::{fs, path::Path};
 
+/// Source-neutral marketplace plan as seen by local publication.
+///
+/// Publication owns the source-independent mechanics: canonical replacement,
+/// record writes, baselines, Agent attachments and post-publication
+/// verification. A marketplace source only supplies its plan; the SkillHub
+/// [`crate::tasks::marketplace::Plan`] implements this, and another source can
+/// do the same without duplicating publication.
+pub(super) trait MarketplaceInstallation {
+    /// Scope whose canonical directory receives the installation.
+    fn scope(&self) -> &ScopeId;
+    /// Canonical folder name, equal to the record key.
+    fn name(&self) -> &str;
+    /// Agent attachment targets selected at preview time.
+    fn targets(&self) -> &[InstallTarget];
+    /// Installation record captured at preview time, if this replaces one.
+    fn previous(&self) -> Option<&Installation>;
+    /// Previous physical paths, if this replaces an installation.
+    fn previous_paths(&self) -> Option<&UninstallPlan>;
+    /// Revalidate the plan against the freshly resolved layout.
+    fn check(&self, paths: &AppPaths, layout: &ScopeLayout) -> Result<(), AppError>;
+    /// Build the record for the published content baseline.
+    fn installation(&self, content_hash: String) -> Installation;
+}
+
 pub(super) enum Publication<'a> {
     Marketplace {
-        plan: &'a marketplace::Plan,
+        plan: &'a dyn MarketplaceInstallation,
         root: &'a Path,
     },
     Workflow {
@@ -51,9 +76,9 @@ fn publish_inner(
     let (layout, name, targets, prefix) = match publication {
         Publication::Marketplace { plan, .. } => {
             let registry = crate::projects::ProjectRegistry::new(paths.clone());
-            let layout = ScopeLayout::resolve_detected(paths, &registry, &plan.layout.scope)?;
+            let layout = ScopeLayout::resolve_detected(paths, &registry, plan.scope())?;
             plan.check(paths, &layout)?;
-            (layout, plan.name(), &plan.targets, ".marketplace-")
+            (layout, plan.name(), plan.targets(), ".marketplace-")
         }
         Publication::Workflow { plan, unit } => {
             // Reused workflows need only their missing attachments; their
@@ -66,7 +91,7 @@ fn publish_inner(
             (
                 plan.layout.clone(),
                 unit.name.as_str(),
-                &plan.targets,
+                plan.targets.as_slice(),
                 ".pack-",
             )
         }
@@ -95,7 +120,7 @@ fn publish_inner(
     match publication {
         Publication::Marketplace { plan, .. } => {
             plan.check(paths, &layout)?;
-            if plan.previous.is_some() {
+            if plan.previous().is_some() {
                 crate::fsutil::rename_directory_new(&canonical, &stage.path().join("previous"))
                     .map_err(|e| AppError::verify_failed(e.to_string()))?;
             }
@@ -109,7 +134,7 @@ fn publish_inner(
         Publication::Marketplace { plan, .. } => {
             let installed = plan.installation(fingerprint.content_hash.clone());
             let mut records = MarketplaceRecords::read(&layout.lock_path)?;
-            if records.skills.get(name) != plan.previous.as_ref() {
+            if records.skills.get(name) != plan.previous() {
                 return Err(AppError::verify_failed(
                     "安装记录在发布期间变化，已保留备份。",
                 ));
@@ -143,7 +168,7 @@ fn publish_inner(
     }
 
     if let Publication::Marketplace { plan, .. } = publication
-        && let Some(previous) = &plan.previous_paths
+        && let Some(previous) = plan.previous_paths()
     {
         for attachment in &previous.attachments {
             if attachment.mode == AttachmentMode::Copy {
@@ -201,3 +226,6 @@ pub(super) fn attach(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

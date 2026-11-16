@@ -4,7 +4,7 @@
 
 **Blocked by:** 07, 08
 
-**Status:** ready-for-agent
+**Status:** wontfix
 
 - [ ] Archive version changes produce update candidates; the same version reports current.
 - [ ] GitHub-backed commit changes produce update candidates; the same commit reports current.
@@ -14,3 +14,7 @@
 - [ ] Local management operations remain available without the ClawHub source.
 - [ ] The update UI shows the ClawHub source and its recorded reference.
 - [ ] Tests cover comparison, execution, failure and source dispatch.
+
+## Comments
+
+- 2026-11-16: Closed without implementation because update execution depends on the ticket 07/08 installation channel, which the ticket 02 hard gate stopped. Source-aware update-check dispatch exists in the identity model (ticket 01): a ClawHub record is never queried as SkillHub and reports an explicit unknown/uncheckable state, and local management remains available. There are no executable ClawHub updates until a native adapter is approved. Evidence: [02-clawhub-cli-feasibility.md](../research/02-clawhub-cli-feasibility.md).
