@@ -323,6 +323,11 @@ export function MarketplacePage(props: Props) {
     setInstallOpen(open);
     notifyInstallOpen(open);
   }, [notifyInstallOpen]);
+  const selectSource = useCallback((id: MarketplaceSourceId) => {
+    setSource(id);
+    rememberMarketplaceSource(id);
+    setVisited((previous) => new Set([...previous, id]));
+  }, []);
   const busy = installOpen || props.gitInstallOpen;
   return <div className="marketplace-workspace" inert={props.gitInstallOpen}>
     <div className="marketplace-kind-tabs" role="group" aria-label="市场类型" inert={busy}>
@@ -333,9 +338,7 @@ export function MarketplacePage(props: Props) {
     <div hidden={tab !== "skills"} className="marketplace-source-panel">
       <div className="marketplace-source-switch" role="group" aria-label="技能市场来源" inert={busy}>
         {(["skillhub", "skills-sh", "clawhub"] as const).map((id) => <Button key={id} variant="ghost" size="sm"
-          aria-pressed={source === id} onClick={() => {
-            setSource(id); rememberMarketplaceSource(id); setVisited((previous) => new Set([...previous, id]));
-          }}>{id === "skillhub" ? "SkillHub" : id === "skills-sh" ? "skills.sh" : "ClawHub"}</Button>)}
+          aria-pressed={source === id} onClick={() => selectSource(id)}>{id === "skillhub" ? "SkillHub" : id === "skills-sh" ? "skills.sh" : "ClawHub"}</Button>)}
       </div>
       {visited.has("skillhub") ? <div hidden={source !== "skillhub"} className="marketplace-source-panel">
         <MarketplaceSkillsPage {...props} active={tab === "skills" && source === "skillhub"} onInstallOpenChange={onInstallOpenChange} />
@@ -344,7 +347,7 @@ export function MarketplacePage(props: Props) {
         <SkillsShPage {...props} active={tab === "skills" && source === "skills-sh"} onInstall={props.onGitInstall} />
       </div> : null}
       {visited.has("clawhub") ? <div hidden={source !== "clawhub"} className="marketplace-source-panel">
-        <ClawHubPage active={tab === "skills" && source === "clawhub"} />
+        <ClawHubPage active={tab === "skills" && source === "clawhub"} onSwitchSkillsSh={() => selectSource("skills-sh")} />
       </div> : null}
     </div>
     {tab === "packs" ? <ExpertPackPage key={props.initialPack?.key ?? "catalog"} {...props} initialSlug={props.initialPack?.slug} onInstallOpenChange={onInstallOpenChange} /> : null}

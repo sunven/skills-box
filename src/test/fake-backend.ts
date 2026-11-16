@@ -2,8 +2,8 @@ import type { PackListing, PackDetail, PackPreview, LocalPack, PackSnapshot } fr
 import { expertPack, packSnapshot } from "./expert-pack-fixtures";
 import type { SkillsShCoordinate, SkillsShListing, SkillsShSnapshot, SkillsShView } from "../lib/skills-sh";
 import { skillsShSkill, skillsShWebsiteSkill, skillsShSnapshot } from "./skills-sh-fixtures";
-import type { ClawHubListing, ClawHubSearch, ClawHubSort } from "../lib/clawhub";
-import { clawhubPageOne, clawhubPageTwo, clawhubSearch } from "./clawhub-fixtures";
+import type { ClawHubCoordinate, ClawHubDetail, ClawHubListing, ClawHubSearch, ClawHubSort, ClawHubVersionFiles } from "../lib/clawhub";
+import { clawhubAliasDetail, clawhubDetail, clawhubFileContent, clawhubPageOne, clawhubPageTwo, clawhubSearch, clawhubVersionFilesFixture } from "./clawhub-fixtures";
 import type { MarketplaceCoordinate, MarketplaceListing, MarketplaceDetail, MarketplaceCli, MarketplacePreview, MarketplaceSort, MarketplaceCategory, MarketplaceApiKeyFilter, MarketplaceFiles } from "../lib/marketplace";
 import { isNativeSkillSource, marketplaceAddress } from "../lib/marketplace";
 import { marketplaceSkill, marketplaceCli, marketplaceCategories, marketplaceFiles, marketplaceFileContent } from "./marketplace-fixtures";
@@ -80,6 +80,9 @@ export interface FakeCommandContract {
   get_skills_sh_snapshot: { args: { coordinate: SkillsShCoordinate }; result: SkillsShSnapshot };
   list_clawhub_skills: { args: { sort: ClawHubSort; cursor: string | null }; result: ClawHubListing };
   search_clawhub_skills: { args: { query: string }; result: ClawHubSearch };
+  get_clawhub_skill_detail: { args: { coordinate: ClawHubCoordinate }; result: ClawHubDetail };
+  list_clawhub_version_files: { args: { coordinate: ClawHubCoordinate; version: string }; result: ClawHubVersionFiles };
+  read_clawhub_version_file: { args: { coordinate: ClawHubCoordinate; version: string; path: string }; result: SkillFileContent };
   list_expert_packs: { args: { keyword: string; page: number }; result: PackListing };
   get_expert_pack: { args: { slug: string }; result: PackDetail };
   list_local_packs: { args: { scope: ScopeId }; result: LocalPack[] };
@@ -1828,6 +1831,11 @@ export function createFakeBackend(
       ? skillsShSnapshot : { files: null, hash: null },
     list_clawhub_skills: ({ cursor }) => cursor === "cursor-2" ? clawhubPageTwo : clawhubPageOne,
     search_clawhub_skills: () => clawhubSearch,
+    get_clawhub_skill_detail: ({ coordinate }) => coordinate.namespace === "anthropics" && coordinate.slug === "debug"
+      ? clawhubAliasDetail
+      : { ...clawhubDetail, coordinate, canonicalUrl: `https://clawhub.ai/${coordinate.namespace}/skills/${coordinate.slug}` },
+    list_clawhub_version_files: ({ coordinate, version }) => ({ ...clawhubVersionFilesFixture(version), coordinate }),
+    read_clawhub_version_file: ({ version, path }) => clawhubFileContent(version, path),
     list_marketplace_skills: ({ keyword, page, category, apiKey }) => {
       const matches = apiKey !== "required" && (!category || category === "knowledge-management") && `${marketplaceSkill.name} ${marketplaceSkill.description}`.toLowerCase().includes(keyword.toLowerCase());
       return { skills: page === 1 && matches ? [marketplaceSkill] : [], total: matches ? 1 : 0, page, pageSize: 24 };

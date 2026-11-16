@@ -6,9 +6,7 @@ import {
   CLAWHUB_OFFICIAL_URL,
   clawhubAddress,
   clawhubKey,
-  clawhubMetricLabels,
   clawhubSorts,
-  type ClawHubMetrics as ClawHubMetricsValue,
   type ClawHubSearch,
   type ClawHubSkill,
   type ClawHubSort,
@@ -16,9 +14,11 @@ import {
 import { useMarketplaceSession } from "../hooks/use-marketplace-session";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
+import { ClawHubDetailPage, ClawHubMetrics } from "./clawhub-detail-page";
 
 interface Props {
   active: boolean;
+  onSwitchSkillsSh: () => void;
 }
 interface Session {
   sort: ClawHubSort;
@@ -36,9 +36,11 @@ const initialSession: Session = {
   searchScroll: 0,
 };
 
-export function ClawHubPage({ active }: Props) {
+export function ClawHubPage({ active, onSwitchSkillsSh }: Props) {
   const [session, setSession] = useMarketplaceSession("clawhub", initialSession);
   const listRef = useRef<HTMLElement>(null);
+  const opener = useRef<HTMLElement | null>(null);
+  const [selected, setSelected] = useState<ClawHubSkill | null>(null);
   const catalog = useInfiniteQuery({
     queryKey: ["marketplace", "clawhub", "list", session.sort],
     queryFn: ({ pageParam }) => listClawhubSkills(session.sort, pageParam),
@@ -62,7 +64,14 @@ export function ClawHubPage({ active }: Props) {
     // session but must not re-run this effect.
     listRef.current.scrollTop = session.submitted ? session.searchScroll : session.scroll;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, session.submitted]);
+  }, [active, session.submitted, selected]);
+  useLayoutEffect(() => {
+    if (!selected) opener.current?.focus({ preventScroll: true });
+  }, [selected]);
+  function openDetail(skill: ClawHubSkill, button: HTMLElement) {
+    opener.current = button;
+    setSelected(skill);
+  }
   const skills = useMemo(() => {
     const seen = new Set<string>();
     const combined: ClawHubSkill[] = [];
@@ -128,8 +137,10 @@ export function ClawHubPage({ active }: Props) {
   const refresh = () => void (session.submitted ? search.refetch() : catalog.refetch());
 
   return (
+    <>
     <main
       ref={listRef}
+      hidden={selected !== null}
       className="discovery-page"
       aria-labelledby="clawhub-title"
       onScroll={(event) => {
@@ -293,7 +304,11 @@ export function ClawHubPage({ active }: Props) {
             </p>
             <div className="marketplace-grid">
               {shown.skills.map((skill) => (
-                <ClawHubCard key={clawhubKey(skill.coordinate)} skill={skill} />
+                <ClawHubCard
+                  key={clawhubKey(skill.coordinate)}
+                  skill={skill}
+                  onOpen={(button) => openDetail(skill, button)}
+                />
               ))}
             </div>
             {shown.skills.length === 0 ? (
@@ -336,7 +351,11 @@ export function ClawHubPage({ active }: Props) {
             ) : null}
             <div className="marketplace-grid">
               {searchResult.skills.map((skill) => (
-                <ClawHubCard key={clawhubKey(skill.coordinate)} skill={skill} />
+                <ClawHubCard
+                  key={clawhubKey(skill.coordinate)}
+                  skill={skill}
+                  onOpen={(button) => openDetail(skill, button)}
+                />
               ))}
             </div>
             {searchResult.skills.length === 0 ? (
@@ -346,6 +365,17 @@ export function ClawHubPage({ active }: Props) {
         ) : null}
       </div>
     </main>
+    {selected ? (
+      <ClawHubDetailPage
+        key={clawhubKey(selected.coordinate)}
+        coordinate={selected.coordinate}
+        summary={selected}
+        active={active}
+        onBack={() => setSelected(null)}
+        onSwitchSkillsSh={onSwitchSkillsSh}
+      />
+    ) : null}
+    </>
   );
 }
 
@@ -358,11 +388,22 @@ function ClawHubOfficialLink() {
   );
 }
 
-function ClawHubCard({ skill }: { skill: ClawHubSkill }) {
+function ClawHubCard({
+  skill,
+  onOpen,
+}: {
+  skill: ClawHubSkill;
+  onOpen: (button: HTMLElement) => void;
+}) {
   return (
     <article className="marketplace-card">
       <h3 className="text-sm font-semibold break-all">
-        {skill.name ?? skill.coordinate.slug}
+        <button
+          className="marketplace-card-title"
+          onClick={(event) => onOpen(event.currentTarget)}
+        >
+          {skill.name ?? skill.coordinate.slug}
+        </button>
       </h3>
       <p className="font-mono text-xs text-muted-foreground break-all">
         {clawhubAddress(skill.coordinate)}
@@ -379,25 +420,11 @@ function ClawHubCard({ skill }: { skill: ClawHubSkill }) {
       ) : null}
       {skill.official ? <span className="badge">官方</span> : null}
       <ClawHubMetrics metrics={skill.metrics} />
+      <div className="flex justify-end mt-auto">
+        <Button variant="ghost" size="sm" onClick={(event) => onOpen(event.currentTarget)}>
+          查看详情
+        </Button>
+      </div>
     </article>
-  );
-}
-
-function ClawHubMetrics({ metrics }: { metrics: ClawHubMetricsValue }) {
-  return (
-    <div className="marketplace-stats" role="group" aria-label="ClawHub 指标">
-      {clawhubMetricLabels.map(({ key, label }) => {
-        const count = metrics[key];
-        return (
-          <span
-            key={key}
-            role="group"
-            aria-label={`${label}：${count === null ? "未提供" : count.toLocaleString()}`}
-          >
-            {label}：{count === null ? "未提供" : count.toLocaleString()}
-          </span>
-        );
-      })}
-    </div>
   );
 }

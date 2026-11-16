@@ -15,8 +15,12 @@
 //! kind without resolver calls; any other kind is excluded and counted as a
 //! non-skill/unsupported entity.
 mod client;
+mod detail;
 mod list;
 mod search;
 
+pub use detail::{
+    AliasDetail, Detail, NativeDetail, VersionFiles, VersionRef, detail, read_file, version_files,
+};
 pub use list::{Listing, Metrics, Skill, Sort, list};
 pub use search::{Search, search};
