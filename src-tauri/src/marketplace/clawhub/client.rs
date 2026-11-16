@@ -1,8 +1,11 @@
 //! Bounded anonymous HTTP access to the ClawHub catalog.
 //!
+//! Requests are direct: the client disables host proxy settings so ClawHub
+//! traffic never silently routes through an environment proxy (spec R3-Q4).
 //! Caching is process memory only and obeys `Cache-Control` (the live API
 //! sends `max-age=0`, so responses are effectively not reused). A 429 sets a
 //! shared cooldown so repeated UI retries cannot hammer the upstream endpoint.
+//! Eviction is least-recently-used within a fixed entry bound.
 
 use crate::error::AppError;
 use serde_json::Value;
@@ -23,19 +26,32 @@ const MAX_RETRY_AFTER: Duration = Duration::from_secs(300);
 struct CacheEntry {
     value: Value,
     expires: Instant,
+    /// Monotonic access stamp. Eviction removes the smallest stamp, i.e. the
+    /// least recently used entry, independent of key order.
+    used: u64,
 }
 
 #[derive(Default)]
 struct Cache {
     entries: BTreeMap<String, CacheEntry>,
+    clock: u64,
 }
 
 impl Cache {
-    fn get(&self, key: &str, now: Instant) -> Option<&Value> {
-        self.entries
+    fn get(&mut self, key: &str, now: Instant) -> Option<&Value> {
+        let fresh = self
+            .entries
             .get(key)
-            .filter(|entry| now < entry.expires)
-            .map(|entry| &entry.value)
+            .is_some_and(|entry| now < entry.expires);
+        if !fresh {
+            self.entries.remove(key);
+            return None;
+        }
+        self.clock = self.clock.wrapping_add(1);
+        let used = self.clock;
+        let entry = self.entries.get_mut(key)?;
+        entry.used = used;
+        Some(&entry.value)
     }
 
     fn put(&mut self, key: String, value: Value, ttl: Duration, now: Instant) {
@@ -43,15 +59,24 @@ impl Cache {
             return;
         }
         if self.entries.len() >= MAX_CACHE_ENTRIES && !self.entries.contains_key(&key) {
-            if let Some(oldest) = self.entries.keys().next().cloned() {
-                self.entries.remove(&oldest);
+            // True LRU: BTreeMap key order is lexical, not recency, so evict by
+            // the access stamp instead of the first key.
+            if let Some(least_used) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.used)
+                .map(|(key, _)| key.clone())
+            {
+                self.entries.remove(&least_used);
             }
         }
+        self.clock = self.clock.wrapping_add(1);
         self.entries.insert(
             key,
             CacheEntry {
                 value,
                 expires: now + ttl.min(MAX_CACHE_TTL),
+                used: self.clock,
             },
         );
     }
@@ -60,6 +85,23 @@ impl Cache {
 static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
 static COOLDOWN: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
 static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+/// Test-only base override for the local contract server. Production always
+/// talks to the documented `https://clawhub.ai` origin.
+#[cfg(test)]
+static TEST_BASE: OnceLock<String> = OnceLock::new();
+
+#[cfg(test)]
+pub(super) fn use_test_base(base: &str) {
+    let _ = TEST_BASE.set(base.to_string());
+}
+
+fn base() -> &'static str {
+    #[cfg(test)]
+    if let Some(base) = TEST_BASE.get() {
+        return base;
+    }
+    API
+}
 
 pub(super) async fn get(key: &str, query: &[(&str, String)]) -> Result<Value, AppError> {
     get_at(PATH, key, query).await
@@ -139,7 +181,7 @@ async fn send(path: &str, query: &[(&str, String)]) -> Result<reqwest::Response,
         return Err(AppError::clawhub_rate_limited(remaining.as_secs().max(1)));
     }
     let response = client()?
-        .get(format!("{API}{path}"))
+        .get(format!("{}{path}", base()))
         .query(query)
         .send()
         .await
@@ -184,13 +226,16 @@ fn client() -> Result<&'static reqwest::Client, AppError> {
     if let Some(client) = CLIENT.get() {
         return Ok(client);
     }
-    let built = reqwest::Client::builder()
-        .https_only(true)
+    let builder = reqwest::Client::builder()
+        .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(30))
-        .user_agent("SkillsBox/0.1 ClawHub-marketplace")
-        .build()
-        .map_err(AppError::clawhub_unavailable)?;
+        .user_agent("SkillsBox/0.1 ClawHub-marketplace");
+    // Production is HTTPS-only. The test build allows the loopback contract
+    // server to simulate upstream 404s without TLS.
+    #[cfg(not(test))]
+    let builder = builder.https_only(true);
+    let built = builder.build().map_err(AppError::clawhub_unavailable)?;
     Ok(CLIENT.get_or_init(|| built))
 }
 
@@ -209,7 +254,7 @@ fn cache_get(key: &str) -> Option<Value> {
     cache()
         .lock()
         .ok()
-        .and_then(|cache| cache.get(key, Instant::now()).cloned())
+        .and_then(|mut cache| cache.get(key, Instant::now()).cloned())
 }
 
 fn cache_put(key: &str, value: Value, ttl: Duration) {
@@ -338,5 +383,32 @@ mod tests {
         }
         assert_eq!(cache.entries.len(), MAX_CACHE_ENTRIES);
         assert!(cache.get("key-00", now).is_none());
+    }
+
+    #[test]
+    fn cache_evicts_the_least_recently_used_entry_not_the_first_key() {
+        let now = Instant::now();
+        let mut cache = Cache::default();
+        for index in 0..MAX_CACHE_ENTRIES {
+            cache.put(
+                format!("key-{index:02}"),
+                serde_json::json!(index),
+                Duration::from_secs(60),
+                now,
+            );
+        }
+        // Touch the lexically first key: it must survive the next insert while
+        // the next-least-recent key is evicted instead.
+        assert!(cache.get("key-00", now).is_some());
+        cache.put(
+            "key-new".into(),
+            serde_json::json!("new"),
+            Duration::from_secs(60),
+            now,
+        );
+        assert_eq!(cache.entries.len(), MAX_CACHE_ENTRIES);
+        assert!(cache.get("key-00", now).is_some());
+        assert!(cache.get("key-01", now).is_none());
+        assert!(cache.get("key-new", now).is_some());
     }
 }

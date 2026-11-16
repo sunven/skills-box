@@ -29,15 +29,12 @@ impl Fixture {
                 .unwrap();
         }
         write_pre_lock(&paths, &["git-skill"]);
-        let record = Installation {
-            name: "market-skill".into(),
-            coordinate: Coordinate::from_canonical("@publisher/market-skill").unwrap(),
-            version: "1.0.0".into(),
-            content_hash: "baseline".into(),
-            installed_at: "now".into(),
-            updated_at: "now".into(),
-            diagnostics: None,
-        };
+        let mut record = Installation::fixture(
+            "market-skill",
+            Coordinate::from_canonical("@publisher/market-skill").unwrap(),
+            "1.0.0",
+        );
+        record.content_hash = "baseline".into();
         let mut records = Records::default();
         records.skills.insert(record.name.clone(), record);
         records.save(&paths.lock_path()).unwrap();

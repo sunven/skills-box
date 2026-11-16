@@ -427,11 +427,7 @@ pub fn inspect(
                 .as_ref()
                 .filter(|e| crate::expert_packs::is_native_source(&e.source_type))
             {
-                let source = if entry.source_type == "clawhub" {
-                    "ClawHub"
-                } else {
-                    "SkillHub"
-                };
+                let source = crate::marketplace::source_label(&entry.source_type).unwrap_or("市场");
                 return Err(AppError::batch_target_changed(format!(
                     "{source} 技能请使用单项更新或「更新全部」，以确认平台目标版本。"
                 )));
@@ -770,19 +766,15 @@ mod tests {
         let canonical = paths.canonical_skills_dir().join("market");
         fs::create_dir_all(&canonical).unwrap();
         fs::write(canonical.join("SKILL.md"), "---\nname: market\n---\n").unwrap();
-        let record = crate::marketplace::records::Installation {
-            name: "market".into(),
-            coordinate: crate::marketplace::Coordinate::from_canonical_for(
+        let record = crate::marketplace::records::Installation::fixture(
+            "market",
+            crate::marketplace::Coordinate::from_canonical_for(
                 crate::marketplace::MarketplaceSource::Clawhub,
                 "@owner/slug",
             )
             .unwrap(),
-            version: "1.2.0".into(),
-            content_hash: "hash".into(),
-            installed_at: "now".into(),
-            updated_at: "now".into(),
-            diagnostics: None,
-        };
+            "1.2.0",
+        );
         let mut records = crate::marketplace::records::Records::default();
         records.skills.insert(record.name.clone(), record);
         records.save(&paths.lock_path()).unwrap();

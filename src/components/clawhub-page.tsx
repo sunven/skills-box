@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { ExternalLink, Search } from "lucide-react";
-import { asAppError, listClawhubSkills, openExternalUrl, searchClawhubSkills } from "../lib/api";
+import { Search } from "lucide-react";
+import { asAppError, listClawhubSkills, searchClawhubSkills } from "../lib/api";
+import type { AppError } from "../lib/types";
 import {
   CLAWHUB_OFFICIAL_URL,
   clawhubAddress,
@@ -15,6 +16,7 @@ import { useMarketplaceSession } from "../hooks/use-marketplace-session";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { ClawHubDetailPage, ClawHubMetrics } from "./clawhub-detail-page";
+import { OfficialLink } from "./official-link";
 
 interface Props {
   active: boolean;
@@ -102,13 +104,15 @@ export function ClawHubPage({ active, onSwitchSkillsSh }: Props) {
   const rateLimited = noticeError?.code === "marketplace.rate_limited";
   const retryAfter = rateLimited ? Math.max(1, noticeError?.retryAfterSeconds ?? 5) : 0;
   const [cooldownUntil, setCooldownUntil] = useState(0);
-  const [, setTick] = useState(0);
+  // Re-render once when the Retry-After window elapses so the countdown and
+  // the retry button's disabled state update without a polling interval.
+  const [, forceTick] = useState(0);
   useEffect(() => {
     setCooldownUntil(rateLimited ? Date.now() + retryAfter * 1000 : 0);
   }, [rateLimited, retryAfter, noticeError?.detail]);
   useEffect(() => {
     if (cooldownUntil <= Date.now()) return;
-    const timer = setTimeout(() => setTick((value) => value + 1), cooldownUntil - Date.now() + 20);
+    const timer = setTimeout(() => forceTick((value) => value + 1), cooldownUntil - Date.now() + 20);
     return () => clearTimeout(timer);
   }, [cooldownUntil]);
   const coolingDown = cooldownUntil > Date.now();
@@ -133,8 +137,9 @@ export function ClawHubPage({ active, onSwitchSkillsSh }: Props) {
     if (keyword === session.submitted) void search.refetch();
     setSession((value) => ({ ...value, submitted: keyword, searchScroll: 0 }));
   }
-  const retry = () => void (session.submitted ? search.refetch() : catalog.refetch());
-  const refresh = () => void (session.submitted ? search.refetch() : catalog.refetch());
+  function refresh() {
+    void (session.submitted ? search.refetch() : catalog.refetch());
+  }
 
   return (
     <>
@@ -228,72 +233,36 @@ export function ClawHubPage({ active, onSwitchSkillsSh }: Props) {
           </p>
         ) : null}
         {!session.submitted && listError ? (
-          <div className="notice" role="alert">
-            {rateLimited ? (
-              <>
-                <p>
-                  ClawHub 请求受限（HTTP 429）。
-                  {shown
-                    ? `保留上次成功结果：${sortLabel(shown.sort)}，已加载 ${shown.skills.length} 项。`
-                    : "尚无可显示的结果。"}
-                </p>
-                <p>{listError.detail ?? listError.message}</p>
-                <p>
-                  {coolingDown
-                    ? `已按 Retry-After 退避，请在约 ${Math.ceil((cooldownUntil - Date.now()) / 1000)} 秒后重试。`
-                    : "退避时间已结束，可以重试。"}
-                </p>
-              </>
-            ) : (
-              <>
-                <p>
-                  ClawHub 请求失败。
-                  {shown
-                    ? `保留上次成功结果：${sortLabel(shown.sort)}，已加载 ${shown.skills.length} 项。`
-                    : "尚无可显示的结果。"}
-                </p>
-                <p>{listError.detail ?? listError.message}</p>
-              </>
-            )}
-            <Button variant="outline" size="sm" disabled={coolingDown} onClick={retry}>
-              重试
-            </Button>
-            <ClawHubOfficialLink />
-          </div>
+          <ClawHubRequestNotice
+            kind="list"
+            error={listError}
+            retained={
+              shown
+                ? `保留上次成功结果：${sortLabel(shown.sort)}，已加载 ${shown.skills.length} 项。`
+                : null
+            }
+            rateLimited={rateLimited}
+            cooldownSeconds={
+              coolingDown ? Math.ceil((cooldownUntil - Date.now()) / 1000) : 0
+            }
+            onRetry={refresh}
+          />
         ) : null}
         {session.submitted && searchError ? (
-          <div className="notice" role="alert">
-            {rateLimited ? (
-              <>
-                <p>
-                  ClawHub 搜索受限（HTTP 429）。
-                  {retained
-                    ? `保留上次成功结果：搜索「${retained.keyword}」，返回 ${retained.result.returned} 项。`
-                    : "尚无可显示的结果。"}
-                </p>
-                <p>{searchError.detail ?? searchError.message}</p>
-                <p>
-                  {coolingDown
-                    ? `已按 Retry-After 退避，请在约 ${Math.ceil((cooldownUntil - Date.now()) / 1000)} 秒后重试。`
-                    : "退避时间已结束，可以重试。"}
-                </p>
-              </>
-            ) : (
-              <>
-                <p>
-                  ClawHub 搜索失败。
-                  {retained
-                    ? `保留上次成功结果：搜索「${retained.keyword}」，返回 ${retained.result.returned} 项。`
-                    : "尚无可显示的结果。"}
-                </p>
-                <p>{searchError.detail ?? searchError.message}</p>
-              </>
-            )}
-            <Button variant="outline" size="sm" disabled={coolingDown} onClick={retry}>
-              重试
-            </Button>
-            <ClawHubOfficialLink />
-          </div>
+          <ClawHubRequestNotice
+            kind="search"
+            error={searchError}
+            retained={
+              retained
+                ? `保留上次成功结果：搜索「${retained.keyword}」，返回 ${retained.result.returned} 项。`
+                : null
+            }
+            rateLimited={rateLimited}
+            cooldownSeconds={
+              coolingDown ? Math.ceil((cooldownUntil - Date.now()) / 1000) : 0
+            }
+            onRetry={refresh}
+          />
         ) : null}
         {!session.submitted && catalog.isPending ? <p role="status">正在加载 ClawHub…</p> : null}
         {session.submitted && search.isPending ? <p role="status">正在搜索 ClawHub…</p> : null}
@@ -379,12 +348,49 @@ export function ClawHubPage({ active, onSwitchSkillsSh }: Props) {
   );
 }
 
-function ClawHubOfficialLink() {
+function ClawHubRequestNotice({
+  kind,
+  error,
+  retained,
+  rateLimited,
+  cooldownSeconds,
+  onRetry,
+}: {
+  kind: "list" | "search";
+  error: AppError;
+  retained: string | null;
+  rateLimited: boolean;
+  cooldownSeconds: number;
+  onRetry: () => void;
+}) {
+  const subject = kind === "search" ? "ClawHub 搜索" : "ClawHub 请求";
   return (
-    <Button variant="ghost" size="sm" onClick={() => void openExternalUrl(CLAWHUB_OFFICIAL_URL)}>
-      <ExternalLink aria-hidden="true" />
-      ClawHub 官网
-    </Button>
+    <div className="notice" role="alert">
+      {rateLimited ? (
+        <>
+          <p>
+            {subject}受限（HTTP 429）。{retained ?? "尚无可显示的结果。"}
+          </p>
+          <p>{error.detail ?? error.message}</p>
+          <p>
+            {cooldownSeconds > 0
+              ? `已按 Retry-After 退避，请在约 ${cooldownSeconds} 秒后重试。`
+              : "退避时间已结束，可以重试。"}
+          </p>
+        </>
+      ) : (
+        <>
+          <p>
+            {subject}失败。{retained ?? "尚无可显示的结果。"}
+          </p>
+          <p>{error.detail ?? error.message}</p>
+        </>
+      )}
+      <Button variant="outline" size="sm" disabled={cooldownSeconds > 0} onClick={onRetry}>
+        重试
+      </Button>
+      <OfficialLink url={CLAWHUB_OFFICIAL_URL} label="ClawHub 官网" />
+    </div>
   );
 }
 

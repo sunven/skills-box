@@ -24,6 +24,21 @@ impl MarketplaceSource {
             Self::Clawhub => "clawhub",
         }
     }
+    /// Parse a projected `sourceType` back to its marketplace source.
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "skillhub" => Some(Self::Skillhub),
+            "clawhub" => Some(Self::Clawhub),
+            _ => None,
+        }
+    }
+    /// User-facing source label; never derive this from a match at call sites.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Skillhub => "SkillHub",
+            Self::Clawhub => "ClawHub",
+        }
+    }
     /// Canonical public listing URL for one coordinate on this source.
     pub fn listing_url(self, namespace: &str, slug: &str) -> String {
         match self {
@@ -31,6 +46,16 @@ impl MarketplaceSource {
             Self::Clawhub => format!("https://clawhub.ai/{namespace}/skills/{slug}"),
         }
     }
+}
+/// Display label for a projected marketplace `sourceType`.
+pub fn source_label(source_type: &str) -> Option<&'static str> {
+    MarketplaceSource::from_key(source_type).map(MarketplaceSource::label)
+}
+/// Native marketplace sources are app-owned records (`skillhub`/`clawhub`),
+/// plus expert-pack workflows (`skillhub-pack`). Git, unmanaged and empty
+/// source types are not native.
+pub fn is_native_source_type(source_type: &str) -> bool {
+    source_type == "skillhub-pack" || MarketplaceSource::from_key(source_type).is_some()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,6 +87,10 @@ impl Coordinate {
     /// Parse the `@owner/slug` display form for a known source. Existing
     /// SkillHub callers keep the source-less default; ClawHub records must
     /// pass their own source instead of inheriting SkillHub.
+    ///
+    /// Warning: this default is a trap for source-aware code. Any ClawHub or
+    /// future-source coordinate must use [`Self::from_canonical_for`]; a bare
+    /// `@owner/slug` string carries no source.
     pub fn from_canonical(raw: &str) -> Result<Self, AppError> {
         Self::from_canonical_for(MarketplaceSource::Skillhub, raw)
     }
@@ -151,6 +180,23 @@ pub fn original_name(markdown: &str) -> Result<String, AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn marketplace_sources_round_trip_keys_labels_and_native_classification() {
+        for source in [MarketplaceSource::Skillhub, MarketplaceSource::Clawhub] {
+            assert_eq!(MarketplaceSource::from_key(source.key()), Some(source));
+            assert!(is_native_source_type(source.key()));
+        }
+        assert_eq!(
+            source_label("clawhub"),
+            Some(MarketplaceSource::Clawhub.label())
+        );
+        assert_eq!(source_label("github"), None);
+        assert!(is_native_source_type("skillhub-pack"));
+        for source in ["github", "git", "unmanaged", ""] {
+            assert!(!is_native_source_type(source), "{source}");
+        }
+    }
 
     #[test]
     fn marketplace_sources_keep_skillhub_wire_format_and_add_clawhub() {

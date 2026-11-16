@@ -59,11 +59,20 @@ export interface ClawHubNativeDetail {
   metrics: ClawHubMetrics;
   ownerDisplayName: string | null;
   latestVersion: string | null;
-  license: string | null;
-  changelog: string | null;
   canonicalUrl: string;
   versions: ClawHubVersion[];
   versionsTruncated: boolean;
+  /**
+   * GitHub resolver result for entries without ClawHub-hosted versions.
+   * Diagnostic only: installation is paused and this is never a Git identity.
+   */
+  resolvedReference: ClawHubResolvedReference | null;
+}
+/** `repo@commit:path` as resolved by ClawHub for GitHub-backed entries. */
+export interface ClawHubResolvedReference {
+  repo: string;
+  path: string;
+  commit: string;
 }
 /**
  * A ClawHub index entry backed by skills.sh. It has no ClawHub-hosted content

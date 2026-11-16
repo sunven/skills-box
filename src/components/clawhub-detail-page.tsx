@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, ExternalLink } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import {
   asAppError,
+  fallbackError,
   getClawhubSkillDetail,
   listClawhubVersionFiles,
-  openExternalUrl,
   readClawhubVersionFile,
 } from "../lib/api";
 import {
@@ -25,6 +25,8 @@ import type { SkillFileContent } from "../lib/types";
 import { fileName, formatBytes, parentDir } from "../lib/skill-content";
 import { Button } from "./ui/button";
 import { MarketplaceFileTree } from "./marketplace-files-tab";
+import { MutationError } from "./mutation/mutation-error";
+import { OfficialLink } from "./official-link";
 import { SkillMarkdown } from "./skill-markdown";
 
 interface Props {
@@ -94,9 +96,6 @@ export function ClawHubDetailPage({
             {data?.kind === "native" && data.ownerDisplayName ? (
               <span>发布者：{data.ownerDisplayName}</span>
             ) : null}
-            {data?.kind === "native" ? (
-              <span>许可证：{data.license ?? "未提供"}</span>
-            ) : null}
           </p>
           {description ? <p className="marketplace-detail-description">{description}</p> : null}
           {topics.length ? (
@@ -110,17 +109,17 @@ export function ClawHubDetailPage({
           ) : null}
           <div className="marketplace-detail-links">
             <ClawHubMetrics metrics={metrics} />
-            <Button variant="ghost" size="sm" onClick={() => void openExternalUrl(canonicalUrl)}>
-              <ExternalLink aria-hidden="true" />
-              ClawHub 页面
-            </Button>
+            <OfficialLink url={canonicalUrl} label="ClawHub 页面" />
           </div>
         </header>
         {detail.isPending ? <p role="status">正在读取 ClawHub 详情…</p> : null}
         {detail.isError ? (
           <div className="notice" role="alert">
             {data ? <p>详情刷新失败，保留上次成功加载的内容。</p> : <p>无法读取 ClawHub 详情。</p>}
-            <MutationMessage error={detail.error} fallback="ClawHub 暂未返回该条目。" />
+            <MutationError
+              alertRole={false}
+              error={asAppError(detail.error) ?? fallbackError("ClawHub 暂未返回该条目。")}
+            />
             <Button
               variant="outline"
               size="sm"
@@ -191,6 +190,17 @@ function NativeBody({ detail, active }: { detail: ClawHubNativeDetail; active: b
         <div className="notice" role="status">
           <p>该条目由 GitHub 仓库提供，ClawHub 未提供可浏览的版本打包内容。</p>
           <p>安装通道暂停期间不提供该条目的内容预览。</p>
+          {detail.resolvedReference ? (
+            <>
+              <p>
+                解析引用：
+                {`${detail.resolvedReference.repo}@${detail.resolvedReference.commit}:${detail.resolvedReference.path}`}
+              </p>
+              <p>该引用仅用于核对上游解析结果；安装通道暂停，不提供安装入口。</p>
+            </>
+          ) : (
+            <p>解析引用：暂不可用（仅诊断；安装通道暂停）。</p>
+          )}
           <OfficialLink url={detail.canonicalUrl} label="ClawHub 页面" />
         </div>
       ) : (
@@ -216,20 +226,13 @@ function NativeBody({ detail, active }: { detail: ClawHubNativeDetail; active: b
               </span>
             ) : null}
           </div>
-          {changelog ? (
-            <section className="marketplace-detail-overview" aria-label="版本更新说明">
-              <h2 className="text-sm font-semibold">更新说明</h2>
-              <pre className="content-text" role="region" aria-label="版本更新说明原文" tabIndex={0}>
-                {changelog}
-              </pre>
-            </section>
-          ) : null}
           {selectedVersion ? (
             <ClawHubVersionBody
               key={selectedVersion}
               coordinate={detail.coordinate}
               version={selectedVersion}
               canonicalUrl={detail.canonicalUrl}
+              changelog={changelog}
               active={active}
             />
           ) : null}
@@ -267,11 +270,13 @@ function ClawHubVersionBody({
   coordinate,
   version,
   canonicalUrl,
+  changelog,
   active,
 }: {
   coordinate: ClawHubCoordinate;
   version: string;
   canonicalUrl: string;
+  changelog: string | null;
   active: boolean;
 }) {
   const [tab, setTab] = useState<"overview" | "files">("overview");
@@ -290,6 +295,9 @@ function ClawHubVersionBody({
   });
   const files = listing.data?.files ?? [];
   const hasSkillMd = files.some((file) => file.path === "SKILL.md");
+  // Prefer the version response's changelog; the version list entry is the
+  // same-version fallback while the response loads.
+  const versionChangelog = listing.data?.changelog ?? changelog;
   const overview = useQuery({
     queryKey: ["marketplace", "clawhub", "file", clawhubKey(coordinate), version, "SKILL.md"],
     queryFn: () => readClawhubVersionFile(coordinate, version, "SKILL.md"),
@@ -333,10 +341,21 @@ function ClawHubVersionBody({
       <div className="marketplace-snapshot-notice">
         <p>ClawHub 版本 v{version} 的打包内容</p>
         <p>浏览内容不保证与将来安装时重新解析的内容完全一致；安装以实际下载内容为准。</p>
+        {/* License is read from this version's response, never from latest. */}
+        {listing.data ? <p>许可证：{listing.data.license ?? "未提供"}</p> : null}
+        <p>解析引用：v{version}（ClawHub archive 版本；仅诊断，安装通道暂停）</p>
         <Button variant="ghost" size="sm" disabled={listing.isFetching} onClick={refresh}>
           刷新版本内容
         </Button>
       </div>
+      {versionChangelog ? (
+        <section className="marketplace-detail-overview" aria-label="版本更新说明">
+          <h2 className="text-sm font-semibold">更新说明</h2>
+          <pre className="content-text" role="region" aria-label="版本更新说明原文" tabIndex={0}>
+            {versionChangelog}
+          </pre>
+        </section>
+      ) : null}
       <div
         ref={tabsRef}
         className="marketplace-detail-tabs"
@@ -493,6 +512,7 @@ function ClawHubVersionBody({
                       version={version}
                       path={selectedPath}
                       exists={selectedExists}
+                      canonicalUrl={canonicalUrl}
                       active={tab === "files"}
                       onNavigate={navigate}
                     />
@@ -512,6 +532,7 @@ function FilePreview({
   version,
   path,
   exists,
+  canonicalUrl,
   active,
   onNavigate,
 }: {
@@ -519,6 +540,7 @@ function FilePreview({
   version: string;
   path: string;
   exists: boolean;
+  canonicalUrl: string;
   active: boolean;
   onNavigate: (path: string) => void;
 }) {
@@ -553,13 +575,19 @@ function FilePreview({
       </div>
       <div className="marketplace-file-content">
         {!exists ? (
-          <p role="status">此版本中没有该文件，请从文件树选择其他文件。</p>
+          <div className="notice">
+            <p role="status">此版本中没有该文件，请从文件树选择其他文件。</p>
+            <OfficialLink url={canonicalUrl} label="ClawHub 页面" />
+          </div>
         ) : query.isPending ? (
           <p role="status">正在读取文件…</p>
         ) : query.isError && !data ? (
           <div className="marketplace-file-notice" role="alert">
             <p>无法读取该文件。</p>
-            <MutationMessage error={query.error} fallback="ClawHub 文件读取失败。" />
+            <MutationError
+              alertRole={false}
+              error={asAppError(query.error) ?? fallbackError("ClawHub 文件读取失败。")}
+            />
             <Button
               variant="outline"
               size="sm"
@@ -568,6 +596,7 @@ function FilePreview({
             >
               重试读取文件
             </Button>
+            <OfficialLink url={canonicalUrl} label="ClawHub 页面" />
           </div>
         ) : data ? (
           <>
@@ -669,31 +698,15 @@ function VersionError({
   return (
     <div className="notice" role="alert">
       <p>无法读取该版本内容。</p>
-      <MutationMessage error={error} fallback="ClawHub 暂未返回该版本。" />
+      <MutationError
+        alertRole={false}
+        error={asAppError(error) ?? fallbackError("ClawHub 暂未返回该版本。")}
+      />
       <Button variant="outline" size="sm" disabled={pending} onClick={retry}>
         重试版本内容
       </Button>
       <OfficialLink url={canonicalUrl} label="ClawHub 页面" />
     </div>
-  );
-}
-
-function MutationMessage({ error, fallback }: { error: unknown; fallback: string }) {
-  const appError = asAppError(error);
-  return (
-    <>
-      <p>{appError?.message ?? (error instanceof Error ? error.message : fallback)}</p>
-      {appError?.detail ? <p>{appError.detail}</p> : null}
-    </>
-  );
-}
-
-function OfficialLink({ url, label }: { url: string; label: string }) {
-  return (
-    <Button variant="ghost" size="sm" onClick={() => void openExternalUrl(url)}>
-      <ExternalLink aria-hidden="true" />
-      {label}
-    </Button>
   );
 }
 

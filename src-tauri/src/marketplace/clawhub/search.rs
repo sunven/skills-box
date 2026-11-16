@@ -89,30 +89,39 @@ fn parse_search(value: Value) -> Result<Search, AppError> {
             .and_then(Value::as_object)
             .and_then(|install| install.get("kind"))
             .and_then(Value::as_str)
-            .filter(|kind| !kind.is_empty() && kind.len() <= MAX_KIND)
-            .ok_or_else(|| AppError::clawhub_unavailable("搜索结果缺少有效 install.kind"))?;
+            .filter(|kind| !kind.is_empty() && kind.len() <= MAX_KIND);
+        let native_value = row
+            .get("native")
+            .and_then(Value::as_object)
+            .and_then(|native| native.get("skill"))
+            .filter(|skill| skill.is_object());
         match kind {
             // ClawHub indexes skills.sh entries as installable aliases. They
             // belong to the skills.sh source, not this one.
-            "skills-sh" => {
+            Some("skills-sh") => {
                 filtered_aliases += 1;
                 continue;
             }
             // `clawhub` is native; `github` is the declared kind for
             // GitHub-backed registry entries. Both must carry a native skill.
-            "clawhub" | "github" => {}
+            Some("clawhub" | "github") => {}
             // Neither a native skill nor a skills.sh alias. The response has
             // identified a non-skill/unsupported entity, so it is excluded.
-            _ => {
+            Some(_) => {
                 filtered_others += 1;
                 continue;
             }
+            // No usable install kind. A row that still carries `native.skill`
+            // is a native entry with incomplete metadata; one without it is
+            // unsupported. Never fail the whole search for such a row.
+            None => {
+                if native_value.is_none() {
+                    filtered_others += 1;
+                    continue;
+                }
+            }
         }
-        let native_value = row
-            .get("native")
-            .and_then(Value::as_object)
-            .and_then(|native| native.get("skill"))
-            .filter(|skill| skill.is_object())
+        let native_value = native_value
             .ok_or_else(|| AppError::clawhub_unavailable("搜索结果缺少 native.skill"))?;
         let native = native_value.as_object().expect("checked object");
         let owner = list::required_component(row, "ownerHandle")?;
@@ -283,6 +292,51 @@ mod tests {
     }
 
     #[test]
+    fn missing_or_invalid_install_kind_keeps_native_rows_and_skips_others() {
+        let search = parse_search(json!({
+            "results": [
+                native("a", "normal", "Normal"),
+                {
+                    "ownerHandle": "a",
+                    "slug": "no-kind",
+                    "displayName": "No Kind",
+                    "native": {"skill": {"slug": "no-kind", "stats": {"downloads": 5}}}
+                },
+                {
+                    "ownerHandle": "a",
+                    "slug": "bad-kind",
+                    "native": {"skill": {"slug": "bad-kind"}},
+                    "install": {"kind": 7}
+                },
+                {
+                    "ownerHandle": "a",
+                    "slug": "empty-kind",
+                    "native": {"skill": {"slug": "empty-kind"}},
+                    "install": {"kind": ""}
+                },
+                {"ownerHandle": "a", "slug": "unsupported", "displayName": "Unsupported"},
+                alias("anthropics", "debug")
+            ]
+        }))
+        .unwrap();
+        assert_eq!(search.upstream_returned, 6);
+        assert_eq!(search.returned, 4);
+        assert_eq!(search.filtered_aliases, 1);
+        assert_eq!(search.filtered_others, 1);
+        assert_eq!(
+            search
+                .skills
+                .iter()
+                .map(|skill| skill.coordinate.canonical())
+                .collect::<Vec<_>>(),
+            ["@a/normal", "@a/no-kind", "@a/bad-kind", "@a/empty-kind"]
+        );
+        assert_eq!(search.skills[1].name.as_deref(), Some("No Kind"));
+        assert_eq!(search.skills[1].metrics.downloads, Some(5));
+        assert_eq!(search.skills[1].topics, Vec::<String>::new());
+    }
+
+    #[test]
     fn filters_other_install_kinds_and_alias_rows_without_identities() {
         let search = parse_search(json!({
             "results": [
@@ -338,9 +392,6 @@ mod tests {
             json!(null),
             json!({}),
             json!({"results": {}}),
-            json!({"results": [{"slug": "x"}]}),
-            json!({"results": [{"install": {"kind": ""}, "ownerHandle": "a", "slug": "b"}]}),
-            json!({"results": [{"install": {"kind": 7}, "ownerHandle": "a", "slug": "b"}]}),
             json!({"results": [{"install": {"kind": "clawhub"}, "ownerHandle": "a", "slug": "b", "native": null}]}),
             json!({"results": [{"install": {"kind": "clawhub"}, "ownerHandle": "a", "slug": "b", "native": {"skill": {"slug": "other"}}}]}),
             json!({"results": [{"install": {"kind": "clawhub"}, "slug": "b", "native": {"skill": {}}}]}),
