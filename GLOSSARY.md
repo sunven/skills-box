@@ -109,7 +109,7 @@ Skill content captured by a Marketplace source for browsing. It may differ from 
 _Avoid_: Marketplace version, Pack snapshot
 
 **Marketplace source**:
-A service that catalogs Skills or Expert packs for installation through the Skill marketplace, such as SkillHub or skills.sh. It may distribute published releases itself or direct users to a Git source; the catalog service and the installation Source need not be the same.
+A service that catalogs Skills or Expert packs for installation through the Skill marketplace, such as SkillHub, skills.sh or ClawHub. It may distribute published releases itself or direct users to a Git source; the catalog service and the installation Source need not be the same.
 _Avoid_: marketplace instance, Git source
 
 **Marketplace coordinate**:
@@ -117,7 +117,7 @@ The identity of a skill entry within a Marketplace source, including the source'
 _Avoid_: installation name, display name
 
 **Marketplace version**:
-The version label assigned by a Marketplace source to a release of a published skill. It can differ from version information declared inside the skill's content.
+The version or resolved reference a Marketplace source assigns to a release of a published skill, such as a version label or a commit. It can differ from version information declared inside the skill's content.
 _Avoid_: content hash, Git ref
 
 **Discovery source**:
