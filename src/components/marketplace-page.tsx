@@ -315,7 +315,9 @@ function MarketplaceSkillsPage({ active = true, scope, scopeLabel, snapshot, dis
 
 export function MarketplacePage(props: Props) {
   const [tab, setTab] = useState<"skills" | "packs">(props.initialPack ? "packs" : "skills");
-  const [source, setSource] = useState(readMarketplaceSource);
+  const [source, setSource] = useState<MarketplaceSourceId>(() =>
+    props.initialPack ? "skillhub" : readMarketplaceSource(),
+  );
   const [visited, setVisited] = useState(() => new Set<MarketplaceSourceId>([source]));
   const [installOpen, setInstallOpen] = useState(false);
   const notifyInstallOpen = props.onInstallOpenChange;
@@ -329,27 +331,31 @@ export function MarketplacePage(props: Props) {
     setVisited((previous) => new Set([...previous, id]));
   }, []);
   const busy = installOpen || props.gitInstallOpen;
+  // Expert packs belong to SkillHub only, so the skills/expert-pack switch is
+  // only rendered while SkillHub is the active source. Other sources always
+  // show their skills panel, and the tab state is kept for the next return.
+  const effectiveTab = source === "skillhub" ? tab : "skills";
   return <div className="marketplace-workspace" inert={props.gitInstallOpen}>
-    <div className="marketplace-kind-tabs" role="group" aria-label="市场类型" inert={busy}>
+    {source === "skillhub" ? <div className="marketplace-kind-tabs" role="group" aria-label="市场类型" inert={busy}>
       <Button variant="ghost" aria-pressed={tab === "skills"} onClick={() => setTab("skills")}>技能</Button>
       <Button variant="ghost" aria-pressed={tab === "packs"} onClick={() => setTab("packs")}>专家包</Button>
       {tab === "packs" ? <span className="marketplace-source-label">来源 · SkillHub</span> : null}
-    </div>
-    <div hidden={tab !== "skills"} className="marketplace-source-panel">
+    </div> : null}
+    <div hidden={effectiveTab !== "skills"} className="marketplace-source-panel">
       <div className="marketplace-source-switch" role="group" aria-label="技能市场来源" inert={busy}>
         {(["skillhub", "skills-sh", "clawhub"] as const).map((id) => <Button key={id} variant="ghost" size="sm"
           aria-pressed={source === id} onClick={() => selectSource(id)}>{id === "skillhub" ? "SkillHub" : id === "skills-sh" ? "skills.sh" : "ClawHub"}</Button>)}
       </div>
       {visited.has("skillhub") ? <div hidden={source !== "skillhub"} className="marketplace-source-panel">
-        <MarketplaceSkillsPage {...props} active={tab === "skills" && source === "skillhub"} onInstallOpenChange={onInstallOpenChange} />
+        <MarketplaceSkillsPage {...props} active={effectiveTab === "skills" && source === "skillhub"} onInstallOpenChange={onInstallOpenChange} />
       </div> : null}
       {visited.has("skills-sh") ? <div hidden={source !== "skills-sh"} className="marketplace-source-panel">
-        <SkillsShPage {...props} active={tab === "skills" && source === "skills-sh"} onInstall={props.onGitInstall} />
+        <SkillsShPage {...props} active={effectiveTab === "skills" && source === "skills-sh"} onInstall={props.onGitInstall} />
       </div> : null}
       {visited.has("clawhub") ? <div hidden={source !== "clawhub"} className="marketplace-source-panel">
-        <ClawHubPage active={tab === "skills" && source === "clawhub"} onSwitchSkillsSh={() => selectSource("skills-sh")} />
+        <ClawHubPage active={effectiveTab === "skills" && source === "clawhub"} onSwitchSkillsSh={() => selectSource("skills-sh")} />
       </div> : null}
     </div>
-    {tab === "packs" ? <ExpertPackPage key={props.initialPack?.key ?? "catalog"} {...props} initialSlug={props.initialPack?.slug} onInstallOpenChange={onInstallOpenChange} /> : null}
+    {effectiveTab === "packs" ? <ExpertPackPage key={props.initialPack?.key ?? "catalog"} {...props} initialSlug={props.initialPack?.slug} onInstallOpenChange={onInstallOpenChange} /> : null}
   </div>;
 }

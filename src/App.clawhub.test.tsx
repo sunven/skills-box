@@ -61,7 +61,7 @@ describe("ClawHub marketplace", () => {
     expect(backend.count("list_clawhub_skills")).toBeGreaterThan(calls);
   });
 
-  it("keeps per-source session state and never lets the expert-pack tab rewrite the source", async () => {
+  it("keeps per-source session state and shows the expert-pack switch only for SkillHub", async () => {
     const { backend } = setup();
     await openMarket();
     fireEvent.change(screen.getByLabelText("搜索 SkillHub"), { target: { value: "hub draft" } });
@@ -70,22 +70,26 @@ describe("ClawHub marketplace", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "skills.sh" }));
     await screen.findByRole("button", { name: skillsShSkill.name });
+    expect(screen.queryByRole("group", { name: "市场类型" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "专家包" })).not.toBeInTheDocument();
+
     fireEvent.click(screen.getByRole("button", { name: "ClawHub" }));
     await screen.findByText("Weather");
     fireEvent.click(screen.getByRole("button", { name: "下载量" }));
     await waitFor(() => expect(backend.callsOf("list_clawhub_skills").slice(-1)[0]!.payload.sort).toBe("downloads"));
     const clawList = screen.getByRole("main", { name: "技能市场" });
     fireEvent.scroll(clawList, { target: { scrollTop: 320 } });
+    expect(screen.queryByRole("group", { name: "市场类型" })).not.toBeInTheDocument();
 
+    // Expert packs are reachable only from SkillHub.
+    fireEvent.click(screen.getByRole("button", { name: "SkillHub" }));
+    expect(screen.getByRole("group", { name: "市场类型" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "专家包" }));
     expect(within(screen.getByRole("group", { name: "市场类型" })).getByText("来源 · SkillHub")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "技能" }));
-    expect(screen.getByRole("button", { name: "ClawHub" })).toHaveAttribute("aria-pressed", "true");
-
-    fireEvent.click(screen.getByRole("button", { name: "SkillHub" }));
+    expect(screen.getByRole("button", { name: "SkillHub" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByLabelText("搜索 SkillHub")).toHaveValue("hub draft");
     expect(hubList.scrollTop).toBe(100);
-    expect(screen.getByRole("button", { name: "下载量" })).toHaveAttribute("aria-pressed", "false");
 
     fireEvent.click(screen.getByRole("button", { name: "ClawHub" }));
     expect(screen.getByRole("button", { name: "下载量" })).toHaveAttribute("aria-pressed", "true");

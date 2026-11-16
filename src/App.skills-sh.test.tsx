@@ -74,9 +74,14 @@ describe("skills.sh marketplace", () => {
     fireEvent.click(screen.getByRole("button", { name: "skills.sh" }));
     expect(screen.getByLabelText("搜索 skills.sh")).toHaveValue("sh draft");
     expect(list.scrollTop).toBe(420);
+    expect(screen.queryByRole("group", { name: "市场类型" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "专家包" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "SkillHub" }));
     fireEvent.click(screen.getByRole("button", { name: "专家包" }));
     expect(within(screen.getByRole("group", { name: "市场类型" })).getByText("来源 · SkillHub")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "技能" }));
+    expect(screen.getByRole("button", { name: "SkillHub" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: "skills.sh" }));
     expect(screen.getByRole("button", { name: "skills.sh" })).toHaveAttribute("aria-pressed", "true");
     expect(localStorage.getItem("skills-box.marketplace-source")).toBe("skills-sh");
     fireEvent.click(screen.getByRole("button", { name: "返回 skills" }));
