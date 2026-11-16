@@ -10,8 +10,8 @@ use std::collections::BTreeSet;
 const PAGE_LIMIT: u32 = 50;
 const MAX_ITEMS: usize = 100;
 const MAX_CURSOR: usize = 4096;
-const MAX_NAME: usize = 400;
-const MAX_TEXT: usize = 20_000;
+pub(super) const MAX_NAME: usize = 400;
+pub(super) const MAX_TEXT: usize = 20_000;
 const MAX_TOPICS: usize = 50;
 const MAX_TOPIC: usize = 100;
 const MAX_VERSION: usize = 200;
@@ -152,7 +152,7 @@ fn parse_listing(value: Value) -> Result<Listing, AppError> {
     })
 }
 
-fn required_component(row: &Value, key: &str) -> Result<String, AppError> {
+pub(super) fn required_component(row: &Value, key: &str) -> Result<String, AppError> {
     row.get(key)
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty() && value.len() <= MAX_VERSION)
@@ -163,7 +163,11 @@ fn required_component(row: &Value, key: &str) -> Result<String, AppError> {
 /// Optional display text. Absent/null/blank strings stay missing so the UI
 /// never has to invent a value. Embedded newlines are allowed (markdown
 /// descriptions); NUL is not.
-fn optional_text(row: &Value, key: &str, max: usize) -> Result<Option<String>, AppError> {
+pub(super) fn optional_text(
+    row: &Value,
+    key: &str,
+    max: usize,
+) -> Result<Option<String>, AppError> {
     match row.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(value))
@@ -177,7 +181,7 @@ fn optional_text(row: &Value, key: &str, max: usize) -> Result<Option<String>, A
     }
 }
 
-fn optional_bool(row: &Value, key: &str) -> Result<Option<bool>, AppError> {
+pub(super) fn optional_bool(row: &Value, key: &str) -> Result<Option<bool>, AppError> {
     match row.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::Bool(value)) => Ok(Some(*value)),
@@ -187,7 +191,7 @@ fn optional_bool(row: &Value, key: &str) -> Result<Option<bool>, AppError> {
     }
 }
 
-fn metrics(row: &Value) -> Result<Metrics, AppError> {
+pub(super) fn metrics(row: &Value) -> Result<Metrics, AppError> {
     let stats = match row.get("stats") {
         None | Some(Value::Null) => return Ok(Metrics::default()),
         Some(stats) => stats
@@ -208,7 +212,7 @@ fn metrics(row: &Value) -> Result<Metrics, AppError> {
     })
 }
 
-fn topics(row: &Value) -> Result<Vec<String>, AppError> {
+pub(super) fn topics(row: &Value) -> Result<Vec<String>, AppError> {
     let values = match row.get("topics") {
         None | Some(Value::Null) => return Ok(Vec::new()),
         Some(Value::Array(values)) => values,

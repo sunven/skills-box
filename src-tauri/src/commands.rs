@@ -947,6 +947,15 @@ pub async fn list_clawhub_skills(
 ) -> Result<crate::marketplace::clawhub::Listing, AppError> {
     crate::marketplace::clawhub::list(sort, cursor).await
 }
+/// Anonymous ClawHub keyword search. Results keep upstream order and exclude
+/// skills.sh alias entries; there is no cursor, so the response carries the
+/// returned count and the requested upstream limit.
+#[tauri::command]
+pub async fn search_clawhub_skills(
+    query: String,
+) -> Result<crate::marketplace::clawhub::Search, AppError> {
+    crate::marketplace::clawhub::search(&query).await
+}
 #[tauri::command]
 pub async fn list_marketplace_skills(
     keyword: String,

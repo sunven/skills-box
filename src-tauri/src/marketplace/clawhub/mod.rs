@@ -6,7 +6,17 @@
 //! normally here; ticket 06 identifies aliases at detail time and redirects to
 //! the skills.sh source. Do not call the per-item install resolver while
 //! listing, and do not filter list entries by guessing.
+//!
+//! `/api/v1/search` does expose `install.kind`. Live samples (2026-11-16)
+//! returned only skills: native rows carried `install.kind: "clawhub"`,
+//! `source: "clawhub"` and a `native.skill` record; indexed skills.sh rows
+//! carried `install.kind: "skills-sh"`, `source: "skills-sh"`, a
+//! `sourceIdentity` and `native: null`. Search is therefore filtered on that
+//! kind without resolver calls; any other kind is excluded and counted as a
+//! non-skill/unsupported entity.
 mod client;
 mod list;
+mod search;
 
 pub use list::{Listing, Metrics, Skill, Sort, list};
+pub use search::{Search, search};
