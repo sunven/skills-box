@@ -115,6 +115,21 @@ Status: ready-for-agent
 5. `--workdir`/`--dir` 的绝对路径行为、flag 顺序、`--no-input` 与交互提示的交互。
 6. 429 响应是否实际携带 `Retry-After`，以及 CLI 下载阶段的限流归属。
 
+### 实现前验证结果（2026-11-16，ticket 02）
+
+结论：**NO-GO（CLI 安装通道按现规格暂停）**。完整证据见 [CLI 可行性验证](research/02-clawhub-cli-feasibility.md)。
+
+- archive 固定版本：**通过**。`clawhub@0.26.0` 在隔离环境中按 `--version` 安装 `@steipete/nano-banana-pro@1.0.0`，落盘 `SKILL.md` 的 sha256 与 `/api/v1/skills/{slug}/versions/1.0.0` 一致，且与 latest `1.0.1` 不同。
+- GitHub-backed 显式固定：**不通过**。resolver 返回 `repo/path/commit/contentHash`；`install @aws/agents-build --version <commit>` 退出 1 并报 `Version not found`，无其他固定参数；不带 `--version` 时 CLI 只解析并安装调用时的 latest commit。内容可按 resolver `contentHash` 独立复核。
+- 可疑技能拦截：**行为符合预期但不满足策略**。真实 `moderation.isSuspicious` 条目在非交互、无 `--force`/`--force-install` 时退出 1、仅 stderr 纯文本、不落任何目标文件；但 `--force-install` 不绕过，GitHub-backed 待扫描条目需要规格禁止的 `--force` 才能安装。
+- 内容校验：archive 可用版本文件的 per-file sha256 校验（下载无 digest，`_meta.json` 为生成文件）；GitHub-backed 可用 resolver `contentHash` 复核。CLI 本身不校验 archive，也不校验 native GitHub 路径。
+- 429/`Retry-After`：真实上游未触发；本地 mock 429 证明 CLI 共 3 次尝试、遵守 `Retry-After`（上限 60s）后退出 1。文档限流为 3000 读/分/IP、1200 下载/分/IP。
+- 目录组成：`/api/v1/skills` 抽样 128 条无 `install`/`kind` 字段，抽样未出现 skills.sh 别名；`/api/v1/search` 返回 `install.kind`（`clawhub`、`skills-sh`）。别名过滤只能在 search 侧；列表按 R7-Q4 回退。
+- 落盘布局与失败形态：native ref 落到 `<dir>/@owner/<slug>`（不是 `<dir>/<slug>`）；所有普通失败退出 1、无 JSON、stderr 纯文本且可能重复一行。
+- lock/origin：仅含 version/owner/fingerprint，无契约 digest；GitHub-backed 记录无 repo/path；二者为 CLI 本地可变状态，不得作为唯一身份或版本依据。
+
+影响：按本规格第 20 条与 ADR-0034，安装暂停；07/08/09 不启动，04/05/06 浏览与详情可继续。原生 HTTP+ZIP 适配器需新 ADR 单独评估，不静默切换，也不静默收窄为仅 archive。
+
 ## 验收条件
 
 1. 首次进入技能市场默认 SkillHub；选择 ClawHub 后重启仍恢复；会话内来源往返与详情返回分别恢复查询和列表位置；专家包始终属 SkillHub。
