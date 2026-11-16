@@ -336,16 +336,16 @@ export function MarketplacePage(props: Props) {
   // show their skills panel, and the tab state is kept for the next return.
   const effectiveTab = source === "skillhub" ? tab : "skills";
   return <div className="marketplace-workspace" inert={props.gitInstallOpen}>
+    {effectiveTab === "skills" ? <div className="marketplace-source-switch" role="group" aria-label="技能市场来源" inert={busy}>
+      {(["skillhub", "skills-sh", "clawhub"] as const).map((id) => <Button key={id} variant="ghost" size="sm"
+        aria-pressed={source === id} onClick={() => selectSource(id)}>{id === "skillhub" ? "SkillHub" : id === "skills-sh" ? "skills.sh" : "ClawHub"}</Button>)}
+    </div> : null}
     {source === "skillhub" ? <div className="marketplace-kind-tabs" role="group" aria-label="市场类型" inert={busy}>
       <Button variant="ghost" aria-pressed={tab === "skills"} onClick={() => setTab("skills")}>技能</Button>
       <Button variant="ghost" aria-pressed={tab === "packs"} onClick={() => setTab("packs")}>专家包</Button>
       {tab === "packs" ? <span className="marketplace-source-label">来源 · SkillHub</span> : null}
     </div> : null}
     <div hidden={effectiveTab !== "skills"} className="marketplace-source-panel">
-      <div className="marketplace-source-switch" role="group" aria-label="技能市场来源" inert={busy}>
-        {(["skillhub", "skills-sh", "clawhub"] as const).map((id) => <Button key={id} variant="ghost" size="sm"
-          aria-pressed={source === id} onClick={() => selectSource(id)}>{id === "skillhub" ? "SkillHub" : id === "skills-sh" ? "skills.sh" : "ClawHub"}</Button>)}
-      </div>
       {visited.has("skillhub") ? <div hidden={source !== "skillhub"} className="marketplace-source-panel">
         <MarketplaceSkillsPage {...props} active={effectiveTab === "skills" && source === "skillhub"} onInstallOpenChange={onInstallOpenChange} />
       </div> : null}

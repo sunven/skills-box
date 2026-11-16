@@ -64,6 +64,9 @@ describe("ClawHub marketplace", () => {
   it("keeps per-source session state and shows the expert-pack switch only for SkillHub", async () => {
     const { backend } = setup();
     await openMarket();
+    expect(screen.getByRole("group", { name: "技能市场来源" }).nextElementSibling).toBe(
+      screen.getByRole("group", { name: "市场类型" }),
+    );
     fireEvent.change(screen.getByLabelText("搜索 SkillHub"), { target: { value: "hub draft" } });
     const hubList = screen.getByRole("main", { name: "技能市场" });
     fireEvent.scroll(hubList, { target: { scrollTop: 100 } });
