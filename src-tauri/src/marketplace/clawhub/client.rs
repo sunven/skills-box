@@ -70,13 +70,75 @@ pub(super) async fn get_at(
     key: &str,
     query: &[(&str, String)],
 ) -> Result<Value, AppError> {
+    get_at_optional(path, key, query)
+        .await?
+        .ok_or_else(|| AppError::clawhub_unavailable("HTTP 404"))
+}
+
+/// Like [`get_at`], but an upstream `404` is a normal "no such public record"
+/// answer instead of an error. Detail, version and file reads use this to
+/// distinguish missing content from transport/rate-limit failures.
+pub(super) async fn get_at_optional(
+    path: &str,
+    key: &str,
+    query: &[(&str, String)],
+) -> Result<Option<Value>, AppError> {
+    if let Some(value) = cache_get(key) {
+        return Ok(Some(value));
+    }
+    let mut response = send(path, query).await?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    let ttl = cache_ttl(header(response.headers(), reqwest::header::CACHE_CONTROL));
+    let value: Value = serde_json::from_slice(&bounded_body(&mut response, MAX_RESPONSE).await?)
+        .map_err(|error| AppError::clawhub_unavailable(format!("响应不是有效 JSON：{error}")))?;
+    cache_put(key, value.clone(), ttl);
+    Ok(Some(value))
+}
+
+/// Raw file bytes for the read-only preview. The caller always supplies the
+/// app's own preview limit; a larger body is reported as oversized instead of
+/// being downloaded into memory.
+pub(super) enum Payload {
+    NotFound,
+    Body(Vec<u8>),
+    TooLarge,
+}
+
+pub(super) async fn get_bytes_at(
+    path: &str,
+    query: &[(&str, String)],
+    limit: u64,
+) -> Result<Payload, AppError> {
+    let mut response = send(path, query).await?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(Payload::NotFound);
+    }
+    if response.content_length().is_some_and(|size| size > limit) {
+        return Ok(Payload::TooLarge);
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| AppError::clawhub_unavailable(error.to_string()))?
+    {
+        if bytes.len() as u64 + chunk.len() as u64 > limit {
+            return Ok(Payload::TooLarge);
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(Payload::Body(bytes))
+}
+
+/// One anonymous GET with the shared cooldown. `404` is returned to optional
+/// callers; every other non-success status becomes a source-specific error.
+async fn send(path: &str, query: &[(&str, String)]) -> Result<reqwest::Response, AppError> {
     if let Some(remaining) = cooldown_remaining() {
         return Err(AppError::clawhub_rate_limited(remaining.as_secs().max(1)));
     }
-    if let Some(value) = cache_get(key) {
-        return Ok(value);
-    }
-    let mut response = client()?
+    let response = client()?
         .get(format!("{API}{path}"))
         .query(query)
         .send()
@@ -91,13 +153,16 @@ pub(super) async fn get_at(
         set_cooldown(wait);
         return Err(AppError::clawhub_rate_limited(wait.as_secs().max(1)));
     }
-    if !status.is_success() {
+    if !status.is_success() && status != reqwest::StatusCode::NOT_FOUND {
         return Err(AppError::clawhub_unavailable(format!("HTTP {status}")));
     }
-    let ttl = cache_ttl(header(response.headers(), reqwest::header::CACHE_CONTROL));
+    Ok(response)
+}
+
+async fn bounded_body(response: &mut reqwest::Response, limit: usize) -> Result<Vec<u8>, AppError> {
     if response
         .content_length()
-        .is_some_and(|size| size > MAX_RESPONSE as u64)
+        .is_some_and(|size| size > limit as u64)
     {
         return Err(AppError::clawhub_unavailable("响应超过 8 MB 限制"));
     }
@@ -107,15 +172,12 @@ pub(super) async fn get_at(
         .await
         .map_err(|error| AppError::clawhub_unavailable(error.to_string()))?
     {
-        if bytes.len() + chunk.len() > MAX_RESPONSE {
+        if bytes.len() + chunk.len() > limit {
             return Err(AppError::clawhub_unavailable("响应超过 8 MB 限制"));
         }
         bytes.extend_from_slice(&chunk);
     }
-    let value: Value = serde_json::from_slice(&bytes)
-        .map_err(|error| AppError::clawhub_unavailable(format!("响应不是有效 JSON：{error}")))?;
-    cache_put(key, value.clone(), ttl);
-    Ok(value)
+    Ok(bytes)
 }
 
 fn client() -> Result<&'static reqwest::Client, AppError> {

@@ -43,12 +43,66 @@ export interface ClawHubSearch {
   filteredOthers: number;
 }
 
+/** One version in the detail's version selector. Order is upstream order. */
+export interface ClawHubVersion {
+  version: string;
+  createdAt: number | null;
+  changelog: string | null;
+}
+/** ClawHub-native entry. `canonicalUrl` is always the documented listing. */
+export interface ClawHubNativeDetail {
+  kind: "native";
+  coordinate: ClawHubCoordinate;
+  name: string | null;
+  description: string | null;
+  topics: string[];
+  metrics: ClawHubMetrics;
+  ownerDisplayName: string | null;
+  latestVersion: string | null;
+  license: string | null;
+  changelog: string | null;
+  canonicalUrl: string;
+  versions: ClawHubVersion[];
+  versionsTruncated: boolean;
+}
+/**
+ * A ClawHub index entry backed by skills.sh. It has no ClawHub-hosted content
+ * and must be browsed/installed from the skills.sh source instead.
+ */
+export interface ClawHubAliasDetail {
+  kind: "alias";
+  coordinate: ClawHubCoordinate;
+  name: string | null;
+  reference: string | null;
+  sourceUrl: string | null;
+  repository: string | null;
+  canonicalUrl: string;
+}
+export type ClawHubDetail = ClawHubNativeDetail | ClawHubAliasDetail;
+export interface ClawHubFileEntry {
+  path: string;
+  sizeBytes: number;
+}
+/** Files and metadata of one explicit version, all from the same response. */
+export interface ClawHubVersionFiles {
+  coordinate: ClawHubCoordinate;
+  version: string;
+  license: string | null;
+  changelog: string | null;
+  files: ClawHubFileEntry[];
+}
+
 export const CLAWHUB_OFFICIAL_URL = "https://clawhub.ai/skills";
 export const clawhubIdentity = (coordinate: ClawHubCoordinate | MarketplaceCoordinate) =>
   `${coordinate.namespace}/${coordinate.slug}`;
 export const clawhubKey = (coordinate: ClawHubCoordinate) => `clawhub:${clawhubIdentity(coordinate)}`;
 export const clawhubAddress = (coordinate: ClawHubCoordinate) =>
   `@${coordinate.namespace}/${coordinate.slug}`;
+/** The version the detail opens on: upstream latest, else the first listed. */
+export const clawhubInitialVersion = (detail: ClawHubNativeDetail) =>
+  detail.latestVersion ?? detail.versions[0]?.version ?? null;
+export const clawhubVersionLabel = (version: string, latest: boolean) =>
+  latest ? `v${version}（latest）` : `v${version}`;
 
 export const clawhubMetricLabels = [
   { key: "downloads", label: "下载量" },
