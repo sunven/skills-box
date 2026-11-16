@@ -4,7 +4,7 @@
 
 **Blocked by:** 02, 03, 06
 
-**Status:** ready-for-agent
+**Status:** wontfix
 
 - [ ] Confirmation shows the true owner-qualified coordinate, resolved version, target scope, selected agents, actual command and the content-difference caveat.
 - [ ] Installation pins the confirmed version, uses an isolated staging directory and never passes `--force`/`--force-install`.
@@ -15,3 +15,7 @@
 - [ ] Same-name conflicts, Stale lock entries and installations in other scopes follow the existing marketplace rules.
 - [ ] Isolated Global and Project end-to-end tests pass; the fake backend and UI tests cover confirmation, failure and retry.
 - [ ] No Git lock entry or Discovery source is created.
+
+## Comments
+
+- 2026-11-16: Closed without implementation by the ticket 02 hard gate. The official `clawhub` CLI installs an explicitly requested archive version correctly, but it cannot pin GitHub-backed entries to a caller-supplied commit (`--version <commit>` → `Version not found`). Per spec decision 20 and ADR-0034 the whole CLI installation channel is paused rather than silently narrowed to archive-only. No install code or CLI adapter was written. A native HTTP+ZIP adapter requires a new ADR and separate approval. Evidence: [02-clawhub-cli-feasibility.md](../research/02-clawhub-cli-feasibility.md).
