@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] Existing SkillHub market records load, display, update-check, uninstall and clean up identically; old records remain readable without migration.
 - [ ] New ClawHub records round-trip source, canonical URL, resolved reference and optional diagnostics; corrupt or unknown schema states are rejected without overwriting valid records.
@@ -12,3 +12,7 @@
 - [ ] Update-check dispatch selects the provider for each record's source; a ClawHub record is never queried as SkillHub and vice versa.
 - [ ] Native-source classification includes ClawHub in uninstall, stale cleanup, restore blocking, copy-to-project blocking and batch-update guidance.
 - [ ] Tests cover backward compatibility, source separation, invalid records and native-source behavior.
+
+## Comments
+
+- 2026-11-16: Resolved on `integration/clawhub-marketplace`. Shipped `MarketplaceSource::Clawhub`, source-derived canonical URLs, records with resolved reference plus optional diagnostics, read-model `sourceVersion` for both sources, source-dispatched update checks (ClawHub records return an explicit unknown/uncheckable state and never query SkillHub), and native-source classification for uninstall, stale cleanup, restore blocking, copy-to-project and batch guidance. Feature `043338f`, merge `a0c584a`; full Rust and frontend suites passed.

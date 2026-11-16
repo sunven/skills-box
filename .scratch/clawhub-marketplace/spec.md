@@ -174,4 +174,5 @@ Status: implemented for browsing/detail; installation paused by ticket 02 gate
 - 2026-11-16：完成两轮只读核查（目录/分发/CLI/合规），设计访谈 R1–R7 逐轮由用户确认（"按推荐"），整体规格由用户回复"确认"。状态更新为 `ready-for-agent`。
 - 2026-11-16：`GLOSSARY.md` 已随访谈更新：Marketplace source 示例加入 ClawHub；Marketplace version 定义扩展为"版本标签或解析引用（如 commit）"。
 - 2026-11-16：按现有市场技能语义修正本地恢复/复制到项目措辞（ClawHub 归类为原生市场来源）；实现工单发布于 `issues/`（01–10）。
+- 2026-11-16：实现完成。工单 01/03/04/05/06/10 已交付并关闭；02 门槛结论为 NO-GO；07/08/09 按门槛关闭为 wontfix。两轴代码审查后修复项（版本锚定 license/changelog、`/versions` 404 保留详情、搜索缺 kind 容错、缺失文件回链、GitHub-backed 解析引用诊断、`.no_proxy()`、去重与 ADR-0034 同步）已合入 `b485f38`。验收与例外见 [implementation.md](implementation.md)。
 - 2026-11-16：完成浏览、详情、合规与回归验收（工单 10），环境、证据、逐条验收与例外见 [implementation.md](implementation.md)。按工单 02 的 NO-GO，07/08/09 未实现；安装/更新执行与验收条件 6–9、11 记为 EXCEPTION（11 同时包含未实现的引用比较），原生 HTTP+ZIP 适配器需新 ADR 单独评估。未声称真实 CLI 安装或更新通过。
