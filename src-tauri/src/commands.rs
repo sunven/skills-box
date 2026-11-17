@@ -1044,6 +1044,29 @@ pub async fn start_marketplace_install(
 }
 
 #[tauri::command]
+pub async fn prepare_clawhub_install(
+    state: State<'_, AppState>,
+    scope: ScopeId,
+    coordinate: crate::marketplace::Coordinate,
+    agents: Vec<String>,
+) -> Result<crate::tasks::marketplace::clawhub::Preview, AppError> {
+    state.tasks.prepare_clawhub(scope, coordinate, agents).await
+}
+
+#[tauri::command]
+pub async fn start_clawhub_install(
+    state: State<'_, AppState>,
+    scope: ScopeId,
+    preview_id: String,
+    on_event: Channel<TaskEvent>,
+) -> Result<TaskId, AppError> {
+    state
+        .tasks
+        .start_clawhub(scope, preview_id, task_event_sink(on_event))
+        .await
+}
+
+#[tauri::command]
 pub async fn list_expert_packs(
     keyword: String,
     page: u32,

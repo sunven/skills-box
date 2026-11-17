@@ -143,15 +143,44 @@ impl TaskManager {
             return Ok(());
         }
         let single = plan.total() == 1;
-        let detection = runtime::detect(&self.inner.paths, self.inner.executor.as_ref()).await;
-        let runtime = detection.1.ok_or_else(|| detection.0.error.unwrap());
+        let (status, runtime) =
+            runtime::detect(&self.inner.paths, self.inner.executor.as_ref()).await;
+        let cli_error = status.error;
         for mut item in std::mem::take(&mut plan.items) {
-            let Some(record) = &item.marketplace_record else {
+            let Some(record) = item.marketplace_record.clone() else {
                 plan.items.push(item);
                 continue;
             };
-            let prepared = async {
-                let runtime = runtime.clone()?;
+            let prepared = self
+                .prepare_marketplace_update_item(&mut item, &record, layout, &runtime, &cli_error)
+                .await;
+            match prepared {
+                Ok(()) => plan.items.push(item),
+                Err(error) if single => return Err(error),
+                Err(error) => plan.skipped.push(crate::tasks::update::UpdateSkip {
+                    name: item.name,
+                    error,
+                }),
+            }
+        }
+        Ok(())
+    }
+
+    async fn prepare_marketplace_update_item(
+        &self,
+        item: &mut crate::tasks::update::UpdateItem,
+        record: &crate::marketplace::records::Installation,
+        layout: &crate::scope_layout::ScopeLayout,
+        runtime: &Option<runtime::Runtime>,
+        cli_error: &Option<AppError>,
+    ) -> Result<(), AppError> {
+        match record.coordinate.source {
+            crate::marketplace::MarketplaceSource::Skillhub => {
+                let runtime = runtime.clone().ok_or_else(|| {
+                    cli_error
+                        .clone()
+                        .unwrap_or_else(|| AppError::marketplace_cli_unavailable("CLI 不可用"))
+                })?;
                 let detail = provider::detail(&record.coordinate).await?;
                 if detail.original_name.as_deref() != Some(&item.name) {
                     return Err(AppError::marketplace_unavailable(format!(
@@ -164,23 +193,24 @@ impl TaskManager {
                 }
                 let paths = self.inner.paths.clone();
                 let layout = layout.clone();
-                let item = item.clone();
+                let item_snapshot = item.clone();
                 let record = record.clone();
-                tokio::task::spawn_blocking(move || {
+                let prepared = tokio::task::spawn_blocking(move || {
                     let previous_paths = crate::tasks::uninstall::plan_uninstall(
                         &paths,
                         &layout,
-                        &layout.scope.skill_id(&item.name),
+                        &layout.scope.skill_id(&item_snapshot.name),
                     )?;
-                    let previous_fingerprint = crate::baseline::fingerprint_folder(&item.canonical)
-                        .map_err(AppError::skill_fingerprint_failed)?
-                        .content_hash;
+                    let previous_fingerprint =
+                        crate::baseline::fingerprint_folder(&item_snapshot.canonical)
+                            .map_err(AppError::skill_fingerprint_failed)?
+                            .content_hash;
                     let prepared = Plan {
                         detail,
                         runtime,
                         stage: StagingDirectory::new()?,
                         layout: layout.clone(),
-                        targets: item.targets.clone(),
+                        targets: item_snapshot.targets.clone(),
                         previous: Some(record.clone()),
                         previous_paths: Some(previous_paths),
                         previous_fingerprint: Some(previous_fingerprint),
@@ -190,22 +220,23 @@ impl TaskManager {
                     Ok::<_, AppError>(prepared)
                 })
                 .await
-                .map_err(|e| AppError::task_internal("市场更新预览", e))?
+                .map_err(|error| AppError::task_internal("市场更新预览", error))??;
+                item.marketplace_plan = Some(prepared);
+                Ok(())
             }
-            .await;
-            match prepared {
-                Ok(prepared) => {
-                    item.marketplace_plan = Some(prepared);
-                    plan.items.push(item);
-                }
-                Err(error) if single => return Err(error),
-                Err(error) => plan.skipped.push(crate::tasks::update::UpdateSkip {
-                    name: item.name,
-                    error,
-                }),
+            crate::marketplace::MarketplaceSource::Clawhub => {
+                let prepared = crate::tasks::marketplace::clawhub::prepare_update_plan(
+                    &self.inner.paths,
+                    layout,
+                    &item.name,
+                    record,
+                    item.targets.clone(),
+                )
+                .await?;
+                item.clawhub_plan = Some(prepared);
+                Ok(())
             }
         }
-        Ok(())
     }
 
     pub(super) async fn preview_update_commands(
@@ -278,29 +309,52 @@ impl TaskManager {
         &self,
         pinned: &Option<(ScopeId, UpdatePlan)>,
     ) -> Result<(), AppError> {
-        if let Some((_, plan)) = pinned
-            .as_ref()
-            .filter(|(_, p)| p.items.iter().any(|i| i.marketplace_plan.is_some()))
-        {
+        let Some((_, plan)) = pinned.as_ref().filter(|(_, plan)| {
+            plan.items
+                .iter()
+                .any(|item| item.marketplace_plan.is_some() || item.clawhub_plan.is_some())
+        }) else {
+            return Ok(());
+        };
+        let needs_cli = plan
+            .items
+            .iter()
+            .any(|item| item.marketplace_plan.is_some());
+        let runtime = if needs_cli {
             let detection = runtime::detect(&self.inner.paths, self.inner.executor.as_ref()).await;
-            let runtime = detection.1.ok_or_else(|| detection.0.error.unwrap())?;
-            for item in &plan.items {
-                if let Some(plan) = &item.marketplace_plan {
-                    if crate::time::now_ms().saturating_sub(plan.created_at) > 900_000
-                        || runtime.program != plan.runtime.program
-                    {
-                        return Err(AppError::cli_command_changed());
-                    }
-                    if provider::release_markdown(
-                        &plan.detail.summary.coordinate,
-                        &plan.detail.summary.version,
-                    )
-                    .await?
-                        != plan.detail.markdown
-                    {
-                        return Err(AppError::cli_command_changed());
-                    }
+            Some(detection.1.ok_or_else(|| {
+                detection
+                    .0
+                    .error
+                    .unwrap_or_else(|| AppError::marketplace_cli_unavailable("CLI 不可用"))
+            })?)
+        } else {
+            None
+        };
+        for item in &plan.items {
+            if let Some(plan) = &item.marketplace_plan {
+                let runtime = runtime
+                    .as_ref()
+                    .expect("SkillHub plan requires a detected CLI runtime");
+                if crate::time::now_ms().saturating_sub(plan.created_at) > 900_000
+                    || runtime.program != plan.runtime.program
+                {
+                    return Err(AppError::cli_command_changed());
                 }
+                if provider::release_markdown(
+                    &plan.detail.summary.coordinate,
+                    &plan.detail.summary.version,
+                )
+                .await?
+                    != plan.detail.markdown
+                {
+                    return Err(AppError::cli_command_changed());
+                }
+            }
+            if let Some(plan) = &item.clawhub_plan
+                && crate::time::now_ms().saturating_sub(plan.created_at) > 900_000
+            {
+                return Err(AppError::cli_command_changed());
             }
         }
         Ok(())
@@ -312,6 +366,11 @@ pub(super) fn apply_pinned_updates(
     layout: &crate::scope_layout::ScopeLayout,
     plan: &mut UpdatePlan,
     pinned: Option<(ScopeId, UpdatePlan)>,
+    staged_clawhub: &std::collections::HashMap<
+        String,
+        std::sync::Arc<crate::marketplace::clawhub::StagedPackage>,
+    >,
+    failed_clawhub: &std::collections::HashMap<String, AppError>,
 ) -> Result<(), AppError> {
     if let Some((scope, previous)) = &pinned {
         if scope != &layout.scope {
@@ -320,6 +379,11 @@ pub(super) fn apply_pinned_updates(
         for item in std::mem::take(&mut plan.items) {
             if let Some(skip) = previous.skipped.iter().find(|s| s.name == item.name) {
                 plan.skipped.push(skip.clone());
+            } else if let Some(error) = failed_clawhub.get(&item.name) {
+                plan.skipped.push(crate::tasks::update::UpdateSkip {
+                    name: item.name,
+                    error: error.clone(),
+                });
             } else {
                 plan.items.push(item);
             }
@@ -333,16 +397,33 @@ pub(super) fn apply_pinned_updates(
             .as_ref()
             .filter(|(scope, _)| scope == &layout.scope)
             .and_then(|(_, p)| p.items.iter().find(|i| i.name == item.name))
-            .and_then(|i| i.marketplace_plan.clone())
             .ok_or_else(AppError::cli_command_changed)?;
-        previous.check(paths, layout)?;
-        if item.marketplace_record != previous.previous
-            || Records::read(&layout.lock_path)?.skills.get(&item.name)
-                != previous.previous.as_ref()
-        {
+        if let Some(previous) = previous.marketplace_plan.clone() {
+            previous.check(paths, layout)?;
+            if item.marketplace_record != previous.previous
+                || Records::read(&layout.lock_path)?.skills.get(&item.name)
+                    != previous.previous.as_ref()
+            {
+                return Err(AppError::cli_command_changed());
+            }
+            item.marketplace_plan = Some(previous);
+        } else if let Some(mut previous) = previous.clawhub_plan.clone() {
+            previous.check(paths, layout)?;
+            if item.marketplace_record != previous.previous
+                || Records::read(&layout.lock_path)?.skills.get(&item.name)
+                    != previous.previous.as_ref()
+            {
+                return Err(AppError::cli_command_changed());
+            }
+            let staged = staged_clawhub
+                .get(&item.name)
+                .cloned()
+                .ok_or_else(AppError::cli_command_changed)?;
+            previous.attach_staged_shared(staged);
+            item.clawhub_plan = Some(previous);
+        } else {
             return Err(AppError::cli_command_changed());
         }
-        item.marketplace_plan = Some(previous);
     }
     Ok(())
 }

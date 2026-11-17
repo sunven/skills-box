@@ -1,5 +1,7 @@
 //! SkillHub writes only into a private staging directory. Publication uses the
 //! same scope ownership, snapshots, attachment checks and task results as Git.
+pub(crate) mod clawhub;
+
 use super::{
     install::InstallTarget,
     manager::{TaskAction, TaskPhase, TaskSkillResult, TaskSkillStatus},

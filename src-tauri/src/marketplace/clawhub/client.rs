@@ -1,7 +1,8 @@
 //! Bounded anonymous HTTP access to the ClawHub catalog.
 //!
-//! Requests are direct: the client disables host proxy settings so ClawHub
-//! traffic never silently routes through an environment proxy (spec R3-Q4).
+//! Requests follow the host proxy configuration (system settings or
+//! environment), so a local/enterprise proxy can be used; the app does not add
+//! its own proxy, account or credentials (ADR-0036).
 //! Caching is process memory only and obeys `Cache-Control` (the live API
 //! sends `max-age=0`, so responses are effectively not reused). A 429 sets a
 //! shared cooldown so repeated UI retries cannot hammer the upstream endpoint.
@@ -86,21 +87,62 @@ static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
 static COOLDOWN: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
 static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 /// Test-only base override for the local contract server. Production always
-/// talks to the documented `https://clawhub.ai` origin.
+/// talks to the documented `https://clawhub.ai` origin. The override is
+/// serialized so tests using different loopback servers cannot race.
 #[cfg(test)]
-static TEST_BASE: OnceLock<String> = OnceLock::new();
+static TEST_BASE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+#[cfg(test)]
+static TEST_SERIAL: Mutex<()> = Mutex::new(());
 
 #[cfg(test)]
-pub(super) fn use_test_base(base: &str) {
-    let _ = TEST_BASE.set(base.to_string());
+pub(super) struct TestBaseGuard {
+    _serial: std::sync::MutexGuard<'static, ()>,
 }
 
-fn base() -> &'static str {
-    #[cfg(test)]
-    if let Some(base) = TEST_BASE.get() {
-        return base;
+#[cfg(test)]
+impl Drop for TestBaseGuard {
+    fn drop(&mut self) {
+        if let Some(slot) = TEST_BASE.get()
+            && let Ok(mut base) = slot.lock()
+        {
+            *base = None;
+        }
+        reset_test_state();
     }
-    API
+}
+
+#[cfg(test)]
+pub(super) fn use_test_base(base: &str) -> TestBaseGuard {
+    let serial = TEST_SERIAL
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    *TEST_BASE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some(base.to_string());
+    reset_test_state();
+    TestBaseGuard { _serial: serial }
+}
+
+#[cfg(test)]
+pub(super) fn reset_test_state() {
+    if let Ok(mut cache) = cache().lock() {
+        cache.entries.clear();
+    }
+    if let Ok(mut cooldown) = COOLDOWN.get_or_init(|| Mutex::new(None)).lock() {
+        *cooldown = None;
+    }
+}
+
+fn base() -> std::borrow::Cow<'static, str> {
+    #[cfg(test)]
+    if let Some(slot) = TEST_BASE.get()
+        && let Ok(base) = slot.lock()
+        && let Some(base) = base.as_ref()
+    {
+        return std::borrow::Cow::Owned(base.clone());
+    }
+    std::borrow::Cow::Borrowed(API)
 }
 
 pub(super) async fn get(key: &str, query: &[(&str, String)]) -> Result<Value, AppError> {
@@ -227,9 +269,9 @@ fn client() -> Result<&'static reqwest::Client, AppError> {
         return Ok(client);
     }
     let builder = reqwest::Client::builder()
-        .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(30))
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(60))
         .user_agent("SkillsBox/0.1 ClawHub-marketplace");
     // Production is HTTPS-only. The test build allows the loopback contract
     // server to simulate upstream 404s without TLS.

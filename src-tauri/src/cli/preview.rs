@@ -80,23 +80,36 @@ pub fn update_preview(
     let entries = plan
         .items
         .iter()
-        .map(|item| CliCommandEntry {
-            name: item.name.clone(),
-            command: Some(display_command(
-                &item
-                    .marketplace_plan
-                    .as_ref()
-                    .map(|p| p.command())
-                    .unwrap_or_else(|| {
-                        ScopedCli::new(runtime.expect("executable update runtime"), layout).install(
-                            &item.source,
-                            std::slice::from_ref(&item.name),
-                            &item.agent_ids,
-                            crate::timeouts::WRITE_TIMEOUT,
-                        )
-                    }),
-            )),
-            reason: None,
+        .map(|item| {
+            if let Some(plan) = &item.clawhub_plan {
+                return CliCommandEntry {
+                    name: item.name.clone(),
+                    command: None,
+                    reason: Some(format!(
+                        "由应用原生下载并校验 ClawHub {}，不执行 CLI 命令。",
+                        plan.reference_label()
+                    )),
+                };
+            }
+            CliCommandEntry {
+                name: item.name.clone(),
+                command: Some(display_command(
+                    &item
+                        .marketplace_plan
+                        .as_ref()
+                        .map(|p| p.command())
+                        .unwrap_or_else(|| {
+                            ScopedCli::new(runtime.expect("executable update runtime"), layout)
+                                .install(
+                                    &item.source,
+                                    std::slice::from_ref(&item.name),
+                                    &item.agent_ids,
+                                    crate::timeouts::WRITE_TIMEOUT,
+                                )
+                        }),
+                )),
+                reason: None,
+            }
         })
         .chain(plan.skipped.iter().map(|skip| CliCommandEntry {
             name: skip.name.clone(),
@@ -116,6 +129,11 @@ pub fn update_preview(
             i.marketplace_plan
                 .as_ref()
                 .map(|p| (i.name.clone(), p.detail.summary.version.clone()))
+                .or_else(|| {
+                    i.clawhub_plan
+                        .as_ref()
+                        .map(|p| (i.name.clone(), p.reference_label()))
+                })
         })
         .collect();
     preview

@@ -495,6 +495,9 @@ impl<A: MutationAction> MutationAction for CheckedAction<A> {
     fn uses_cli(&self, p: &Self::Plan) -> bool {
         self.inner.uses_cli(p)
     }
+    fn uses_native(&self, u: &Self::Unit) -> bool {
+        self.inner.uses_native(u)
+    }
     fn execute_native(
         &self,
         u: &Self::Unit,

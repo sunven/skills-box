@@ -62,6 +62,9 @@ pub struct ResolvedReference {
     pub repo: String,
     pub path: String,
     pub commit: String,
+    /// Upstream folder content hash, required for native GitHub-backed
+    /// installation and diagnostic only for browsing.
+    pub content_hash: Option<String>,
 }
 
 /// A ClawHub index entry whose install kind is `skills-sh`. It belongs to the
@@ -90,23 +93,21 @@ pub async fn detail(coordinate: &Coordinate) -> Result<Detail, AppError> {
     validate_coordinate(coordinate)?;
     let path = format!("/api/v1/skills/{}", coordinate.slug);
     let key = format!("detail|@{}", coordinate.canonical().trim_start_matches('@'));
-    let native = client::get_at_optional(
-        &path,
-        &key,
-        &[("ownerHandle", coordinate.namespace.clone())],
-    )
-    .await;
-    // The public detail response has no `install.kind`, so exactly one
-    // exact-mode search call classifies the coordinate. This happens per
-    // opened detail, never per list item.
-    let alias = classify_alias(coordinate).await;
+    let query = [("ownerHandle", coordinate.namespace.clone())];
+    let native_request = client::get_at_optional(&path, &key, &query);
+    // The alias classification and version list are independent reads. Start
+    // all three together so the detail opens in one upstream round trip; the
+    // version result is discarded for aliases and missing entries.
+    let alias_request = classify_alias(coordinate);
+    let versions_request = fetch_versions(coordinate);
+    let (native, alias, versions) = tokio::join!(native_request, alias_request, versions_request);
     match native {
         Ok(Some(value)) => {
             if let Ok(Some(alias)) = alias {
                 return Ok(Detail::Alias(alias));
             }
             // A served detail is native even if only the classifier failed.
-            let (versions, truncated) = fetch_versions(coordinate).await?;
+            let (versions, truncated) = versions?;
             let resolved_reference = if versions.is_empty() {
                 // Diagnostic only (installation is paused). A resolver failure
                 // must not hide the browsable detail, so it degrades to
@@ -169,6 +170,25 @@ pub async fn read_file(
 ) -> Result<SkillFileContent, AppError> {
     files::validate_path(path)?;
     let listing = version_files(coordinate, version).await?;
+    read_file_with_listing(coordinate, version, path, &listing).await
+}
+
+/// Read one file when the caller already holds the same version's file list.
+/// This avoids a duplicate version request in install/update previews.
+pub(crate) async fn read_file_with_listing(
+    coordinate: &Coordinate,
+    version: &str,
+    path: &str,
+    listing: &VersionFiles,
+) -> Result<SkillFileContent, AppError> {
+    validate_coordinate(coordinate)?;
+    validate_version(version)?;
+    if listing.coordinate != *coordinate || listing.version != version {
+        return Err(AppError::clawhub_unavailable(
+            "版本文件列表与请求的坐标或版本不一致",
+        ));
+    }
+    files::validate_path(path)?;
     let entry = listing
         .files
         .iter()
@@ -284,10 +304,20 @@ fn parse_resolved_reference(value: &Value) -> Result<Option<ResolvedReference>, 
         .and_then(Value::as_str)
         .filter(|commit| crate::marketplace::is_commit(commit))
         .ok_or_else(|| AppError::clawhub_unavailable("安装解析提交无效"))?;
+    let content_hash = match github.get("contentHash") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(hash))
+            if hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()) =>
+        {
+            Some(hash.to_ascii_lowercase())
+        }
+        Some(_) => return Err(AppError::clawhub_unavailable("安装解析内容哈希无效")),
+    };
     Ok(Some(ResolvedReference {
         repo: repo.to_string(),
         path: path.to_string(),
         commit: commit.to_string(),
+        content_hash,
     }))
 }
 
@@ -694,8 +724,16 @@ mod tests {
     }
 
     /// Minimal loopback contract server: exact path match, one request per
-    /// connection, unknown paths answer 404.
+    /// connection, unknown paths answer 404. Connections are handled
+    /// concurrently so tests can observe client-side overlap.
     fn serve_local(routes: Vec<(&str, u16, Value)>) -> String {
+        serve_local_delayed(routes, None)
+    }
+
+    fn serve_local_delayed(
+        routes: Vec<(&str, u16, Value)>,
+        delay: Option<std::time::Duration>,
+    ) -> String {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = format!("http://{}", listener.local_addr().unwrap());
         let routes: std::collections::HashMap<String, (u16, String)> = routes
@@ -703,35 +741,42 @@ mod tests {
             .map(|(path, status, body)| (path.to_string(), (status, body.to_string())))
             .collect();
         std::thread::spawn(move || {
-            use std::io::{BufRead, BufReader, Write};
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { break };
-                let Ok(clone) = stream.try_clone() else {
-                    continue;
-                };
-                let mut reader = BufReader::new(clone);
-                let mut request = String::new();
-                if reader.read_line(&mut request).is_err() {
-                    continue;
-                }
-                loop {
-                    let mut header = String::new();
-                    if reader.read_line(&mut header).is_err()
-                        || header == "\r\n"
-                        || header.is_empty()
-                    {
-                        break;
+                let routes = routes.clone();
+                std::thread::spawn(move || {
+                    use std::io::{BufRead, BufReader, Write};
+                    let Ok(clone) = stream.try_clone() else {
+                        return;
+                    };
+                    let mut reader = BufReader::new(clone);
+                    let mut request = String::new();
+                    if reader.read_line(&mut request).is_err() {
+                        return;
                     }
-                }
-                let target = request.split_whitespace().nth(1).unwrap_or("/");
-                let path = target.split('?').next().unwrap_or(target);
-                let (status, body) = routes.get(path).cloned().unwrap_or((404, "{}".to_string()));
-                let reason = if status == 200 { "OK" } else { "Not Found" };
-                let response = format!(
-                    "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nCache-Control: public, max-age=0\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                let _ = stream.write_all(response.as_bytes());
+                    loop {
+                        let mut header = String::new();
+                        if reader.read_line(&mut header).is_err()
+                            || header == "\r\n"
+                            || header.is_empty()
+                        {
+                            break;
+                        }
+                    }
+                    let target = request.split_whitespace().nth(1).unwrap_or("/");
+                    if let Some(delay) = delay {
+                        std::thread::sleep(delay);
+                    }
+                    let path = target.split('?').next().unwrap_or(target);
+                    let (status, body) =
+                        routes.get(path).cloned().unwrap_or((404, "{}".to_string()));
+                    let reason = if status == 200 { "OK" } else { "Not Found" };
+                    let response = format!(
+                        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nCache-Control: public, max-age=0\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = stream.write_all(response.as_bytes());
+                });
             }
         });
         address
@@ -1061,6 +1106,10 @@ mod tests {
         assert_eq!(reference.repo, "aws/agent-toolkit-for-aws");
         assert_eq!(reference.path, "plugins/aws-agents/skills/agents-build");
         assert_eq!(reference.commit, "b4416dddac9b6a0cc5412136e6dbf8f07ffdb31c");
+        assert_eq!(
+            reference.content_hash.as_deref(),
+            Some("d79709bf46ca8cd0fffe392a914cd56539b4b7c0ff0fe34c9583f24057300195")
+        );
 
         // Non-GitHub resolvers carry no GitHub reference and are not an error.
         assert_eq!(
@@ -1090,9 +1139,56 @@ mod tests {
                 "repo": "aws/toolkit", "path": "skills/a",
                 "commit": "B4416DDDAC9B6A0CC5412136E6DBF8F07FFDB31C"
             }}),
+            json!({"ok": true, "installKind": "github", "github": {
+                "repo": "aws/toolkit", "path": "skills/a",
+                "commit": "b4416dddac9b6a0cc5412136e6dbf8f07ffdb31c",
+                "contentHash": "abc"
+            }}),
         ] {
             assert!(parse_resolved_reference(&bad).is_err(), "{bad}");
         }
+    }
+
+    #[tokio::test]
+    async fn fetches_detail_alias_and_versions_concurrently() {
+        let delay = std::time::Duration::from_millis(200);
+        let base = serve_local_delayed(
+            vec![
+                (
+                    "/api/v1/skills/weather",
+                    200,
+                    json!({
+                        "skill": {
+                            "slug": "weather",
+                            "displayName": "Weather",
+                            "summary": "Forecasts.",
+                            "topics": [],
+                            "stats": {"downloads": 1, "installs": 2, "stars": 3}
+                        },
+                        "latestVersion": {"version": "1.0.0"},
+                        "owner": {"handle": "steipete", "displayName": "Peter"}
+                    }),
+                ),
+                ("/api/v1/search", 200, json!({"results": []})),
+                (
+                    "/api/v1/skills/weather/versions",
+                    200,
+                    json!({"items": [{"version": "1.0.0"}], "nextCursor": null}),
+                ),
+            ],
+            Some(delay),
+        );
+        let _guard = client::use_test_base(&base);
+        let start = std::time::Instant::now();
+        let result = detail(&coordinate()).await.unwrap();
+        let elapsed = start.elapsed();
+        assert!(matches!(result, Detail::Native(_)));
+        // Sequential native + alias + versions takes 600 ms; all three
+        // concurrent reads take about 200 ms.
+        assert!(
+            elapsed < std::time::Duration::from_millis(350),
+            "detail took {elapsed:?}"
+        );
     }
 
     #[tokio::test]
@@ -1115,7 +1211,7 @@ mod tests {
             ),
             ("/api/v1/search", 200, json!({"results": []})),
         ]);
-        client::use_test_base(&base);
+        let _guard = client::use_test_base(&base);
         let weather = coordinate();
         let Detail::Native(detail) = detail(&weather).await.unwrap() else {
             panic!("a served detail stays native");

@@ -98,6 +98,8 @@ async fn unavailable_marketplace_cli_only_skips_its_rows_and_keeps_the_confirmed
         &layout,
         &mut replanned,
         f.manager.pinned_updates(&Some(preview.id.clone())),
+        &std::collections::HashMap::new(),
+        &std::collections::HashMap::new(),
     )
     .unwrap();
     assert_eq!(replanned.items.len(), 1);
@@ -161,6 +163,8 @@ fn pinned_marketplace_update_retains_the_confirmed_release_without_git_runtime()
         &layout,
         &mut replanned,
         Some((ScopeId::Global, pinned)),
+        &std::collections::HashMap::new(),
+        &std::collections::HashMap::new(),
     )
     .unwrap();
     assert!(!replanned.needs_cli());

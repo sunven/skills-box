@@ -11,7 +11,7 @@
 | Node / npm / pnpm | v24.15.0 / 11.12.1 / 11.10.0 |
 | Rust | rustc 1.98.1，cargo 1.98.1 |
 | ClawHub CLI | `clawhub@0.26.0`（build `123d0f6c`），仅用于工单 02 的临时 HOME/prefix 门槛验证；应用不安装、不调用该 CLI |
-| 构建目录 | `CARGO_TARGET_DIR=/Users/sunven/cargo-target-skills-box` |
+| 构建目录 | 默认 `src-tauri/target/`（项目内，已被 `src-tauri/.gitignore` 忽略）；不再使用外部 `CARGO_TARGET_DIR` |
 | 网络 | 可用；ClawHub 仅匿名只读请求，保持低请求量 |
 
 ## 交付与暂停范围
@@ -33,7 +33,7 @@
 | 检查 | 结果与证据 |
 | --- | --- |
 | 匿名只读 | 应用只发送匿名 GET（`marketplace/clawhub/client.rs`），无账户、令牌、Cookie 或授权流程；产品代码不调用 `clawhub` CLI；无 ClawHub 设置或凭据文件 |
-| 代理 | 客户端显式调用 `.no_proxy()`，请求直连 ClawHub，不继承宿主系统/环境代理设置（spec R3-Q4）；应用不配置账户、令牌或应用级代理 |
+| 代理 | 跟随宿主系统/环境代理（reqwest `system-proxy`），应用不配置账户、令牌或应用级代理；GitHub-backed codeload 同样跟随系统代理（ADR-0036，2026-11-17 取代原 `.no_proxy()` 直连约束） |
 | 会话缓存 | 仅进程内存、最多 12 条、按最近最少使用淘汰、TTL 取 `Cache-Control` 且上限 300 秒；`no-store`/`no-cache`/`max-age=0` 不缓存。测试：`cache_lifetime_obeys_cache_control_and_is_bounded`、`cache_is_bounded_and_never_serves_expired_entries`、`cache_evicts_the_least_recently_used_entry_not_the_first_key`。2026-11-16 实测目录响应头 `cache-control: public, max-age=0`，因此本次运行实际不产生目录缓存复用 |
 | 不落盘/无离线 | ClawHub 模块无文件写入；目录、详情和文件内容只存在于请求/内存。跨重启仅持久化来源选择（localStorage），不持久化目录或内容，不存在离线浏览。市场记录文件只承载安装/卸载等管理状态，不用于目录或内容缓存；安装暂停期间无法产生 ClawHub 记录 |
 | 429 / `Retry-After` | `retry_after` 支持秒数与 HTTP 日期、限定 1–300 秒并有单元测试；429 设置共享冷却，后续请求以 `marketplace.rate_limited` 快速失败，错误携带 `retryAfterSeconds`（`rate_limit_errors_carry_the_server_retry_window`）；列表与搜索各有前端限流状态与退避测试。共享冷却的到期行为由代码检查确认，未用 Rust 层 mock HTTP 服务器直接测试。**本次验收与工单 02 均未触发真实上游 429**；工单 02 仅用本地 mock 观察 CLI 的 429 行为 |
@@ -94,7 +94,9 @@
 - **无 ClawHub 记录可创建**：安装暂停期间 `owner/slug@引用` 记录、唯一身份、同名冲突与原生管理只能做模型级/共享管线测试，未经过真实安装。
 - **规格第 43 条（已安装/冲突状态）为 EXCEPTION**：安装暂停期间无法创建任何 ClawHub 市场记录，因此没有可查询的已安装状态或同名冲突；未构建推测性的已安装/冲突 UI。恢复安装时需另行实现并测试。
 - **限流验证边界**：真实上游 429 未触发；读限制 3000 次/分/IP 仅出现在限流错误提示，下载限制 1200 次/分/IP 没有代码路径；共享冷却到期未做 Rust 单元测试。
-- **代理边界**：ClawHub 客户端显式 `.no_proxy()`，不读取宿主系统/环境代理设置；应用不引入代理、账户或令牌。
+- **代理边界**：ClawHub 与 GitHub-backed 下载跟随宿主系统/环境代理（ADR-0036）；应用不新增代理配置、账户或令牌。原 `.no_proxy()` 直连约束已由用户确认取代。
+- **ClawHub 打开延迟（2026-11-17）**：线上单请求约 1.5s，系统代理下约 1.4s，直连可达 5.2s 或超时。详情页原按 `detail → 别名搜索 → 版本列表` 串行，UI 再串行取版本文件与 `SKILL.md`；安装预览还重复读取版本列表、详情和版本安全状态。现改为：详情/别名/版本并行，安装与更新预览并行获取版本列表与 moderation、复用一次版本列表读取 `SKILL.md`，UI 在文件列表加载时并行预取 `SKILL.md`，客户端超时提高到 60s。延迟测试见 `detail::tests::fetches_detail_alias_and_versions_concurrently`。
+- **代理切换后的实测（2026-11-17）**：同一 GET 直连约 5.18s、系统代理约 1.42s。切换前 live 详情测试在 83s 后因 `error decoding response body` 失败；切换后同一测试 10.65s 通过，live 安装预览 4.02s 通过（`@steipete/weather`）。
 - **实时 smoke 的波动**：SkillHub 与 skills.sh 的只读 live 测试各出现一次上游数据波动，重跑通过；这些断言依赖当日上游目录内容，不是确定性回归门禁。
 
 ## 代码审查后续
@@ -102,3 +104,56 @@
 - **ADR-0006 的措辞已过时**：其中「frontend only branches on the lock family」不再成立——前端已按 `marketplace.rate_limited` 等具体错误码分支（ClawHub 列表/搜索），且这是既有先例。按审查结论不改 ADR 与代码，仅记录理由。
 - **`Coordinate::from_canonical` 的 SkillHub 默认值**：保留以兼容既有 SkillHub 调用点，不新增别名构造函数；改为在方法文档中明确警告「裸 `@owner/slug` 不携带来源」，ClawHub/未来来源必须使用 `from_canonical_for`。
 - 本次已顺手修复的低风险项：ClawHub 与 SkillHub 共用 `marketplace/files.rs` 的路径校验/预览/解码与 `%` 规则；前端共用 `MutationError`、`OfficialLink` 与统一错误通知块；Rust 来源标签/原生分类集中到 `marketplace`；测试记录工厂 `Installation::fixture`；缓存改为真正 LRU。
+
+## 原生安装与更新（工单 11–15，2026-11-17）
+
+ADR-0035 确认后实现。范围：原生 archive 与 GitHub-backed 安装、安装期安全门、更新检查与执行、隔离验收。
+
+### 交付
+
+- **11 原生包暂存**：`marketplace/clawhub/package.rs` 下载显式 archive 版本，隔离解压，按版本文件列表逐文件校验 SHA-256，允许且校验注册表生成的 `_meta.json`；拒绝符号链接、特殊文件、路径穿越、大小写冲突、重复路径、额外内容与压缩炸弹。
+- **12 安装流程**：`tasks/marketplace/clawhub.rs` + `tasks/manager/clawhub.rs` + `prepare_clawhub_install`/`start_clawhub_install`。预览解析 latest archive、读取原始名、执行 moderation 门、校验 Scope/Agent/冲突；确认后重新解析同一引用、暂存、经 source-neutral 发布管线写入 canonical store、市场记录、基线与 Agent 挂载。详情页提供安装入口与安装对话框，不使用 CLI。
+- **13 GitHub-backed**：`marketplace/clawhub/github.rs` + `target.rs`。门槛通过：从 codeload 固定 commit 下载，按注册表算法（含 ICU en-US `localeCompare` 排序）复现 `contentHash` 并校验；记录 `repo/path/commit/contentHash` 诊断。门槛证据见 [research/03-github-content-hash-gate.md](research/03-github-content-hash-gate.md)。
+- **14 更新**：更新检查按来源分派，archive 比较 semver、GitHub-backed 比较 commit；ClawHub 使用独立来源预算。更新预览构建原生计划，固定预览后重新解析并暂存在执行前完成；`execute_native` 发布新内容并保留挂载与 `installedAt`。混合更新通过 `uses_native` 阻止 ClawHub 条目回退到 CLI。
+- **15 验收**：本记录与隔离验收测试。
+
+### 验证
+
+| 检查 | 结果 |
+| --- | --- |
+| `cargo fmt --check` | 通过 |
+| 全量 Rust 套件（跳过两项宿主敏感测试） | 802 通过、0 失败、13 ignored |
+| 前端 `pnpm test` | 49 文件、518 项通过 |
+| `pnpm exec tsc --noEmit` | 通过 |
+| live archive 暂存（`@steipete/weather@1.0.0`） | 通过 |
+| live GitHub-backed 暂存与哈希（`@aws/agents-build`） | 通过（约 90 秒） |
+| 隔离真实安装+更新（`@steipete/nano-banana-pro` 1.0.0→1.0.1，Global 与 Project） | 通过；前两次因上游慢响应超时，重跑通过 |
+| 门槛复核 | AWS 固定 commit + 6 个抽样文件夹全部匹配 |
+
+### 验收逐项（工单 15）
+
+| 项 | 结果 | 证据 / 例外 |
+| --- | --- | --- |
+| 隔离 Global/Project 真实安装+更新 | **PASS** | `clawhub_live_archive_install_and_update_publish_into_isolated_scopes` 在临时 HOME、临时 Scope 与临时 Project 中完成两版本发布，校验 canonical、记录、基线、挂载与 `installedAt` |
+| GitHub-backed 端到端 | **PARTIAL** | 下载、哈希校验、暂存与诊断记录的 live 测试通过；抽样条目被 moderation 标记 pending-suspicious，真实发布按设计阻断，未执行 live 发布。确定性发布与诊断测试覆盖发布路径 |
+| 合规 | **PASS** | 匿名 GET、无账户/令牌/代理、目录缓存仅内存、包内容仅临时暂存、canonical 回链；真实 429 未触发 |
+| 安全 | **PASS** | moderation 显式阻断、ZIP 硬化、大小/哈希/截断失败、别名拒绝、失败暂存不覆盖既有安装 |
+| 冲突与 Scope 隔离 | **PASS** | 确定性 Global/Project 发布、同名 Unmanaged 冲突、跨 Scope 独立测试 |
+| 回归 | **PASS** | 全量 Rust 与前端套件通过；SkillHub、skills.sh、Git 与专家包路径未改动行为 |
+| 文档 | **PASS** | 规格、ADR-0035、工单 11–15 与本记录同步 |
+| 不触碰真实用户环境 | **PASS** | live 测试只使用临时 HOME/Scope 与匿名读接口 |
+
+### 偏差与限制
+
+- **GitHub-backed 真实安装受 moderation 限制**：抽样 GitHub-backed 条目多为待扫描/可疑，应用按设计阻断；未找到 clean live fixture 执行完整 live 发布。
+- **上游波动**：ClawHub 实时接口在验收时出现两次 `error decoding response body` / 发送失败超时，重跑通过；不作为确定性回归门禁。
+- **同引用内容替换不检测**：与规格第 21 条一致；本地基线只检测本地改动。
+- **contentHash 依赖未文档化行为**：算法、默认 locale 或 GitHub 归档布局变化时需重新打开 ticket 13 门槛，应用不会静默放宽校验。
+- **限流未压测**：真实 429/`Retry-After` 未触发；文档限流值只由已有退避逻辑与单元测试覆盖。
+- **历史版本**：详情可切换历史版本，但安装/更新固定确认时解析出的 latest archive 或 resolver commit。
+
+### EXCEPTION
+
+- GitHub-backed 的完整 live 发布（抽样条目被 moderation 阻断；下载与哈希校验已实时验证）。
+- 真实上游 429/`Retry-After` 未触发。
+- 未自动化一次完整的 live Manager/UI 编排；核心计划、原生执行与 UI 安装/更新流程分别由单元、隔离发布与 fake-backend 测试覆盖。

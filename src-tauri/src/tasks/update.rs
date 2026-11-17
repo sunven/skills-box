@@ -38,6 +38,7 @@ pub struct UpdateItem {
     pub name: String,
     pub marketplace_record: Option<crate::marketplace::records::Installation>,
     pub marketplace_plan: Option<super::marketplace::Plan>,
+    pub clawhub_plan: Option<crate::tasks::marketplace::clawhub::Plan>,
     /// Normalized source, with `#ref` appended only when the lock pinned
     /// a non-default branch/tag/commit.
     pub source: String,
@@ -206,6 +207,7 @@ pub fn plan_updates(
             name: name.clone(),
             marketplace_record,
             marketplace_plan: None,
+            clawhub_plan: None,
             source,
             canonical,
             lock_hash: entry.skill_folder_hash.clone(),
@@ -379,9 +381,38 @@ impl MutationAction for UpdateAction {
     fn independent_command(&self, item: &Self::Unit, _: &Reporter) -> Option<CommandSpec> {
         item.marketplace_plan.as_ref().map(|p| p.command())
     }
+
+    fn uses_native(&self, item: &Self::Unit) -> bool {
+        item.clawhub_plan.is_some()
+    }
+
+    fn execute_native(
+        &self,
+        item: &Self::Unit,
+        preflight: &Preflight,
+        reporter: &Reporter,
+    ) -> Result<UnitOutcome, AppError> {
+        let plan = item
+            .clawhub_plan
+            .as_ref()
+            .ok_or_else(|| AppError::task_internal("更新", "缺少 ClawHub 原生更新计划"))?;
+        crate::tasks::marketplace::clawhub::publish_plan(
+            &self.paths,
+            &self.layout.scope,
+            plan,
+            preflight,
+            reporter,
+            "update",
+            TaskSkillStatus::Updated,
+        )
+    }
+
     fn before_write(&self, item: &Self::Unit) -> Result<(), AppError> {
         self.layout.ensure_mutation_ready()?;
         if let Some(plan) = &item.marketplace_plan {
+            plan.check(&self.paths, &self.layout)?;
+        }
+        if let Some(plan) = &item.clawhub_plan {
             plan.check(&self.paths, &self.layout)?;
         }
         Ok(())
@@ -431,6 +462,9 @@ impl MutationAction for UpdateAction {
             Some(item.name.as_str()),
         );
         if let Some(plan) = &item.marketplace_plan {
+            plan.check(&self.paths, &self.layout)?;
+        }
+        if let Some(plan) = &item.clawhub_plan {
             plan.check(&self.paths, &self.layout)?;
         }
         let mut warnings = Vec::new();

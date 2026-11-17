@@ -49,7 +49,7 @@ async function openWeatherDetail() {
 const detailMain = (name = "Weather") => screen.getByRole("main", { name });
 
 describe("ClawHub detail", () => {
-  it("opens the latest version from a list card with ClawHub identity, metrics, license and the paused-install note", async () => {
+  it("opens the latest version from a list card with ClawHub identity, metrics, license and an install affordance", async () => {
     const { backend } = setup();
     const main = await openWeatherDetail();
     const detail = within(main);
@@ -68,13 +68,13 @@ describe("ClawHub detail", () => {
       detail.getByText(`ClawHub 版本 v${clawhubVersionOne} 的打包内容`),
     ).toBeInTheDocument();
     expect(
-      detail.getByText(`解析引用：v${clawhubVersionOne}（ClawHub archive 版本；仅诊断，安装通道暂停）`),
+      detail.getByText(`解析引用：v${clawhubVersionOne}（ClawHub archive 版本；安装按确认时的 latest 版本解析）`),
     ).toBeInTheDocument();
     expect(
       detail.getByText(/不保证与将来安装时重新解析的内容完全一致/),
     ).toBeInTheDocument();
-    expect(detail.getByText("ClawHub 安装暂不可用。")).toBeInTheDocument();
-    expect(detail.queryByRole("button", { name: "安装" })).not.toBeInTheDocument();
+    expect(detail.getByRole("button", { name: "安装" })).toBeEnabled();
+    expect(detail.queryByText("ClawHub 安装暂不可用。")).not.toBeInTheDocument();
     expect(detail.queryByText(/scan|扫描/i)).not.toBeInTheDocument();
     expect(
       await detail.findByRole("heading", { name: "Weather 1.2.0" }),
@@ -96,6 +96,41 @@ describe("ClawHub detail", () => {
     expect(backend.callsOf("open_external_url").slice(-1)[0].payload.url).toBe(
       clawhubDetail.canonicalUrl,
     );
+  });
+
+  it("installs an archive ClawHub skill through the native flow and attaches it to an agent", async () => {
+    const { backend } = setup({ autoTasks: { delayMs: 5 } });
+    const main = await openWeatherDetail();
+    const detail = within(main);
+
+    fireEvent.click(await detail.findByRole("button", { name: "安装" }));
+    const dialog = await screen.findByRole("dialog", { name: "安装 · Weather" });
+    fireEvent.click(within(dialog).getByLabelText("Claude Code"));
+    fireEvent.click(within(dialog).getByRole("button", { name: "预览安装" }));
+    expect(
+      await within(dialog).findByText(/由应用原生下载并校验 ClawHub/),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(/确认安装 weather · v1\.2\.0/),
+    ).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认安装" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("clawhub-result")).toHaveAttribute(
+        "data-overall",
+        "success",
+      ),
+    );
+    expect(
+      backend.callsOf("prepare_clawhub_install")[0].payload.coordinate,
+    ).toEqual(clawhubSkill.coordinate);
+    expect(backend.callsOf("start_clawhub_install")).toHaveLength(1);
+
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "查看已安装技能" }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "weather" }),
+    ).toBeInTheDocument();
   });
 
   it("opens a search result and returns to the same query, scroll and list without refetching it", async () => {
@@ -159,7 +194,7 @@ describe("ClawHub detail", () => {
     expect(detail.getByText("许可证：MIT")).toBeInTheDocument();
     expect(detail.queryByText("许可证：MIT-0")).not.toBeInTheDocument();
     expect(
-      detail.getByText(`解析引用：v${clawhubVersionOld}（ClawHub archive 版本；仅诊断，安装通道暂停）`),
+      detail.getByText(`解析引用：v${clawhubVersionOld}（ClawHub archive 版本；安装按确认时的 latest 版本解析）`),
     ).toBeInTheDocument();
 
     fireEvent.click(detail.getByRole("tab", { name: "文件" }));
@@ -414,7 +449,7 @@ describe("ClawHub detail", () => {
   });
 
   it("states explicitly when a version has no SKILL.md or no files at all", async () => {
-    const { backend } = setup({
+    setup({
       commands: {
         list_clawhub_version_files: (args, fake) =>
           args.version === clawhubVersionOld
@@ -439,11 +474,11 @@ describe("ClawHub detail", () => {
     ).toBeInTheDocument();
     fireEvent.click(detail.getByRole("tab", { name: "文件" }));
     expect(await detail.findByText("此版本没有可浏览的文件。")).toBeInTheDocument();
+    // SKILL.md may be prefetched in parallel with the file list; the empty
+    // listing still wins and no overview content is rendered.
     expect(
-      backend
-        .callsOf("read_clawhub_version_file")
-        .some((call) => call.payload.version === clawhubVersionOld),
-    ).toBe(false);
+      detail.queryByRole("heading", { name: "Weather 1.0.0" }),
+    ).not.toBeInTheDocument();
   });
 
   it("keeps the last successful same-version content and marks it stale when a refresh fails", async () => {
@@ -525,7 +560,6 @@ describe("ClawHub detail", () => {
     expect(detail.getByText(/内容浏览与安装请在 skills.sh 来源中进行/)).toBeInTheDocument();
     expect(detail.getByText(/对应仓库：anthropics\/knowledge-work-plugins/)).toBeInTheDocument();
     expect(detail.queryByRole("button", { name: "安装" })).not.toBeInTheDocument();
-    expect(detail.queryByText("ClawHub 安装暂不可用。")).not.toBeInTheDocument();
     expect(detail.queryByRole("combobox", { name: "ClawHub 版本" })).not.toBeInTheDocument();
     expect(detail.queryByText(/ClawHub 版本 v/)).not.toBeInTheDocument();
 
@@ -577,6 +611,8 @@ describe("ClawHub detail", () => {
                   repo: "aws/agent-toolkit-for-aws",
                   path: "plugins/aws-agents/skills/agents-build",
                   commit: "b4416dddac9b6a0cc5412136e6dbf8f07ffdb31c",
+                  contentHash:
+                    "d79709bf46ca8cd0fffe392a914cd56539b4b7c0ff0fe34c9583f24057300195",
                 },
               }
             : fake.dispatch("get_clawhub_skill_detail", args),
@@ -594,22 +630,32 @@ describe("ClawHub detail", () => {
     const detail = within(detailMain(clawhubSparseSkill.coordinate.slug));
 
     expect(
-      detail.getByText("安装通道暂停期间不提供该条目的内容预览。"),
+      detail.getByText(
+        "安装会固定解析出的 commit 并校验文件夹内容哈希；解析引用不会创建 Git 安装身份。",
+      ),
     ).toBeInTheDocument();
     expect(
       detail.getByText(
         /解析引用：aws\/agent-toolkit-for-aws@b4416dddac9b6a0cc5412136e6dbf8f07ffdb31c:plugins\/aws-agents\/skills\/agents-build/,
       ),
     ).toBeInTheDocument();
-    expect(detail.getByText(/仅用于核对上游解析结果/)).toBeInTheDocument();
     expect(detail.queryByText(/许可证/)).not.toBeInTheDocument();
     const metrics = detail.getByRole("group", { name: "ClawHub 指标" });
     expect(within(metrics).getAllByText(/未提供/)).toHaveLength(3);
     expect(detail.queryByRole("combobox", { name: "ClawHub 版本" })).not.toBeInTheDocument();
     expect(detail.queryByText(/ClawHub 版本 v/)).not.toBeInTheDocument();
-    expect(detail.queryByRole("button", { name: "安装" })).not.toBeInTheDocument();
+    expect(detail.getByRole("button", { name: "安装" })).toBeEnabled();
     expect(backend.count("list_clawhub_version_files")).toBe(0);
     expect(backend.count("read_clawhub_version_file")).toBe(0);
+
+    fireEvent.click(detail.getByRole("button", { name: "安装" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: `安装 · ${clawhubSparseSkill.coordinate.slug}`,
+    });
+    expect(dialog).toHaveTextContent(
+      /aws\/agent-toolkit-for-aws@b4416dddac9b6a0cc5412136e6dbf8f07ffdb31c:plugins\/aws-agents\/skills\/agents-build/,
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "关闭安装" }));
 
     const links = detail.getAllByRole("button", { name: "ClawHub 页面" });
     fireEvent.click(links[links.length - 1]);

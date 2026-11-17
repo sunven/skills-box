@@ -1,3 +1,4 @@
+import type { CliCommandPreview } from "./cli-commands";
 import type { MarketplaceCoordinate } from "./marketplace";
 
 /** The only documented ClawHub catalog sorts exposed by the app. */
@@ -73,6 +74,7 @@ export interface ClawHubResolvedReference {
   repo: string;
   path: string;
   commit: string;
+  contentHash?: string | null;
 }
 /**
  * A ClawHub index entry backed by skills.sh. It has no ClawHub-hosted content
@@ -99,6 +101,16 @@ export interface ClawHubVersionFiles {
   license: string | null;
   changelog: string | null;
   files: ClawHubFileEntry[];
+}
+
+/** Native archive installation preview. No CLI command is executed. */
+export interface ClawHubInstallPreview {
+  coordinate: ClawHubCoordinate;
+  name: string;
+  version: string;
+  referenceLabel: string;
+  canonicalUrl: string;
+  commands: CliCommandPreview;
 }
 
 export const CLAWHUB_OFFICIAL_URL = "https://clawhub.ai/skills";

@@ -29,6 +29,7 @@ use super::uninstall as uninstall_task;
 use super::update as update_task;
 
 pub(crate) mod batch;
+mod clawhub;
 mod cli_preview;
 mod expert_packs;
 mod marketplace;
@@ -282,6 +283,7 @@ struct Inner {
     batch_previews: Mutex<HashMap<String, super::batch::BatchPlan>>,
     pack_previews: Mutex<HashMap<String, super::expert_packs::Plan>>,
     marketplace_previews: Mutex<HashMap<String, super::marketplace::Plan>>,
+    clawhub_previews: Mutex<HashMap<String, super::marketplace::clawhub::Plan>>,
     update_previews: Mutex<HashMap<String, (crate::scope::ScopeId, super::update::UpdatePlan)>>,
     shutting_down: AtomicBool,
     finished_notify: Notify,
@@ -428,6 +430,7 @@ impl TaskManager {
                 batch_previews: Mutex::new(HashMap::new()),
                 pack_previews: Mutex::new(HashMap::new()),
                 marketplace_previews: Mutex::new(HashMap::new()),
+                clawhub_previews: Mutex::new(HashMap::new()),
                 update_previews: Mutex::new(HashMap::new()),
                 shutting_down: AtomicBool::new(false),
                 finished_notify: Notify::new(),
@@ -937,12 +940,37 @@ impl TaskManager {
     ) -> Result<TaskId, AppError> {
         self.ensure_not_shutting_down()?;
         let names = install::validate_skill_names(&skill_ids)?;
+        let single = names.len() == 1;
         let pinned = self.pinned_updates(&preview_id);
         self.validate_pinned_updates(&pinned).await?;
+        let mut staged_clawhub = HashMap::new();
+        let mut failed_clawhub = HashMap::new();
+        if let Some((_, preview)) = &pinned {
+            for item in &preview.items {
+                if let Some(plan) = &item.clawhub_plan {
+                    match crate::tasks::marketplace::clawhub::stage_for_start(plan).await {
+                        Ok(staged) => {
+                            staged_clawhub.insert(item.name.clone(), Arc::new(staged));
+                        }
+                        Err(error) if single => return Err(error),
+                        Err(error) => {
+                            failed_clawhub.insert(item.name.clone(), error);
+                        }
+                    }
+                }
+            }
+        }
         let planned = self
             .plan_scoped_mutation(scope, MutationKind::Update, move |paths, layout| {
                 let mut plan = update_task::plan_updates(paths, layout, &names)?;
-                marketplace::apply_pinned_updates(paths, layout, &mut plan, pinned)?;
+                marketplace::apply_pinned_updates(
+                    paths,
+                    layout,
+                    &mut plan,
+                    pinned,
+                    &staged_clawhub,
+                    &failed_clawhub,
+                )?;
                 Ok(plan)
             })
             .await?;

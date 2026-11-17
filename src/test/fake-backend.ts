@@ -2,7 +2,8 @@ import type { PackListing, PackDetail, PackPreview, LocalPack, PackSnapshot } fr
 import { expertPack, packSnapshot } from "./expert-pack-fixtures";
 import type { SkillsShCoordinate, SkillsShListing, SkillsShSnapshot, SkillsShView } from "../lib/skills-sh";
 import { skillsShSkill, skillsShWebsiteSkill, skillsShSnapshot } from "./skills-sh-fixtures";
-import type { ClawHubCoordinate, ClawHubDetail, ClawHubListing, ClawHubSearch, ClawHubSort, ClawHubVersionFiles } from "../lib/clawhub";
+import type { ClawHubCoordinate, ClawHubDetail, ClawHubInstallPreview, ClawHubListing, ClawHubSearch, ClawHubSort, ClawHubVersionFiles } from "../lib/clawhub";
+import { clawhubAddress } from "../lib/clawhub";
 import { clawhubAliasDetail, clawhubDetail, clawhubFileContent, clawhubPageOne, clawhubPageTwo, clawhubSearch, clawhubVersionFilesFixture } from "./clawhub-fixtures";
 import type { MarketplaceCoordinate, MarketplaceListing, MarketplaceDetail, MarketplaceCli, MarketplacePreview, MarketplaceSort, MarketplaceCategory, MarketplaceApiKeyFilter, MarketplaceFiles } from "../lib/marketplace";
 import { isNativeSkillSource, marketplaceAddress } from "../lib/marketplace";
@@ -97,6 +98,8 @@ export interface FakeCommandContract {
   get_marketplace_cli: { args: Record<string, never>; result: MarketplaceCli };
   prepare_marketplace_install: { args: { scope: ScopeId; coordinate: MarketplaceCoordinate; agents: string[] }; result: MarketplacePreview };
   start_marketplace_install: { args: { scope: ScopeId; previewId: string; onEvent: Channel<TaskEvent> }; result: string };
+  prepare_clawhub_install: { args: { scope: ScopeId; coordinate: ClawHubCoordinate; agents: string[] }; result: ClawHubInstallPreview };
+  start_clawhub_install: { args: { scope: ScopeId; previewId: string; onEvent: Channel<TaskEvent> }; result: string };
   list_stale_records: { args: { scope: ScopeId }; result: StaleRecord[] };
   get_cli_commands: { args: Record<string, never>; result: CliCommandRecord[] };
   preview_cli_commands: { args: { scope: ScopeId; request: CliCommandRequest }; result: CliCommandPreview };
@@ -441,6 +444,8 @@ export function createFakeBackend(
   let data: FakeBackendData = { ...initialData };
   const marketPreviews = new Map<string, { scope: ScopeId; preview: MarketplacePreview; agents: string[] }>();
   const marketTasks = new Map<string, { scope: ScopeId; preview: MarketplacePreview; agents: string[] }>();
+  const clawhubPreviews = new Map<string, { scope: ScopeId; preview: ClawHubInstallPreview; agents: string[] }>();
+  const clawhubTasks = new Map<string, { scope: ScopeId; preview: ClawHubInstallPreview; agents: string[] }>();
   const dataPreviews = new Map<string, AppDataPreview>();
   let projectList: ProjectList = factoryValue(initialData.projects);
   const initialProjects = projectList;
@@ -591,6 +596,13 @@ export function createFakeBackend(
           installInto(market.scope, [detail.originalName!]);
           const snapshot = snapshotFor(market.scope);
           setSnapshot({ ...snapshot, skills: snapshot.skills.map((s) => s.name === detail.originalName ? { ...s, source: marketplaceAddress(detail.coordinate), sourceType: "skillhub", sourceVersion: detail.version, description: detail.description, attachments: market.agents.map((id) => ({ agentId: id, agentName: snapshot.installTargets.find((a) => a.id === id)?.displayName ?? id, mode: "link" as const, path: `~/.${id}/skills/${s.name}`, detachable: true })) } : s) }, market.scope);
+        }
+        const clawhub = clawhubTasks.get(task.taskId);
+        if (clawhub && event.result?.overall === "success") {
+          const { name, version, coordinate } = clawhub.preview;
+          installInto(clawhub.scope, [name]);
+          const snapshot = snapshotFor(clawhub.scope);
+          setSnapshot({ ...snapshot, skills: snapshot.skills.map((s) => s.name === name ? { ...s, source: clawhubAddress(coordinate), sourceType: "clawhub", sourceVersion: version, attachments: clawhub.agents.map((id) => ({ agentId: id, agentName: snapshot.installTargets.find((a) => a.id === id)?.displayName ?? id, mode: "link" as const, path: `~/.${id}/skills/${s.name}`, detachable: true })) } : s) }, clawhub.scope);
         }
         if (event.result?.action === "install") {
           const source = installSources.get(task.taskId);
@@ -1860,6 +1872,40 @@ export function createFakeBackend(
       marketTasks.set(task.taskId, plan);
       taskCommands.set(task.taskId, { scope, commands: plan.preview.commands.entries.flatMap((e) => e.command ? [e.command] : []) });
       scheduleAutoTask(task, "install", [plan.preview.detail.originalName!], scope);
+      return task.taskId;
+    },
+    prepare_clawhub_install: ({ scope, coordinate, agents }) => {
+      const isGithub = coordinate.slug === "agents-build";
+      const name = isGithub ? "agents-build" : "weather";
+      const existing = snapshotFor(scope).skills.find((s) => s.name === name);
+      if (existing) throw { code: "skill.conflict", message: "当前作用域已有同名技能。", retryable: false } satisfies AppError;
+      const version = isGithub
+        ? "b4416dddac9b6a0cc5412136e6dbf8f07ffdb31c"
+        : (clawhubDetail.latestVersion ?? clawhubDetail.versions[0].version);
+      const referenceLabel = isGithub
+        ? `aws/agent-toolkit-for-aws@${version}:plugins/aws-agents/skills/agents-build`
+        : `v${version}`;
+      const id = `clawhub-${scope}-${clawhubPreviews.size}`;
+      const preview: ClawHubInstallPreview = {
+        coordinate,
+        name,
+        version,
+        referenceLabel,
+        canonicalUrl: `https://clawhub.ai/${coordinate.namespace}/skills/${coordinate.slug}`,
+        commands: {
+          id,
+          entries: [{ name, command: null, reason: `由应用原生下载并校验 ClawHub ${clawhubAddress(coordinate)} ${referenceLabel}，不执行 CLI 命令。` }],
+        },
+      };
+      clawhubPreviews.set(id, { scope, preview, agents });
+      return preview;
+    },
+    start_clawhub_install: ({ scope, previewId, onEvent }) => {
+      const plan = clawhubPreviews.get(previewId);
+      if (!plan || plan.scope !== scope) throw { code: "cli.command_changed", message: "请刷新预览。", retryable: true } satisfies AppError;
+      const task = makeTask("start_clawhub_install", onEvent);
+      clawhubTasks.set(task.taskId, plan);
+      scheduleAutoTask(task, "install", [plan.preview.name], scope);
       return task.taskId;
     },
     get_cli_commands: () => cliRecords,

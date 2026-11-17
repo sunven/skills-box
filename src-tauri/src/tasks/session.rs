@@ -174,6 +174,12 @@ pub trait MutationAction: Send + Sync + 'static {
         None
     }
 
+    /// This unit is written natively even when a CLI runtime exists for other
+    /// units in the same session.
+    fn uses_native(&self, _unit: &Self::Unit) -> bool {
+        false
+    }
+
     /// Native writers share the backup, cancellation seal and result envelope.
     fn execute_native(
         &self,
@@ -397,9 +403,13 @@ pub async fn run<A: MutationAction>(
                 }
             }
         }
-        let command = action
-            .independent_command(unit, &reporter)
-            .or_else(|| runtime.as_ref().map(|r| action.command(unit, r, &reporter)));
+        let command = if action.uses_native(unit) {
+            None
+        } else {
+            action
+                .independent_command(unit, &reporter)
+                .or_else(|| runtime.as_ref().map(|r| action.command(unit, r, &reporter)))
+        };
         let completed = if let Some(mut spec) = command {
             if let Some(expected) = &ctx.expected_commands
                 && !expected.contains(&crate::cli::commands::display_command(&spec))

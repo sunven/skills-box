@@ -1,4 +1,4 @@
-use super::{MarketplaceSource, provider, records::Records};
+use super::{MarketplaceSource, clawhub, provider, records::Records};
 use crate::{
     error::AppError,
     inventory::UpdateState,
@@ -21,8 +21,19 @@ pub async fn check(
     deadline_ms: u64,
     slots: &tokio::sync::Semaphore,
 ) -> Vec<UpdateSkillResult> {
-    let latest: LatestCheck =
-        Arc::new(|coordinate| Box::pin(async move { provider::latest(&coordinate).await }));
+    let latest: LatestCheck = Arc::new(|coordinate| {
+        Box::pin(async move {
+            match coordinate.source {
+                MarketplaceSource::Skillhub => provider::latest(&coordinate).await,
+                MarketplaceSource::Clawhub => {
+                    match clawhub::resolve_install_target(&coordinate).await? {
+                        clawhub::InstallTarget::Archive(version) => Ok(version),
+                        clawhub::InstallTarget::Github(reference) => Ok(reference.commit),
+                    }
+                }
+            }
+        })
+    });
     check_with(
         records,
         selected,
@@ -47,17 +58,18 @@ async fn check_with(
     latest: LatestCheck,
 ) -> Vec<UpdateSkillResult> {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(deadline_ms);
-    let mut skillhub_index = 0usize;
+    let mut indexes = [0usize; 2];
     let entries = records
         .skills
         .into_values()
         .filter(|r| selected.is_none_or(|s| s.contains(&r.name)))
         .map(|record| {
-            let index = (record.coordinate.source == MarketplaceSource::Skillhub).then(|| {
-                let index = skillhub_index;
-                skillhub_index += 1;
-                index
-            });
+            let slot = match record.coordinate.source {
+                MarketplaceSource::Skillhub => 0,
+                MarketplaceSource::Clawhub => 1,
+            };
+            let index = indexes[slot];
+            indexes[slot] += 1;
             (record, index)
         })
         .collect::<Vec<_>>();
@@ -65,9 +77,6 @@ async fn check_with(
         .map(|(record, index)| {
             let latest = Arc::clone(&latest);
             async move {
-                let Some(index) = index else {
-                    return unavailable_row(&record);
-                };
                 if index >= budget {
                     return row(&record, None, None, true);
                 }
@@ -88,25 +97,6 @@ async fn check_with(
         .await
 }
 
-/// ClawHub installation is paused (ticket 02 gate), so an update check must
-/// report an explicit unknown state instead of fabricating a candidate or
-/// querying SkillHub.
-fn unavailable_row(record: &super::records::Installation) -> UpdateSkillResult {
-    UpdateSkillResult {
-        name: record.name.clone(),
-        source: Some(record.coordinate.canonical()),
-        reference: None,
-        lock_hash: Some(record.version.clone()),
-        remote_hash: None,
-        state: UpdateState::Unknown,
-        unknown_reason: Some(UpdateUnknownReason::Uncheckable),
-        cached: false,
-        last_success_at_epoch_ms: None,
-        previous_state: None,
-        error: None,
-        note: Some("ClawHub 安装通道暂停，暂不支持更新检查；本地管理不受影响。".into()),
-    }
-}
 fn row(
     record: &super::records::Installation,
     latest: Option<String>,
@@ -138,7 +128,14 @@ fn row(
             if skipped {
                 "本次检查达到来源上限。"
             } else {
-                "SkillHub 平台版本；同版本内容重新发布不触发更新。"
+                match record.coordinate.source {
+                    MarketplaceSource::Skillhub => {
+                        "SkillHub 平台版本；同版本内容重新发布不触发更新。"
+                    }
+                    MarketplaceSource::Clawhub => {
+                        "ClawHub 安装引用（archive 版本或 GitHub commit）；引用相同不触发更新。"
+                    }
+                }
             }
             .into(),
         ),
@@ -212,7 +209,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn clawhub_records_never_reach_the_skillhub_provider_and_report_unknown() {
+    async fn clawhub_records_use_the_clawhub_target_and_compare_references() {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let latest: LatestCheck = {
             let seen = Arc::clone(&seen);
@@ -233,24 +230,60 @@ mod tests {
         .await;
         let mut seen = seen.lock().unwrap().clone();
         seen.sort_by(|a, b| a.canonical().cmp(&b.canonical()));
-        assert_eq!(seen.len(), 1, "only SkillHub rows query a provider");
-        assert_eq!(seen[0].source, MarketplaceSource::Skillhub);
-        assert_eq!(seen[0].canonical(), "@publisher/alpha");
+        assert_eq!(seen.len(), 2, "both sources query their own target");
+        assert_eq!(seen[0].source, MarketplaceSource::Clawhub);
+        assert_eq!(seen[1].source, MarketplaceSource::Skillhub);
         let row = |name: &str| rows.iter().find(|row| row.name == name).unwrap();
         assert_eq!(row("alpha").state, UpdateState::Update);
         assert_eq!(row("alpha").remote_hash.as_deref(), Some("2.0.0"));
         let clawhub = row("beta");
-        assert_eq!(clawhub.state, UpdateState::Unknown);
-        assert_eq!(
-            clawhub.unknown_reason,
-            Some(UpdateUnknownReason::Uncheckable)
-        );
-        assert!(clawhub.remote_hash.is_none());
+        assert_eq!(clawhub.state, UpdateState::Update);
+        assert_eq!(clawhub.remote_hash.as_deref(), Some("2.0.0"));
         assert_eq!(
             clawhub.lock_hash.as_deref(),
             Some("b4416dddac9b6a0cc5412136e6dbf8f07ffdb31c")
         );
         assert!(clawhub.note.as_deref().unwrap().contains("ClawHub"));
+    }
+
+    #[tokio::test]
+    async fn clawhub_checks_report_current_update_and_error_from_the_resolved_reference() {
+        let selected = std::collections::BTreeSet::from(["beta".to_string()]);
+        let run = |result: Result<&'static str, AppError>| {
+            let latest: LatestCheck = Arc::new(move |_| {
+                let result = result.clone();
+                Box::pin(async move { result.map(str::to_string) })
+            });
+            let selected = selected.clone();
+            async move {
+                let mut rows = check_with(
+                    records(),
+                    Some(&selected),
+                    8,
+                    1,
+                    5_000,
+                    &tokio::sync::Semaphore::new(1),
+                    latest,
+                )
+                .await;
+                rows.pop().unwrap()
+            }
+        };
+        assert_eq!(
+            run(Ok("b4416dddac9b6a0cc5412136e6dbf8f07ffdb31c"))
+                .await
+                .state,
+            UpdateState::Current
+        );
+        assert_eq!(
+            run(Ok("0000000000000000000000000000000000000000"))
+                .await
+                .state,
+            UpdateState::Update
+        );
+        let failed = run(Err(AppError::clawhub_unavailable("offline"))).await;
+        assert_eq!(failed.state, UpdateState::Error);
+        assert!(failed.remote_hash.is_none());
     }
 
     #[tokio::test]
@@ -281,7 +314,7 @@ mod tests {
         );
         assert_eq!(
             row("beta").unknown_reason,
-            Some(UpdateUnknownReason::Uncheckable)
+            Some(UpdateUnknownReason::NotChecked)
         );
     }
 

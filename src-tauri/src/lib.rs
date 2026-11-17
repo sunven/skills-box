@@ -258,6 +258,8 @@ pub fn run() {
             commands::get_marketplace_cli,
             commands::prepare_marketplace_install,
             commands::start_marketplace_install,
+            commands::prepare_clawhub_install,
+            commands::start_clawhub_install,
             commands::get_discovery_state,
             commands::start_discovery_scan,
             commands::acknowledge_discoveries,

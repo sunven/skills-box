@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Search } from "lucide-react";
 import { asAppError, listClawhubSkills, searchClawhubSkills } from "../lib/api";
-import type { AppError } from "../lib/types";
+import type { AppError, InventorySnapshot, ScopeId } from "../lib/types";
 import {
   CLAWHUB_OFFICIAL_URL,
   clawhubAddress,
@@ -21,6 +21,12 @@ import { OfficialLink } from "./official-link";
 interface Props {
   active: boolean;
   onSwitchSkillsSh: () => void;
+  scope: ScopeId;
+  scopeLabel: string;
+  snapshot?: InventorySnapshot;
+  disabled: boolean;
+  onView: (name: string) => void;
+  onInstallOpenChange: (open: boolean) => void;
 }
 interface Session {
   sort: ClawHubSort;
@@ -38,7 +44,16 @@ const initialSession: Session = {
   searchScroll: 0,
 };
 
-export function ClawHubPage({ active, onSwitchSkillsSh }: Props) {
+export function ClawHubPage({
+  active,
+  onSwitchSkillsSh,
+  scope,
+  scopeLabel,
+  snapshot,
+  disabled,
+  onView,
+  onInstallOpenChange,
+}: Props) {
   const [session, setSession] = useMarketplaceSession("clawhub", initialSession);
   const listRef = useRef<HTMLElement>(null);
   const opener = useRef<HTMLElement | null>(null);
@@ -340,8 +355,14 @@ export function ClawHubPage({ active, onSwitchSkillsSh }: Props) {
         coordinate={selected.coordinate}
         summary={selected}
         active={active}
+        scope={scope}
+        scopeLabel={scopeLabel}
+        snapshot={snapshot}
+        disabled={disabled}
         onBack={() => setSelected(null)}
         onSwitchSkillsSh={onSwitchSkillsSh}
+        onView={onView}
+        onInstallOpenChange={onInstallOpenChange}
       />
     ) : null}
     </>

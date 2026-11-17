@@ -9,7 +9,6 @@ import {
   readClawhubVersionFile,
 } from "../lib/api";
 import {
-  CLAWHUB_OFFICIAL_URL,
   clawhubAddress,
   clawhubInitialVersion,
   clawhubKey,
@@ -21,9 +20,10 @@ import {
   type ClawHubNativeDetail,
   type ClawHubSkill,
 } from "../lib/clawhub";
-import type { SkillFileContent } from "../lib/types";
+import type { InventorySnapshot, ScopeId, SkillFileContent } from "../lib/types";
 import { fileName, formatBytes, parentDir } from "../lib/skill-content";
 import { Button } from "./ui/button";
+import { ClawHubInstallDialog } from "./clawhub-install-dialog";
 import { MarketplaceFileTree } from "./marketplace-files-tab";
 import { MutationError } from "./mutation/mutation-error";
 import { OfficialLink } from "./official-link";
@@ -33,8 +33,14 @@ interface Props {
   coordinate: ClawHubCoordinate;
   summary: ClawHubSkill;
   active: boolean;
+  scope: ScopeId;
+  scopeLabel: string;
+  snapshot?: InventorySnapshot;
+  disabled: boolean;
   onBack: () => void;
   onSwitchSkillsSh: () => void;
+  onView: (name: string) => void;
+  onInstallOpenChange: (open: boolean) => void;
 }
 
 /**
@@ -46,10 +52,17 @@ export function ClawHubDetailPage({
   coordinate,
   summary,
   active,
+  scope,
+  scopeLabel,
+  snapshot,
+  disabled,
   onBack,
   onSwitchSkillsSh,
+  onView,
+  onInstallOpenChange,
 }: Props) {
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const [installOpen, setInstallOpen] = useState(false);
   const detail = useQuery({
     queryKey: ["marketplace", "clawhub", "detail", clawhubKey(coordinate)],
     queryFn: () => getClawhubSkillDetail(coordinate),
@@ -60,6 +73,7 @@ export function ClawHubDetailPage({
   useEffect(() => {
     headingRef.current?.focus({ preventScroll: true });
   }, []);
+  useEffect(() => () => onInstallOpenChange(false), [onInstallOpenChange]);
 
   const data = detail.data;
   const native = data?.kind === "native" ? data : null;
@@ -68,24 +82,58 @@ export function ClawHubDetailPage({
   const metrics = native?.metrics ?? summary.metrics;
   const topics = native?.topics ?? summary.topics;
   const canonicalUrl = data?.canonicalUrl ?? summary.officialUrl;
+  const installable = Boolean(
+    native &&
+      ((native.versions.length > 0 && native.latestVersion !== null) ||
+        native.resolvedReference?.contentHash),
+  );
+  const installed = snapshot?.skills.find(
+    (entry) =>
+      entry.sourceType === "clawhub" &&
+      entry.source === clawhubAddress(coordinate),
+  );
 
   return (
-    <main className="marketplace-detail-page" aria-labelledby="clawhub-detail-title">
-      <div className="marketplace-detail-bar">
-        <div className="marketplace-detail-bar-inner">
-          <Button variant="ghost" size="sm" onClick={onBack}>
-            <ArrowLeft aria-hidden="true" />
-            返回列表
-          </Button>
-          <span className="marketplace-detail-bar-name" title={name}>
-            {name}
-          </span>
-          <div className="marketplace-detail-action">
-            <span className="marketplace-detail-target">来源 · ClawHub</span>
+    <>
+      <main
+        className="marketplace-detail-page"
+        aria-labelledby="clawhub-detail-title"
+        inert={installOpen}
+      >
+        <div className="marketplace-detail-bar">
+          <div className="marketplace-detail-bar-inner">
+            <Button variant="ghost" size="sm" onClick={onBack}>
+              <ArrowLeft aria-hidden="true" />
+              返回列表
+            </Button>
+            <span className="marketplace-detail-bar-name" title={name}>
+              {name}
+            </span>
+            <div className="marketplace-detail-action">
+              <span className="marketplace-detail-target" aria-live="polite">
+                安装到：{scopeLabel}
+              </span>
+              {installable ? (
+                <Button
+                  size="sm"
+                  title={`当前作用域：${scopeLabel}`}
+                  disabled={!snapshot || disabled}
+                  onClick={() => {
+                    if (installed) {
+                      onView(installed.name);
+                    } else {
+                      setInstallOpen(true);
+                      onInstallOpenChange(true);
+                    }
+                  }}
+                >
+                  {installed ? "查看已安装技能" : "安装"}
+                </Button>
+              ) : null}
+            </div>
           </div>
         </div>
-      </div>
-      <div className="marketplace-detail-content">
+        <div className="marketplace-detail-content">
         <header className="marketplace-detail-header">
           <h1 id="clawhub-detail-title" ref={headingRef} tabIndex={-1}>
             {name}
@@ -138,6 +186,26 @@ export function ClawHubDetailPage({
         ) : null}
       </div>
     </main>
+    {installOpen && data && data.kind === "native" ? (
+      <ClawHubInstallDialog
+        coordinate={coordinate}
+        detail={data}
+        scope={scope}
+        scopeLabel={scopeLabel}
+        snapshot={snapshot}
+        disabled={disabled}
+        onClose={() => {
+          setInstallOpen(false);
+          onInstallOpenChange(false);
+        }}
+        onView={(installedName) => {
+          setInstallOpen(false);
+          onInstallOpenChange(false);
+          onView(installedName);
+        }}
+      />
+    ) : null}
+    </>
   );
 }
 
@@ -160,19 +228,6 @@ export function ClawHubMetrics({ metrics }: { metrics: ClawHubMetricsValue }) {
   );
 }
 
-function ClawHubInstallPausedNote() {
-  return (
-    <div className="notice" role="status">
-      <p>ClawHub 安装暂不可用。</p>
-      <p>
-        官方 CLI 目前无法固定 GitHub-backed 条目的解析引用，按既定的安装可行性门槛，ClawHub
-        安装通道已暂停；浏览与详情不受影响。
-      </p>
-      <OfficialLink url={CLAWHUB_OFFICIAL_URL} label="ClawHub 官网" />
-    </div>
-  );
-}
-
 function NativeBody({ detail, active }: { detail: ClawHubNativeDetail; active: boolean }) {
   const initial = clawhubInitialVersion(detail);
   const [selected, setSelected] = useState<string | null>(initial);
@@ -185,21 +240,19 @@ function NativeBody({ detail, active }: { detail: ClawHubNativeDetail; active: b
 
   return (
     <>
-      <ClawHubInstallPausedNote />
       {detail.versions.length === 0 ? (
         <div className="notice" role="status">
           <p>该条目由 GitHub 仓库提供，ClawHub 未提供可浏览的版本打包内容。</p>
-          <p>安装通道暂停期间不提供该条目的内容预览。</p>
+          <p>安装会固定解析出的 commit 并校验文件夹内容哈希；解析引用不会创建 Git 安装身份。</p>
           {detail.resolvedReference ? (
             <>
               <p>
                 解析引用：
                 {`${detail.resolvedReference.repo}@${detail.resolvedReference.commit}:${detail.resolvedReference.path}`}
               </p>
-              <p>该引用仅用于核对上游解析结果；安装通道暂停，不提供安装入口。</p>
             </>
           ) : (
-            <p>解析引用：暂不可用（仅诊断；安装通道暂停）。</p>
+            <p>解析引用：暂不可用（仅诊断）。</p>
           )}
           <OfficialLink url={detail.canonicalUrl} label="ClawHub 页面" />
         </div>
@@ -301,7 +354,9 @@ function ClawHubVersionBody({
   const overview = useQuery({
     queryKey: ["marketplace", "clawhub", "file", clawhubKey(coordinate), version, "SKILL.md"],
     queryFn: () => readClawhubVersionFile(coordinate, version, "SKILL.md"),
-    enabled: active && hasSkillMd,
+    // Start SKILL.md in parallel with the file list. If the list later says
+    // the version has no SKILL.md, the render path ignores this result.
+    enabled: active && (hasSkillMd || listing.isPending),
     retry: false,
     staleTime: Infinity,
     gcTime: 300_000,
@@ -343,7 +398,7 @@ function ClawHubVersionBody({
         <p>浏览内容不保证与将来安装时重新解析的内容完全一致；安装以实际下载内容为准。</p>
         {/* License is read from this version's response, never from latest. */}
         {listing.data ? <p>许可证：{listing.data.license ?? "未提供"}</p> : null}
-        <p>解析引用：v{version}（ClawHub archive 版本；仅诊断，安装通道暂停）</p>
+        <p>解析引用：v{version}（ClawHub archive 版本；安装按确认时的 latest 版本解析）</p>
         <Button variant="ghost" size="sm" disabled={listing.isFetching} onClick={refresh}>
           刷新版本内容
         </Button>

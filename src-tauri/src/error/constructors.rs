@@ -81,6 +81,36 @@ impl AppError {
         .hint("请从该版本的文件树选择其他文件，或打开 ClawHub 页面查看。")
         .retryable(false)
     }
+    /// A ClawHub installation package that failed structural or content
+    /// verification before publication.
+    pub fn clawhub_package_invalid(detail: impl std::fmt::Display) -> Self {
+        Self::new(ErrorCode::VerifyFailed, "ClawHub 安装包未通过校验。")
+            .detail(detail.to_string())
+            .hint("请重试；若持续失败，请选择其他版本或打开 ClawHub 页面确认。")
+            .retryable(true)
+    }
+    /// Upstream moderation blocks this ClawHub installation. There is no force
+    /// path equivalent to the CLI's `--force`.
+    pub fn clawhub_install_blocked(detail: impl std::fmt::Display) -> Self {
+        Self::new(
+            ErrorCode::MarketplaceUnavailable,
+            "ClawHub 已阻止安装该技能。",
+        )
+        .detail(detail.to_string())
+        .hint("上游将该技能标记为可疑或恶意；应用不会强制安装。请打开 ClawHub 页面确认。")
+        .retryable(false)
+    }
+    /// This ClawHub entry class (GitHub-backed or a skills.sh alias) has no
+    /// native archive installation channel.
+    pub fn clawhub_install_unsupported(detail: impl std::fmt::Display) -> Self {
+        Self::new(
+            ErrorCode::MarketplaceUnavailable,
+            "暂不支持安装该 ClawHub 条目。",
+        )
+        .detail(detail.to_string())
+        .hint("skills.sh 别名请在 skills.sh 来源安装；GitHub-backed 条目等待后续支持。")
+        .retryable(false)
+    }
     pub fn marketplace_cli_unavailable(detail: impl std::fmt::Display) -> Self {
         Self::new(
             ErrorCode::MarketplaceCliUnavailable,

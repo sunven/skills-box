@@ -353,7 +353,16 @@ export function MarketplacePage(props: Props) {
         <SkillsShPage {...props} active={effectiveTab === "skills" && source === "skills-sh"} onInstall={props.onGitInstall} />
       </div> : null}
       {visited.has("clawhub") ? <div hidden={source !== "clawhub"} className="marketplace-source-panel">
-        <ClawHubPage active={effectiveTab === "skills" && source === "clawhub"} onSwitchSkillsSh={() => selectSource("skills-sh")} />
+        <ClawHubPage
+          active={effectiveTab === "skills" && source === "clawhub"}
+          onSwitchSkillsSh={() => selectSource("skills-sh")}
+          scope={props.scope}
+          scopeLabel={props.scopeLabel}
+          snapshot={props.snapshot}
+          disabled={props.disabled}
+          onView={props.onView}
+          onInstallOpenChange={props.onInstallOpenChange}
+        />
       </div> : null}
     </div>
     {effectiveTab === "packs" ? <ExpertPackPage key={props.initialPack?.key ?? "catalog"} {...props} initialSlug={props.initialPack?.slug} onInstallOpenChange={onInstallOpenChange} /> : null}

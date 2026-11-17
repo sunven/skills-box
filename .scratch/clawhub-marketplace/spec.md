@@ -1,6 +1,6 @@
 # ClawHub 市场来源
 
-Status: implemented for browsing/detail; installation paused by ticket 02 gate
+Status: browsing/detail, native install and update implemented per ADR-0035; acceptance recorded in implementation.md (tickets 11–15)
 
 日期：2026-11-16。
 设计访谈 R1–R7 分轮确认（用户逐轮"按推荐"），整体规格已由用户"确认"。事实依据见 [上游契约调研](research/01-clawhub-contract.md)，身份决策见 [ADR-0034](../../docs/adr/0034-clawhub-versioned-registry-identity.md)。
@@ -16,7 +16,7 @@ Status: implemented for browsing/detail; installation paused by ticket 02 gate
 7. **单一安装身份（R3-Q1）**：同一 ClawHub 条目只有一种安装身份、一条市场记录、一条更新路径；不与 Git 直装或 skills.sh 安装合并身份。
 8. **失败与来源隔离（R3-Q2）**：来源级失败隔离；保留上次成功结果并标注旧查询条件与错误；无旧结果时显示错误、重试与官网入口；不静默切换来源。
 9. **验收标准（R3-Q3）**：在临时 HOME 与临时注册 Project 中完成真实端到端安装，不触碰真实用户环境；覆盖失败路径并回归 SkillHub 与 skills.sh。
-10. **直连与隐私（R3-Q4）**：应用直接匿名请求 ClawHub；上游可见请求 IP 与搜索词；不新增搜索历史存储，只沿用现有诊断日志范围。
+10. **直连与隐私（R3-Q4）**：应用匿名请求 ClawHub，遵循宿主系统/环境代理配置；上游可见代理出口 IP 与搜索词；应用不新增代理配置、账户或令牌；不新增搜索历史存储，只沿用现有诊断日志范围。2026-11-17 用户确认由 ADR-0036 取代原“直连、不引入代理”约束。
 11. **外部依赖（R4-Q2）**：至多接受一个官方 CLI 作为可选依赖；缺失时只阻止该来源安装，不影响浏览或其他来源；应用不自动安装依赖。
 12. **不引入第三种安装通道（R4-Q3）**：实现优先落在 Git 安装或市场版本记录两种既有模型之一；本来源选择市场版本记录模型（见第 13 条）。
 13. **安装身份（R5-Q1）**：统一注册表模型——所有 ClawHub 条目按 `owner/slug@解析引用` 建立市场记录。archive 条目的引用为 semver 版本；GitHub-backed 条目的引用为 resolver 返回的 commit 与子路径。更新按该引用比较；不把 GitHub-backed 条目改写成 Git 安装身份。
@@ -29,6 +29,18 @@ Status: implemented for browsing/detail; installation paused by ticket 02 gate
 20. **执行适配器（R7-Q1）**：官方 `clawhub` CLI 作为可选依赖，隔离暂存、显式版本、非交互；绝不自动传 `--force`/`--force-install`；发布前剥离 CLI 生成的包内 `.clawhub/` 元数据；CLI 自己的 lock 不作为身份依据。版本固定必须实测；若不被尊重或结果不可校验，暂停安装并单独立项评估原生 HTTP+ZIP（需新 ADR），不静默切换。
 21. **更新语义（R7-Q2）**：比较安装时解析出的市场引用；引用相同不产生更新候选；同版本 archive 内容变化不检测；记录的 commit/contentHash 仅作诊断；本地基线只检测本地改动。
 22. **浏览控制（R7-Q3）**：排序只暴露文档化的推荐 / 最近更新 / 下载量；cursor「加载更多」，不显示伪造总数；分类只展示标签不提供筛选；搜索保留上游顺序并提示返回上限。
+
+## 安装执行修订（ADR-0035）
+
+2026-11-17 已确认：以应用原生 HTTP+ZIP 通道取代官方 `clawhub` CLI 执行 ClawHub 安装与更新。浏览、搜索、详情与版本文件行为不变。
+
+- **取代第 11、12、20 条中的执行部分**：ClawHub 安装/更新不再依赖官方 CLI、Node 或 npm；"至多一个可选 CLI 依赖"和"不引入第三种安装通道"的限制不再适用于本来源。安装身份、市场记录、发布管线、挂载与冲突规则（第 6、9、13、21 条）保持不变。
+- **archive 条目**：按确认时解析出的显式 semver 版本从 `/api/v1/download` 下载 ZIP，用 `/api/v1/skills/{slug}/versions/{version}` 的 per-file sha256 校验后发布。只允许注册表生成的 `_meta.json` 作为额外文件；拒绝符号链接、特殊文件、路径穿越、额外内容与超限包。
+- **GitHub-backed 条目**：按 resolver 的 `repo/path/commit` 从 GitHub codeload 固定 commit 下载子路径，并复现 ClawHub 的文件夹内容哈希与 `contentHash` 对照。该哈希算法未文档化，必须先通过隔离验证门槛；未通过时 GitHub-backed 安装保持阻断并在界面明确标注暂不支持，不回退 CLI。2026-11-17 门槛已通过（AWS 固定 commit 与 6 个抽样文件夹全部匹配，见 [门槛记录](research/03-github-content-hash-gate.md)），GitHub-backed 原生安装已启用；待扫描/可疑条目仍按 moderation 阻断。
+- **可疑技能**：安装时读取 skill 级 `moderation` 与版本级 `security`；显式 suspicious/malware 一律阻断并给出官网链接，不提供 `--force` 等价物。GitHub-backed 待扫描条目在上游清理前不可安装。
+- **依赖与失败**：表中 `clawhub` CLI 缺失相关行不再适用；改为纯网络依赖，仅阻断 ClawHub 安装/更新，不影响浏览、其他来源与本地管理。
+- **更新语义**：仍按第 21 条比较安装引用；更新执行复用同一原生适配器。
+- 工单 02/07/08/09 保持历史结论；新工单 11–15 实现本修订。
 
 ## 页面与浏览行为
 
@@ -95,7 +107,7 @@ Status: implemented for browsing/detail; installation paused by ticket 02 gate
 - 限流：3000 读/分/IP、1200 下载/分/IP；实现退避与显式错误。
 - `robots.txt` 禁止 `/api/` 与 API 文档许可冲突，以文档许可为准；若许可移除或访问被阻断，降级为官网入口，不绕过。
 - 缓存仅会话级内存，遵守 HTTP 缓存头；不写入 App data，不提供离线浏览。
-- 直连 ClawHub，不引入代理、账户或令牌；上游可见 IP 与搜索词。
+- 遵循宿主系统/环境代理请求 ClawHub（应用不内置代理配置、账户或令牌）；上游可见代理出口 IP 与搜索词。
 
 ## 工程边界
 
@@ -152,7 +164,7 @@ Status: implemented for browsing/detail; installation paused by ticket 02 gate
 | --- | --- | --- |
 | R1 来源定位与首版目标 | 第三个 Marketplace source；安装能力以核查为准 | 已确认 |
 | R2 导航、能力、匿名、兼容 | 来源切换、能力驱动、无账户、只承诺生命周期 | 已确认 |
-| R3 身份唯一、隔离、验收、隐私 | 单一身份、来源级失败隔离、隔离验证、直连 | 已确认 |
+| R3 身份唯一、隔离、验收、隐私 | 单一身份、来源级失败隔离、隔离验证、遵循系统代理 | 已确认 |
 | R4 动机、依赖、通道 | OpenClaw 优先、至多一个可选 CLI、不新增第三通道 | 已确认 |
 | R5 注册表身份、别名、范围、合规 | `owner/slug@引用` 市场记录、过滤 skills.sh 别名、skills-only、按文档许可 | 已确认 |
 | R6 详情版本、缓存、扫描 | 版本锚定、会话内存缓存、不展示扫描 | 已确认 |
@@ -163,6 +175,8 @@ Status: implemented for browsing/detail; installation paused by ticket 02 gate
 
 - [上游契约调研](research/01-clawhub-contract.md)：匿名接口、分发形态、CLI 能力、合规与稳定性事实。
 - [ADR-0034](../../docs/adr/0034-clawhub-versioned-registry-identity.md)：ClawHub 版本化注册表身份。
+- [ADR-0035](../../docs/adr/0035-clawhub-native-http-zip-installation.md)：ClawHub 原生 HTTP+ZIP 安装（提案）。
+- [ADR-0036](../../docs/adr/0036-clawhub-follow-system-proxy.md)：ClawHub 跟随宿主系统代理。
 - [ADR-0029](../../docs/adr/0029-marketplace-catalog-boundary.md)：市场目录与 Git 来源发现独立。
 - [ADR-0030](../../docs/adr/0030-marketplace-installation-records-and-execution.md)：市场记录、平台版本与发布执行。
 - [ADR-0033](../../docs/adr/0033-marketplace-catalog-and-git-installation-identity.md)：skills.sh 目录身份与 Git 安装身份分离。
@@ -176,3 +190,8 @@ Status: implemented for browsing/detail; installation paused by ticket 02 gate
 - 2026-11-16：按现有市场技能语义修正本地恢复/复制到项目措辞（ClawHub 归类为原生市场来源）；实现工单发布于 `issues/`（01–10）。
 - 2026-11-16：实现完成。工单 01/03/04/05/06/10 已交付并关闭；02 门槛结论为 NO-GO；07/08/09 按门槛关闭为 wontfix。两轴代码审查后修复项（版本锚定 license/changelog、`/versions` 404 保留详情、搜索缺 kind 容错、缺失文件回链、GitHub-backed 解析引用诊断、`.no_proxy()`、去重与 ADR-0034 同步）已合入 `b485f38`。验收与例外见 [implementation.md](implementation.md)。
 - 2026-11-16：完成浏览、详情、合规与回归验收（工单 10），环境、证据、逐条验收与例外见 [implementation.md](implementation.md)。按工单 02 的 NO-GO，07/08/09 未实现；安装/更新执行与验收条件 6–9、11 记为 EXCEPTION（11 同时包含未实现的引用比较），原生 HTTP+ZIP 适配器需新 ADR 单独评估。未声称真实 CLI 安装或更新通过。
+- 2026-11-17：起草"安装执行修订"与 [ADR-0035](../../docs/adr/0035-clawhub-native-http-zip-installation.md)，新增工单 11–15（原生 archive 下载校验、安装发布、GitHub-backed 门槛、更新、验收）。用户已确认：ADR-0035 置为 `accepted`，工单转 `ready-for-agent`。
+- 2026-11-17：工单 11–13 实现并关闭：原生 archive 下载/解压/逐文件校验、安装预览与原生发布（Global/Project、挂载、冲突）、GitHub-backed 原生安装（codeload 固定 commit、ICU en-US 复现 `contentHash`、记录诊断、UI 入口）。门槛证据见 [GitHub content-hash gate](research/03-github-content-hash-gate.md)。工单 14（更新检查与执行）与 15（隔离验收与回归）仍为 `ready-for-agent`。
+- 2026-11-17：工单 14 实现并关闭：更新检查按来源分派并比较 archive 版本或 GitHub commit；更新预览构建 ClawHub 计划，固定预览后在执行前暂存新引用，由原生动作发布并保留挂载与 `installedAt`；混合更新中 ClawHub 条目不会回退到 CLI。工单 15（隔离验收与回归）仍为 `ready-for-agent`。
+- 2026-11-17：工单 15 完成并关闭：隔离 Global/Project 真实安装+更新、GitHub-backed 暂存与哈希、全量回归与合规检查已记录于 [implementation.md](implementation.md)；EXCEPTION 为完整 live GitHub-backed 发布（抽样条目被 moderation 阻断）、真实 429 未触发、未自动化单次 live Manager/UI 编排。
+- 2026-11-17：用户确认 [ADR-0036](../../docs/adr/0036-clawhub-follow-system-proxy.md)：ClawHub 与 GitHub-backed 下载改为跟随宿主系统/环境代理，取代 R3-Q4 的直连约束。实测直连约 5.2s/请求、系统代理约 1.4s/请求；同时详情/别名/版本请求并行化、安装预览去掉重复版本请求、超时提高到 60s。

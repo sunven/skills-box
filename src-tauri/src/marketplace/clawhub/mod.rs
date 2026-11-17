@@ -19,12 +19,20 @@
 //! counted as filtered otherwise.
 mod client;
 mod detail;
+pub mod github;
 mod list;
+mod moderation;
+mod package;
 mod search;
+mod target;
 
+pub(crate) use detail::read_file_with_listing;
 pub use detail::{
     AliasDetail, Detail, NativeDetail, ResolvedReference, VersionFiles, VersionRef, detail,
     read_file, version_files,
 };
 pub use list::{Listing, Metrics, Skill, Sort, list};
+pub use moderation::{ensure_installable, ensure_installable_at};
+pub use package::{StagedPackage, stage_archive};
 pub use search::{Search, search};
+pub use target::{InstallTarget, resolve as resolve_install_target};

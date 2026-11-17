@@ -1,6 +1,6 @@
 import type { PackListing, PackDetail, PackPreview, LocalPack } from "./expert-packs";
 import type { SkillsShCoordinate, SkillsShListing, SkillsShSnapshot, SkillsShView } from "./skills-sh";
-import type { ClawHubCoordinate, ClawHubDetail, ClawHubListing, ClawHubSearch, ClawHubSort, ClawHubVersionFiles } from "./clawhub";
+import type { ClawHubCoordinate, ClawHubDetail, ClawHubInstallPreview, ClawHubListing, ClawHubSearch, ClawHubSort, ClawHubVersionFiles } from "./clawhub";
 import type { MarketplaceCoordinate, MarketplaceListing, MarketplaceDetail, MarketplaceCli, MarketplacePreview, MarketplaceSort, MarketplaceCategory, MarketplaceApiKeyFilter, MarketplaceFiles } from "./marketplace";
 import type { BatchRequest, BatchPreview, BatchConfirmation, StaleRecord } from "./batch";
 import type { CliCommandRequest, CliCommandPreview, CliCommandRecord } from "./cli-commands";
@@ -48,6 +48,8 @@ export const API_COMMANDS = {
   getClawhubSkillDetail: "get_clawhub_skill_detail",
   listClawhubVersionFiles: "list_clawhub_version_files",
   readClawhubVersionFile: "read_clawhub_version_file",
+  prepareClawhubInstall: "prepare_clawhub_install",
+  startClawhubInstall: "start_clawhub_install",
   listExpertPacks: "list_expert_packs",
   getExpertPack: "get_expert_pack",
   listLocalPacks: "list_local_packs",
@@ -592,6 +594,13 @@ export function listClawhubVersionFiles(coordinate: ClawHubCoordinate, version: 
 }
 export function readClawhubVersionFile(coordinate: ClawHubCoordinate, version: string, path: string): Promise<SkillFileContent> {
   return invoke(API_COMMANDS.readClawhubVersionFile, { coordinate, version, path });
+}
+export function prepareClawhubInstall(scope: ScopeId, coordinate: ClawHubCoordinate, agents: string[]): Promise<ClawHubInstallPreview> {
+  return invoke(API_COMMANDS.prepareClawhubInstall, { scope, coordinate, agents });
+}
+export function startClawhubInstall(scope: ScopeId, previewId: string, onEvent: (event: TaskEvent) => void): Promise<string> {
+  const channel = new Channel<TaskEvent>(); channel.onmessage = onEvent;
+  return invoke(API_COMMANDS.startClawhubInstall, { scope, previewId, onEvent: channel });
 }
 export function listMarketplaceSkills(keyword: string, page: number, sort: MarketplaceSort, category: string, apiKey: MarketplaceApiKeyFilter): Promise<MarketplaceListing> { return invoke(API_COMMANDS.listMarketplaceSkills, { keyword, page, sort, category, apiKey }); }
 export function getMarketplaceSkill(coordinate: MarketplaceCoordinate): Promise<MarketplaceDetail> { return invoke(API_COMMANDS.getMarketplaceSkill, { coordinate }); }
