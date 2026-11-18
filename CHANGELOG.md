@@ -2,6 +2,60 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.8] - 2026-11-18
+
+### Bug Fixes
+
+- Preserve project skill IDs in batch update checks
+- Address audit findings in skill operations and release checks
+- Centralize mutation refresh and preserve submitted scope
+- Address ClawHub two-axis code review findings
+- Show marketplace kind switch only for SkillHub
+- Place market kind switch below the source switcher
+
+### Documentation
+
+- Specify ClawHub marketplace integration
+- Close ClawHub installation tickets by feasibility gate
+- Record ClawHub acceptance and compliance results
+- Correct ClawHub acceptance notes wording
+- Align ClawHub acceptance exception summary
+- Resolve ClawHub tickets and record final verification
+
+### Features
+
+- Add skills.sh marketplace with Git installation
+- Add ClawHub marketplace record identity
+- Add ClawHub catalog list source
+- Add ClawHub keyword search with skills.sh alias filtering
+- Add ClawHub detail with versioned files
+- Add native ClawHub install and update
+
+### Miscellaneous Tasks
+
+- Remove unneeded mut in ClawHub stale-record test
+
+### Refactor
+
+- Unify local skill publication and baseline handling
+- Publish through a source-neutral marketplace plan contract
+
+### Testing
+
+- Record clawhub cli feasibility gate
+
+### Merge
+
+- Ticket 02 clawhub cli feasibility gate
+- Ticket 01 source-aware marketplace identity
+- Ticket 03 source-neutral marketplace publication
+- Ticket 04 clawhub catalog list
+- Ticket 05 clawhub search with alias filtering
+- Ticket 06 clawhub detail with versioned files
+- Ticket 10 clawhub acceptance and compliance
+- Address ClawHub code review findings
+- ClawHub marketplace integration
+
 ## [0.1.7] - 2026-11-11
 
 ### Bug Fixes
