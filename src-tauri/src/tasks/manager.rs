@@ -269,6 +269,17 @@ pub struct TaskManager {
     inner: Arc<Inner>,
 }
 
+pub struct NativeMutationGuard {
+    manager: TaskManager,
+    _permit: MutationPermit,
+}
+impl Drop for NativeMutationGuard {
+    fn drop(&mut self) {
+        *self.manager.inner.native_mutation.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        self.manager.inner.finished_notify.notify_waiters();
+    }
+}
+
 struct Inner {
     runtime: Arc<dyn CliRuntimeProvider>,
     executor: Arc<dyn ProcessExecutor>,
@@ -277,6 +288,7 @@ struct Inner {
     projects: Arc<crate::projects::ProjectRegistry>,
     marker: MarkerStore,
     tasks: Mutex<HashMap<TaskId, TaskEntry>>,
+    native_mutation: Mutex<Option<ActiveMutationInfo>>,
     next_id: AtomicU64,
     mutation_slots: Arc<Semaphore>,
     config: TaskManagerConfig,
@@ -424,6 +436,7 @@ impl TaskManager {
                 paths,
                 projects,
                 tasks: Mutex::new(HashMap::new()),
+                native_mutation: Mutex::new(None),
                 next_id: AtomicU64::new(1),
                 mutation_slots: Arc::new(Semaphore::new(1)),
                 config,
@@ -487,6 +500,9 @@ impl TaskManager {
     /// read-only and intentionally excluded: closing the window during a
     /// preview does not risk a half-written skill store.
     pub fn active_mutation(&self) -> Option<ActiveMutationInfo> {
+        if let Some(active) = self.inner.native_mutation.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+            return Some(active);
+        }
         let tasks = self.lock_tasks();
         tasks.iter().find_map(|(task_id, entry)| {
             if entry.state != TaskState::Running {
@@ -505,6 +521,21 @@ impl TaskManager {
 
     pub fn has_running_mutation(&self) -> bool {
         self.active_mutation().is_some()
+    }
+
+    /// Native plugin workers share the write slot, but never enter Skill locks,
+    /// snapshots, cancellation tokens or interruption records.
+    pub fn begin_native_plugin(&self, target: String) -> Result<NativeMutationGuard, AppError> {
+        let permit = self.try_acquire_mutation()?;
+        *self.inner.native_mutation.lock().unwrap_or_else(|e| e.into_inner()) = Some(ActiveMutationInfo {
+            task_id: uuid::Uuid::new_v4().to_string(),
+            scope: crate::scope::ScopeId::global(),
+            kind: MutationKind::NativePlugin,
+            skills: vec![target],
+            started_at_epoch_ms: now_ms(),
+            snapshot_paths: vec![],
+        });
+        Ok(NativeMutationGuard { manager: self.clone(), _permit: permit })
     }
 
     /// Acquire the write slot for a Project root change. Relocate and Forget
@@ -585,7 +616,7 @@ impl TaskManager {
         self.inner.shutting_down.store(true, Ordering::SeqCst);
         let active = self.active_mutation();
         let cancelled_tasks = self.cancel_all_tasks();
-        if active.is_none() {
+        if active.as_ref().is_none_or(|task| task.kind == MutationKind::NativePlugin) {
             // Native Attach/Detach and blocking planning own the write slot
             // without a registry entry. They cannot be cancelled safely;
             // wait for their actual worker to release it before app.exit().

@@ -42,6 +42,7 @@ export function ExitDialog({
 
   if (!open) return null;
 
+  const native = info?.kind === "native_plugin";
   const title = info
     ? `${KIND_LABELS[info.kind]}任务正在运行`
     : "变更任务正在运行";
@@ -70,7 +71,9 @@ export function ExitDialog({
             </h2>
             <p className="modal-sub">
               {title}。
-              {info?.kind === "batch"
+              {native
+                ? "等待原生写入与状态核验结束，再退出应用。"
+                : info?.kind === "batch"
                 ? "停止后续目标，等待当前目标完成后退出。"
                 : "退出会立即终止 skills CLI 的整个进程组。"}
             </p>
@@ -96,12 +99,12 @@ export function ExitDialog({
             />
             <div>
               <p className="font-medium">
-                {info?.kind === "batch"
+                {native ? "当前插件操作将继续完成" : info?.kind === "batch"
                   ? "已完成的操作保留"
                   : "写入可能只完成一部分"}
               </p>
               <p className="mt-0.5">
-                {info?.kind === "batch"
+                {native ? "应用不会强制中断原生命令。操作结果由宿主记录决定；若系统异常结束，下次打开插件页会提示核对。" : info?.kind === "batch"
                   ? "当前目标完成后，尚未执行的目标将停止。已完成的操作与备份保留，不自动续跑。"
                   : "应用不会自动回滚；已创建的 lock 快照会保留。下次启动会显示中断警告并校验 lock 与快照，请根据备份手动确认 skill 状态。"}
               </p>
@@ -118,12 +121,12 @@ export function ExitDialog({
                 <strong>{KIND_LABELS[info.kind]}</strong>
               </p>
               <p className="mt-1 break-all">
-                <span className="text-muted-foreground">Skill：</span>
+                <span className="text-muted-foreground">{native ? "目标：" : "Skill："}</span>
                 {info.skills.join("、") || "—"}
               </p>
-              <p className="mono mt-1 break-all">
+              {!native && <p className="mono mt-1 break-all">
                 快照：{info.snapshotPaths.join("、") || "尚未创建"}
-              </p>
+              </p>}
             </div>
           ) : null}
 
@@ -152,10 +155,10 @@ export function ExitDialog({
             onClick={onConfirm}
           >
             {pending
-              ? info?.kind === "batch"
+              ? native ? "等待写入与核验完成…" : info?.kind === "batch"
                 ? "等待当前目标完成…"
                 : "正在退出…"
-              : info?.kind === "batch"
+              : native ? "完成后退出" : info?.kind === "batch"
                 ? "停止后续并退出"
                 : "确认退出"}
           </Button>

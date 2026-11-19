@@ -1,6 +1,6 @@
 # Skills Box
 
-A macOS-first desktop tool for managing Agent Skills at global and project scope across coding agents: inventory, install, update, detach, and uninstall.
+A macOS-first desktop tool for managing Agent Skills at global and project scope and native Plugins at user scope across coding agents.
 
 ## Language
 
@@ -31,6 +31,22 @@ _Avoid_: cache, source directory
 **Skill**:
 A folder identified by its `SKILL.md` and name, containing reusable instructions for coding agents.
 _Avoid_: package, plugin
+
+**Plugin**:
+A native extension recognized by an Agent and managed as one unit, which may contain Skills and other capabilities.
+_Avoid_: skill, expert pack
+
+**Plugin marketplace**:
+A source registered with an Agent that catalogs Plugins available to that Agent.
+_Avoid_: skill marketplace, marketplace source
+
+**Plugin marketplace sync**:
+Refresh a Plugin marketplace and apply any related Plugin content changes defined by its Agent, including changes to disabled Plugins.
+_Avoid_: update check, reread, skill update
+
+**Plugin reinstall**:
+A native operation that installs an already installed Plugin again; it does not by itself mean upgrading to a newer release.
+_Avoid_: plugin update, restore skill
 
 **Expert pack**:
 A published collection of member skills and a workflow skill that coordinates them for a task. The Chinese UI labels it 「专家包」.

@@ -29,6 +29,7 @@ import { refreshMutationQueries } from "./mutation-refresh";
 import type { MutationRefreshOptions } from "./mutation-refresh";
 
 export const MUTATION_KIND_LABELS: Record<MutationKind, string> = {
+  native_plugin: "原生插件操作",
   install: "安装",
   update: "更新",
   uninstall: "卸载",

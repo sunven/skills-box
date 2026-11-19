@@ -27,6 +27,8 @@ pub enum MutationKind {
     Update,
     Uninstall,
     Batch,
+    /// Active-operation presentation only. Plugin recovery is stored separately.
+    NativePlugin,
 }
 
 impl MutationKind {
@@ -36,6 +38,7 @@ impl MutationKind {
             Self::Update => "更新",
             Self::Uninstall => "卸载",
             Self::Batch => "批量操作",
+            Self::NativePlugin => "原生插件操作",
         }
     }
 }

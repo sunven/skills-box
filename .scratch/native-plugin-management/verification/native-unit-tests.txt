@@ -1,0 +1,30 @@
+   Compiling skills-box v0.1.8 (/Users/sunven/github/skills-box/src-tauri)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.29s
+     Running unittests src/lib.rs (src-tauri/target/debug/deps/skills_box_lib-ada3ed185752e44f)
+
+running 23 tests
+test native_plugins::tests::native_adapters_codex_override ... ignored, real official config override response using a temporary CLI wrapper
+test native_plugins::tests::native_adapters_compatibility_probe ... ignored, real isolated compatibility probe; no user configuration
+test native_plugins::tests::native_adapters_git_and_source_contracts ... ignored, real CLI Git sync/update, ref/sparse and JSON sources via loopback only
+test native_plugins::tests::native_adapters_isolated_lifecycle ... ignored, requires installed Codex and Claude CLIs; all writes stay in temporary homes
+test native_plugins::tests::native_adapters_native_catalog_and_approval ... ignored, real isolated Codex native catalog and Claude approval boundary
+test native_plugins::tests::native_adapters_network_failure ... ignored, real native network failure against a closed loopback port
+test native_plugins::tests::native_adapters_scope_and_orphan ... ignored, real isolated scope and orphan contract verification
+test native_plugins::tests::nested_origins_require_every_user_owned_leaf ... ok
+test native_plugins::tests::post_read_failure_is_unknown_and_approval_failure_needs_host ... ok
+test native_plugins::tests::blocks_cross_scope_removal_and_shared_plugin_changes ... ok
+test native_plugins::tests::input_guards_and_native_argument_shapes ... ok
+test native_plugins::tests::native_install_policies_and_unverified_sources_are_blocked ... ok
+test native_plugins::tests::unknown_response_cannot_be_success_and_partial_writes_are_preserved ... ok
+test native_plugins::tests::unknown_versions_are_per_action_and_cannot_inherit_write_semantics ... ok
+test native_plugins::tests::local_detail_rejects_symlink_escape_and_limits_content ... ok
+test native_plugins::tests::missing_cli_is_an_error_instead_of_empty_inventory ... ok
+test native_plugins::tests::local_source_changes_invalidate_confirmation ... ok
+test native_plugins::tests::unreadable_catalog_and_native_list_keep_other_markets_visible ... ok
+test native_plugins::tests::interrupted_record_is_reconciled_as_unknown_not_success ... ok
+test native_plugins::tests::stale_confirmation_is_consumed_without_writing ... ok
+test native_plugins::tests::detached_worker_retains_permit_and_exit_waits_through_verification ... ok
+test native_plugins::tests::unknown_mutation_contract_disables_only_affected_action ... ok
+test native_plugins::tests::service_preserves_partial_and_unknown_results_without_retry ... ok
+
+test result: ok. 16 passed; 0 failed; 7 ignored; 0 measured; 818 filtered out; finished in 1.55s

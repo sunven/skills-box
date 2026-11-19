@@ -1,0 +1,8 @@
+
+ RUN  v5.0.5 /Users/sunven/github/skills-box
+
+
+ Test Files  1 passed (1)
+      Tests  5 passed (5)
+   Start at  00:43:45
+   Duration  845ms (tests 39%, environment 25%, import 15%, transform 14%, setup 7%)

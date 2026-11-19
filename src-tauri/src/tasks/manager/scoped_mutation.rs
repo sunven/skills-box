@@ -56,6 +56,7 @@ impl<P> PlannedMutation<P> {
             MutationKind::Update => TaskAction::Update,
             MutationKind::Uninstall => TaskAction::Uninstall,
             MutationKind::Batch => TaskAction::Batch,
+            MutationKind::NativePlugin => return Err(AppError::path_invalid("原生插件不能进入 Skill 变更协议。")),
         };
         let registered = manager.register_mutation(
             action_kind,

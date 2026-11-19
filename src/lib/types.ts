@@ -121,7 +121,7 @@ export interface EnvReport {
   pinnedCliVersion: string;
 }
 
-export type MutationKind = "install" | "update" | "uninstall" | "batch";
+export type MutationKind = "install" | "update" | "uninstall" | "batch" | "native_plugin";
 
 /** Startup verification for a mutation whose process ended before finishing. */
 export interface InterruptedReport {

@@ -1,3 +1,4 @@
+pub mod native_plugins;
 pub mod agents;
 mod app_data;
 pub mod app_update;
@@ -55,6 +56,7 @@ use update::project_checks::ProjectUpdateChecks;
 use update::state::UpdateCheckStateStore;
 
 pub struct AppState {
+    pub native_plugins: native_plugins::Service,
     pub paths: AppPaths,
     pub app_data: std::sync::Arc<app_data::DataService>,
     pub environment: Arc<EnvironmentService>,
@@ -112,6 +114,7 @@ impl AppState {
             executor,
         );
         Self {
+            native_plugins: native_plugins::Service::new(paths.clone(), tasks.clone(), Arc::clone(&projects)),
             app_updates: app_update::AppUpdateService::new(tasks.clone()),
             app_data: std::sync::Arc::new(app_data::DataService::default()),
             read_model,
@@ -226,6 +229,11 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            native_plugins::read_native_plugins,
+            native_plugins::prepare_native_plugin,
+            native_plugins::execute_native_plugin,
+            native_plugins::native_plugin_details,
+            native_plugins::verify_native_plugin_host,
             commands::get_app_data,
             commands::save_data_preferences,
             commands::preview_app_data_cleanup,

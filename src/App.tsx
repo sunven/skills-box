@@ -1,3 +1,4 @@
+import { NativePluginsPage } from "./components/native-plugins-page";
 import { ExpertPackProvider } from "./components/expert-pack-context";
 import { MarketplacePage } from "./components/marketplace-page";
 import { BatchDialog, type BatchSelection } from "./components/batch-dialog";
@@ -172,6 +173,7 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [packEntry, setPackEntry] = useState<{ slug: string; key: number } | undefined>();
   const [marketplaceOpen, setMarketplaceOpen] = useState(false);
+  const [pluginsOpen, setPluginsOpen] = useState(false);
   const [marketplaceInstallOpen, setMarketplaceInstallOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("github");
   const appUpdate = useAppUpdate();
@@ -512,7 +514,7 @@ function App() {
   };
 
   return (
-    <ExpertPackProvider scope={scope} onOpen={(slug) => { setPackEntry({ slug, key: Date.now() }); setMarketplaceOpen(true); setSettingsOpen(false); setDiscoveryEntry(null); setDetailEntry(null); }}>
+    <ExpertPackProvider scope={scope} onOpen={(slug) => { setPackEntry({ slug, key: Date.now() }); setPluginsOpen(false); setMarketplaceOpen(true); setSettingsOpen(false); setDiscoveryEntry(null); setDetailEntry(null); }}>
     <div className="app-shell text-foreground">
       {appUpdate.critical ? (
         <p className="notice" role="status">正在安装应用更新并准备重启，暂时无法关闭应用或开始新的写入。</p>
@@ -521,12 +523,14 @@ function App() {
         inert={marketplaceInstallOpen}
         settingsOpen={settingsOpen}
         marketplaceOpen={marketplaceOpen}
-        onOpenMarketplace={() => { setPackEntry(undefined); setMarketplaceOpen(true); setSettingsOpen(false); setDiscoveryEntry(null); }}
+        pluginsOpen={pluginsOpen}
+        onOpenPlugins={() => { setPluginsOpen(true); setMarketplaceOpen(false); setSettingsOpen(false); setDiscoveryEntry(null); }}
+        onOpenMarketplace={() => { setPackEntry(undefined); setPluginsOpen(false); setMarketplaceOpen(true); setSettingsOpen(false); setDiscoveryEntry(null); }}
         discoveryOpen={discoveryEntry !== null}
         discoveryCount={discovery.query.data?.unreadCount ?? 0}
-        onOpenDiscovery={() => { setMarketplaceOpen(false); setSettingsOpen(false); setDiscoveryEntry({ filter: "uninstalled", source: "all" }); }}
-        onOpenSettings={() => { setMarketplaceOpen(false); setSettingsSection("github"); setSettingsOpen(true); setDiscoveryEntry(null); }}
-        onReturnToSkills={() => { setMarketplaceOpen(false); setSettingsOpen(false); setDiscoveryEntry(null); }}
+        onOpenDiscovery={() => { setPluginsOpen(false); setMarketplaceOpen(false); setSettingsOpen(false); setDiscoveryEntry({ filter: "uninstalled", source: "all" }); }}
+        onOpenSettings={() => { setPluginsOpen(false); setMarketplaceOpen(false); setSettingsSection("github"); setSettingsOpen(true); setDiscoveryEntry(null); }}
+        onReturnToSkills={() => { setPluginsOpen(false); setMarketplaceOpen(false); setSettingsOpen(false); setDiscoveryEntry(null); }}
         report={report}
         isLoading={environment.isPending}
         isError={environment.isError}
@@ -545,7 +549,7 @@ function App() {
         filtersOpen={filtersOpen}
         onToggleFilters={() => setFiltersOpen((open) => !open)}
         scopeSwitcher={
-          settingsOpen || discoveryEntry ? null : (
+          settingsOpen || discoveryEntry || pluginsOpen ? null : (
             <ScopeSwitcher
               disabled={appUpdate.critical || batchRunning || marketplaceInstallOpen}
               activeScope={scope}
@@ -560,7 +564,9 @@ function App() {
           )
         }
       />
-      {settingsOpen ? (
+      {pluginsOpen ? (
+        <NativePluginsPage disabled={appUpdate.critical || batchRunning} />
+      ) : settingsOpen ? (
         <SettingsPage onAgentsChanged={handleRecheck} appUpdate={appUpdate} initialSection={settingsSection} />
       ) : marketplaceOpen ? (
         <MarketplacePage
@@ -824,6 +830,7 @@ function App() {
       <AppUpdateReminder
         update={appUpdate}
         onView={() => {
+          setPluginsOpen(false);
           setSettingsSection("updates");
           setSettingsOpen(true);
           setDiscoveryEntry(null);

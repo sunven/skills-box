@@ -1,0 +1,243 @@
+{
+  "root": "/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-ehnz_f42",
+  "calls": [
+    {
+      "host": "codex",
+      "args": [
+        "plugin",
+        "marketplace",
+        "add",
+        "http://127.0.0.1:56147/market.git",
+        "--json",
+        "--ref",
+        "main",
+        "--sparse",
+        ".claude-plugin",
+        "--sparse",
+        "demo"
+      ],
+      "code": 0,
+      "stdout": "{\n  \"marketplaceName\": \"skills-box-test\",\n  \"installedRoot\": \"/private/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-ehnz_f42/home/.codex/.tmp/marketplaces/skills-box-test\",\n  \"alreadyAdded\": false\n}\n",
+      "stderr": ""
+    },
+    {
+      "host": "codex",
+      "args": [
+        "plugin",
+        "add",
+        "demo@skills-box-test",
+        "--json"
+      ],
+      "code": 0,
+      "stdout": "{\n  \"pluginId\": \"demo@skills-box-test\",\n  \"name\": \"demo\",\n  \"marketplaceName\": \"skills-box-test\",\n  \"version\": \"1.0.0\",\n  \"installedPath\": \"/private/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-ehnz_f42/home/.codex/plugins/cache/skills-box-test/demo/1.0.0\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
+      "stderr": ""
+    },
+    {
+      "host": "codex-rpc",
+      "method": "config/value/write",
+      "params": {
+        "keyPath": "plugins.\"demo@skills-box-test\".enabled",
+        "value": false,
+        "mergeStrategy": "replace",
+        "filePath": "/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-ehnz_f42/home/.codex/config.toml"
+      },
+      "response": {
+        "id": 2,
+        "result": {
+          "status": "ok",
+          "version": "sha256:b2fbe16331fb02f3b1d2f1484c69776ee5c2719ae846e6ba96e0752e37c9ea74",
+          "filePath": "/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-ehnz_f42/home/.codex/config.toml",
+          "overriddenMetadata": null
+        }
+      }
+    },
+    {
+      "host": "claude",
+      "args": [
+        "plugin",
+        "marketplace",
+        "add",
+        "http://127.0.0.1:56147/market.git",
+        "--json",
+        "--sparse",
+        ".claude-plugin",
+        "demo"
+      ],
+      "code": 0,
+      "stdout": "{\"command\":\"marketplace-add\",\"outcome\":\"ok\",\"marketplace\":\"skills-box-test\",\"message\":\"Refreshing marketplace cache (timeout: 120s)…\\nCloning repository (timeout: 120s): http://127.0.0.1:56147/market.git\\nClone complete, validating marketplace…\\nCleaning up old marketplace cache…\\nSuccessfully added marketplace: skills-box-test (declared in user settings)\"}\n",
+      "stderr": ""
+    },
+    {
+      "host": "claude",
+      "args": [
+        "plugin",
+        "install",
+        "demo@skills-box-test",
+        "--json"
+      ],
+      "code": 0,
+      "stdout": "{\"command\":\"install\",\"outcome\":\"ok\",\"plugin\":\"demo@skills-box-test\",\"pluginId\":\"demo@skills-box-test\",\"scope\":\"user\",\"message\":\"Successfully installed plugin: demo@skills-box-test (scope: user)\"}\n",
+      "stderr": ""
+    },
+    {
+      "host": "claude",
+      "args": [
+        "plugin",
+        "disable",
+        "demo@skills-box-test",
+        "--scope",
+        "user",
+        "--json"
+      ],
+      "code": 0,
+      "stdout": "{\"command\":\"disable\",\"outcome\":\"ok\",\"plugin\":\"demo@skills-box-test\",\"pluginId\":\"demo@skills-box-test\",\"scope\":\"user\",\"message\":\"Successfully disabled plugin: demo (scope: user)\"}\n",
+      "stderr": ""
+    },
+    {
+      "host": "codex",
+      "args": [
+        "plugin",
+        "marketplace",
+        "upgrade",
+        "skills-box-test",
+        "--json"
+      ],
+      "code": 0,
+      "stdout": "{\n  \"selectedMarketplaces\": [\n    \"skills-box-test\"\n  ],\n  \"upgradedRoots\": [\n    \"/private/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-ehnz_f42/home/.codex/.tmp/marketplaces/skills-box-test\"\n  ],\n  \"errors\": []\n}\n",
+      "stderr": ""
+    },
+    {
+      "host": "codex",
+      "args": [
+        "plugin",
+        "list",
+        "--json"
+      ],
+      "code": 0,
+      "stdout": "{\n  \"installed\": [\n    {\n      \"pluginId\": \"demo@skills-box-test\",\n      \"name\": \"demo\",\n      \"marketplaceName\": \"skills-box-test\",\n      \"version\": \"2.0.0\",\n      \"installed\": true,\n      \"enabled\": false,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"/private/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-ehnz_f42/home/.codex/.tmp/marketplaces/skills-box-test/demo\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"git\",\n        \"source\": \"http://127.0.0.1:56147/market.git\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    }\n  ],\n  \"available\": []\n}\n",
+      "stderr": ""
+    },
+    {
+      "host": "codex",
+      "args": [
+        "plugin",
+        "list",
+        "--json"
+      ],
+      "code": 0,
+      "stdout": "{\n  \"installed\": [\n    {\n      \"pluginId\": \"demo@skills-box-test\",\n      \"name\": \"demo\",\n      \"marketplaceName\": \"skills-box-test\",\n      \"version\": \"2.0.0\",\n      \"installed\": true,\n      \"enabled\": false,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"/private/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-ehnz_f42/home/.codex/.tmp/marketplaces/skills-box-test/demo\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"git\",\n        \"source\": \"http://127.0.0.1:56147/market.git\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    }\n  ],\n  \"available\": []\n}\n",
+      "stderr": ""
+    },
+    {
+      "host": "codex",
+      "args": [
+        "plugin",
+        "marketplace",
+        "remove",
+        "skills-box-test",
+        "--json"
+      ],
+      "code": 0,
+      "stdout": "{\n  \"marketplaceName\": \"skills-box-test\",\n  \"installedRoot\": \"/private/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-ehnz_f42/home/.codex/.tmp/marketplaces/skills-box-test\"\n}\n",
+      "stderr": ""
+    },
+    {
+      "host": "claude",
+      "args": [
+        "plugin",
+        "marketplace",
+        "update",
+        "skills-box-test",
+        "--json"
+      ],
+      "code": 0,
+      "stdout": "{\"command\":\"marketplace-update\",\"outcome\":\"ok\",\"marketplace\":\"skills-box-test\",\"message\":\"Refreshing marketplace cache (timeout: 120s)…\\nCloning repository (timeout: 120s): http://127.0.0.1:56147/market.git\\nReplacing the existing marketplace clone…\\nClone complete, validating marketplace…\\nSuccessfully updated marketplace: skills-box-test\"}\n",
+      "stderr": ""
+    },
+    {
+      "host": "claude",
+      "args": [
+        "plugin",
+        "list",
+        "--json"
+      ],
+      "code": 0,
+      "stdout": "[\n  {\n    \"id\": \"demo@skills-box-test\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": false,\n    \"installPath\": \"/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-ehnz_f42/home/.claude/plugins/cache/skills-box-test/demo/1.0.0\",\n    \"installedAt\": \"2026-11-19T15:56:22.347Z\",\n    \"lastUpdated\": \"2026-11-19T15:56:22.347Z\",\n    \"projectEnabled\": false\n  }\n]\n",
+      "stderr": ""
+    },
+    {
+      "host": "claude",
+      "args": [
+        "plugin",
+        "update",
+        "demo@skills-box-test",
+        "--scope",
+        "user",
+        "--json"
+      ],
+      "code": 0,
+      "stdout": "{\"command\":\"update\",\"outcome\":\"ok\",\"plugin\":\"demo@skills-box-test\",\"pluginId\":\"demo@skills-box-test\",\"scope\":\"user\",\"message\":\"Plugin \\\"demo\\\" updated from 1.0.0 to 2.0.0 for scope user. Restart to apply changes.\",\"updateOutcome\":\"updated\",\"oldVersion\":\"1.0.0\",\"newVersion\":\"2.0.0\"}\n",
+      "stderr": ""
+    },
+    {
+      "host": "claude",
+      "args": [
+        "plugin",
+        "list",
+        "--json"
+      ],
+      "code": 0,
+      "stdout": "[\n  {\n    \"id\": \"demo@skills-box-test\",\n    \"version\": \"2.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": false,\n    \"installPath\": \"/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-ehnz_f42/home/.claude/plugins/cache/skills-box-test/demo/2.0.0\",\n    \"installedAt\": \"2026-11-19T15:56:22.347Z\",\n    \"lastUpdated\": \"2026-11-19T15:56:25.721Z\",\n    \"projectEnabled\": false\n  }\n]\n",
+      "stderr": ""
+    },
+    {
+      "host": "claude",
+      "args": [
+        "plugin",
+        "marketplace",
+        "remove",
+        "skills-box-test",
+        "--json"
+      ],
+      "code": 0,
+      "stdout": "{\"command\":\"marketplace-remove\",\"outcome\":\"ok\",\"marketplace\":\"skills-box-test\",\"message\":\"Successfully removed marketplace: skills-box-test\\nAlso uninstalled 1 plugin from this marketplace:\\n  demo@skills-box-test\\nThe removal also deletes their saved options, secrets and data where it can.\\nTo use a plugin again, add the marketplace back and reinstall the plugin.\"}\n",
+      "stderr": ""
+    },
+    {
+      "host": "claude",
+      "args": [
+        "plugin",
+        "marketplace",
+        "add",
+        "http://127.0.0.1:56147/market/.claude-plugin/marketplace.json",
+        "--scope",
+        "user",
+        "--json"
+      ],
+      "code": 0,
+      "stdout": "{\"command\":\"marketplace-add\",\"outcome\":\"ok\",\"marketplace\":\"skills-box-test\",\"message\":\"Downloading marketplace from http://127.0.0.1:56147/market/.claude-plugin/marketplace.json\\nValidating marketplace data\\nSaving marketplace to cache\\nCleaning up old marketplace cache…\\nSuccessfully added marketplace: skills-box-test (declared in user settings)\"}\n",
+      "stderr": ""
+    },
+    {
+      "host": "claude",
+      "args": [
+        "plugin",
+        "marketplace",
+        "list",
+        "--json"
+      ],
+      "code": 0,
+      "stdout": "[\n  {\n    \"name\": \"skills-box-test\",\n    \"source\": \"url\",\n    \"url\": \"http://127.0.0.1:56147/market/.claude-plugin/marketplace.json\",\n    \"installLocation\": \"/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-ehnz_f42/home/.claude/plugins/marketplaces/skills-box-test\"\n  }\n]\n",
+      "stderr": ""
+    }
+  ],
+  "codex_files": {
+    ".codex/plugins/cache/skills-box-test/demo/2.0.0/skills/hello/SKILL.md": "---\nname: hello\ndescription: Changed fixture\n---\nVersion 2.\n",
+    ".codex/.tmp/marketplaces/skills-box-test/demo/skills/hello/SKILL.md": "---\nname: hello\ndescription: Changed fixture\n---\nVersion 2.\n"
+  },
+  "claude_files": {
+    ".claude/plugins/cache/skills-box-test/demo/1.0.0/skills/hello/SKILL.md": "---\nname: hello\ndescription: Static fixture\n---\nNo executable content.\n",
+    ".claude/plugins/cache/skills-box-test/demo/2.0.0/skills/hello/SKILL.md": "---\nname: hello\ndescription: Changed fixture\n---\nVersion 2.\n",
+    ".claude/plugins/marketplaces/skills-box-test/demo/skills/hello/SKILL.md": "---\nname: hello\ndescription: Changed fixture\n---\nVersion 2.\n"
+  }
+}

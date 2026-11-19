@@ -1,0 +1,857 @@
+{
+  "root": "/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-4y4j4_s8",
+  "calls": [
+    {
+      "host": "codex",
+      "args": [
+        "plugin",
+        "marketplace",
+        "add",
+        "/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-4y4j4_s8/market",
+        "--json"
+      ],
+      "code": 0,
+      "stdout": "{\n  \"marketplaceName\": \"skills-box-test\",\n  \"installedRoot\": \"/private/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-4y4j4_s8/market\",\n  \"alreadyAdded\": false\n}\n",
+      "stderr": ""
+    },
+    {
+      "host": "codex",
+      "args": [
+        "plugin",
+        "add",
+        "demo@skills-box-test",
+        "--json"
+      ],
+      "code": 0,
+      "stdout": "{\n  \"pluginId\": \"demo@skills-box-test\",\n  \"name\": \"demo\",\n  \"marketplaceName\": \"skills-box-test\",\n  \"version\": \"1.0.0\",\n  \"installedPath\": \"/private/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-4y4j4_s8/home/.codex/plugins/cache/skills-box-test/demo/1.0.0\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
+      "stderr": ""
+    },
+    {
+      "host": "codex-rpc",
+      "method": "config/read",
+      "params": {
+        "includeLayers": true
+      },
+      "response": {
+        "id": 2,
+        "result": {
+          "config": {
+            "model": null,
+            "review_model": null,
+            "model_context_window": null,
+            "model_auto_compact_token_limit": null,
+            "model_auto_compact_token_limit_scope": null,
+            "model_provider": null,
+            "approval_policy": null,
+            "approvals_reviewer": null,
+            "sandbox_mode": null,
+            "sandbox_workspace_write": null,
+            "forced_chatgpt_workspace_id": null,
+            "forced_login_method": null,
+            "web_search": null,
+            "client_search_provider": null,
+            "tools": null,
+            "instructions": null,
+            "developer_instructions": null,
+            "compact_prompt": null,
+            "model_reasoning_effort": null,
+            "model_reasoning_summary": null,
+            "model_verbosity": null,
+            "service_tier": null,
+            "analytics": null,
+            "apps": null,
+            "browser_use": null,
+            "computer_use": null,
+            "desktop": null,
+            "goals": null,
+            "log_dir": null,
+            "include_permissions_instructions": true,
+            "js_repl_node_module_dirs": null,
+            "experimental_compact_prompt_file": null,
+            "model_providers": {},
+            "mcp_oauth_credentials_store": "auto",
+            "realtime": null,
+            "experimental_realtime_webrtc_call_base_url": null,
+            "agents": null,
+            "model_post_turn_compact_threshold_percent": null,
+            "auto_review": null,
+            "experimental_realtime_ws_backend_prompt": null,
+            "features": {
+              "api_key_cyber_access_programs": true,
+              "api_key_model_discovery": true,
+              "auth_elicitation": true,
+              "background_paginated_rollout_migration": false,
+              "codex_apps_mcp_2026_07_28": false,
+              "daybreak_program_propagation": false,
+              "mcp_2026_07_28": false,
+              "mcp_connection_sharing": false,
+              "mcp_lazy_stdio_startup": false,
+              "memories": false,
+              "mentions_v2": true,
+              "remote_control": false,
+              "remote_plugin": true,
+              "tool_suggest": true,
+              "windows_sandbox_service": false
+            },
+            "plan_mode_reasoning_effort": null,
+            "shell_environment_policy": {
+              "inherit": null,
+              "ignore_default_excludes": null,
+              "exclude": null,
+              "set": null,
+              "include_only": null,
+              "filters": null,
+              "experimental_use_profile": null
+            },
+            "experimental_realtime_ws_model": null,
+            "experimental_use_unified_exec_tool": null,
+            "project_root_markers": [
+              ".git"
+            ],
+            "project_doc_fallback_filenames": [],
+            "ghost_snapshot": null,
+            "notify": null,
+            "model_instructions_file": null,
+            "windows": null,
+            "cloud": null,
+            "mcp_oauth_callback_url": null,
+            "mcp_enterprise_managed_auth": null,
+            "background_terminal_max_timeout": 300000,
+            "default_permissions": null,
+            "experimental_realtime_start_instructions": null,
+            "mcp_optional_startup_grace_ms": null,
+            "profile": null,
+            "history": {
+              "persistence": "save-all",
+              "max_bytes": null
+            },
+            "model_catalog_json": null,
+            "chatgpt_base_url": "https://chatgpt.com/backend-api/",
+            "responses_api_metadata": null,
+            "experimental_thread_store": null,
+            "file_opener": "vscode",
+            "oss_provider": null,
+            "otel": null,
+            "audio": null,
+            "mcp_oauth_callback_port": null,
+            "notice": null,
+            "sqlite_home": null,
+            "cli_auth_credentials_store": "file",
+            "daybreak": null,
+            "projects": null,
+            "suppress_unstable_features_warning": null,
+            "apps_mcp_product_sku": null,
+            "tui": null,
+            "tool_suggest": null,
+            "plugins": {
+              "demo@skills-box-test": {
+                "enabled": true
+              }
+            },
+            "mcp_servers": {},
+            "disable_paste_burst": null,
+            "include_environment_context": true,
+            "include_apps_instructions": true,
+            "personality": null,
+            "project_doc_max_bytes": 32768,
+            "allow_login_shell": true,
+            "hide_agent_reasoning": false,
+            "experimental_thread_store_endpoint": null,
+            "check_for_update_on_startup": null,
+            "marketplaces": {
+              "skills-box-test": {
+                "last_updated": null,
+                "last_revision": null,
+                "source_type": "local",
+                "source": "/private/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-4y4j4_s8/market",
+                "ref": null,
+                "sparse_paths": null
+              }
+            },
+            "allow_symlinked_codex_home": null,
+            "experimental_realtime_ws_base_url": null,
+            "include_collaboration_mode_instructions": true,
+            "profiles": {},
+            "memories": null,
+            "experimental_realtime_ws_startup_context": null,
+            "skills": null,
+            "js_repl_node_path": null,
+            "openai_base_url": null,
+            "show_raw_agent_reasoning": null,
+            "hooks": null,
+            "orchestrator": null,
+            "permissions": null,
+            "include_environment_context_time": true,
+            "feedback": null,
+            "tool_output_token_limit": null,
+            "thread_unload_delay_secs": null
+          },
+          "origins": {
+            "marketplaces.skills-box-test.source_type": {
+              "name": {
+                "type": "user",
+                "file": "/private/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-4y4j4_s8/home/.codex/config.toml",
+                "profile": null
+              },
+              "version": "sha256:76fab52f13aacfe3b23d9845ff2d9bd1f4b39206e5e38573b8c435eb9d7d845a"
+            },
+            "plugins.demo@skills-box-test.enabled": {
+              "name": {
+                "type": "user",
+                "file": "/private/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-4y4j4_s8/home/.codex/config.toml",
+                "profile": null
+              },
+              "version": "sha256:76fab52f13aacfe3b23d9845ff2d9bd1f4b39206e5e38573b8c435eb9d7d845a"
+            },
+            "marketplaces.skills-box-test.source": {
+              "name": {
+                "type": "user",
+                "file": "/private/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-4y4j4_s8/home/.codex/config.toml",
+                "profile": null
+              },
+              "version": "sha256:76fab52f13aacfe3b23d9845ff2d9bd1f4b39206e5e38573b8c435eb9d7d845a"
+            }
+          },
+          "layers": [
+            {
+              "name": {
+                "type": "user",
+                "file": "/private/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-4y4j4_s8/home/.codex/config.toml",
+                "profile": null
+              },
+              "version": "sha256:76fab52f13aacfe3b23d9845ff2d9bd1f4b39206e5e38573b8c435eb9d7d845a",
+              "config": {
+                "marketplaces": {
+                  "skills-box-test": {
+                    "source_type": "local",
+                    "source": "/private/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-4y4j4_s8/market"
+                  }
+                },
+                "plugins": {
+                  "demo@skills-box-test": {
+                    "enabled": true
+                  }
+                }
+              }
+            },
+            {
+              "name": {
+                "type": "system",
+                "file": "/etc/codex/config.toml"
+              },
+              "version": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+              "config": {}
+            }
+          ]
+        }
+      }
+    },
+    {
+      "host": "codex-rpc",
+      "method": "config/value/write",
+      "params": {
+        "keyPath": "plugins.\"demo@skills-box-test\".enabled",
+        "value": true,
+        "mergeStrategy": "replace",
+        "filePath": "/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-4y4j4_s8/home/.codex/config.toml",
+        "expectedVersion": "sha256:76fab52f13aacfe3b23d9845ff2d9bd1f4b39206e5e38573b8c435eb9d7d845a"
+      },
+      "response": {
+        "id": 2,
+        "result": {
+          "status": "ok",
+          "version": "sha256:7b82f018e0363a89fa410637429ebc3f818d9903c915a18d3c49f022a516c16d",
+          "filePath": "/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-4y4j4_s8/home/.codex/config.toml",
+          "overriddenMetadata": null
+        }
+      }
+    },
+    {
+      "host": "codex-rpc",
+      "method": "config/value/write",
+      "params": {
+        "keyPath": "plugins.\"demo@skills-box-test\".enabled",
+        "value": true,
+        "mergeStrategy": "replace",
+        "filePath": "/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-4y4j4_s8/home/.codex/config.toml",
+        "expectedVersion": "sha256:76fab52f13aacfe3b23d9845ff2d9bd1f4b39206e5e38573b8c435eb9d7d845a"
+      },
+      "response": {
+        "error": {
+          "code": -32600,
+          "data": {
+            "config_write_error_code": "configVersionConflict"
+          },
+          "message": "Configuration was modified since last read. Fetch latest version and retry."
+        },
+        "id": 2
+      }
+    },
+    {
+      "host": "codex-rpc",
+      "method": "config/value/write",
+      "params": {
+        "keyPath": "plugins.\"dotted.name@skills-box-test\".enabled",
+        "value": false,
+        "mergeStrategy": "replace",
+        "filePath": "/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-4y4j4_s8/home/.codex/config.toml"
+      },
+      "response": {
+        "id": 2,
+        "result": {
+          "status": "ok",
+          "version": "sha256:4fe7c1c98d07e7fc1f38c27eb122ba10ce722cdb240769481de2d5149e995764",
+          "filePath": "/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-4y4j4_s8/home/.codex/config.toml",
+          "overriddenMetadata": null
+        }
+      }
+    },
+    {
+      "host": "codex",
+      "args": [
+        "plugin",
+        "marketplace",
+        "upgrade",
+        "skills-box-test",
+        "--json"
+      ],
+      "code": 1,
+      "stdout": "",
+      "stderr": "Error: marketplace `skills-box-test` is not configured as a Git marketplace\n"
+    },
+    {
+      "host": "codex",
+      "args": [
+        "plugin",
+        "list",
+        "--json"
+      ],
+      "code": 0,
+      "stdout": "{\n  \"installed\": [\n    {\n      \"pluginId\": \"demo@skills-box-test\",\n      \"name\": \"demo\",\n      \"marketplaceName\": \"skills-box-test\",\n      \"version\": \"1.0.0\",\n      \"installed\": true,\n      \"enabled\": false,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"/private/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-4y4j4_s8/market/demo\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"/private/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-4y4j4_s8/market\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    }\n  ],\n  \"available\": []\n}\n",
+      "stderr": ""
+    },
+    {
+      "host": "codex",
+      "args": [
+        "plugin",
+        "marketplace",
+        "remove",
+        "skills-box-test",
+        "--json"
+      ],
+      "code": 0,
+      "stdout": "{\n  \"marketplaceName\": \"skills-box-test\",\n  \"installedRoot\": null\n}\n",
+      "stderr": ""
+    },
+    {
+      "host": "codex-rpc",
+      "method": "config/read",
+      "params": {
+        "includeLayers": true
+      },
+      "response": {
+        "id": 2,
+        "result": {
+          "config": {
+            "model": null,
+            "review_model": null,
+            "model_context_window": null,
+            "model_auto_compact_token_limit": null,
+            "model_auto_compact_token_limit_scope": null,
+            "model_provider": null,
+            "approval_policy": null,
+            "approvals_reviewer": null,
+            "sandbox_mode": null,
+            "sandbox_workspace_write": null,
+            "forced_chatgpt_workspace_id": null,
+            "forced_login_method": null,
+            "web_search": null,
+            "client_search_provider": null,
+            "tools": null,
+            "instructions": null,
+            "developer_instructions": null,
+            "compact_prompt": null,
+            "model_reasoning_effort": null,
+            "model_reasoning_summary": null,
+            "model_verbosity": null,
+            "service_tier": null,
+            "analytics": null,
+            "apps": null,
+            "browser_use": null,
+            "computer_use": null,
+            "desktop": null,
+            "auto_review": null,
+            "log_dir": null,
+            "feedback": null,
+            "agents": null,
+            "include_collaboration_mode_instructions": true,
+            "responses_api_metadata": null,
+            "mcp_servers": {},
+            "js_repl_node_module_dirs": null,
+            "cli_auth_credentials_store": "file",
+            "include_environment_context": true,
+            "mcp_optional_startup_grace_ms": null,
+            "realtime": null,
+            "openai_base_url": null,
+            "mcp_enterprise_managed_auth": null,
+            "orchestrator": null,
+            "show_raw_agent_reasoning": null,
+            "experimental_thread_store": null,
+            "permissions": null,
+            "mcp_oauth_callback_port": null,
+            "allow_symlinked_codex_home": null,
+            "default_permissions": null,
+            "goals": null,
+            "model_post_turn_compact_threshold_percent": null,
+            "memories": null,
+            "daybreak": null,
+            "sqlite_home": null,
+            "experimental_realtime_ws_model": null,
+            "experimental_realtime_ws_backend_prompt": null,
+            "file_opener": "vscode",
+            "thread_unload_delay_secs": null,
+            "model_instructions_file": null,
+            "otel": null,
+            "model_providers": {},
+            "profiles": {},
+            "skills": null,
+            "mcp_oauth_callback_url": null,
+            "disable_paste_burst": null,
+            "check_for_update_on_startup": null,
+            "experimental_realtime_ws_base_url": null,
+            "project_doc_fallback_filenames": [],
+            "suppress_unstable_features_warning": null,
+            "audio": null,
+            "js_repl_node_path": null,
+            "include_apps_instructions": true,
+            "project_doc_max_bytes": 32768,
+            "include_environment_context_time": true,
+            "personality": null,
+            "cloud": null,
+            "notify": null,
+            "ghost_snapshot": null,
+            "plan_mode_reasoning_effort": null,
+            "history": {
+              "persistence": "save-all",
+              "max_bytes": null
+            },
+            "experimental_realtime_webrtc_call_base_url": null,
+            "hooks": null,
+            "chatgpt_base_url": "https://chatgpt.com/backend-api/",
+            "profile": null,
+            "mcp_oauth_credentials_store": "auto",
+            "marketplaces": {},
+            "tool_suggest": null,
+            "experimental_thread_store_endpoint": null,
+            "experimental_realtime_start_instructions": null,
+            "tool_output_token_limit": null,
+            "projects": null,
+            "plugins": {
+              "demo@skills-box-test": {
+                "enabled": false
+              },
+              "dotted.name@skills-box-test": {
+                "enabled": false
+              }
+            },
+            "notice": null,
+            "experimental_compact_prompt_file": null,
+            "project_root_markers": [
+              ".git"
+            ],
+            "allow_login_shell": true,
+            "tui": null,
+            "experimental_realtime_ws_startup_context": null,
+            "background_terminal_max_timeout": 300000,
+            "features": {
+              "api_key_cyber_access_programs": true,
+              "api_key_model_discovery": true,
+              "auth_elicitation": true,
+              "background_paginated_rollout_migration": false,
+              "codex_apps_mcp_2026_07_28": false,
+              "daybreak_program_propagation": false,
+              "mcp_2026_07_28": false,
+              "mcp_connection_sharing": false,
+              "mcp_lazy_stdio_startup": false,
+              "memories": false,
+              "mentions_v2": true,
+              "remote_control": false,
+              "remote_plugin": true,
+              "tool_suggest": true,
+              "windows_sandbox_service": false
+            },
+            "experimental_use_unified_exec_tool": null,
+            "oss_provider": null,
+            "include_permissions_instructions": true,
+            "windows": null,
+            "shell_environment_policy": {
+              "inherit": null,
+              "ignore_default_excludes": null,
+              "exclude": null,
+              "set": null,
+              "include_only": null,
+              "filters": null,
+              "experimental_use_profile": null
+            },
+            "hide_agent_reasoning": false,
+            "model_catalog_json": null,
+            "apps_mcp_product_sku": null
+          },
+          "origins": {
+            "plugins.dotted.name@skills-box-test.enabled": {
+              "name": {
+                "type": "user",
+                "file": "/private/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-4y4j4_s8/home/.codex/config.toml",
+                "profile": null
+              },
+              "version": "sha256:9d97966a0f33462b9361c54922a3cbb6f79fd465b0a613cf5363229e7496b0d1"
+            },
+            "plugins.demo@skills-box-test.enabled": {
+              "name": {
+                "type": "user",
+                "file": "/private/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-4y4j4_s8/home/.codex/config.toml",
+                "profile": null
+              },
+              "version": "sha256:9d97966a0f33462b9361c54922a3cbb6f79fd465b0a613cf5363229e7496b0d1"
+            }
+          },
+          "layers": [
+            {
+              "name": {
+                "type": "user",
+                "file": "/private/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-4y4j4_s8/home/.codex/config.toml",
+                "profile": null
+              },
+              "version": "sha256:9d97966a0f33462b9361c54922a3cbb6f79fd465b0a613cf5363229e7496b0d1",
+              "config": {
+                "plugins": {
+                  "demo@skills-box-test": {
+                    "enabled": false
+                  },
+                  "dotted.name@skills-box-test": {
+                    "enabled": false
+                  }
+                }
+              }
+            },
+            {
+              "name": {
+                "type": "system",
+                "file": "/etc/codex/config.toml"
+              },
+              "version": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+              "config": {}
+            }
+          ]
+        }
+      }
+    },
+    {
+      "host": "claude",
+      "args": [
+        "plugin",
+        "marketplace",
+        "add",
+        "/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-4y4j4_s8/market",
+        "--scope",
+        "user",
+        "--json"
+      ],
+      "code": 0,
+      "stdout": "{\"command\":\"marketplace-add\",\"outcome\":\"ok\",\"marketplace\":\"skills-box-test\",\"message\":\"Successfully added marketplace: skills-box-test (declared in user settings)\"}\n",
+      "stderr": ""
+    },
+    {
+      "host": "claude",
+      "args": [
+        "plugin",
+        "install",
+        "demo@skills-box-test",
+        "--scope",
+        "user",
+        "--json"
+      ],
+      "code": 0,
+      "stdout": "{\"command\":\"install\",\"outcome\":\"ok\",\"plugin\":\"demo@skills-box-test\",\"pluginId\":\"demo@skills-box-test\",\"scope\":\"user\",\"message\":\"Successfully installed plugin: demo@skills-box-test (scope: user)\"}\n",
+      "stderr": ""
+    },
+    {
+      "host": "claude",
+      "args": [
+        "plugin",
+        "install",
+        "demo@skills-box-test",
+        "--scope",
+        "project",
+        "--json"
+      ],
+      "code": 0,
+      "stdout": "{\"command\":\"install\",\"outcome\":\"ok\",\"plugin\":\"demo@skills-box-test\",\"pluginId\":\"demo@skills-box-test\",\"scope\":\"project\",\"message\":\"Successfully installed plugin: demo@skills-box-test (scope: project)\"}\n",
+      "stderr": ""
+    },
+    {
+      "host": "claude",
+      "args": [
+        "plugin",
+        "marketplace",
+        "remove",
+        "skills-box-test",
+        "--scope",
+        "user",
+        "--json"
+      ],
+      "code": 0,
+      "stdout": "{\"command\":\"marketplace-remove\",\"outcome\":\"ok\",\"marketplace\":\"skills-box-test\",\"message\":\"Successfully removed marketplace: skills-box-test (from user settings)\\nAlso uninstalled 1 plugin from this marketplace:\\n  demo@skills-box-test\\nThe removal also deletes their saved options, secrets and data where it can.\\nTo use a plugin again, add the marketplace back and reinstall the plugin.\"}\n",
+      "stderr": ""
+    },
+    {
+      "host": "claude",
+      "args": [
+        "plugin",
+        "list",
+        "--json"
+      ],
+      "code": 0,
+      "stdout": "[]\n",
+      "stderr": ""
+    },
+    {
+      "host": "claude",
+      "args": [
+        "plugin",
+        "marketplace",
+        "add",
+        "/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-4y4j4_s8/market/.claude-plugin/marketplace.json",
+        "--scope",
+        "user",
+        "--json"
+      ],
+      "code": 0,
+      "stdout": "{\"command\":\"marketplace-add\",\"outcome\":\"ok\",\"marketplace\":\"skills-box-test\",\"message\":\"Successfully added marketplace: skills-box-test (declared in user settings)\"}\n",
+      "stderr": ""
+    },
+    {
+      "host": "claude",
+      "args": [
+        "plugin",
+        "marketplace",
+        "list",
+        "--json"
+      ],
+      "code": 0,
+      "stdout": "[\n  {\n    \"name\": \"skills-box-test\",\n    \"source\": \"file\",\n    \"path\": \"/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-4y4j4_s8/market/.claude-plugin/marketplace.json\",\n    \"installLocation\": \"/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-4y4j4_s8/market\"\n  }\n]\n",
+      "stderr": ""
+    }
+  ],
+  "orphan_config": {
+    "id": 2,
+    "result": {
+      "config": {
+        "model": null,
+        "review_model": null,
+        "model_context_window": null,
+        "model_auto_compact_token_limit": null,
+        "model_auto_compact_token_limit_scope": null,
+        "model_provider": null,
+        "approval_policy": null,
+        "approvals_reviewer": null,
+        "sandbox_mode": null,
+        "sandbox_workspace_write": null,
+        "forced_chatgpt_workspace_id": null,
+        "forced_login_method": null,
+        "web_search": null,
+        "client_search_provider": null,
+        "tools": null,
+        "instructions": null,
+        "developer_instructions": null,
+        "compact_prompt": null,
+        "model_reasoning_effort": null,
+        "model_reasoning_summary": null,
+        "model_verbosity": null,
+        "service_tier": null,
+        "analytics": null,
+        "apps": null,
+        "browser_use": null,
+        "computer_use": null,
+        "desktop": null,
+        "auto_review": null,
+        "log_dir": null,
+        "feedback": null,
+        "agents": null,
+        "include_collaboration_mode_instructions": true,
+        "responses_api_metadata": null,
+        "mcp_servers": {},
+        "js_repl_node_module_dirs": null,
+        "cli_auth_credentials_store": "file",
+        "include_environment_context": true,
+        "mcp_optional_startup_grace_ms": null,
+        "realtime": null,
+        "openai_base_url": null,
+        "mcp_enterprise_managed_auth": null,
+        "orchestrator": null,
+        "show_raw_agent_reasoning": null,
+        "experimental_thread_store": null,
+        "permissions": null,
+        "mcp_oauth_callback_port": null,
+        "allow_symlinked_codex_home": null,
+        "default_permissions": null,
+        "goals": null,
+        "model_post_turn_compact_threshold_percent": null,
+        "memories": null,
+        "daybreak": null,
+        "sqlite_home": null,
+        "experimental_realtime_ws_model": null,
+        "experimental_realtime_ws_backend_prompt": null,
+        "file_opener": "vscode",
+        "thread_unload_delay_secs": null,
+        "model_instructions_file": null,
+        "otel": null,
+        "model_providers": {},
+        "profiles": {},
+        "skills": null,
+        "mcp_oauth_callback_url": null,
+        "disable_paste_burst": null,
+        "check_for_update_on_startup": null,
+        "experimental_realtime_ws_base_url": null,
+        "project_doc_fallback_filenames": [],
+        "suppress_unstable_features_warning": null,
+        "audio": null,
+        "js_repl_node_path": null,
+        "include_apps_instructions": true,
+        "project_doc_max_bytes": 32768,
+        "include_environment_context_time": true,
+        "personality": null,
+        "cloud": null,
+        "notify": null,
+        "ghost_snapshot": null,
+        "plan_mode_reasoning_effort": null,
+        "history": {
+          "persistence": "save-all",
+          "max_bytes": null
+        },
+        "experimental_realtime_webrtc_call_base_url": null,
+        "hooks": null,
+        "chatgpt_base_url": "https://chatgpt.com/backend-api/",
+        "profile": null,
+        "mcp_oauth_credentials_store": "auto",
+        "marketplaces": {},
+        "tool_suggest": null,
+        "experimental_thread_store_endpoint": null,
+        "experimental_realtime_start_instructions": null,
+        "tool_output_token_limit": null,
+        "projects": null,
+        "plugins": {
+          "demo@skills-box-test": {
+            "enabled": false
+          },
+          "dotted.name@skills-box-test": {
+            "enabled": false
+          }
+        },
+        "notice": null,
+        "experimental_compact_prompt_file": null,
+        "project_root_markers": [
+          ".git"
+        ],
+        "allow_login_shell": true,
+        "tui": null,
+        "experimental_realtime_ws_startup_context": null,
+        "background_terminal_max_timeout": 300000,
+        "features": {
+          "api_key_cyber_access_programs": true,
+          "api_key_model_discovery": true,
+          "auth_elicitation": true,
+          "background_paginated_rollout_migration": false,
+          "codex_apps_mcp_2026_07_28": false,
+          "daybreak_program_propagation": false,
+          "mcp_2026_07_28": false,
+          "mcp_connection_sharing": false,
+          "mcp_lazy_stdio_startup": false,
+          "memories": false,
+          "mentions_v2": true,
+          "remote_control": false,
+          "remote_plugin": true,
+          "tool_suggest": true,
+          "windows_sandbox_service": false
+        },
+        "experimental_use_unified_exec_tool": null,
+        "oss_provider": null,
+        "include_permissions_instructions": true,
+        "windows": null,
+        "shell_environment_policy": {
+          "inherit": null,
+          "ignore_default_excludes": null,
+          "exclude": null,
+          "set": null,
+          "include_only": null,
+          "filters": null,
+          "experimental_use_profile": null
+        },
+        "hide_agent_reasoning": false,
+        "model_catalog_json": null,
+        "apps_mcp_product_sku": null
+      },
+      "origins": {
+        "plugins.dotted.name@skills-box-test.enabled": {
+          "name": {
+            "type": "user",
+            "file": "/private/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-4y4j4_s8/home/.codex/config.toml",
+            "profile": null
+          },
+          "version": "sha256:9d97966a0f33462b9361c54922a3cbb6f79fd465b0a613cf5363229e7496b0d1"
+        },
+        "plugins.demo@skills-box-test.enabled": {
+          "name": {
+            "type": "user",
+            "file": "/private/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-4y4j4_s8/home/.codex/config.toml",
+            "profile": null
+          },
+          "version": "sha256:9d97966a0f33462b9361c54922a3cbb6f79fd465b0a613cf5363229e7496b0d1"
+        }
+      },
+      "layers": [
+        {
+          "name": {
+            "type": "user",
+            "file": "/private/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-4y4j4_s8/home/.codex/config.toml",
+            "profile": null
+          },
+          "version": "sha256:9d97966a0f33462b9361c54922a3cbb6f79fd465b0a613cf5363229e7496b0d1",
+          "config": {
+            "plugins": {
+              "demo@skills-box-test": {
+                "enabled": false
+              },
+              "dotted.name@skills-box-test": {
+                "enabled": false
+              }
+            }
+          }
+        },
+        {
+          "name": {
+            "type": "system",
+            "file": "/etc/codex/config.toml"
+          },
+          "version": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          "config": {}
+        }
+      ]
+    }
+  },
+  "orphan_files": {
+    ".codex/plugins/cache/skills-box-test/demo/1.0.0/.claude-plugin/plugin.json": "{\"name\": \"demo\", \"version\": \"1.0.0\", \"description\": \"Static fixture\"}"
+  },
+  "claude_before_remove": {
+    ".claude/settings.json": "{\n  \"extraKnownMarketplaces\": {\n    \"skills-box-test\": {\n      \"source\": {\n        \"source\": \"directory\",\n        \"path\": \"/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-4y4j4_s8/market\"\n      }\n    }\n  },\n  \"enabledPlugins\": {\n    \"demo@skills-box-test\": true\n  }\n}\n",
+    ".claude/.claude.json": "{\n  \"firstStartTime\": \"2026-11-19T15:51:56.056Z\",\n  \"firstStartVersion\": \"2.1.323\",\n  \"machineID\": \"ae9e968dc607d9131742763dd4ee246a1951c7572f464bb1c53855ed3e27dfe9\",\n  \"opusProMigrationComplete\": true,\n  \"sonnet1m45MigrationComplete\": true,\n  \"seenNotifications\": {},\n  \"hasResetAutoModeOptInForDefaultOffer\": true,\n  \"migrationVersion\": 15,\n  \"userID\": \"ebd8f341edbbc015e53af0587085f335a28365095d784580d25f0d2c8dae0b03\"\n}",
+    ".claude/plugins/known_marketplaces.json": "{\n  \"skills-box-test\": {\n    \"source\": {\n      \"source\": \"directory\",\n      \"path\": \"/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-4y4j4_s8/market\"\n    },\n    \"installLocation\": \"/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-4y4j4_s8/market\",\n    \"lastUpdated\": \"2026-11-19T15:51:56.080Z\"\n  }\n}",
+    ".claude/plugins/installed_plugins.json": "{\n  \"version\": 2,\n  \"plugins\": {\n    \"demo@skills-box-test\": [\n      {\n        \"scope\": \"user\",\n        \"installPath\": \"/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-4y4j4_s8/home/.claude/plugins/cache/skills-box-test/demo/1.0.0\",\n        \"version\": \"1.0.0\",\n        \"installedAt\": \"2026-11-19T15:51:56.709Z\",\n        \"lastUpdated\": \"2026-11-19T15:51:56.709Z\"\n      },\n      {\n        \"scope\": \"project\",\n        \"installPath\": \"/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-4y4j4_s8/home/.claude/plugins/cache/skills-box-test/demo/1.0.0\",\n        \"version\": \"1.0.0\",\n        \"installedAt\": \"2026-11-19T15:51:57.406Z\",\n        \"lastUpdated\": \"2026-11-19T15:51:57.406Z\",\n        \"projectPath\": \"/private/var/folders/hx/3v6dd_js10lfdpq5mvfpdbth0000gn/T/skills-box-plugins-4y4j4_s8/project\"\n      }\n    ]\n  }\n}"
+  },
+  "claude_after_remove": {
+    ".claude/settings.json": "{\n  \"enabledPlugins\": {},\n  \"extraKnownMarketplaces\": {}\n}\n",
+    ".claude/.claude.json": "{\n  \"firstStartTime\": \"2026-11-19T15:51:56.056Z\",\n  \"firstStartVersion\": \"2.1.323\",\n  \"machineID\": \"ae9e968dc607d9131742763dd4ee246a1951c7572f464bb1c53855ed3e27dfe9\",\n  \"opusProMigrationComplete\": true,\n  \"sonnet1m45MigrationComplete\": true,\n  \"seenNotifications\": {},\n  \"hasResetAutoModeOptInForDefaultOffer\": true,\n  \"migrationVersion\": 15,\n  \"userID\": \"ebd8f341edbbc015e53af0587085f335a28365095d784580d25f0d2c8dae0b03\"\n}",
+    ".claude/plugins/known_marketplaces.json": "{}",
+    ".claude/plugins/installed_plugins.json": "{\n  \"version\": 2,\n  \"plugins\": {}\n}"
+  }
+}
