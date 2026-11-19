@@ -820,7 +820,7 @@ export const DetailPane = memo(function DetailPane({
                   未挂载任何 agent。共享副本仍保留，可在安装向导中重新挂载。
                 </p>
               ) : (
-                <ul className="mt-2.5 space-y-1.5">
+                <ul className="mt-3 space-y-2">
                   {attachments.map((attachment) => (
                     <AgentAttachmentRow
                       key={`${attachment.agentId}:${attachment.path}`}

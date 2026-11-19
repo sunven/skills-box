@@ -460,7 +460,7 @@ function SkillTreeDir({
           listing.data.entries.length === 0 ? (
             <p
               className="content-tree-note"
-              style={{ paddingLeft: 8 + (depth + 1) * 12 + 14 }}
+              style={{ paddingLeft: 8 + (depth + 1) * 12 + 24 }}
             >
               空目录
             </p>
@@ -484,7 +484,7 @@ function SkillTreeDir({
               {listing.data.truncated ? (
                 <p
                   className="content-tree-note"
-                  style={{ paddingLeft: 8 + (depth + 1) * 12 + 14 }}
+                  style={{ paddingLeft: 8 + (depth + 1) * 12 + 24 }}
                 >
                   已显示前 {listing.data.maxEntries} 项
                 </p>
@@ -514,7 +514,7 @@ function TreeState({
     return (
       <p
         className="content-tree-note inline-flex items-center gap-1.5"
-        style={{ paddingLeft: 8 + indent * 12 + 14 }}
+        style={{ paddingLeft: 8 + indent * 12 + 24 }}
       >
         <Loader2 className="size-3 animate-spin" aria-hidden="true" />
         {text}
@@ -524,7 +524,7 @@ function TreeState({
   return (
     <div
       className="content-tree-note"
-      style={{ paddingLeft: 8 + indent * 12 + 14 }}
+      style={{ paddingLeft: 8 + indent * 12 + 24 }}
     >
       <p className="text-destructive">{error?.message ?? "读取失败。"}</p>
       {error?.hint ? <p>{error.hint}</p> : null}
