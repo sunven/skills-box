@@ -72,6 +72,7 @@ export function AppHeader({
   onToggleFilters,
   scopeSwitcher,
 }: AppHeaderProps) {
+  const skillsOpen = !settingsOpen && !discoveryOpen && !marketplaceOpen && !pluginsOpen;
   const failedSources = lastCheck?.failedSourceCount ?? 0;
   const outcomeSuffix =
     lastCheck?.outcome === "failed"
@@ -121,10 +122,14 @@ export function AppHeader({
         {scopeSwitcher}
       </div>
 
+      <nav className="topbar-nav" aria-label="功能导航">
+        <button type="button" className="topbar-tab" aria-pressed={skillsOpen} onClick={onReturnToSkills}>技能</button>
+        <button type="button" className="topbar-tab" aria-pressed={pluginsOpen} onClick={onOpenPlugins}>插件</button>
+        <button type="button" className="topbar-tab" aria-pressed={marketplaceOpen} onClick={onOpenMarketplace}>技能市场</button>
+        <button type="button" className="topbar-tab" onClick={onOpenDiscovery} aria-label={`发现 (${discoveryCount})`} aria-pressed={discoveryOpen}>发现{discoveryCount > 0 ? <span className="discovery-count" data-testid="discovery-badge">{discoveryCount}</span> : null}</button>
+      </nav>
+
       <div className="topbar-actions">
-        <Button variant={pluginsOpen ? "outline" : "ghost"} size="sm" aria-pressed={pluginsOpen} onClick={onOpenPlugins}>插件</Button>
-        <Button variant={marketplaceOpen ? "outline" : "ghost"} size="sm" aria-pressed={marketplaceOpen} onClick={onOpenMarketplace}>技能市场</Button>
-        <Button variant={discoveryOpen ? "outline" : "ghost"} size="sm" onClick={onOpenDiscovery} aria-label={`发现 (${discoveryCount})`} aria-pressed={discoveryOpen}>发现{discoveryCount > 0 ? <span className="discovery-count" data-testid="discovery-badge">{discoveryCount}</span> : null}</Button>
         {settingsOpen || discoveryOpen || marketplaceOpen || pluginsOpen ? <Button variant="ghost" size="sm" onClick={onReturnToSkills}><ArrowLeft aria-hidden="true" />返回 skills</Button> : <>
         <span
           data-testid="last-update-check"

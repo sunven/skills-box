@@ -89,7 +89,7 @@ describe("ClawHub marketplace", () => {
     expect(screen.getByRole("group", { name: "市场类型" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "专家包" }));
     expect(within(screen.getByRole("group", { name: "市场类型" })).getByText("来源 · SkillHub")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "技能" }));
+    fireEvent.click(within(screen.getByRole("group", { name: "市场类型" })).getByRole("button", { name: "技能" }));
     expect(screen.getByRole("button", { name: "SkillHub" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByLabelText("搜索 SkillHub")).toHaveValue("hub draft");
     expect(hubList.scrollTop).toBe(100);

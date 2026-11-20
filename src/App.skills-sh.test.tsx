@@ -79,7 +79,7 @@ describe("skills.sh marketplace", () => {
     fireEvent.click(screen.getByRole("button", { name: "SkillHub" }));
     fireEvent.click(screen.getByRole("button", { name: "专家包" }));
     expect(within(screen.getByRole("group", { name: "市场类型" })).getByText("来源 · SkillHub")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "技能" }));
+    fireEvent.click(within(screen.getByRole("group", { name: "市场类型" })).getByRole("button", { name: "技能" }));
     expect(screen.getByRole("button", { name: "SkillHub" })).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(screen.getByRole("button", { name: "skills.sh" }));
     expect(screen.getByRole("button", { name: "skills.sh" })).toHaveAttribute("aria-pressed", "true");

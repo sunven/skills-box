@@ -283,7 +283,7 @@
 
 .topbar {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   min-height: 52px;
   align-items: center;
   gap: 16px;
@@ -320,7 +320,7 @@
 }
 
 .topbar-stamp {
-  flex: none;
+  flex: 0 1 auto;
   min-width: 0;
   max-width: 15rem;
   overflow: hidden;
@@ -594,7 +594,8 @@
 
 /* ---------- Scope switcher ---------- */
 
-.scope-switcher {
+.scope-switcher,
+.topbar-nav {
   position: relative;
   display: flex;
   min-width: 0;
@@ -604,10 +605,18 @@
   border-radius: 7px;
   padding: 2px;
   background: var(--muted);
+}
+
+.scope-switcher {
   anchor-name: --scope-switcher;
 }
 
-.scope-tab {
+.topbar-nav {
+  justify-self: center;
+}
+
+.scope-tab,
+.topbar-tab {
   display: inline-flex;
   height: 28px;
   align-items: center;
@@ -621,12 +630,14 @@
   transition: background-color 120ms ease, color 120ms ease;
 }
 
-.scope-tab:hover {
+.scope-tab:hover,
+.topbar-tab:hover {
   background: var(--raised);
   color: var(--foreground);
 }
 
-.scope-tab[aria-pressed="true"] {
+.scope-tab[aria-pressed="true"],
+.topbar-tab[aria-pressed="true"] {
   background: var(--accent);
   color: var(--primary-foreground);
   font-weight: 600;
@@ -2079,6 +2090,10 @@
 }
 
 @media (max-width: 1080px) {
+  .topbar .btn-label {
+    display: none;
+  }
+
   .rail-toggle {
     display: inline-flex;
   }
