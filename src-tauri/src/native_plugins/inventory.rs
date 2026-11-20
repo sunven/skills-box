@@ -486,7 +486,7 @@ pub fn load(
                     None
                 }
             })
-            .or(local)
+            .or_else(|| local.clone())
             .map(|p| p.to_string_lossy().into_owned());
         let read_only = if rt.host == Host::Codex
             && !config["config"]["plugins"][id].is_null()
@@ -500,9 +500,9 @@ pub fn load(
             Some("市场不可用，无法确认安装来源。".into())
         } else if market_row.is_some_and(|m| m.catalog_error.is_some()) {
             Some("市场目录读取不完整，请修复后重新读取。".into())
-        } else if local_root
+        } else if local
             .as_ref()
-            .is_some_and(|root| Path::new(root).join("package.json").exists())
+            .is_some_and(|root| root.join("package.json").exists())
         {
             Some("插件包含 Node 包清单；依赖安装副作用尚未验证，请在宿主中处理。".into())
         } else if source_missing && install_restriction(rt.host, &entry).is_none() {

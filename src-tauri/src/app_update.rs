@@ -334,7 +334,10 @@ impl AppUpdateService {
                     });
                     service.finish_restart(guards).await;
                 }
-                Ok((Err(error), _guards)) => service.fail(error),
+                Ok((Err(error), guards)) => {
+                    drop(guards);
+                    service.fail(error);
+                }
                 Err(error) => service.fail(AppError::app_update_install_failed(error)),
             }
         });

@@ -30,12 +30,35 @@ fn rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
     for entry in fs::read_dir(dir).unwrap() {
         let entry = entry.unwrap();
         let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        // These are the repo's separately declared #[cfg(test)] modules.
+        if name == "tests" || name == "tests.rs" || name.ends_with("_tests.rs") {
+            continue;
+        }
         if path.is_dir() {
             rust_sources(&path, out);
         } else if path.extension().is_some_and(|extension| extension == "rs") {
             out.push(path);
         }
     }
+}
+
+fn production_prefix(source: &str) -> &str {
+    // Only the trailing inline test module ends production code. A test-only
+    // import or `mod tests;` near the top must not hide the rest of the file.
+    source.split("#[cfg(test)]\nmod tests {").next().unwrap()
+}
+
+#[test]
+fn source_scan_keeps_product_code_after_test_imports_and_external_modules() {
+    let source = "#[cfg(test)]\nuse fixture::Helper;\n#[cfg(test)]\nmod tests;\nfn product() {}\n#[cfg(test)]\nmod tests { fn fixture() {} }";
+    assert!(production_prefix(source).contains("fn product()"));
+    assert!(!production_prefix(source).contains("fn fixture()"));
+    let mut sources = Vec::new();
+    rust_sources(&manifest_dir().join("src/native_plugins"), &mut sources);
+    assert!(sources.iter().any(|path| path.ends_with("inventory.rs")));
+    assert!(!sources.iter().any(|path| path.ends_with("tests.rs")));
 }
 
 #[test]
@@ -144,16 +167,20 @@ fn product_code_never_uses_skills_list_as_truth() {
     rust_sources(&manifest_dir().join("src"), &mut sources);
     for path in sources {
         let source = read(&path);
-        let product = source
-            .split("#[cfg(test)]")
-            .next()
-            .expect("source has a prefix");
+        let product = production_prefix(&source);
+        let relative = path.strip_prefix(manifest_dir().join("src")).unwrap();
+        let skills_commands = relative == Path::new("cli.rs") || relative.starts_with("cli");
         for (index, line) in product.lines().enumerate() {
             let code = line.trim_start();
             if code.starts_with("//") {
                 continue;
             }
-            for forbidden in ["skills list", "list -g --json", "\"list\""] {
+            // Native Plugin inventory legitimately calls `plugin list`.
+            // The bare operation token is restricted only in Skills builders.
+            for forbidden in ["skills list", "list -g --json"]
+                .into_iter()
+                .chain(skills_commands.then_some("\"list\""))
+            {
                 assert!(
                     !code.contains(forbidden),
                     "{}:{} contains forbidden CLI usage {forbidden:?}; `skills list` is diagnostic-only and must not be a data source",
@@ -171,10 +198,7 @@ fn no_shell_is_used_outside_the_debug_fake_cli() {
     rust_sources(&manifest_dir().join("src"), &mut sources);
     for path in sources {
         let source = read(&path);
-        let product = source
-            .split("#[cfg(test)]")
-            .next()
-            .expect("source has a prefix");
+        let product = production_prefix(&source);
         let is_fake_executor = path.ends_with("process/tokio_executor.rs");
         let shell_mentions =
             product.matches("/bin/sh").count() + product.matches("Command::new(\"sh\")").count();
@@ -312,16 +336,14 @@ fn command_builders_only_use_the_approved_skills_flags() {
     // by unit tests do not count as product usage.
     let files = [
         "src/cli.rs",
+        "src/cli/scoped.rs",
         "src/tasks/install.rs",
         "src/tasks/update.rs",
         "src/tasks/uninstall.rs",
     ];
     for file in files {
         let source = read(manifest_dir().join(file));
-        let product = source
-            .split("#[cfg(test)]")
-            .next()
-            .expect("source has a prefix");
+        let product = production_prefix(&source);
         for forbidden in [
             "\"list\"",
             "\"upgrade\"",

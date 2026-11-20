@@ -99,6 +99,31 @@ fn blocks_cross_scope_removal_and_shared_plugin_changes() {
     assert!(operations::arguments(&request(Host::Claude, Action::Enable, "demo@team"), &o).is_ok());
 }
 #[test]
+fn sync_allows_unused_catalog_removal_but_preserves_installed_and_configured_plugins() {
+    for host in [Host::Claude, Host::Codex] {
+        let mut before = observation(host);
+        let mut after = observation(host);
+        after.snapshot.plugins.clear();
+        let r = request(host, Action::SyncMarket, "team");
+        let out = Output {
+            success: true,
+            value: None,
+            diagnostic: String::new(),
+        };
+        assert!(!operations::postcondition(&r, &before, &after, &out));
+        before.snapshot.plugins[0].installation_state = "absent".into();
+        before.snapshot.plugins[0].installations.clear();
+        assert!(!operations::postcondition(&r, &before, &after, &out));
+        before.snapshot.plugins[0].user_enabled = None;
+        assert!(operations::postcondition(&r, &before, &after, &out));
+
+        let before = observation(host);
+        let mut after = observation(host);
+        after.snapshot.plugins[0].user_enabled = Some(true);
+        assert!(!operations::postcondition(&r, &before, &after, &out));
+    }
+}
+#[test]
 fn unknown_response_cannot_be_success_and_partial_writes_are_preserved() {
     let before = observation(Host::Claude);
     let mut after = observation(Host::Claude);
@@ -909,6 +934,44 @@ async fn local_source_changes_invalidate_confirmation() {
     assert_eq!(outcome.status, "conflict");
     assert!(!outcome.executed);
     assert!(!rt.root.join("started").exists());
+}
+
+#[tokio::test]
+async fn plugin_update_checks_new_source_instead_of_old_installation() {
+    let (temp, service, rt) = fake_service();
+    let old = temp.path().join("installed-old");
+    fs::create_dir_all(old.join(".claude-plugin")).unwrap();
+    fs::write(
+        old.join(".claude-plugin/plugin.json"),
+        r#"{"name":"demo","version":"1.0.0"}"#,
+    )
+    .unwrap();
+    let records_path = rt.root.join("plugins/installed_plugins.json");
+    let mut records: serde_json::Value =
+        serde_json::from_slice(&fs::read(&records_path).unwrap()).unwrap();
+    records["plugins"]["demo@skills-box-verification"][0]["installPath"] = json!(old);
+    fs::write(records_path, records.to_string()).unwrap();
+    fs::write(
+        temp.path().join("market/demo/package.json"),
+        r#"{"name":"demo"}"#,
+    )
+    .unwrap();
+    let obs = service.observation(&rt).unwrap();
+    assert_eq!(obs.snapshot.plugins[0].local_root.as_deref(), old.to_str());
+    assert!(
+        obs.snapshot.plugins[0]
+            .install_blocked_reason
+            .as_deref()
+            .unwrap()
+            .contains("Node")
+    );
+    assert!(
+        operations::arguments(
+            &request(Host::Claude, Action::Update, "demo@skills-box-verification"),
+            &obs
+        )
+        .is_err()
+    );
 }
 
 #[tokio::test]

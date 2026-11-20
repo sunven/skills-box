@@ -852,27 +852,6 @@ fn diagnostic(error: &AppError) -> String {
         None => error.message.clone(),
     }
 }
-/// The pinned CLI uses a sanitized directory/lock key while discovery sees
-/// metadata names. Occupancy and actual metadata both participate in projection.
-fn install_directory_name(name: &str) -> String {
-    let mut value = String::new();
-    let mut replacing = false;
-    for c in name.to_lowercase().chars() {
-        if c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_') {
-            value.push(c);
-            replacing = false;
-        } else if !replacing {
-            value.push('-');
-            replacing = true;
-        }
-    }
-    let name = value.trim_matches(['.', '-']);
-    if name.is_empty() {
-        "unnamed-skill".into()
-    } else {
-        name.chars().take(255).collect()
-    }
-}
 fn installation(
     p: &Projection,
     skills: Option<&[SkillIdentity]>,
@@ -882,7 +861,7 @@ fn installation(
     let (Some(entries), Some(skills)) = (&p.entries, skills) else {
         return InstallationStatus::Unknown;
     };
-    let disk_name = install_directory_name(name);
+    let disk_name = crate::cli::install_directory_name(name);
     let matches: Vec<_> = skills
         .iter()
         .filter(|s| {

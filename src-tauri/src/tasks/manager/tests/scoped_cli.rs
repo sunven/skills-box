@@ -139,6 +139,47 @@ impl Fixture {
 }
 
 #[tokio::test]
+async fn normalized_install_conflicts_preserve_files_without_starting_cli_in_either_scope() {
+    for project in [false, true] {
+        for directory in [".agents/skills", ".qoder/skills"] {
+            let fixture = Fixture::new(true);
+            let (scope, root) = if project {
+                (fixture.scope.clone(), fixture.root.clone())
+            } else {
+                (ScopeId::global(), fixture.paths.home().to_path_buf())
+            };
+            let occupied = root.join(directory).join("my-skill");
+            fs::create_dir_all(&occupied).unwrap();
+            fs::write(occupied.join("local-notes.txt"), "preserve my work").unwrap();
+            let request = install_request(&["My Skill"], &["qoder"]);
+            let error = fixture
+                .manager
+                .preview_cli_commands(
+                    scope.clone(),
+                    CliCommandRequest::Install {
+                        request: request.clone(),
+                    },
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, ErrorCode::SkillConflict);
+            let (sink, _) = sink();
+            let error = fixture
+                .manager
+                .start_install(scope, request, sink)
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, ErrorCode::SkillConflict);
+            assert!(fixture.executor.calls().is_empty());
+            assert_eq!(
+                fs::read_to_string(occupied.join("local-notes.txt")).unwrap(),
+                "preserve my work"
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn project_install_command_verification_backup_and_baseline_share_scope() {
     let fixture = Fixture::new(true);
     let event = fixture.install().await;

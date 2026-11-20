@@ -375,7 +375,12 @@ pub fn postcondition(r: &Request, before: &Observation, after: &Observation, out
                     .snapshot
                     .plugins
                     .iter()
-                    .filter(|p| p.marketplace == r.target)
+                    .filter(|p| {
+                        p.marketplace == r.target
+                            && (p.installation_state != "absent"
+                                || !p.installations.is_empty()
+                                || p.user_enabled.is_some())
+                    })
                     .all(|p| {
                         next.plugins
                             .iter()

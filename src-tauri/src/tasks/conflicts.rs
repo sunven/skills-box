@@ -5,6 +5,7 @@
 //! installer and the preview reuse [`find_conflicts`].
 
 use std::collections::HashMap;
+use std::fs;
 
 use serde::Serialize;
 
@@ -18,6 +19,10 @@ use crate::scope_layout::ScopeLayout;
 pub struct ConflictInfo {
     pub management: ManagementState,
     pub source: Option<String>,
+    /// An exact-name retry can back up every occupied destination. Aliases and
+    /// filesystem entries omitted by the inventory must never use that bypass.
+    #[serde(skip)]
+    pub(crate) retryable: bool,
 }
 
 /// Look up existing skills by name. Returns only names that already exist as
@@ -38,34 +43,60 @@ pub fn find_conflicts(
     let catalog = layout.catalog(paths)?;
     let mut conflicts = HashMap::new();
     for name in names {
-        if let Some(located) = crate::inventory::locate_in_catalog(&catalog, name) {
-            let source = located.lock_entry.as_ref().map(|entry| {
-                crate::update_target::resolve_source(entry)
-                    .ok()
-                    .unwrap_or_else(|| entry.source.clone())
-            });
-            conflicts.insert(
-                name.clone(),
-                ConflictInfo {
-                    management: located.management,
-                    source,
-                },
-            );
-            continue;
+        super::install::validate_skill_name(name)?;
+        let destination = crate::cli::install_directory_name(name);
+        let located = crate::inventory::locate_in_catalog(&catalog, &destination);
+        // Retain the requested-name check as well as the CLI's directory/lock
+        // identity. The map stays keyed by the metadata name for the preview.
+        let mut conflict = [&destination, name].into_iter().find_map(|key| {
+            let located = crate::inventory::locate_in_catalog(&catalog, key);
+            let entry = catalog.lock.get(key);
+            let management = located
+                .as_ref()
+                .map(|skill| skill.management)
+                .or_else(|| entry.map(|_| ManagementState::Managed))?;
+            Some(ConflictInfo {
+                management,
+                source: entry.map(|entry| {
+                    crate::update_target::resolve_source(entry)
+                        .unwrap_or_else(|_| entry.source.clone())
+                }),
+                retryable: destination == *name,
+            })
+        });
+        // lstat catches case aliases, plain files and dangling symlinks even
+        // when no inventory row exists. The filesystem decides case equality.
+        for directory in std::iter::once(&layout.canonical_dir)
+            .chain(layout.agents.iter().map(|agent| &agent.skills_dir))
+        {
+            let path = directory.join(&destination);
+            match fs::symlink_metadata(&path) {
+                Ok(_) => {
+                    let backed_up = located.as_ref().is_some_and(|skill| {
+                        skill.canonical_path.as_ref() == Some(&path)
+                            || skill
+                                .attachments
+                                .iter()
+                                .any(|attachment| attachment.path == path)
+                    });
+                    let info = conflict.get_or_insert(ConflictInfo {
+                        management: ManagementState::Unmanaged,
+                        source: None,
+                        retryable: false,
+                    });
+                    info.retryable &= backed_up;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(AppError::skill_read_failed_context(
+                        &format!("无法检查安装目标 {}", path.display()),
+                        error,
+                    ));
+                }
+            }
         }
-        // Present in the strict scope lock but absent from the snapshot: a
-        // stale lock entry. Never install over it silently.
-        if let Some(entry) = catalog.lock.get(name) {
-            let source = crate::update_target::resolve_source(entry)
-                .ok()
-                .or_else(|| Some(entry.source.clone()));
-            conflicts.insert(
-                name.clone(),
-                ConflictInfo {
-                    management: ManagementState::Managed,
-                    source,
-                },
-            );
+        if let Some(conflict) = conflict {
+            conflicts.insert(name.clone(), conflict);
         }
     }
     Ok(conflicts)
@@ -145,6 +176,54 @@ mod tests {
     fn empty_name_list_skips_inventory_read() {
         let paths = AppPaths::new("/nonexistent/home", "/nonexistent/app-data");
         assert!(find_conflicts(&paths, &[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn normalized_destination_conflicts_with_existing_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(tmp.path().join("home"), tmp.path().join("data"));
+        write_skill(paths.home(), "my-skill");
+        let conflicts = find_conflicts(&paths, &["My Skill".into()]).unwrap();
+        assert_eq!(conflicts["My Skill"].management, ManagementState::Unmanaged);
+    }
+
+    #[test]
+    fn case_alias_conflicts_on_case_insensitive_filesystems() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(tmp.path().join("home"), tmp.path().join("data"));
+        write_skill(paths.home(), "Alpha");
+        if !paths.canonical_skills_dir().join("alpha").exists() {
+            return; // This filesystem keeps the two destinations separate.
+        }
+        assert!(
+            find_conflicts(&paths, &["alpha".into()])
+                .unwrap()
+                .contains_key("alpha")
+        );
+    }
+
+    #[test]
+    fn destination_occupancy_does_not_require_an_inventory_row() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(tmp.path().join("home"), tmp.path().join("data"));
+        let agent = crate::inventory::AgentDir {
+            id: "claude-code".into(),
+            display_name: "Claude Code".into(),
+            universal: false,
+            skills_dir: paths.home().join(".claude/skills"),
+        };
+        fs::create_dir_all(paths.canonical_skills_dir()).unwrap();
+        fs::create_dir_all(&agent.skills_dir).unwrap();
+        fs::write(paths.canonical_skills_dir().join("my-skill"), "local file").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("missing", agent.skills_dir.join("other-skill")).unwrap();
+        let layout = ScopeLayout::global(&paths, vec![agent]);
+        let conflicts =
+            super::find_conflicts(&paths, &layout, &["My Skill".into(), "Other Skill".into()])
+                .unwrap();
+        assert!(conflicts.contains_key("My Skill"));
+        #[cfg(unix)]
+        assert!(conflicts.contains_key("Other Skill"));
     }
 
     #[test]

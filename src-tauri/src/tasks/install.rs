@@ -102,6 +102,16 @@ pub fn validate_request(
     layout.ensure_mutation_ready()?;
     let source = validate_source(&request.source)?;
     let skills = validate_skill_names(&request.skills)?;
+    let mut destinations = HashMap::new();
+    for name in &skills {
+        let destination = crate::cli::install_directory_name(name);
+        if let Some(previous) = destinations.insert(destination.clone(), name) {
+            return Err(AppError::skill_conflict(
+                name,
+                format!("与「{previous}」写入同一目录：{destination}"),
+            ));
+        }
+    }
     let (agent_ids, targets) = if layout.is_global() {
         validate_agents(paths, &request.agents)?
     } else {
@@ -465,6 +475,7 @@ pub fn conflicts_for(
         if let Some(conflict) = conflicts.get(name) {
             let retryable_managed =
                 retry_source.is_some()
+                    && conflict.retryable
                     && conflict.management == ManagementState::Managed
                     && conflict.source.as_deref().zip(retry_source).is_some_and(
                         |(existing, retry)| {
@@ -1457,6 +1468,29 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn retry_rejects_a_normalized_alias_that_would_not_be_backed_up() {
+        let (_tmp, paths) = fixture();
+        install_state(&paths, "my-skill", None, false);
+        write_lock(&paths, &["my-skill"]);
+        assert_eq!(
+            conflicts_for(&paths, &["My Skill".into()], Some("acme/skills"))
+                .unwrap()
+                .expect("alias must not bypass the backup")
+                .code,
+            ErrorCode::SkillConflict
+        );
+    }
+
+    #[test]
+    fn install_rejects_selected_names_sharing_one_cli_destination() {
+        let (_tmp, paths) = fixture();
+        for names in [["My Skill", "my-skill"], ["Alpha", "alpha"]] {
+            let error = validate_request(&paths, &request("acme/skills", &names, &[])).unwrap_err();
+            assert_eq!(error.code, ErrorCode::SkillConflict);
+        }
     }
 
     #[test]

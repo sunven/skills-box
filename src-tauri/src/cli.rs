@@ -21,6 +21,28 @@ pub use scoped::ScopedCli;
 /// npm package selector shared by environment probes, execution and previews.
 pub const CLI_VERSION: &str = "latest";
 
+/// Directory and lock key written by `skills add`, distinct from the metadata
+/// name passed to `-s`. Discovery and install collision checks must agree.
+pub(crate) fn install_directory_name(name: &str) -> String {
+    let mut value = String::new();
+    let mut replacing = false;
+    for c in name.to_lowercase().chars() {
+        if c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_') {
+            value.push(c);
+            replacing = false;
+        } else if !replacing {
+            value.push('-');
+            replacing = true;
+        }
+    }
+    let name = value.trim_matches(['.', '-']);
+    if name.is_empty() {
+        "unnamed-skill".into()
+    } else {
+        name.chars().take(255).collect()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CliRuntime {
     /// Absolute `<node_dir>/npx` path.

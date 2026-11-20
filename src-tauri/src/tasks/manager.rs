@@ -1638,6 +1638,7 @@ mod tests {
                 ConflictInfo {
                     management: crate::inventory::ManagementState::Managed,
                     source: Some("acme/skills".to_string()),
+                    retryable: true,
                 },
             )]),
             Duration::from_secs(60),

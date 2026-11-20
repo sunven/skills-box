@@ -307,6 +307,41 @@ async fn dropping_request_does_not_release_live_installation_and_failure_release
 }
 
 #[tokio::test]
+async fn failed_installation_releases_guards_before_waiting_to_publish_error() {
+    let f = Fixture::new();
+    f.candidate().await;
+    f.driver
+        .release
+        .install_failure
+        .store(true, Ordering::SeqCst);
+    f.driver.release.download_gate.add_permits(1);
+    f.service.update().unwrap();
+    f.driver.release.entered_install.notified().await;
+
+    // Pause publication at its real mutex, so a late guard drop cannot pass
+    // merely because the worker happened to run before the assertion.
+    let released = {
+        let _state = f.service.0.state.lock().unwrap();
+        f.driver.release.finish_install();
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            if f.tasks.try_acquire_mutation().is_ok() && f.service.configuration_write().is_ok() {
+                break true;
+            }
+            if std::time::Instant::now() >= deadline {
+                break false;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    };
+    assert!(
+        released,
+        "failed installation retained guards until error publication"
+    );
+    wait_for(&f.service, Phase::Error).await;
+}
+
+#[tokio::test]
 async fn disabled_driver_never_starts_a_real_check() {
     let f = Fixture::new();
     f.service.configure(f.driver.clone(), false);
