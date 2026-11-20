@@ -251,22 +251,35 @@
   align-items: center;
   gap: 8px;
   border-bottom: 1px solid var(--border);
-  padding-right: 8px;
+  /* Leave the native macOS window controls clear. */
+  padding: 0 8px 0 80px;
   background: var(--raised);
   user-select: none;
   -webkit-user-select: none;
 }
 
-.app-titlebar-drag {
+.app-titlebar-name {
   display: flex;
-  flex: 1;
+  flex: none;
   height: 100%;
   align-items: center;
-  /* Leave the native macOS window controls clear. */
-  padding-left: 80px;
   color: var(--muted-foreground);
   font-size: 12px;
   font-weight: 600;
+}
+
+.app-titlebar-drag {
+  flex: 1;
+  height: 100%;
+}
+
+.app-titlebar .titlebar-back {
+  height: 24px;
+  flex: none;
+  gap: 4px;
+  border-radius: 4px;
+  padding: 0 6px;
+  font-size: 12px;
 }
 
 .app-titlebar .titlebar-settings {
@@ -2577,7 +2590,6 @@
 .marketplace-detail-page { flex: 1; min-height: 0; min-width: 0; overflow-y: auto; background: var(--card); scrollbar-gutter: stable both-edges; }
 .marketplace-detail-bar { position: sticky; top: 0; z-index: 2; border-bottom: 1px solid var(--border); background: var(--card); }
 .marketplace-detail-bar-inner { display: flex; align-items: center; gap: 20px; max-width: 1024px; margin: 0 auto; padding: 12px 40px; }
-.marketplace-detail-bar-inner > button { flex-shrink: 0; }
 .marketplace-detail-bar-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--muted-foreground); }
 .marketplace-detail-action { display: flex; align-items: center; gap: 14px; margin-left: auto; flex-shrink: 0; }
 .marketplace-detail-target { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted-foreground); font-size: 12px; }

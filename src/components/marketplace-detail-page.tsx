@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, ExternalLink } from "lucide-react";
+import { ExternalLink } from "lucide-react";
+import { TitlebarBack } from "./app-titlebar";
 import { asAppError, fallbackError, getMarketplaceSkill, openExternalUrl } from "../lib/api";
 import { marketplaceAddress, marketplaceKey, type MarketplaceSkill } from "../lib/marketplace";
 import type { InventorySnapshot, ScopeId } from "../lib/types";
@@ -11,6 +12,7 @@ import { MarketplaceInstallDialog } from "./marketplace-install-dialog";
 import { MutationError } from "./mutation/mutation-error";
 
 interface Props {
+  active?: boolean;
   summary: MarketplaceSkill;
   scope: ScopeId;
   scopeLabel: string;
@@ -22,7 +24,7 @@ interface Props {
 }
 
 export function MarketplaceDetailPage({
-  summary, scope, scopeLabel, snapshot, disabled, onBack, onView, onInstallOpenChange,
+  active = true, summary, scope, scopeLabel, snapshot, disabled, onBack, onView, onInstallOpenChange,
 }: Props) {
   const headingRef = useRef<HTMLHeadingElement>(null);
   const actionRef = useRef<HTMLButtonElement>(null);
@@ -64,13 +66,10 @@ export function MarketplaceDetailPage({
 
   return (
     <>
+      <TitlebarBack active={active} label="返回列表" onBack={onBack} />
       <main className="marketplace-detail-page" aria-labelledby="marketplace-detail-title" inert={installTarget !== null}>
         <div className="marketplace-detail-bar">
           <div className="marketplace-detail-bar-inner">
-            <Button variant="ghost" size="sm" onClick={onBack}>
-              <ArrowLeft aria-hidden="true" />
-              返回列表
-            </Button>
             <span className="marketplace-detail-bar-name" title={skill.name}>{skill.name}</span>
             <div className="marketplace-detail-action">
               <span className="marketplace-detail-target" aria-live="polite">安装到：{scopeLabel}</span>

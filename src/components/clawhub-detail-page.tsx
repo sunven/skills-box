@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft } from "lucide-react";
+import { TitlebarBack } from "./app-titlebar";
 import {
   asAppError,
   fallbackError,
@@ -95,6 +95,7 @@ export function ClawHubDetailPage({
 
   return (
     <>
+      <TitlebarBack active={active} label="返回列表" onBack={onBack} />
       <main
         className="marketplace-detail-page"
         aria-labelledby="clawhub-detail-title"
@@ -102,10 +103,6 @@ export function ClawHubDetailPage({
       >
         <div className="marketplace-detail-bar">
           <div className="marketplace-detail-bar-inner">
-            <Button variant="ghost" size="sm" onClick={onBack}>
-              <ArrowLeft aria-hidden="true" />
-              返回列表
-            </Button>
             <span className="marketplace-detail-bar-name" title={name}>
               {name}
             </span>

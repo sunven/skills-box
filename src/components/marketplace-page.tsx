@@ -298,6 +298,7 @@ function MarketplaceSkillsPage({ active = true, scope, scopeLabel, snapshot, dis
     </main>
     {selected ? (
       <MarketplaceDetailPage
+        active={active}
         key={marketplaceKey(selected.coordinate)}
         summary={selected}
         scope={scope}

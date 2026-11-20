@@ -151,7 +151,7 @@ describe("ClawHub detail", () => {
     expect(list).not.toBeVisible();
     const searches = backend.count("search_clawhub_skills");
 
-    fireEvent.click(within(main).getByRole("button", { name: "返回列表" }));
+    fireEvent.click(within(screen.getByRole("toolbar", { name: "窗口标题栏" })).getByRole("button", { name: "返回列表" }));
     await waitFor(() =>
       expect(screen.queryByRole("main", { name: "Weather" })).not.toBeInTheDocument(),
     );

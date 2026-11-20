@@ -1,4 +1,4 @@
-import { ArrowLeft, ArrowUpCircle, Download, RefreshCw, SlidersHorizontal } from "lucide-react";
+import { ArrowUpCircle, Download, RefreshCw, SlidersHorizontal } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button } from "./ui/button";
 import type { AppError, UpdateCheckReport } from "../lib/types";
@@ -130,7 +130,7 @@ export function AppHeader({
       </nav>
 
       <div className="topbar-actions">
-        {settingsOpen || discoveryOpen || marketplaceOpen || pluginsOpen ? <Button variant="ghost" size="sm" onClick={onReturnToSkills}><ArrowLeft aria-hidden="true" />返回 skills</Button> : <>
+        {skillsOpen ? <>
         <span
           data-testid="last-update-check"
           data-error={!checkingUpdates && updateError ? "true" : undefined}
@@ -189,7 +189,7 @@ export function AppHeader({
           <Download className="size-3.5" aria-hidden="true" />
           安装 skill
         </Button>
-        </>}
+        </> : null}
       </div>
     </header>
   );

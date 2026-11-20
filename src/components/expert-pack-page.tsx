@@ -20,6 +20,7 @@ import { Input } from "./ui/input";
 import { MutationError } from "./mutation/mutation-error";
 import { MarketplaceDetailPage } from "./marketplace-detail-page";
 import { ExpertPackInstallDialog } from "./expert-pack-install-dialog";
+import { TitlebarBack } from "./app-titlebar";
 export interface ExpertPackPageProps {
   scope: ScopeId;
   scopeLabel: string;
@@ -136,18 +137,14 @@ export function ExpertPackPage({
         <div className="discovery-content space-y-5">
           {slug ? (
             <>
-              <div className="flex items-center justify-between gap-4">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    setSlug(null);
-                    setForget(false);
-                  }}
-                >
-                  <ArrowLeft />
-                  返回专家包列表
-                </Button>
+              <TitlebarBack
+                label="返回专家包列表"
+                onBack={() => {
+                  setSlug(null);
+                  setForget(false);
+                }}
+              />
+              <div className="flex items-center justify-end gap-4">
                 <div className="flex items-center gap-3">
                   <span className="text-sm text-muted-foreground">
                     {scopeLabel}

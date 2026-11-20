@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Search } from "lucide-react";
+import { Search } from "lucide-react";
+import { TitlebarBack } from "./app-titlebar";
 import { asAppError, getSkillsShSnapshot, listSkillsSh } from "../lib/api";
 import { useMarketplaceSession } from "../hooks/use-marketplace-session";
 import { skillsShInstallation, skillsShKey, skillsShViews, type MarketplaceInstallSeed, type SkillsShListing, type SkillsShSkill, type SkillsShSnapshot, type SkillsShView } from "../lib/skills-sh";
@@ -143,8 +144,8 @@ function SkillsShDetail({ skill, metric, onBack, ...props }: Props & { skill: Sk
   const { installed, collision } = skillsShInstallation(skill, props.snapshot);
   useEffect(() => { heading.current?.focus({ preventScroll: true }); }, []);
   return <main className="marketplace-detail-page" aria-labelledby="skills-sh-detail-title">
+    <TitlebarBack active={props.active} label="返回列表" onBack={onBack} />
     <div className="marketplace-detail-bar"><div className="marketplace-detail-bar-inner">
-      <Button variant="ghost" size="sm" onClick={onBack}><ArrowLeft aria-hidden="true" />返回列表</Button>
       <span className="marketplace-detail-bar-name">{skill.name}</span>
       <div className="marketplace-detail-action">
         <span className="marketplace-detail-target">安装到：{props.scopeLabel}</span>

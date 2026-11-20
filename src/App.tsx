@@ -19,7 +19,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { StaleRecordsDialog } from "./components/stale-records-dialog";
 import { AnomalyDialog } from "./components/anomaly-panel";
 import { AppHeader } from "./components/app-header";
-import { AppTitlebar } from "./components/app-titlebar";
+import { AppTitlebar, TitlebarNavigationProvider } from "./components/app-titlebar";
 import { DetailPane, type DetailEntry } from "./components/detail-pane";
 import { EnvironmentBanner } from "./components/environment-banner";
 import { ExitDialog } from "./components/exit-dialog";
@@ -514,12 +514,21 @@ function App() {
     setFiltersOpen(false);
   };
 
+  const handleReturnToSkills = () => {
+    setPluginsOpen(false);
+    setMarketplaceOpen(false);
+    setSettingsOpen(false);
+    setDiscoveryEntry(null);
+  };
+
   return (
+    <TitlebarNavigationProvider>
     <ExpertPackProvider scope={scope} onOpen={(slug) => { setPackEntry({ slug, key: Date.now() }); setPluginsOpen(false); setMarketplaceOpen(true); setSettingsOpen(false); setDiscoveryEntry(null); setDetailEntry(null); }}>
     <div className="app-shell text-foreground">
       <AppTitlebar
         settingsOpen={settingsOpen}
         disabled={marketplaceInstallOpen}
+        onBack={settingsOpen || discoveryEntry || marketplaceOpen || pluginsOpen ? handleReturnToSkills : undefined}
         onOpenSettings={() => { setPluginsOpen(false); setMarketplaceOpen(false); setSettingsSection("github"); setSettingsOpen(true); setDiscoveryEntry(null); }}
       />
       {appUpdate.critical ? (
@@ -535,7 +544,7 @@ function App() {
         discoveryOpen={discoveryEntry !== null}
         discoveryCount={discovery.query.data?.unreadCount ?? 0}
         onOpenDiscovery={() => { setPluginsOpen(false); setMarketplaceOpen(false); setSettingsOpen(false); setDiscoveryEntry({ filter: "uninstalled", source: "all" }); }}
-        onReturnToSkills={() => { setPluginsOpen(false); setMarketplaceOpen(false); setSettingsOpen(false); setDiscoveryEntry(null); }}
+        onReturnToSkills={handleReturnToSkills}
         mutationsEnabled={mutationsEnabled}
         onInstall={() => openInstall()}
         updateReport={updateData}
@@ -842,6 +851,7 @@ function App() {
       />
     </div>
     </ExpertPackProvider>
+    </TitlebarNavigationProvider>
   );
 }
 

@@ -78,6 +78,13 @@ describe("expert packs", () => {
     await screen.findByRole("main", { name: marketplaceSkill.name });
     expect(backend.count("prepare_pack_install")).toBe(0);
     expect(backend.count("get_marketplace_cli")).toBe(0);
+    const titlebar = within(screen.getByRole("toolbar", { name: "窗口标题栏" }));
+    fireEvent.click(titlebar.getByRole("button", { name: "返回列表" }));
+    expect(screen.getByRole("heading", { name: "研究助理" })).toBeVisible();
+    fireEvent.click(titlebar.getByRole("button", { name: "返回专家包列表" }));
+    expect(screen.getByRole("textbox", { name: "搜索专家包" })).toHaveValue("研究");
+    fireEvent.click(titlebar.getByRole("button", { name: "返回 skills" }));
+    expect(titlebar.queryByRole("button", { name: /返回/ })).not.toBeInTheDocument();
   });
   it("shows adopted versions and adapted workflow then installs the pack with one task", async () => {
     const backend = setup({ autoTasks: true });

@@ -98,7 +98,11 @@ describe("SkillHub marketplace", () => {
     const opener = screen.getByRole("button", { name: marketplaceSkill.name });
     fireEvent.click(opener);
     const page = await screen.findByRole("main", { name: marketplaceSkill.name });
-    fireEvent.click(within(page).getByRole("button", { name: "返回列表" }));
+    expect(within(page).queryByRole("button", { name: "返回列表" })).not.toBeInTheDocument();
+    const titlebar = within(screen.getByRole("toolbar", { name: "窗口标题栏" }));
+    expect(titlebar.queryByRole("button", { name: "返回 skills" })).not.toBeInTheDocument();
+    fireEvent.click(titlebar.getByRole("button", { name: "返回列表" }));
+    expect(titlebar.getByRole("button", { name: "返回 skills" })).toBeEnabled();
     expect(list.scrollTop).toBe(420);
     expect(opener).toHaveFocus();
     expect(input).toHaveValue("draft not submitted");
@@ -142,6 +146,7 @@ describe("SkillHub marketplace", () => {
     within(page).getByRole("button", { name: "安装" }).focus();
     fireEvent.click(within(page).getByRole("button", { name: "安装" }));
     const dialog = await screen.findByRole("dialog", { name: `安装 · ${marketplaceSkill.name}` });
+    expect(within(screen.getByRole("toolbar", { name: "窗口标题栏" })).getByRole("button", { name: "返回列表" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "切换到全局" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "切换到全局" }));
     expect(backend.callsOf("set_active_scope").slice(-1)[0].payload.scope).toBe(scope);
