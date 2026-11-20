@@ -1,8 +1,8 @@
 use super::*;
 use crate::{
-    baseline::BaselineStore,
+    baseline::{BaselineStore, fingerprint_folder},
     cli::CliRuntimeProvider,
-    marketplace::{Coordinate, provider::Summary},
+    marketplace::{Coordinate, provider::Summary, records::Records},
     process::{CancelToken, ExecError, ProcessExecutor},
     scope::ScopeId,
     tasks::{
@@ -61,17 +61,21 @@ impl Fixture {
             requirements: vec![],
         };
         let plan = Plan {
+            publication: crate::tasks::publication::Plan {
+                name: detail.original_name.clone().unwrap(),
+                coordinate: detail.summary.coordinate.clone(),
+                layout,
+                targets,
+                previous: None,
+                previous_paths: None,
+                previous_fingerprint: None,
+            },
             detail,
             runtime: Runtime {
                 program: PathBuf::from("/fake/skillhub"),
                 env: BTreeMap::new(),
             },
             stage: StagingDirectory::new().unwrap(),
-            layout,
-            targets,
-            previous: None,
-            previous_paths: None,
-            previous_fingerprint: None,
             created_at: crate::time::now_ms(),
         };
         Self {
@@ -83,7 +87,7 @@ impl Fixture {
     fn downloaded(&self, plan: &Plan) -> ExecOutput {
         let root = fs::canonicalize(plan.stage.path())
             .unwrap()
-            .join(plan.detail.summary.coordinate.canonical());
+            .join(plan.publication.coordinate.canonical());
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join("SKILL.md"), &plan.detail.markdown).unwrap();
         fs::write(
@@ -91,26 +95,26 @@ impl Fixture {
             r#"{"version":"wrong-package-version"}"#,
         )
         .unwrap();
-        fs::write(plan.stage.path().join(".skills_store_lock.json"), serde_json::json!({"skills":{plan.detail.summary.coordinate.canonical():{"zip_url":format!("https://api.skillhub.cn/api/v1/download?slug={}&namespace={}&version={}",plan.detail.summary.coordinate.slug,plan.detail.summary.coordinate.namespace,plan.detail.summary.version),"version":"wrong-cli-version"}}}).to_string()).unwrap();
-        ExecOutput { code: Some(0), signal: None, stdout: serde_json::json!({"success":true,"slug":plan.detail.summary.coordinate.canonical(),"targetDir":root,"version":"newer-than-confirmed"}).to_string(), stderr: String::new(), duration: Duration::ZERO }
+        fs::write(plan.stage.path().join(".skills_store_lock.json"), serde_json::json!({"skills":{plan.publication.coordinate.canonical():{"zip_url":format!("https://api.skillhub.cn/api/v1/download?slug={}&namespace={}&version={}",plan.publication.coordinate.slug,plan.publication.coordinate.namespace,plan.detail.summary.version),"version":"wrong-cli-version"}}}).to_string()).unwrap();
+        ExecOutput { code: Some(0), signal: None, stdout: serde_json::json!({"success":true,"slug":plan.publication.coordinate.canonical(),"targetDir":root,"version":"newer-than-confirmed"}).to_string(), stderr: String::new(), duration: Duration::ZERO }
     }
     fn update(&self) -> Plan {
         let mut plan = self.plan.clone();
-        plan.previous = Records::read(&plan.layout.lock_path)
+        plan.publication.previous = Records::read(&plan.publication.layout.lock_path)
             .unwrap()
             .skills
             .get(plan.name())
             .cloned();
-        plan.previous_paths = Some(
+        plan.publication.previous_paths = Some(
             crate::tasks::uninstall::plan_uninstall(
                 &self.paths,
-                &plan.layout,
-                &plan.layout.scope.skill_id(plan.name()),
+                &plan.publication.layout,
+                &plan.publication.layout.scope.skill_id(plan.name()),
             )
             .unwrap(),
         );
-        plan.previous_fingerprint = Some(
-            fingerprint_folder(&plan.layout.canonical_dir.join(plan.name()))
+        plan.publication.previous_fingerprint = Some(
+            fingerprint_folder(&plan.publication.layout.canonical_dir.join(plan.name()))
                 .unwrap()
                 .content_hash,
         );
@@ -147,7 +151,7 @@ fn ctx(plan: &Plan, output: ExecOutput, action: TaskAction) -> SessionContext {
         cancel: CancelToken::new(),
         envelope: TaskEnvelope {
             action,
-            scope: plan.layout.scope.clone(),
+            scope: plan.publication.layout.scope.clone(),
             started_at: crate::time::now_ms(),
         },
         runtime: Arc::new(NoGitRuntime),
@@ -172,7 +176,7 @@ async fn marketplace_install_is_managed_scoped_and_preserves_confirmed_version_w
             ctx(&f.plan, output, TaskAction::Install),
             Action {
                 paths: f.paths.clone(),
-                layout: f.plan.layout.clone(),
+                layout: f.plan.publication.layout.clone(),
             },
             f.plan.clone(),
         )
@@ -181,11 +185,14 @@ async fn marketplace_install_is_managed_scoped_and_preserves_confirmed_version_w
             panic!("{result:?}");
         };
         assert_eq!(result.overall, TaskOverall::Success, "{:?}", result.skills);
-        let record =
-            Records::read(&f.plan.layout.lock_path).unwrap().skills["original-name"].clone();
+        let record = Records::read(&f.plan.publication.layout.lock_path)
+            .unwrap()
+            .skills["original-name"]
+            .clone();
         assert_eq!(record.version, "1.0.0");
         let located = f
             .plan
+            .publication
             .layout
             .locate(&f.paths, "original-name")
             .unwrap()
@@ -195,19 +202,19 @@ async fn marketplace_install_is_managed_scoped_and_preserves_confirmed_version_w
             crate::inventory::ManagementState::Managed
         );
         assert!(
-            f.plan.targets[0]
+            f.plan.publication.targets[0]
                 .skills_dir
                 .join("original-name")
                 .is_symlink()
         );
         assert!(
-            BaselineStore::for_scope(&f.paths, &f.plan.layout.scope)
+            BaselineStore::for_scope(&f.paths, &f.plan.publication.layout.scope)
                 .load("original-name")
                 .unwrap()
                 .verified
         );
         assert!(
-            !f.plan.layout.lock_path.exists(),
+            !f.plan.publication.layout.lock_path.exists(),
             "marketplace must not create Git lock"
         );
         if project {
@@ -231,8 +238,8 @@ async fn publication_baseline_and_attachment_failures_preserve_results_and_backu
                 for attachment_failure in [false, true] {
                     let mut f = Fixture::new(project);
                     let name = "original-name";
-                    let canonical = f.plan.layout.canonical_dir.join(name);
-                    let agent_dir = &f.plan.targets[0].skills_dir;
+                    let canonical = f.plan.publication.layout.canonical_dir.join(name);
+                    let agent_dir = &f.plan.publication.targets[0].skills_dir;
                     fs::create_dir_all(agent_dir).unwrap();
                     let attachment = agent_dir.join(name);
                     if updating {
@@ -246,10 +253,10 @@ async fn publication_baseline_and_attachment_failures_preserve_results_and_backu
                         // A new request resolves the current layout, including
                         // project Agent directories created by the first install.
                         let registry = crate::projects::ProjectRegistry::new(f.paths.clone());
-                        f.plan.layout = ScopeLayout::resolve_detected(
+                        f.plan.publication.layout = ScopeLayout::resolve_detected(
                             &f.paths,
                             &registry,
-                            &f.plan.layout.scope,
+                            &f.plan.publication.layout.scope,
                         )
                         .unwrap();
                     }
@@ -257,14 +264,15 @@ async fn publication_baseline_and_attachment_failures_preserve_results_and_backu
                     let update_plan = updating.then(|| {
                         let mut update = crate::tasks::update::plan_updates(
                             &f.paths,
-                            &f.plan.layout,
+                            &f.plan.publication.layout,
                             &[name.into()],
                         )
                         .unwrap();
                         update.items[0].marketplace_plan = Some(plan.clone());
                         update
                     });
-                    let baselines = BaselineStore::for_scope(&f.paths, &plan.layout.scope);
+                    let baselines =
+                        BaselineStore::for_scope(&f.paths, &plan.publication.layout.scope);
                     if baseline_failure {
                         baselines.clear(name).unwrap();
                         fs::create_dir_all(baselines.baseline_path(name)).unwrap();
@@ -293,7 +301,7 @@ async fn publication_baseline_and_attachment_failures_preserve_results_and_backu
                             context,
                             crate::tasks::update::UpdateAction::new(
                                 f.paths.clone(),
-                                f.plan.layout.clone(),
+                                f.plan.publication.layout.clone(),
                                 Duration::from_secs(5),
                             ),
                             update_plan,
@@ -304,7 +312,7 @@ async fn publication_baseline_and_attachment_failures_preserve_results_and_backu
                             context,
                             Action {
                                 paths: f.paths.clone(),
-                                layout: plan.layout.clone(),
+                                layout: plan.publication.layout.clone(),
                             },
                             plan.clone(),
                         )
@@ -342,7 +350,10 @@ async fn publication_baseline_and_attachment_failures_preserve_results_and_backu
                         "project={project} updating={updating} baseline_failure={baseline_failure} attachment_failure={attachment_failure}: {result:?}"
                     );
                     assert_eq!(
-                        Records::read(&plan.layout.lock_path).unwrap().skills[name].version,
+                        Records::read(&plan.publication.layout.lock_path)
+                            .unwrap()
+                            .skills[name]
+                            .version,
                         plan.detail.summary.version
                     );
                     assert_eq!(
@@ -387,8 +398,8 @@ fn publication_record_failure_stops_before_baseline_and_attachments() {
         let f = Fixture::new(project);
         let output = f.downloaded(&f.plan);
         let root = validate_staged(&f.plan, &output).unwrap();
-        fs::create_dir_all(&f.plan.layout.canonical_dir).unwrap();
-        let record_dir = f.plan.layout.lock_path.parent().unwrap();
+        fs::create_dir_all(&f.plan.publication.layout.canonical_dir).unwrap();
+        let record_dir = f.plan.publication.layout.lock_path.parent().unwrap();
         let permissions = fs::metadata(record_dir).unwrap().permissions();
         fs::set_permissions(record_dir, fs::Permissions::from_mode(0o555)).unwrap();
         let probe = record_dir.join("permission-probe");
@@ -412,6 +423,7 @@ fn publication_record_failure_stops_before_baseline_and_attachments() {
         assert!(outcome.warnings.is_empty());
         assert!(
             f.plan
+                .publication
                 .layout
                 .canonical_dir
                 .join(f.plan.name())
@@ -419,17 +431,22 @@ fn publication_record_failure_stops_before_baseline_and_attachments() {
                 .is_file()
         );
         assert!(
-            Records::read(&f.plan.layout.lock_path)
+            Records::read(&f.plan.publication.layout.lock_path)
                 .unwrap()
                 .skills
                 .is_empty()
         );
         assert!(
-            BaselineStore::for_scope(&f.paths, &f.plan.layout.scope)
+            BaselineStore::for_scope(&f.paths, &f.plan.publication.layout.scope)
                 .load(f.plan.name())
                 .is_none()
         );
-        assert!(!f.plan.targets[0].skills_dir.join(f.plan.name()).exists());
+        assert!(
+            !f.plan.publication.targets[0]
+                .skills_dir
+                .join(f.plan.name())
+                .exists()
+        );
     }
 }
 
@@ -440,16 +457,34 @@ fn marketplace_staging_failure_and_local_races_preserve_existing_installation() 
         .result
         .unwrap();
     let update = f.update();
-    let old = fs::read(f.plan.layout.canonical_dir.join("original-name/SKILL.md")).unwrap();
+    let old = fs::read(
+        f.plan
+            .publication
+            .layout
+            .canonical_dir
+            .join("original-name/SKILL.md"),
+    )
+    .unwrap();
     let mut failed = f.downloaded(&update);
     failed.code = Some(1);
     assert!(publish(&f.paths, &update, &failed).result.is_err());
     assert_eq!(
-        fs::read(f.plan.layout.canonical_dir.join("original-name/SKILL.md")).unwrap(),
+        fs::read(
+            f.plan
+                .publication
+                .layout
+                .canonical_dir
+                .join("original-name/SKILL.md")
+        )
+        .unwrap(),
         old
     );
     fs::write(
-        f.plan.layout.canonical_dir.join("original-name/local-edit"),
+        f.plan
+            .publication
+            .layout
+            .canonical_dir
+            .join("original-name/local-edit"),
         "edited",
     )
     .unwrap();
@@ -459,7 +494,10 @@ fn marketplace_staging_failure_and_local_races_preserve_existing_installation() 
             .is_err()
     );
     assert_eq!(
-        Records::read(&f.plan.layout.lock_path).unwrap().skills["original-name"].version,
+        Records::read(&f.plan.publication.layout.lock_path)
+            .unwrap()
+            .skills["original-name"]
+            .version,
         "1.0.0"
     );
 }
@@ -471,15 +509,18 @@ async fn marketplace_update_uses_pinned_command_and_uninstalls_natively_with_rec
         .result
         .unwrap();
     let update = f.update();
-    let mut plan =
-        crate::tasks::update::plan_updates(&f.paths, &f.plan.layout, &["original-name".into()])
-            .unwrap();
+    let mut plan = crate::tasks::update::plan_updates(
+        &f.paths,
+        &f.plan.publication.layout,
+        &["original-name".into()],
+    )
+    .unwrap();
     plan.items[0].marketplace_plan = Some(update.clone());
     let result = session::run(
         ctx(&update, f.downloaded(&update), TaskAction::Update),
         crate::tasks::update::UpdateAction::new(
             f.paths.clone(),
-            f.plan.layout.clone(),
+            f.plan.publication.layout.clone(),
             Duration::from_secs(5),
         ),
         plan,
@@ -490,11 +531,18 @@ async fn marketplace_update_uses_pinned_command_and_uninstalls_natively_with_rec
     };
     assert_eq!(result.overall, TaskOverall::Success, "{:?}", result.skills);
     assert_eq!(
-        Records::read(&f.plan.layout.lock_path).unwrap().skills["original-name"].version,
+        Records::read(&f.plan.publication.layout.lock_path)
+            .unwrap()
+            .skills["original-name"]
+            .version,
         "2.0.0"
     );
-    let uninstall =
-        crate::tasks::uninstall::plan_uninstall(&f.paths, &f.plan.layout, "original-name").unwrap();
+    let uninstall = crate::tasks::uninstall::plan_uninstall(
+        &f.paths,
+        &f.plan.publication.layout,
+        "original-name",
+    )
+    .unwrap();
     assert!(!uninstall.needs_cli());
     let mut context = ctx(&update, f.downloaded(&update), TaskAction::Uninstall);
     context.expected_commands = Some(vec![]);
@@ -502,7 +550,7 @@ async fn marketplace_update_uses_pinned_command_and_uninstalls_natively_with_rec
         context,
         crate::tasks::uninstall::UninstallAction::new(
             f.paths.clone(),
-            f.plan.layout.clone(),
+            f.plan.publication.layout.clone(),
             Duration::from_secs(5),
         ),
         uninstall,
@@ -513,37 +561,24 @@ async fn marketplace_update_uses_pinned_command_and_uninstalls_natively_with_rec
     };
     assert_eq!(result.overall, TaskOverall::Success, "{:?}", result.skills);
     assert!(
-        Records::read(&f.plan.layout.lock_path)
+        Records::read(&f.plan.publication.layout.lock_path)
             .unwrap()
             .skills
             .is_empty()
     );
-    assert!(!f.plan.layout.canonical_dir.join("original-name").exists());
+    assert!(
+        !f.plan
+            .publication
+            .layout
+            .canonical_dir
+            .join("original-name")
+            .exists()
+    );
     assert!(
         PathBuf::from(result.backup_path.unwrap())
             .join(crate::marketplace::records::FILE_NAME)
             .is_file()
     );
-}
-
-#[test]
-fn marketplace_rejects_names_conflicting_with_unmanaged_or_stale_installations_and_duplicate_coordinates()
- {
-    let f = Fixture::new(false);
-    let canonical = f.plan.layout.canonical_dir.join(f.plan.name());
-    fs::create_dir_all(&canonical).unwrap();
-    fs::write(canonical.join("SKILL.md"), &f.plan.detail.markdown).unwrap();
-    assert!(f.plan.check(&f.paths, &f.plan.layout).is_err());
-    fs::remove_dir_all(&canonical).unwrap();
-    publish(&f.paths, &f.plan, &f.downloaded(&f.plan))
-        .result
-        .unwrap();
-    fs::remove_file(f.plan.targets[0].skills_dir.join(f.plan.name())).unwrap();
-    fs::remove_dir_all(&canonical).unwrap();
-    assert!(f.plan.check(&f.paths, &f.plan.layout).is_err());
-    let mut renamed = f.plan.clone();
-    renamed.detail.original_name = Some("new-name".into());
-    assert!(renamed.check(&f.paths, &renamed.layout).is_err());
 }
 
 #[test]
@@ -553,7 +588,7 @@ fn marketplace_rejects_forged_success_wrong_content_and_symlink_packages_before_
         let mut output = f.downloaded(&f.plan);
         let root = fs::canonicalize(f.plan.stage.path())
             .unwrap()
-            .join(f.plan.detail.summary.coordinate.canonical());
+            .join(f.plan.publication.coordinate.canonical());
         match failure {
             "coordinate" => output.stdout = output.stdout.replace("@publisher/public-slug", "@other/public-slug"),
             "content" => fs::write(root.join("SKILL.md"), "---\nname: renamed\n---\n").unwrap(),
@@ -562,12 +597,19 @@ fn marketplace_rejects_forged_success_wrong_content_and_symlink_packages_before_
         }
         assert!(publish(&f.paths, &f.plan, &output).result.is_err());
         assert!(
-            Records::read(&f.plan.layout.lock_path)
+            Records::read(&f.plan.publication.layout.lock_path)
                 .unwrap()
                 .skills
                 .is_empty()
         );
-        assert!(!f.plan.layout.canonical_dir.join(f.plan.name()).exists());
+        assert!(
+            !f.plan
+                .publication
+                .layout
+                .canonical_dir
+                .join(f.plan.name())
+                .exists()
+        );
     }
 }
 
@@ -584,18 +626,18 @@ fn marketplace_record_changes_invalidate_inventory_and_stale_cleanup_never_write
             .as_deref(),
         Some("1.0.0")
     );
-    let mut records = Records::read(&f.plan.layout.lock_path).unwrap();
+    let mut records = Records::read(&f.plan.publication.layout.lock_path).unwrap();
     records.skills.get_mut("original-name").unwrap().version = "2.0.0-longer".into();
-    records.save(&f.plan.layout.lock_path).unwrap();
+    records.save(&f.plan.publication.layout.lock_path).unwrap();
     assert_eq!(
         read.snapshot(&ScopeId::Global).unwrap().skills[0]
             .source_version
             .as_deref(),
         Some("2.0.0-longer")
     );
-    fs::remove_file(f.plan.targets[0].skills_dir.join(f.plan.name())).unwrap();
-    fs::remove_dir_all(f.plan.layout.canonical_dir.join(f.plan.name())).unwrap();
-    let stale = crate::tasks::stale_records::list(&f.paths, &f.plan.layout).unwrap();
+    fs::remove_file(f.plan.publication.targets[0].skills_dir.join(f.plan.name())).unwrap();
+    fs::remove_dir_all(f.plan.publication.layout.canonical_dir.join(f.plan.name())).unwrap();
+    let stale = crate::tasks::stale_records::list(&f.paths, &f.plan.publication.layout).unwrap();
     assert!(stale[0].clean_reason.is_none(), "{:?}", stale);
     assert!(
         stale[0]
@@ -613,7 +655,7 @@ fn marketplace_record_changes_invalidate_inventory_and_stale_cleanup_never_write
     };
     let plan = crate::tasks::batch::plan(
         &f.paths,
-        &f.plan.layout,
+        &f.plan.publication.layout,
         request,
         "test".into(),
         Default::default(),
@@ -622,35 +664,53 @@ fn marketplace_record_changes_invalidate_inventory_and_stale_cleanup_never_write
     assert!(plan.targets[0].target.eligible);
     crate::tasks::stale_records::clean(
         &f.paths,
-        &f.plan.layout,
+        &f.plan.publication.layout,
         &plan,
         &plan.targets[0],
         &|_| {},
-        &|| crate::tasks::stale_records::verify(&f.paths, &f.plan.layout, &plan, &plan.targets[0]),
+        &|| {
+            crate::tasks::stale_records::verify(
+                &f.paths,
+                &f.plan.publication.layout,
+                &plan,
+                &plan.targets[0],
+            )
+        },
     )
     .unwrap();
-    crate::tasks::stale_records::advance(&f.plan.layout, &plan, "original-name", true, None)
-        .unwrap();
+    crate::tasks::stale_records::advance(
+        &f.plan.publication.layout,
+        &plan,
+        "original-name",
+        true,
+        None,
+    )
+    .unwrap();
     assert!(
-        Records::read(&f.plan.layout.lock_path)
+        Records::read(&f.plan.publication.layout.lock_path)
             .unwrap()
             .skills
             .is_empty()
     );
-    assert!(!f.plan.layout.lock_path.exists());
+    assert!(!f.plan.publication.layout.lock_path.exists());
 }
 
 #[test]
 fn removed_or_redirected_marketplace_stage_returns_a_changed_preview_error() {
     let f = Fixture::new(false);
     let command = f.plan.command();
+    fs::create_dir_all(f.plan.publication.layout.lock_path.parent().unwrap()).unwrap();
+    fs::write(&f.plan.publication.layout.lock_path, "corrupt Git lock").unwrap();
     fs::remove_dir_all(f.plan.stage.path()).unwrap();
     assert_eq!(f.plan.command(), command);
     assert_eq!(
-        f.plan.check(&f.paths, &f.plan.layout).unwrap_err().code,
+        f.plan
+            .check(&f.paths, &f.plan.publication.layout)
+            .unwrap_err()
+            .code,
         crate::error::ErrorCode::CliCommandChanged
     );
     std::os::unix::fs::symlink(f.paths.home(), f.plan.stage.path()).unwrap();
-    assert!(f.plan.check(&f.paths, &f.plan.layout).is_err());
+    assert!(f.plan.check(&f.paths, &f.plan.publication.layout).is_err());
     fs::remove_file(f.plan.stage.path()).unwrap();
 }

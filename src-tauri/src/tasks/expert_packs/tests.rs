@@ -89,17 +89,21 @@ impl Fixture {
         let downloads = members
             .iter()
             .map(|m| marketplace::Plan {
+                publication: crate::tasks::publication::Plan {
+                    name: m.name.clone(),
+                    coordinate: m.coordinate.clone(),
+                    layout: layout.clone(),
+                    targets: targets.clone(),
+                    previous: None,
+                    previous_paths: None,
+                    previous_fingerprint: None,
+                },
                 detail: m.detail(),
                 runtime: Runtime {
                     program: "/fake/skillhub".into(),
                     env: BTreeMap::new(),
                 },
                 stage: marketplace::StagingDirectory::new().unwrap(),
-                layout: layout.clone(),
-                targets: targets.clone(),
-                previous: None,
-                previous_paths: None,
-                previous_fingerprint: None,
                 created_at: crate::time::now_ms(),
             })
             .collect();
@@ -170,7 +174,14 @@ impl ProcessExecutor for Downloader {
         assert_eq!(command, plan.command());
         // No member may have been published while later downloads are running.
         for other in &self.plans {
-            assert!(!other.layout.canonical_dir.join(other.name()).exists());
+            assert!(
+                !other
+                    .publication
+                    .layout
+                    .canonical_dir
+                    .join(other.name())
+                    .exists()
+            );
         }
         let root = plan
             .stage

@@ -121,6 +121,21 @@ fn pinned_marketplace_update_retains_the_confirmed_release_without_git_runtime()
     let item = &pinned.items[0];
     let record = item.marketplace_record.as_ref().unwrap().clone();
     let plan = Plan {
+        publication: crate::tasks::publication::Plan {
+            name: item.name.clone(),
+            coordinate: record.coordinate.clone(),
+            layout: layout.clone(),
+            targets: item.targets.clone(),
+            previous: Some(record.clone()),
+            previous_paths: Some(
+                uninstall_task::plan_uninstall(&f.paths, &layout, "market-skill").unwrap(),
+            ),
+            previous_fingerprint: Some(
+                crate::baseline::fingerprint_folder(&item.canonical)
+                    .unwrap()
+                    .content_hash,
+            ),
+        },
         detail: Detail {
             summary: Summary {
                 coordinate: record.coordinate.clone(),
@@ -142,17 +157,6 @@ fn pinned_marketplace_update_retains_the_confirmed_release_without_git_runtime()
             env: BTreeMap::new(),
         },
         stage: StagingDirectory::new().unwrap(),
-        layout: layout.clone(),
-        targets: item.targets.clone(),
-        previous: Some(record),
-        previous_paths: Some(
-            uninstall_task::plan_uninstall(&f.paths, &layout, "market-skill").unwrap(),
-        ),
-        previous_fingerprint: Some(
-            crate::baseline::fingerprint_folder(&item.canonical)
-                .unwrap()
-                .content_hash,
-        ),
         created_at: crate::time::now_ms(),
     };
     pinned.items[0].marketplace_plan = Some(plan);

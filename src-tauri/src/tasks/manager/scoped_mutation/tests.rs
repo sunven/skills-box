@@ -492,17 +492,21 @@ async fn pack_holds_one_registered_task_and_write_permit_until_cancelled_downloa
     let (_, targets) =
         crate::tasks::install::validate_selected_agents(&paths, &layout, &agents).unwrap();
     let download = Download {
+        publication: crate::tasks::publication::Plan {
+            name: member.name.clone(),
+            coordinate: member.coordinate.clone(),
+            layout: layout.clone(),
+            targets,
+            previous: None,
+            previous_paths: None,
+            previous_fingerprint: None,
+        },
         detail: member.detail(),
         runtime: Runtime {
             program: "/fake/skillhub".into(),
             env: Default::default(),
         },
         stage: StagingDirectory::new().unwrap(),
-        layout: layout.clone(),
-        targets,
-        previous: None,
-        previous_paths: None,
-        previous_fingerprint: None,
         created_at: crate::time::now_ms(),
     };
     let snapshot = Snapshot {

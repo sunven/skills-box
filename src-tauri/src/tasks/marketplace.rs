@@ -3,24 +3,18 @@
 pub(crate) mod clawhub;
 
 use super::{
-    install::InstallTarget,
     manager::{TaskAction, TaskPhase, TaskSkillResult, TaskSkillStatus},
     publication::{self, Publication},
     session::*,
 };
 use crate::{
     backup::{BackupAction, BackupStore},
-    baseline::fingerprint_folder,
     cli::{
         CliRuntime,
         preview::{CliCommandEntry, CliCommandPreview, CommandPlan},
     },
     error::AppError,
-    marketplace::{
-        provider::Detail,
-        records::{Installation, Records},
-        runtime::Runtime,
-    },
+    marketplace::{provider::Detail, records::Installation, runtime::Runtime},
     paths::AppPaths,
     process::{CommandSpec, ExecOutput},
     scope_layout::ScopeLayout,
@@ -60,141 +54,35 @@ impl StagingDirectory {
 
 #[derive(Debug, Clone)]
 pub struct Plan {
+    pub(crate) publication: publication::Plan,
     pub detail: Detail,
     pub runtime: Runtime,
     pub stage: Arc<StagingDirectory>,
-    pub layout: ScopeLayout,
-    pub targets: Vec<InstallTarget>,
-    pub previous: Option<Installation>,
-    pub previous_paths: Option<super::uninstall::UninstallPlan>,
-    pub previous_fingerprint: Option<String>,
     pub created_at: u64,
 }
 impl Plan {
     pub fn name(&self) -> &str {
-        self.detail
-            .original_name
-            .as_deref()
-            .expect("validated original name")
+        &self.publication.name
     }
     pub fn command(&self) -> CommandSpec {
         self.runtime.install(
-            &self.detail.summary.coordinate,
+            &self.publication.coordinate,
             &self.detail.summary.version,
             self.stage.path(),
         )
     }
     pub fn check(&self, paths: &AppPaths, layout: &ScopeLayout) -> Result<(), AppError> {
-        self.stage.check()?;
-        layout.ensure_mutation_ready()?;
-        layout.lock()?;
-        if Records::read(&layout.lock_path)?
-            .skills
-            .values()
-            .any(|record| {
-                record.coordinate == self.detail.summary.coordinate && record.name != self.name()
-            })
-        {
-            return Err(AppError::skill_conflict(
-                self.name(),
-                "当前作用域已安装同一市场坐标，请查看已有安装。",
-            ));
-        }
-        if layout.scope != self.layout.scope
-            || layout.root != self.layout.root
-            || layout.project.as_ref().map(|p| &p.check_revision)
-                != self.layout.project.as_ref().map(|p| &p.check_revision)
-        {
-            return Err(AppError::batch_target_changed(
-                "项目目录已变化，请重新预览。",
-            ));
-        }
-        if Records::read(&layout.lock_path)?.skills.get(self.name()) != self.previous.as_ref() {
-            return Err(AppError::cli_command_changed());
-        }
-        if let Some(previous) = &self.previous_paths {
-            let current = super::uninstall::plan_uninstall(
-                paths,
-                layout,
-                &layout.scope.skill_id(self.name()),
-            )?;
-            if &current != previous
-                || Some(
-                    fingerprint_folder(&layout.canonical_dir.join(self.name()))
-                        .map_err(AppError::skill_fingerprint_failed)?
-                        .content_hash,
-                ) != self.previous_fingerprint
-            {
-                return Err(AppError::batch_target_changed(
-                    "本地内容或挂载已变化，请重新确认更新。",
-                ));
-            }
-        } else if let Some(error) =
-            super::install::conflicts_for(paths, layout, &[self.name().into()], None)?
-        {
-            return Err(error);
-        }
-        let ids = self
-            .targets
-            .iter()
-            .map(|t| t.id.clone())
-            .collect::<Vec<_>>();
-        // Updates may retain attachments to agents no longer detected. Their
-        // concrete path state is validated by the captured uninstall plan.
-        if self.previous.is_none() {
-            let (_, targets) = super::install::validate_selected_agents(paths, layout, &ids)?;
-            if targets != self.targets {
-                return Err(AppError::cli_command_changed());
-            }
-            let located = crate::inventory::LocatedSkill {
-                primary_path: Some(layout.canonical_dir.join(self.name())),
-                name: self.name().into(),
-                management: crate::inventory::ManagementState::Managed,
-                canonical_path: Some(layout.canonical_dir.join(self.name())),
-                lock_entry: Some(self.installation(String::new()).entry()),
-                attachments: vec![],
-            };
-            let agents = if layout.is_global() {
-                layout.agents.clone()
-            } else {
-                layout.install_targets(&crate::inventory::detected_agent_dirs(paths))
-            };
-            for target in self
-                .targets
-                .iter()
-                .filter(|t| t.needs_attachment(&layout.canonical_dir))
-            {
-                crate::attachment_target::resolve_publication_attach(
-                    &layout.canonical_dir,
-                    &located,
-                    &agents,
-                    &target.id,
-                    crate::attachment_target::TargetContext::for_layout(layout),
-                    false,
-                )?;
-            }
-        }
-        if let Some(root) = layout.project_root() {
-            crate::project_path::resolve(
-                &layout.canonical_dir,
-                root,
-                crate::project_path::Existence::AllowMissing,
-            )
-            .map_err(|e| AppError::path_invalid(format!("{e:?}")))?;
-        }
-        if fs::symlink_metadata(&layout.canonical_dir).is_ok_and(|m| m.file_type().is_symlink()) {
-            return Err(AppError::path_invalid("技能目录不能是符号链接"));
-        }
-        Ok(())
+        publication::check(paths, layout, self)
     }
     pub(super) fn installation(&self, hash: String) -> Installation {
         let now = httpdate::fmt_http_date(std::time::SystemTime::now());
         Installation {
             name: self.name().into(),
-            coordinate: self.detail.summary.coordinate.clone(),
+            coordinate: self.publication.coordinate.clone(),
             version: self.detail.summary.version.clone(),
             content_hash: hash,
             installed_at: self
+                .publication
                 .previous
                 .as_ref()
                 .map(|r| r.installed_at.clone())
@@ -205,23 +93,11 @@ impl Plan {
     }
 }
 impl publication::MarketplaceInstallation for Plan {
-    fn scope(&self) -> &crate::scope::ScopeId {
-        &self.layout.scope
+    fn publication(&self) -> &publication::Plan {
+        &self.publication
     }
-    fn name(&self) -> &str {
-        Plan::name(self)
-    }
-    fn targets(&self) -> &[InstallTarget] {
-        &self.targets
-    }
-    fn previous(&self) -> Option<&Installation> {
-        self.previous.as_ref()
-    }
-    fn previous_paths(&self) -> Option<&super::uninstall::UninstallPlan> {
-        self.previous_paths.as_ref()
-    }
-    fn check(&self, paths: &AppPaths, layout: &ScopeLayout) -> Result<(), AppError> {
-        Plan::check(self, paths, layout)
+    fn check_staged(&self) -> Result<(), AppError> {
+        self.stage.check()
     }
     fn installation(&self, content_hash: String) -> Installation {
         Plan::installation(self, content_hash)
@@ -234,7 +110,7 @@ impl CommandPlan for Plan {
     fn command_preview(&self, layout: &ScopeLayout, _: Option<&CliRuntime>) -> CliCommandPreview {
         CliCommandPreview::new(
             &layout.scope,
-            if self.previous.is_some() {
+            if self.publication.previous.is_some() {
                 "marketplace-update"
             } else {
                 "marketplace-install"
@@ -244,7 +120,7 @@ impl CommandPlan for Plan {
                 command: Some(crate::cli::commands::display_command(&self.command())),
                 reason: Some(format!(
                     "SkillHub {} · {}",
-                    self.detail.summary.coordinate.canonical(),
+                    self.publication.coordinate.canonical(),
                     self.detail.summary.version
                 )),
             }],
@@ -280,12 +156,12 @@ pub(crate) fn validate_staged(
         .map_err(|e| AppError::cli_invalid_json(e.to_string()))?;
     let root = fs::canonicalize(plan.stage.path())
         .map_err(|e| AppError::verify_failed(e.to_string()))?
-        .join(plan.detail.summary.coordinate.canonical());
+        .join(plan.publication.coordinate.canonical());
     if fs::canonicalize(&root).map_err(|e| AppError::verify_failed(e.to_string()))? != root {
         return Err(AppError::verify_failed("CLI 暂存目录包含间接路径。"));
     }
     if result["success"] != true
-        || result["slug"] != plan.detail.summary.coordinate.canonical()
+        || result["slug"] != plan.publication.coordinate.canonical()
         || result["targetDir"].as_str() != root.to_str()
     {
         return Err(AppError::verify_failed(
@@ -297,7 +173,7 @@ pub(crate) fn validate_staged(
             .map_err(|e| AppError::verify_failed(e.to_string()))?,
     )
     .map_err(|e| AppError::verify_failed(e.to_string()))?;
-    let download = lock["skills"][plan.detail.summary.coordinate.canonical()]["zip_url"]
+    let download = lock["skills"][plan.publication.coordinate.canonical()]["zip_url"]
         .as_str()
         .and_then(|url| reqwest::Url::parse(url).ok())
         .ok_or_else(|| AppError::verify_failed("CLI 未记录具体版本的下载地址。"))?;
@@ -305,8 +181,8 @@ pub(crate) fn validate_staged(
     if download.scheme() != "https"
         || download.host_str() != Some("api.skillhub.cn")
         || download.path() != "/api/v1/download"
-        || params.get("slug") != Some(&plan.detail.summary.coordinate.slug)
-        || params.get("namespace") != Some(&plan.detail.summary.coordinate.namespace)
+        || params.get("slug") != Some(&plan.publication.coordinate.slug)
+        || params.get("namespace") != Some(&plan.publication.coordinate.namespace)
         || params.get("version") != Some(&plan.detail.summary.version)
     {
         return Err(AppError::verify_failed(
@@ -375,6 +251,7 @@ impl MutationAction for Action {
             None,
             &[],
             &plan
+                .publication
                 .targets
                 .iter()
                 .map(|t| t.id.clone())
@@ -412,7 +289,11 @@ impl MutationAction for Action {
             &crate::logs::OperationEntry::new(
                 "install",
                 plan.name(),
-                plan.targets.iter().map(|t| t.id.clone()).collect(),
+                plan.publication
+                    .targets
+                    .iter()
+                    .map(|t| t.id.clone())
+                    .collect(),
                 super::update::status_label(status),
                 Some(backup.clone()),
                 error.clone(),

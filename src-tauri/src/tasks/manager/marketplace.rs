@@ -39,22 +39,29 @@ impl TaskManager {
                 crate::tasks::install::validate_selected_agents(&paths, &layout, &agents)?;
             let stage = StagingDirectory::new()?;
             let plan = Plan {
+                publication: crate::tasks::publication::Plan {
+                    name: detail
+                        .original_name
+                        .clone()
+                        .expect("validated original name"),
+                    coordinate: detail.summary.coordinate.clone(),
+                    layout,
+                    targets,
+                    previous: None,
+                    previous_paths: None,
+                    previous_fingerprint: None,
+                },
                 detail,
                 runtime,
                 stage,
-                layout,
-                targets,
-                previous: None,
-                previous_paths: None,
-                previous_fingerprint: None,
                 created_at: crate::time::now_ms(),
             };
-            plan.check(&paths, &plan.layout)?;
+            plan.check(&paths, &plan.publication.layout)?;
             Ok::<_, AppError>(plan)
         })
         .await
         .map_err(|e| AppError::task_internal("市场安装预览", e))??;
-        let commands = plan.command_preview(&plan.layout, None);
+        let commands = plan.command_preview(&plan.publication.layout, None);
         let preview = Preview {
             detail: plan.detail.clone(),
             commands: commands.clone(),
@@ -86,7 +93,7 @@ impl TaskManager {
             .get(&preview_id)
             .cloned()
             .ok_or_else(AppError::cli_command_changed)?;
-        if scope != plan.layout.scope
+        if scope != plan.publication.layout.scope
             || crate::time::now_ms().saturating_sub(plan.created_at) > 900_000
         {
             return Err(AppError::cli_command_changed());
@@ -97,11 +104,8 @@ impl TaskManager {
             return Err(AppError::cli_command_changed());
         }
         // Recheck exact release availability, never resolve latest after confirmation.
-        if provider::release_markdown(
-            &plan.detail.summary.coordinate,
-            &plan.detail.summary.version,
-        )
-        .await?
+        if provider::release_markdown(&plan.publication.coordinate, &plan.detail.summary.version)
+            .await?
             != plan.detail.markdown
         {
             return Err(AppError::cli_command_changed());
@@ -206,14 +210,21 @@ impl TaskManager {
                             .map_err(AppError::skill_fingerprint_failed)?
                             .content_hash;
                     let prepared = Plan {
+                        publication: crate::tasks::publication::Plan {
+                            name: detail
+                                .original_name
+                                .clone()
+                                .expect("validated original name"),
+                            coordinate: detail.summary.coordinate.clone(),
+                            layout: layout.clone(),
+                            targets: item_snapshot.targets.clone(),
+                            previous: Some(record.clone()),
+                            previous_paths: Some(previous_paths),
+                            previous_fingerprint: Some(previous_fingerprint),
+                        },
                         detail,
                         runtime,
                         stage: StagingDirectory::new()?,
-                        layout: layout.clone(),
-                        targets: item_snapshot.targets.clone(),
-                        previous: Some(record.clone()),
-                        previous_paths: Some(previous_paths),
-                        previous_fingerprint: Some(previous_fingerprint),
                         created_at: crate::time::now_ms(),
                     };
                     prepared.check(&paths, &layout)?;
@@ -342,7 +353,7 @@ impl TaskManager {
                     return Err(AppError::cli_command_changed());
                 }
                 if provider::release_markdown(
-                    &plan.detail.summary.coordinate,
+                    &plan.publication.coordinate,
                     &plan.detail.summary.version,
                 )
                 .await?
@@ -400,18 +411,18 @@ pub(super) fn apply_pinned_updates(
             .ok_or_else(AppError::cli_command_changed)?;
         if let Some(previous) = previous.marketplace_plan.clone() {
             previous.check(paths, layout)?;
-            if item.marketplace_record != previous.previous
+            if item.marketplace_record != previous.publication.previous
                 || Records::read(&layout.lock_path)?.skills.get(&item.name)
-                    != previous.previous.as_ref()
+                    != previous.publication.previous.as_ref()
             {
                 return Err(AppError::cli_command_changed());
             }
             item.marketplace_plan = Some(previous);
         } else if let Some(mut previous) = previous.clawhub_plan.clone() {
             previous.check(paths, layout)?;
-            if item.marketplace_record != previous.previous
+            if item.marketplace_record != previous.publication.previous
                 || Records::read(&layout.lock_path)?.skills.get(&item.name)
-                    != previous.previous.as_ref()
+                    != previous.publication.previous.as_ref()
             {
                 return Err(AppError::cli_command_changed());
             }

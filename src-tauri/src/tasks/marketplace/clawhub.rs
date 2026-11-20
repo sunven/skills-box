@@ -11,42 +11,35 @@ use crate::{
     cli::preview::{CliCommandEntry, CliCommandPreview, CommandPlan},
     error::AppError,
     logs::{OperationEntry, OperationLog},
-    marketplace::{Coordinate, clawhub, original_name, records::Records},
+    marketplace::{Coordinate, clawhub, original_name},
     paths::AppPaths,
     scope_layout::ScopeLayout,
     tasks::{
-        install::{InstallTarget, conflicts_for, validate_selected_agents},
+        install::{InstallTarget, validate_selected_agents},
         manager::{TaskAction, TaskPhase, TaskSkillResult, TaskSkillStatus},
         publication::{self, MarketplaceInstallation, Publication},
         session::{
             CancellationPolicy, FailedUnit, FailureDisposition, MutationAction, Preflight,
             Reporter, SessionProfile, StartOutcome, UnitOutcome, log_unit_cancelled, unit_failure,
         },
-        uninstall::UninstallPlan,
     },
 };
 use serde::Serialize;
-use std::{fs, sync::Arc, time::SystemTime};
+use std::{sync::Arc, time::SystemTime};
 
 #[derive(Debug, Clone)]
 pub struct Plan {
-    pub(crate) coordinate: Coordinate,
-    pub(crate) name: String,
+    pub(crate) publication: publication::Plan,
     pub(crate) version: String,
     pub(crate) canonical_url: String,
-    pub(crate) layout: ScopeLayout,
-    pub(crate) targets: Vec<InstallTarget>,
     pub(crate) staged: Option<Arc<clawhub::StagedPackage>>,
     pub(crate) github: Option<clawhub::github::GithubReference>,
-    pub(crate) previous: Option<crate::marketplace::records::Installation>,
-    pub(crate) previous_paths: Option<UninstallPlan>,
-    pub(crate) previous_fingerprint: Option<String>,
     pub(crate) created_at: u64,
 }
 
 impl Plan {
     pub(crate) fn name(&self) -> &str {
-        &self.name
+        &self.publication.name
     }
 
     pub(crate) fn attach_staged(&mut self, staged: clawhub::StagedPackage) {
@@ -65,115 +58,18 @@ impl Plan {
     }
 
     pub(crate) fn check(&self, paths: &AppPaths, layout: &ScopeLayout) -> Result<(), AppError> {
-        if let Some(staged) = &self.staged {
-            staged.check()?;
-        }
-        layout.ensure_mutation_ready()?;
-        layout.lock()?;
-        if Records::read(&layout.lock_path)?
-            .skills
-            .values()
-            .any(|record| record.coordinate == self.coordinate && record.name != self.name())
-        {
-            return Err(AppError::skill_conflict(
-                self.name(),
-                "当前作用域已安装同一市场坐标，请查看已有安装。",
-            ));
-        }
-        if layout.scope != self.layout.scope
-            || layout.root != self.layout.root
-            || layout.project.as_ref().map(|p| &p.check_revision)
-                != self.layout.project.as_ref().map(|p| &p.check_revision)
-        {
-            return Err(AppError::batch_target_changed(
-                "项目目录已变化，请重新预览。",
-            ));
-        }
-        if Records::read(&layout.lock_path)?.skills.get(self.name()) != self.previous.as_ref() {
-            return Err(AppError::cli_command_changed());
-        }
-        if let Some(previous) = &self.previous_paths {
-            let current = crate::tasks::uninstall::plan_uninstall(
-                paths,
-                layout,
-                &layout.scope.skill_id(self.name()),
-            )?;
-            if &current != previous
-                || Some(
-                    fingerprint_folder(&layout.canonical_dir.join(self.name()))
-                        .map_err(AppError::skill_fingerprint_failed)?
-                        .content_hash,
-                ) != self.previous_fingerprint
-            {
-                return Err(AppError::batch_target_changed(
-                    "本地内容或挂载已变化，请重新确认更新。",
-                ));
-            }
-        } else if let Some(error) = conflicts_for(paths, layout, &[self.name().into()], None)? {
-            return Err(error);
-        }
-        let ids = self
-            .targets
-            .iter()
-            .map(|target| target.id.clone())
-            .collect::<Vec<_>>();
-        if self.previous.is_none() {
-            let (_, targets) = validate_selected_agents(paths, layout, &ids)?;
-            if targets != self.targets {
-                return Err(AppError::cli_command_changed());
-            }
-            let located = crate::inventory::LocatedSkill {
-                primary_path: Some(layout.canonical_dir.join(self.name())),
-                name: self.name().into(),
-                management: crate::inventory::ManagementState::Managed,
-                canonical_path: Some(layout.canonical_dir.join(self.name())),
-                lock_entry: Some(self.installation(String::new()).entry()),
-                attachments: vec![],
-            };
-            let agents = if layout.is_global() {
-                layout.agents.clone()
-            } else {
-                layout.install_targets(&crate::inventory::detected_agent_dirs(paths))
-            };
-            for target in self
-                .targets
-                .iter()
-                .filter(|target| target.needs_attachment(&layout.canonical_dir))
-            {
-                crate::attachment_target::resolve_publication_attach(
-                    &layout.canonical_dir,
-                    &located,
-                    &agents,
-                    &target.id,
-                    crate::attachment_target::TargetContext::for_layout(layout),
-                    false,
-                )?;
-            }
-        }
-        if let Some(root) = layout.project_root() {
-            crate::project_path::resolve(
-                &layout.canonical_dir,
-                root,
-                crate::project_path::Existence::AllowMissing,
-            )
-            .map_err(|error| AppError::path_invalid(format!("{error:?}")))?;
-        }
-        if fs::symlink_metadata(&layout.canonical_dir)
-            .is_ok_and(|meta| meta.file_type().is_symlink())
-        {
-            return Err(AppError::path_invalid("技能目录不能是符号链接"));
-        }
-        Ok(())
+        publication::check(paths, layout, self)
     }
 
     fn installation(&self, hash: String) -> crate::marketplace::records::Installation {
         let now = httpdate::fmt_http_date(SystemTime::now());
         crate::marketplace::records::Installation {
-            name: self.name.clone(),
-            coordinate: self.coordinate.clone(),
+            name: self.publication.name.clone(),
+            coordinate: self.publication.coordinate.clone(),
             version: self.version.clone(),
             content_hash: hash,
             installed_at: self
+                .publication
                 .previous
                 .as_ref()
                 .map(|record| record.installed_at.clone())
@@ -192,23 +88,14 @@ impl Plan {
 }
 
 impl MarketplaceInstallation for Plan {
-    fn scope(&self) -> &crate::scope::ScopeId {
-        &self.layout.scope
+    fn publication(&self) -> &publication::Plan {
+        &self.publication
     }
-    fn name(&self) -> &str {
-        Plan::name(self)
-    }
-    fn targets(&self) -> &[InstallTarget] {
-        &self.targets
-    }
-    fn previous(&self) -> Option<&crate::marketplace::records::Installation> {
-        self.previous.as_ref()
-    }
-    fn previous_paths(&self) -> Option<&UninstallPlan> {
-        self.previous_paths.as_ref()
-    }
-    fn check(&self, paths: &AppPaths, layout: &ScopeLayout) -> Result<(), AppError> {
-        Plan::check(self, paths, layout)
+    fn check_staged(&self) -> Result<(), AppError> {
+        if let Some(staged) = &self.staged {
+            staged.check()?;
+        }
+        Ok(())
     }
     fn installation(&self, content_hash: String) -> crate::marketplace::records::Installation {
         Plan::installation(self, content_hash)
@@ -228,11 +115,11 @@ impl CommandPlan for Plan {
             &layout.scope,
             "clawhub-install",
             vec![CliCommandEntry {
-                name: self.name.clone(),
+                name: self.publication.name.clone(),
                 command: None,
                 reason: Some(format!(
                     "由应用原生下载并校验 ClawHub {} {}，不执行 CLI 命令。",
-                    self.coordinate.canonical(),
+                    self.publication.coordinate.canonical(),
                     self.reference_label()
                 )),
             }],
@@ -266,20 +153,22 @@ async fn build_plan(
     tokio::task::spawn_blocking(move || {
         let (_, targets) = validate_selected_agents(&paths, &layout, &agents)?;
         let plan = Plan {
-            coordinate,
-            name,
+            publication: crate::tasks::publication::Plan {
+                coordinate,
+                name,
+                layout,
+                targets,
+                previous: None,
+                previous_paths: None,
+                previous_fingerprint: None,
+            },
             version,
             canonical_url,
-            layout,
-            targets,
             staged: None,
             github,
-            previous: None,
-            previous_paths: None,
-            previous_fingerprint: None,
             created_at: crate::time::now_ms(),
         };
-        plan.check(&paths, &plan.layout)?;
+        plan.check(&paths, &plan.publication.layout)?;
         Ok(plan)
     })
     .await
@@ -347,21 +236,21 @@ pub(crate) async fn prepare_plan(
 pub(crate) async fn stage_for_start(plan: &Plan) -> Result<clawhub::StagedPackage, AppError> {
     match (
         &plan.github,
-        clawhub::resolve_install_target(&plan.coordinate).await?,
+        clawhub::resolve_install_target(&plan.publication.coordinate).await?,
     ) {
         (Some(expected), clawhub::InstallTarget::Github(current)) => {
             if current != *expected {
                 return Err(AppError::cli_command_changed());
             }
-            clawhub::ensure_installable_at(&plan.coordinate, None).await?;
+            clawhub::ensure_installable_at(&plan.publication.coordinate, None).await?;
             clawhub::github::stage(&current).await
         }
         (None, clawhub::InstallTarget::Archive(version)) => {
             if version != plan.version {
                 return Err(AppError::cli_command_changed());
             }
-            clawhub::ensure_installable(&plan.coordinate, &version).await?;
-            clawhub::stage_archive(&plan.coordinate, &version).await
+            clawhub::ensure_installable(&plan.publication.coordinate, &version).await?;
+            clawhub::stage_archive(&plan.publication.coordinate, &version).await
         }
         _ => Err(AppError::cli_command_changed()),
     }
@@ -437,20 +326,22 @@ pub(crate) async fn prepare_update_plan(
             .map_err(AppError::skill_fingerprint_failed)?
             .content_hash;
         let plan = Plan {
-            coordinate: record.coordinate.clone(),
-            name: record.name.clone(),
+            publication: crate::tasks::publication::Plan {
+                coordinate: record.coordinate.clone(),
+                name: record.name.clone(),
+                layout,
+                targets,
+                previous: Some(record.clone()),
+                previous_paths: Some(previous_paths),
+                previous_fingerprint: Some(previous_fingerprint),
+            },
             version,
             canonical_url: record.coordinate.url(),
-            layout,
-            targets,
             staged: None,
             github,
-            previous: Some(record),
-            previous_paths: Some(previous_paths),
-            previous_fingerprint: Some(previous_fingerprint),
             created_at: crate::time::now_ms(),
         };
-        plan.check(&paths, &plan.layout)?;
+        plan.check(&paths, &plan.publication.layout)?;
         Ok(plan)
     })
     .await
@@ -491,7 +382,8 @@ pub(crate) fn publish_plan(
     let _ = OperationLog::for_scope(paths, scope).append(&OperationEntry::new(
         operation,
         plan.name(),
-        plan.targets
+        plan.publication
+            .targets
             .iter()
             .map(|target| target.id.clone())
             .collect(),
@@ -555,6 +447,7 @@ impl MutationAction for Action {
             None,
             &[],
             &plan
+                .publication
                 .targets
                 .iter()
                 .map(|target| target.id.clone())
@@ -653,23 +546,65 @@ mod tests {
     }
 
     #[test]
+    fn invalid_stage_keeps_its_source_error_ahead_of_common_validation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(tmp.path().join("home"), tmp.path().join("data"));
+        paths.ensure_dirs().unwrap();
+        let layout = ScopeLayout::global(&paths, vec![]);
+        let source = tmp.path().join("source");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("SKILL.md"), "---\nname: weather\n---\n").unwrap();
+        let staged = clawhub::StagedPackage::from_folder(&source).unwrap();
+        fs::remove_dir_all(staged.path()).unwrap();
+        fs::create_dir_all(layout.lock_path.parent().unwrap()).unwrap();
+        fs::write(&layout.lock_path, "corrupt Git lock").unwrap();
+        let mut plan = Plan {
+            publication: publication::Plan {
+                coordinate: coordinate(),
+                name: "weather".into(),
+                layout: layout.clone(),
+                targets: vec![],
+                previous: None,
+                previous_paths: None,
+                previous_fingerprint: None,
+            },
+            version: "1.0.0".into(),
+            canonical_url: coordinate().url(),
+            staged: Some(Arc::new(staged)),
+            github: None,
+            created_at: 0,
+        };
+        let error = plan.check(&paths, &layout).unwrap_err();
+        assert_eq!(error.code, crate::error::ErrorCode::VerifyFailed);
+        assert_eq!(error.message, "ClawHub 安装包未通过校验。");
+        assert_eq!(error.detail.as_deref(), Some("暂存目录已被移动或替换"));
+        plan.staged = None;
+        assert_eq!(
+            plan.check(&paths, &layout).unwrap_err().code,
+            crate::error::ErrorCode::LockCorrupt
+        );
+    }
+
+    #[test]
     fn record_uses_the_archive_semver_without_diagnostics() {
         let tmp = tempfile::tempdir().unwrap();
         let paths = AppPaths::new(tmp.path().join("home"), tmp.path().join("data"));
         paths.ensure_dirs().unwrap();
         let layout = ScopeLayout::global(&paths, vec![]);
         let plan = Plan {
-            coordinate: coordinate(),
-            name: "weather".into(),
+            publication: crate::tasks::publication::Plan {
+                coordinate: coordinate(),
+                name: "weather".into(),
+                layout,
+                targets: vec![],
+                previous: None,
+                previous_paths: None,
+                previous_fingerprint: None,
+            },
             version: "1.2.0".into(),
             canonical_url: coordinate().url(),
-            layout,
-            targets: vec![],
             staged: None,
             github: None,
-            previous: None,
-            previous_paths: None,
-            previous_fingerprint: None,
             created_at: 0,
         };
         let record = plan.installation("hash".into());
@@ -740,17 +675,19 @@ mod tests {
             fs::write(source.join("notes.txt"), "notes").unwrap();
             let staged = clawhub::StagedPackage::from_folder(&source).unwrap();
             let plan = Plan {
-                coordinate: coordinate(),
-                name: "weather".into(),
+                publication: crate::tasks::publication::Plan {
+                    coordinate: coordinate(),
+                    name: "weather".into(),
+                    layout: layout.clone(),
+                    targets,
+                    previous: None,
+                    previous_paths: None,
+                    previous_fingerprint: None,
+                },
                 version: "1.2.0".into(),
                 canonical_url: coordinate().url(),
-                layout: layout.clone(),
-                targets,
                 staged: None,
                 github: None,
-                previous: None,
-                previous_paths: None,
-                previous_fingerprint: None,
                 created_at: 0,
             };
 
@@ -776,7 +713,7 @@ mod tests {
             assert_eq!(record.version, "1.2.0", "project={project}");
             assert_eq!(record.coordinate, coordinate(), "project={project}");
             assert!(record.diagnostics.is_none(), "project={project}");
-            let attachment = plan.targets[0].skills_dir.join("weather");
+            let attachment = plan.publication.targets[0].skills_dir.join("weather");
             assert!(
                 fs::symlink_metadata(&attachment)
                     .unwrap()
@@ -819,17 +756,19 @@ mod tests {
             )
             .unwrap();
             Plan {
-                coordinate: coordinate(),
-                name: "weather".into(),
+                publication: crate::tasks::publication::Plan {
+                    coordinate: coordinate(),
+                    name: "weather".into(),
+                    layout,
+                    targets,
+                    previous: None,
+                    previous_paths: None,
+                    previous_fingerprint: None,
+                },
                 version: "1.2.0".into(),
                 canonical_url: coordinate().url(),
-                layout,
-                targets,
                 staged: None,
                 github: None,
-                previous: None,
-                previous_paths: None,
-                previous_fingerprint: None,
                 created_at: 0,
             }
         };
@@ -850,21 +789,23 @@ mod tests {
         fs::create_dir_all(&conflict).unwrap();
         fs::write(conflict.join("SKILL.md"), "---\nname: conflict\n---\n").unwrap();
         let plan = Plan {
-            coordinate: Coordinate::from_canonical_for(
-                MarketplaceSource::Clawhub,
-                "@other/conflict",
-            )
-            .unwrap(),
-            name: "conflict".into(),
+            publication: crate::tasks::publication::Plan {
+                coordinate: Coordinate::from_canonical_for(
+                    MarketplaceSource::Clawhub,
+                    "@other/conflict",
+                )
+                .unwrap(),
+                name: "conflict".into(),
+                layout: global_layout.clone(),
+                targets: vec![],
+                previous: None,
+                previous_paths: None,
+                previous_fingerprint: None,
+            },
             version: "1.0.0".into(),
             canonical_url: String::new(),
-            layout: global_layout.clone(),
-            targets: vec![],
             staged: None,
             github: None,
-            previous: None,
-            previous_paths: None,
-            previous_fingerprint: None,
             created_at: 0,
         };
         let error = plan.check(&paths, &global_layout).unwrap_err();
@@ -891,17 +832,19 @@ mod tests {
         fs::create_dir_all(&source).unwrap();
         fs::write(source.join("SKILL.md"), "---\nname: weather\n---\n# v1\n").unwrap();
         let v1 = Plan {
-            coordinate: coordinate(),
-            name: "weather".into(),
+            publication: crate::tasks::publication::Plan {
+                coordinate: coordinate(),
+                name: "weather".into(),
+                layout: layout.clone(),
+                targets: targets.clone(),
+                previous: None,
+                previous_paths: None,
+                previous_fingerprint: None,
+            },
             version: "1.0.0".into(),
             canonical_url: coordinate().url(),
-            layout: layout.clone(),
-            targets: targets.clone(),
             staged: None,
             github: None,
-            previous: None,
-            previous_paths: None,
-            previous_fingerprint: None,
             created_at: 0,
         };
         let installed = clawhub::StagedPackage::from_folder(&source).unwrap();
@@ -936,17 +879,19 @@ mod tests {
             .unwrap()
             .content_hash;
         let update = Plan {
-            coordinate: coordinate(),
-            name: "weather".into(),
+            publication: crate::tasks::publication::Plan {
+                coordinate: coordinate(),
+                name: "weather".into(),
+                layout: layout.clone(),
+                targets,
+                previous: Some(previous.clone()),
+                previous_paths: Some(previous_paths),
+                previous_fingerprint: Some(previous_fingerprint),
+            },
             version: "2.0.0".into(),
             canonical_url: coordinate().url(),
-            layout: layout.clone(),
-            targets,
             staged: None,
             github: None,
-            previous: Some(previous.clone()),
-            previous_paths: Some(previous_paths),
-            previous_fingerprint: Some(previous_fingerprint),
             created_at: 0,
         };
         update.check(&paths, &layout).unwrap();
@@ -973,7 +918,7 @@ mod tests {
             "---\nname: weather\n---\n# v2\n"
         );
         assert!(
-            fs::symlink_metadata(update.targets[0].skills_dir.join("weather"))
+            fs::symlink_metadata(update.publication.targets[0].skills_dir.join("weather"))
                 .unwrap()
                 .file_type()
                 .is_symlink()
@@ -997,7 +942,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(plan.version, "1.0.0");
-        assert!(!plan.name.is_empty());
+        assert!(!plan.publication.name.is_empty());
         assert!(plan.github.is_none());
         assert_eq!(plan.reference_label(), "v1.0.0");
     }
@@ -1040,17 +985,19 @@ mod tests {
             .unwrap();
 
             let install = Plan {
-                coordinate: coordinate.clone(),
-                name: v1.name.clone(),
+                publication: crate::tasks::publication::Plan {
+                    coordinate: coordinate.clone(),
+                    name: v1.name.clone(),
+                    layout: layout.clone(),
+                    targets: targets.clone(),
+                    previous: None,
+                    previous_paths: None,
+                    previous_fingerprint: None,
+                },
                 version: "1.0.0".into(),
                 canonical_url: coordinate.url(),
-                layout: layout.clone(),
-                targets: targets.clone(),
                 staged: None,
                 github: None,
-                previous: None,
-                previous_paths: None,
-                previous_fingerprint: None,
                 created_at: 0,
             };
             publication::publish(
@@ -1087,17 +1034,19 @@ mod tests {
                 .unwrap()
                 .content_hash;
             let update = Plan {
-                coordinate: coordinate.clone(),
-                name: v1.name.clone(),
+                publication: crate::tasks::publication::Plan {
+                    coordinate: coordinate.clone(),
+                    name: v1.name.clone(),
+                    layout: layout.clone(),
+                    targets,
+                    previous: Some(previous.clone()),
+                    previous_paths: Some(previous_paths),
+                    previous_fingerprint: Some(previous_fingerprint),
+                },
                 version: "1.0.1".into(),
                 canonical_url: coordinate.url(),
-                layout: layout.clone(),
-                targets,
                 staged: None,
                 github: None,
-                previous: Some(previous.clone()),
-                previous_paths: Some(previous_paths),
-                previous_fingerprint: Some(previous_fingerprint),
                 created_at: 0,
             };
             update.check(&paths, &layout).unwrap();
@@ -1123,7 +1072,7 @@ mod tests {
                 "project={project}"
             );
             assert!(
-                fs::symlink_metadata(update.targets[0].skills_dir.join(&v1.name))
+                fs::symlink_metadata(update.publication.targets[0].skills_dir.join(&v1.name))
                     .unwrap()
                     .file_type()
                     .is_symlink(),

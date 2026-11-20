@@ -176,14 +176,18 @@ impl TaskManager {
                 .into_iter()
                 .map(|member| {
                     Ok(Download {
+                        publication: crate::tasks::publication::Plan {
+                            name: member.name.clone(),
+                            coordinate: member.coordinate.clone(),
+                            layout: layout.clone(),
+                            targets: targets.clone(),
+                            previous: None,
+                            previous_paths: None,
+                            previous_fingerprint: None,
+                        },
                         detail: member.detail(),
                         runtime: runtime.clone().unwrap(),
                         stage: StagingDirectory::new()?,
-                        layout: layout.clone(),
-                        targets: targets.clone(),
-                        previous: None,
-                        previous_paths: None,
-                        previous_fingerprint: None,
                         created_at: crate::time::now_ms(),
                     })
                 })

@@ -1,5 +1,6 @@
 use super::*;
 use crate::{
+    error::ErrorCode,
     marketplace::{Coordinate, records::Installation},
     projects::ProjectRegistry,
     scope::ScopeId,
@@ -9,41 +10,31 @@ use std::{cell::Cell, path::PathBuf};
 /// A marketplace plan that knows nothing about SkillHub: it exercises the
 /// publication contract on its own.
 struct FakePlan {
-    layout: ScopeLayout,
-    targets: Vec<InstallTarget>,
-    name: String,
+    publication: Plan,
     record: Installation,
-    previous: Option<Installation>,
-    previous_paths: Option<crate::tasks::uninstall::UninstallPlan>,
     checks: Cell<u32>,
-    fail_check_at: Option<u32>,
+    before_check: Option<Box<dyn Fn(u32)>>,
+    before_record: Option<Box<dyn Fn()>>,
 }
 
 impl MarketplaceInstallation for FakePlan {
-    fn scope(&self) -> &ScopeId {
-        &self.layout.scope
+    fn publication(&self) -> &Plan {
+        &self.publication
     }
-    fn name(&self) -> &str {
-        &self.name
-    }
-    fn targets(&self) -> &[InstallTarget] {
-        &self.targets
-    }
-    fn previous(&self) -> Option<&Installation> {
-        self.previous.as_ref()
-    }
-    fn previous_paths(&self) -> Option<&crate::tasks::uninstall::UninstallPlan> {
-        self.previous_paths.as_ref()
-    }
-    fn check(&self, _: &AppPaths, _: &ScopeLayout) -> Result<(), AppError> {
+    fn check_staged(&self) -> Result<(), AppError> {
         let checks = self.checks.get() + 1;
         self.checks.set(checks);
-        if self.fail_check_at == Some(checks) {
-            return Err(AppError::cli_command_changed());
+        if let Some(before_check) = &self.before_check {
+            before_check(checks);
         }
         Ok(())
     }
     fn installation(&self, content_hash: String) -> Installation {
+        if !content_hash.is_empty()
+            && let Some(before_record) = &self.before_record
+        {
+            before_record();
+        }
         Installation {
             content_hash,
             ..self.record.clone()
@@ -59,13 +50,28 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::scoped(false)
+    }
+
+    fn scoped(project: bool) -> Self {
         let tmp = tempfile::tempdir().unwrap();
         let root = fs::canonicalize(tmp.path()).unwrap();
         let paths = AppPaths::new(root.join("home"), root.join("data"));
         paths.ensure_dirs().unwrap();
         fs::create_dir_all(paths.home().join(".claude/skills")).unwrap();
         let registry = ProjectRegistry::new(paths.clone());
-        let layout = ScopeLayout::resolve_detected(&paths, &registry, &ScopeId::Global).unwrap();
+        let scope = if project {
+            let root = root.join("project");
+            fs::create_dir_all(&root).unwrap();
+            registry
+                .add(root.to_str().unwrap())
+                .unwrap()
+                .project
+                .scope()
+        } else {
+            ScopeId::Global
+        };
+        let layout = ScopeLayout::resolve_detected(&paths, &registry, &scope).unwrap();
         let (_, targets) = crate::tasks::install::validate_selected_agents(
             &paths,
             &layout,
@@ -83,16 +89,72 @@ impl Fixture {
             diagnostics: None,
         };
         let plan = FakePlan {
-            layout: layout.clone(),
-            targets,
-            name: record.name.clone(),
+            publication: Plan {
+                layout,
+                targets,
+                name: record.name.clone(),
+                coordinate: record.coordinate.clone(),
+                previous: None,
+                previous_paths: None,
+                previous_fingerprint: None,
+            },
             record,
-            previous: None,
-            previous_paths: None,
             checks: Cell::new(0),
-            fail_check_at: None,
+            before_check: None,
+            before_record: None,
         };
         Self { tmp, paths, plan }
+    }
+
+    fn current_layout(&self) -> ScopeLayout {
+        ScopeLayout::resolve_detected(
+            &self.paths,
+            &ProjectRegistry::new(self.paths.clone()),
+            &self.plan.publication.layout.scope,
+        )
+        .unwrap()
+    }
+
+    fn check(&self) -> Result<(), AppError> {
+        check(&self.paths, &self.current_layout(), &self.plan)
+    }
+
+    fn install(&self) {
+        let root = stage(self, "first", "---\nname: fake-skill\n---\n", "first");
+        publish(
+            &self.paths,
+            Publication::Marketplace {
+                plan: &self.plan,
+                root: &root,
+            },
+        )
+        .result
+        .unwrap();
+    }
+
+    fn prepare_update(&mut self) {
+        self.plan.publication.layout = self.current_layout();
+        let plan = &mut self.plan.publication;
+        plan.previous = MarketplaceRecords::read(&plan.layout.lock_path)
+            .unwrap()
+            .skills
+            .get(&plan.name)
+            .cloned();
+        plan.previous_paths = Some(
+            super::super::uninstall::plan_uninstall(
+                &self.paths,
+                &plan.layout,
+                &plan.layout.scope.skill_id(&plan.name),
+            )
+            .unwrap(),
+        );
+        plan.previous_fingerprint = Some(
+            fingerprint_folder(&plan.layout.canonical_dir.join(&plan.name))
+                .unwrap()
+                .content_hash,
+        );
+        self.plan.checks.set(0);
+        self.plan.record.version = "3.2.0".into();
     }
 }
 
@@ -102,6 +164,264 @@ fn stage(fixture: &Fixture, directory: &str, markdown: &str, notes: &str) -> Pat
     fs::write(root.join("SKILL.md"), markdown).unwrap();
     fs::write(root.join("notes.txt"), notes).unwrap();
     root
+}
+
+#[test]
+fn install_rejects_occupied_names_stale_records_and_duplicate_coordinates() {
+    for project in [false, true] {
+        let fixture = Fixture::scoped(project);
+        let plan = &fixture.plan.publication;
+        fixture.check().unwrap();
+        let canonical = plan.layout.canonical_dir.join(&plan.name);
+        fs::create_dir_all(&canonical).unwrap();
+        fs::write(canonical.join("SKILL.md"), "---\nname: fake-skill\n---\n").unwrap();
+        assert_eq!(fixture.check().unwrap_err().code, ErrorCode::SkillConflict);
+        fs::remove_dir_all(&canonical).unwrap();
+
+        let mut records = MarketplaceRecords::default();
+        let record = Installation {
+            content_hash: "recorded-hash".into(),
+            ..fixture.plan.record.clone()
+        };
+        records.skills.insert(plan.name.clone(), record.clone());
+        records.save(&plan.layout.lock_path).unwrap();
+        assert_eq!(
+            fixture.check().unwrap_err().code,
+            ErrorCode::CliCommandChanged
+        );
+
+        records.skills.clear();
+        records.skills.insert(
+            "another-name".into(),
+            Installation {
+                name: "another-name".into(),
+                ..record
+            },
+        );
+        records.save(&plan.layout.lock_path).unwrap();
+        assert_eq!(fixture.check().unwrap_err().code, ErrorCode::SkillConflict);
+        assert!(!canonical.exists());
+    }
+}
+
+#[test]
+fn update_rejects_changed_records_content_attachments_and_physical_paths() {
+    for project in [false, true] {
+        for change in ["record", "content", "attachment", "canonical"] {
+            let mut fixture = Fixture::scoped(project);
+            fixture.install();
+            fixture.prepare_update();
+            fixture.check().unwrap();
+            let plan = &fixture.plan.publication;
+            let canonical = plan.layout.canonical_dir.join(&plan.name);
+            let attachment = plan.targets[0].skills_dir.join(&plan.name);
+            match change {
+                "record" => {
+                    let mut records = MarketplaceRecords::read(&plan.layout.lock_path).unwrap();
+                    records.skills.get_mut(&plan.name).unwrap().version = "4.0.0".into();
+                    records.save(&plan.layout.lock_path).unwrap();
+                }
+                "content" => fs::write(canonical.join("notes.txt"), "local edit").unwrap(),
+                "attachment" => {
+                    fs::remove_file(&attachment).unwrap();
+                    crate::backup::copy_tree(&canonical, &attachment).unwrap();
+                }
+                "canonical" => {
+                    let moved = plan.layout.canonical_dir.join("moved");
+                    fs::rename(&canonical, &moved).unwrap();
+                    std::os::unix::fs::symlink(&moved, &canonical).unwrap();
+                }
+                _ => unreachable!(),
+            }
+            let root = stage(&fixture, "second", "---\nname: fake-skill\n---\n", "second");
+            let outcome = publish(
+                &fixture.paths,
+                Publication::Marketplace {
+                    plan: &fixture.plan,
+                    root: &root,
+                },
+            );
+            assert_eq!(
+                outcome.result.unwrap_err().code,
+                if change == "record" {
+                    ErrorCode::CliCommandChanged
+                } else {
+                    ErrorCode::BatchTargetChanged
+                },
+                "project={project}, change={change}"
+            );
+            assert_eq!(
+                fs::read_to_string(canonical.join("notes.txt")).unwrap(),
+                if change == "content" {
+                    "local edit"
+                } else {
+                    "first"
+                }
+            );
+            assert_eq!(
+                BaselineStore::for_scope(&fixture.paths, &plan.layout.scope)
+                    .load(&plan.name)
+                    .unwrap()
+                    .content_hash,
+                plan.previous.as_ref().unwrap().content_hash
+            );
+            assert_eq!(attachment.is_symlink(), change != "attachment");
+            assert_eq!(canonical.is_symlink(), change == "canonical");
+        }
+    }
+}
+
+#[test]
+fn relocate_invalidates_publication_even_after_returning_to_the_original_root() {
+    let fixture = Fixture::scoped(true);
+    fixture.check().unwrap();
+    let layout = &fixture.plan.publication.layout;
+    let registry = ProjectRegistry::new(fixture.paths.clone());
+    let id = layout.project.as_ref().unwrap().id.to_string();
+    let other = fixture.tmp.path().join("relocated");
+    fs::create_dir_all(&other).unwrap();
+    registry.relocate(&id, other.to_str().unwrap()).unwrap();
+    assert_eq!(
+        fixture.check().unwrap_err().code,
+        ErrorCode::BatchTargetChanged
+    );
+    registry
+        .relocate(&id, layout.root.to_str().unwrap())
+        .unwrap();
+    assert_eq!(fixture.current_layout().root, layout.root);
+    assert_eq!(
+        fixture.check().unwrap_err().code,
+        ErrorCode::BatchTargetChanged
+    );
+    assert!(!layout.canonical_dir.exists());
+    assert!(!other.join(".agents/skills").exists());
+}
+
+#[test]
+fn common_validation_preserves_error_precedence() {
+    let mut fixture = Fixture::scoped(true);
+    fixture.install();
+    fixture.prepare_update();
+    let layout = fixture.current_layout();
+    let mut records = MarketplaceRecords::read(&layout.lock_path).unwrap();
+    let original = records.clone();
+    records.skills.get_mut("fake-skill").unwrap().version = "4.0.0".into();
+    records.skills.get_mut("fake-skill").unwrap().coordinate =
+        Coordinate::from_canonical("@publisher/replaced").unwrap();
+    records.skills.insert(
+        "other-name".into(),
+        Installation {
+            name: "other-name".into(),
+            ..original.skills["fake-skill"].clone()
+        },
+    );
+    records.save(&layout.lock_path).unwrap();
+    fs::write(layout.lock_path.clone(), "corrupt Git lock").unwrap();
+    fs::write(
+        layout.canonical_dir.join("fake-skill/notes.txt"),
+        "local edit",
+    )
+    .unwrap();
+    ProjectRegistry::new(fixture.paths.clone())
+        .relocate(
+            &layout.project.as_ref().unwrap().id.to_string(),
+            layout.root.to_str().unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(fixture.check().unwrap_err().code, ErrorCode::LockCorrupt);
+    fs::remove_file(&layout.lock_path).unwrap();
+    assert_eq!(fixture.check().unwrap_err().code, ErrorCode::SkillConflict);
+    records.skills.remove("other-name");
+    records.save(&layout.lock_path).unwrap();
+    assert_eq!(
+        fixture.check().unwrap_err().code,
+        ErrorCode::BatchTargetChanged
+    );
+    fixture.plan.publication.layout = fixture.current_layout();
+    assert_eq!(
+        fixture.check().unwrap_err().code,
+        ErrorCode::CliCommandChanged
+    );
+    original.save(&layout.lock_path).unwrap();
+    assert_eq!(
+        fixture.check().unwrap_err().code,
+        ErrorCode::BatchTargetChanged
+    );
+}
+
+#[test]
+fn new_install_requires_detection_but_update_retains_project_attachments() {
+    for updating in [false, true] {
+        let mut fixture = Fixture::scoped(true);
+        if updating {
+            fixture.install();
+            fixture.prepare_update();
+        }
+        fs::remove_dir_all(fixture.paths.home().join(".claude")).unwrap();
+        if updating {
+            fixture.check().unwrap();
+            let root = stage(&fixture, "second", "---\nname: fake-skill\n---\n", "second");
+            publish(
+                &fixture.paths,
+                Publication::Marketplace {
+                    plan: &fixture.plan,
+                    root: &root,
+                },
+            )
+            .result
+            .unwrap();
+            let attachment = fixture.plan.publication.targets[0]
+                .skills_dir
+                .join("fake-skill");
+            assert!(attachment.is_symlink());
+            assert_eq!(
+                fs::read_to_string(attachment.join("notes.txt")).unwrap(),
+                "second"
+            );
+        } else {
+            assert_eq!(
+                fixture.check().unwrap_err().code,
+                ErrorCode::AgentNotDetected
+            );
+        }
+    }
+}
+
+#[test]
+fn install_rejects_redirected_canonical_and_agent_directories() {
+    for project in [false, true] {
+        for canonical in [false, true] {
+            let fixture = Fixture::scoped(project);
+            let layout = &fixture.plan.publication.layout;
+            let directory = if canonical {
+                layout.canonical_dir.clone()
+            } else {
+                fixture.plan.publication.targets[0].skills_dir.clone()
+            };
+            let destination = if canonical && project {
+                fixture.tmp.path().join("outside-project")
+            } else {
+                layout.root.join("redirected")
+            };
+            fs::create_dir_all(&destination).unwrap();
+            fs::create_dir_all(directory.parent().unwrap()).unwrap();
+            if directory.exists() {
+                fs::remove_dir(&directory).unwrap();
+            }
+            std::os::unix::fs::symlink(&destination, &directory).unwrap();
+            assert_eq!(
+                fixture.check().unwrap_err().code,
+                if canonical && project {
+                    ErrorCode::PathOutsideAllowedRoot
+                } else {
+                    ErrorCode::PathInvalid
+                },
+                "project={project}, canonical={canonical}"
+            );
+            assert!(fs::read_dir(destination).unwrap().next().is_none());
+        }
+    }
 }
 
 #[test]
@@ -123,12 +443,17 @@ fn source_neutral_publication_publishes_a_fake_marketplace_plan() {
     outcome.result.unwrap();
     assert!(outcome.warnings.is_empty());
 
-    let canonical = fixture.plan.layout.canonical_dir.join("fake-skill");
+    let canonical = fixture
+        .plan
+        .publication
+        .layout
+        .canonical_dir
+        .join("fake-skill");
     assert_eq!(
         fs::read_to_string(canonical.join("notes.txt")).unwrap(),
         "second source"
     );
-    let records = MarketplaceRecords::read(&fixture.plan.layout.lock_path).unwrap();
+    let records = MarketplaceRecords::read(&fixture.plan.publication.layout.lock_path).unwrap();
     let record = &records.skills["fake-skill"];
     assert_eq!(record.version, "3.1.4");
     assert_eq!(
@@ -136,13 +461,13 @@ fn source_neutral_publication_publishes_a_fake_marketplace_plan() {
         fingerprint_folder(&canonical).unwrap().content_hash
     );
     assert!(
-        BaselineStore::for_scope(&fixture.paths, &fixture.plan.layout.scope)
+        BaselineStore::for_scope(&fixture.paths, &fixture.plan.publication.layout.scope)
             .load("fake-skill")
             .unwrap()
             .verified
     );
     assert!(
-        fixture.plan.targets[0]
+        fixture.plan.publication.targets[0]
             .skills_dir
             .join("fake-skill")
             .is_symlink()
@@ -152,14 +477,14 @@ fn source_neutral_publication_publishes_a_fake_marketplace_plan() {
         "publication must revalidate after preparing the candidate"
     );
     assert!(
-        !fixture.plan.layout.lock_path.exists(),
+        !fixture.plan.publication.layout.lock_path.exists(),
         "marketplace publication must not write the Git lock"
     );
 }
 
 #[test]
 fn publication_record_race_keeps_the_existing_record_baseline_and_attachments() {
-    let fixture = Fixture::new();
+    let mut fixture = Fixture::new();
     let mut records = MarketplaceRecords::default();
     records.skills.insert(
         "fake-skill".into(),
@@ -169,7 +494,8 @@ fn publication_record_race_keeps_the_existing_record_baseline_and_attachments() 
             ..fixture.plan.record.clone()
         },
     );
-    records.save(&fixture.plan.layout.lock_path).unwrap();
+    let lock_path = fixture.plan.publication.layout.lock_path.clone();
+    fixture.plan.before_record = Some(Box::new(move || records.save(&lock_path).unwrap()));
     let root = stage(
         &fixture,
         "staged",
@@ -192,15 +518,15 @@ fn publication_record_race_keeps_the_existing_record_baseline_and_attachments() 
             .unwrap_or_default()
             .contains("安装记录在发布期间变化")
     );
-    let records = MarketplaceRecords::read(&fixture.plan.layout.lock_path).unwrap();
+    let records = MarketplaceRecords::read(&fixture.plan.publication.layout.lock_path).unwrap();
     assert_eq!(records.skills["fake-skill"].version, "0.9.0");
     assert!(
-        BaselineStore::for_scope(&fixture.paths, &fixture.plan.layout.scope)
+        BaselineStore::for_scope(&fixture.paths, &fixture.plan.publication.layout.scope)
             .load("fake-skill")
             .is_none()
     );
     assert!(
-        !fixture.plan.targets[0]
+        !fixture.plan.publication.targets[0]
             .skills_dir
             .join("fake-skill")
             .exists()
@@ -208,6 +534,7 @@ fn publication_record_race_keeps_the_existing_record_baseline_and_attachments() 
     assert!(
         fixture
             .plan
+            .publication
             .layout
             .canonical_dir
             .join("fake-skill/notes.txt")
@@ -234,18 +561,38 @@ fn failed_publication_revalidation_keeps_the_existing_installation() {
     )
     .result
     .unwrap();
-    let canonical = fixture.plan.layout.canonical_dir.join("fake-skill");
-    let installed = MarketplaceRecords::read(&fixture.plan.layout.lock_path)
+    let canonical = fixture
+        .plan
+        .publication
+        .layout
+        .canonical_dir
+        .join("fake-skill");
+    let installed = MarketplaceRecords::read(&fixture.plan.publication.layout.lock_path)
         .unwrap()
         .skills["fake-skill"]
         .clone();
 
-    fixture.plan.previous = Some(installed.clone());
-    fixture.plan.previous_paths = Some(
-        crate::tasks::uninstall::plan_uninstall(&fixture.paths, &fixture.plan.layout, "fake-skill")
-            .unwrap(),
+    fixture.plan.publication.previous = Some(installed.clone());
+    fixture.plan.publication.previous_paths = Some(
+        crate::tasks::uninstall::plan_uninstall(
+            &fixture.paths,
+            &fixture.plan.publication.layout,
+            "fake-skill",
+        )
+        .unwrap(),
     );
-    fixture.plan.fail_check_at = Some(2);
+    fixture.plan.publication.previous_fingerprint = Some(installed.content_hash.clone());
+    let changed = canonical.join("notes.txt");
+    let store = fixture.plan.publication.layout.canonical_dir.clone();
+    fixture.plan.before_check = Some(Box::new(move |checks| {
+        if checks == 2 {
+            assert!(fs::read_dir(&store).unwrap().any(|entry| {
+                fs::read_to_string(entry.unwrap().path().join("candidate/notes.txt"))
+                    .is_ok_and(|content| content == "second")
+            }));
+            fs::write(&changed, "concurrent edit").unwrap();
+        }
+    }));
     fixture.plan.checks.set(0);
     fixture.plan.record.version = "3.2.0".into();
     let second = stage(
@@ -263,23 +610,23 @@ fn failed_publication_revalidation_keeps_the_existing_installation() {
     );
     assert_eq!(
         outcome.result.unwrap_err().code,
-        crate::error::ErrorCode::CliCommandChanged
+        crate::error::ErrorCode::BatchTargetChanged
     );
     assert_eq!(
         fs::read_to_string(canonical.join("notes.txt")).unwrap(),
-        "first"
+        "concurrent edit"
     );
-    let records = MarketplaceRecords::read(&fixture.plan.layout.lock_path).unwrap();
+    let records = MarketplaceRecords::read(&fixture.plan.publication.layout.lock_path).unwrap();
     assert_eq!(records.skills["fake-skill"].version, "3.1.4");
     assert_eq!(
-        BaselineStore::for_scope(&fixture.paths, &fixture.plan.layout.scope)
+        BaselineStore::for_scope(&fixture.paths, &fixture.plan.publication.layout.scope)
             .load("fake-skill")
             .unwrap()
             .content_hash,
         installed.content_hash
     );
     assert!(
-        fixture.plan.targets[0]
+        fixture.plan.publication.targets[0]
             .skills_dir
             .join("fake-skill")
             .is_symlink()
@@ -294,6 +641,7 @@ fn marketplace_update_replaces_universal_copies_with_verified_attachments() {
     ] {
         let mut fixture = Fixture::new();
         fixture.plan.record.coordinate.source = source;
+        fixture.plan.publication.coordinate.source = source;
         let first = stage(
             &fixture,
             "first",
@@ -313,7 +661,7 @@ fn marketplace_update_replaces_universal_copies_with_verified_attachments() {
         fs::create_dir_all(&gemini).unwrap();
         fs::write(gemini.join("SKILL.md"), "old copy").unwrap();
         fs::write(gemini.join("notes.txt"), "local notes").unwrap();
-        fixture.plan.layout = ScopeLayout::resolve_detected(
+        fixture.plan.publication.layout = ScopeLayout::resolve_detected(
             &fixture.paths,
             &ProjectRegistry::new(fixture.paths.clone()),
             &ScopeId::Global,
@@ -321,7 +669,7 @@ fn marketplace_update_replaces_universal_copies_with_verified_attachments() {
         .unwrap();
         let update = crate::tasks::update::plan_updates(
             &fixture.paths,
-            &fixture.plan.layout,
+            &fixture.plan.publication.layout,
             &["fake-skill".into()],
         )
         .unwrap()
@@ -334,25 +682,30 @@ fn marketplace_update_replaces_universal_copies_with_verified_attachments() {
                 .any(|target| target.id == "gemini-cli" && target.universal)
         );
         assert!(update.copy_agents.iter().any(|name| name == "Gemini CLI"));
-        let snapshot = crate::backup::BackupStore::for_layout(&fixture.paths, &fixture.plan.layout)
-            .create(
-                crate::backup::BackupAction::Update,
-                &update.name,
-                Some(&update.canonical),
-                &update.attachments,
-                &update.agent_ids,
-            )
-            .unwrap();
-        fixture.plan.previous = update.marketplace_record;
-        fixture.plan.previous_paths = Some(
+        let snapshot = crate::backup::BackupStore::for_layout(
+            &fixture.paths,
+            &fixture.plan.publication.layout,
+        )
+        .create(
+            crate::backup::BackupAction::Update,
+            &update.name,
+            Some(&update.canonical),
+            &update.attachments,
+            &update.agent_ids,
+        )
+        .unwrap();
+        fixture.plan.publication.previous_fingerprint =
+            Some(fingerprint_folder(&update.canonical).unwrap().content_hash);
+        fixture.plan.publication.previous = update.marketplace_record;
+        fixture.plan.publication.previous_paths = Some(
             crate::tasks::uninstall::plan_uninstall(
                 &fixture.paths,
-                &fixture.plan.layout,
+                &fixture.plan.publication.layout,
                 "fake-skill",
             )
             .unwrap(),
         );
-        fixture.plan.targets = update.targets;
+        fixture.plan.publication.targets = update.targets;
         let second = stage(
             &fixture,
             "second",

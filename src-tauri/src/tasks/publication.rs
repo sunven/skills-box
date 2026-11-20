@@ -7,33 +7,136 @@ use crate::{
     inventory::AttachmentMode,
     marketplace::records::{Installation, Records as MarketplaceRecords},
     paths::AppPaths,
-    scope::ScopeId,
     scope_layout::ScopeLayout,
 };
 use std::{fs, path::Path};
 
-/// Source-neutral marketplace plan as seen by local publication.
-///
-/// Publication owns the source-independent mechanics: canonical replacement,
-/// record writes, baselines, Agent attachments and post-publication
-/// verification. A marketplace source only supplies its plan; the SkillHub
-/// [`crate::tasks::marketplace::Plan`] implements this, and another source can
-/// do the same without duplicating publication.
+/// Confirmed local facts shared by marketplace installation and update.
+#[derive(Debug, Clone)]
+pub(crate) struct Plan {
+    pub name: String,
+    pub coordinate: crate::marketplace::Coordinate,
+    pub layout: ScopeLayout,
+    pub targets: Vec<InstallTarget>,
+    pub previous: Option<Installation>,
+    pub previous_paths: Option<UninstallPlan>,
+    pub previous_fingerprint: Option<String>,
+}
+
+/// Source adapters supply staging checks and records; publication owns local
+/// revalidation, replacement, baselines and Agent attachments.
 pub(super) trait MarketplaceInstallation {
-    /// Scope whose canonical directory receives the installation.
-    fn scope(&self) -> &ScopeId;
-    /// Canonical folder name, equal to the record key.
-    fn name(&self) -> &str;
-    /// Agent attachment targets selected at preview time.
-    fn targets(&self) -> &[InstallTarget];
-    /// Installation record captured at preview time, if this replaces one.
-    fn previous(&self) -> Option<&Installation>;
-    /// Previous physical paths, if this replaces an installation.
-    fn previous_paths(&self) -> Option<&UninstallPlan>;
-    /// Revalidate the plan against the freshly resolved layout.
-    fn check(&self, paths: &AppPaths, layout: &ScopeLayout) -> Result<(), AppError>;
-    /// Build the record for the published content baseline.
+    fn publication(&self) -> &Plan;
+    fn check_staged(&self) -> Result<(), AppError>;
     fn installation(&self, content_hash: String) -> Installation;
+}
+
+pub(super) fn check(
+    paths: &AppPaths,
+    layout: &ScopeLayout,
+    source: &dyn MarketplaceInstallation,
+) -> Result<(), AppError> {
+    source.check_staged()?;
+    let plan = source.publication();
+    layout.ensure_mutation_ready()?;
+    layout.lock()?;
+    if MarketplaceRecords::read(&layout.lock_path)?
+        .skills
+        .values()
+        .any(|record| record.coordinate == plan.coordinate && record.name != plan.name)
+    {
+        return Err(AppError::skill_conflict(
+            &plan.name,
+            "当前作用域已安装同一市场坐标，请查看已有安装。",
+        ));
+    }
+    if layout.scope != plan.layout.scope
+        || layout.root != plan.layout.root
+        || layout.project.as_ref().map(|p| &p.check_revision)
+            != plan.layout.project.as_ref().map(|p| &p.check_revision)
+    {
+        return Err(AppError::batch_target_changed(
+            "项目目录已变化，请重新预览。",
+        ));
+    }
+    if MarketplaceRecords::read(&layout.lock_path)?
+        .skills
+        .get(&plan.name)
+        != plan.previous.as_ref()
+    {
+        return Err(AppError::cli_command_changed());
+    }
+    if let Some(previous) = &plan.previous_paths {
+        let current =
+            super::uninstall::plan_uninstall(paths, layout, &layout.scope.skill_id(&plan.name))?;
+        if &current != previous
+            || Some(
+                fingerprint_folder(&layout.canonical_dir.join(&plan.name))
+                    .map_err(AppError::skill_fingerprint_failed)?
+                    .content_hash,
+            ) != plan.previous_fingerprint
+        {
+            return Err(AppError::batch_target_changed(
+                "本地内容或挂载已变化，请重新确认更新。",
+            ));
+        }
+    } else if let Some(error) =
+        super::install::conflicts_for(paths, layout, &[plan.name.clone()], None)?
+    {
+        return Err(error);
+    }
+    let ids = plan
+        .targets
+        .iter()
+        .map(|t| t.id.clone())
+        .collect::<Vec<_>>();
+    // Updates may retain attachments to agents no longer detected. Their
+    // concrete path state is validated by the captured uninstall plan.
+    if plan.previous.is_none() {
+        let (_, targets) = super::install::validate_selected_agents(paths, layout, &ids)?;
+        if targets != plan.targets {
+            return Err(AppError::cli_command_changed());
+        }
+        let located = crate::inventory::LocatedSkill {
+            primary_path: Some(layout.canonical_dir.join(&plan.name)),
+            name: plan.name.clone(),
+            management: crate::inventory::ManagementState::Managed,
+            canonical_path: Some(layout.canonical_dir.join(&plan.name)),
+            lock_entry: Some(source.installation(String::new()).entry()),
+            attachments: vec![],
+        };
+        let agents = if layout.is_global() {
+            layout.agents.clone()
+        } else {
+            layout.install_targets(&crate::inventory::detected_agent_dirs(paths))
+        };
+        for target in plan
+            .targets
+            .iter()
+            .filter(|t| t.needs_attachment(&layout.canonical_dir))
+        {
+            crate::attachment_target::resolve_publication_attach(
+                &layout.canonical_dir,
+                &located,
+                &agents,
+                &target.id,
+                crate::attachment_target::TargetContext::for_layout(layout),
+                false,
+            )?;
+        }
+    }
+    if let Some(root) = layout.project_root() {
+        crate::project_path::resolve(
+            &layout.canonical_dir,
+            root,
+            crate::project_path::Existence::AllowMissing,
+        )
+        .map_err(|e| AppError::path_invalid(format!("{e:?}")))?;
+    }
+    if fs::symlink_metadata(&layout.canonical_dir).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(AppError::path_invalid("技能目录不能是符号链接"));
+    }
+    Ok(())
 }
 
 pub(super) enum Publication<'a> {
@@ -76,9 +179,15 @@ fn publish_inner(
     let (layout, name, targets, prefix) = match publication {
         Publication::Marketplace { plan, .. } => {
             let registry = crate::projects::ProjectRegistry::new(paths.clone());
-            let layout = ScopeLayout::resolve_detected(paths, &registry, plan.scope())?;
-            plan.check(paths, &layout)?;
-            (layout, plan.name(), plan.targets(), ".marketplace-")
+            let layout =
+                ScopeLayout::resolve_detected(paths, &registry, &plan.publication().layout.scope)?;
+            check(paths, &layout, *plan)?;
+            (
+                layout,
+                plan.publication().name.as_str(),
+                plan.publication().targets.as_slice(),
+                ".marketplace-",
+            )
         }
         Publication::Workflow { plan, unit } => {
             // Reused workflows need only their missing attachments; their
@@ -119,8 +228,8 @@ fn publish_inner(
     let canonical = layout.canonical_dir.join(name);
     match publication {
         Publication::Marketplace { plan, .. } => {
-            plan.check(paths, &layout)?;
-            if plan.previous().is_some() {
+            check(paths, &layout, *plan)?;
+            if plan.publication().previous.is_some() {
                 crate::fsutil::rename_directory_new(&canonical, &stage.path().join("previous"))
                     .map_err(|e| AppError::verify_failed(e.to_string()))?;
             }
@@ -134,7 +243,7 @@ fn publish_inner(
         Publication::Marketplace { plan, .. } => {
             let installed = plan.installation(fingerprint.content_hash.clone());
             let mut records = MarketplaceRecords::read(&layout.lock_path)?;
-            if records.skills.get(name) != plan.previous() {
+            if records.skills.get(name) != plan.publication().previous.as_ref() {
                 return Err(AppError::verify_failed(
                     "安装记录在发布期间变化，已保留备份。",
                 ));
@@ -168,7 +277,7 @@ fn publish_inner(
     }
 
     if let Publication::Marketplace { plan, .. } = publication
-        && let Some(previous) = plan.previous_paths()
+        && let Some(previous) = plan.publication().previous_paths.as_ref()
     {
         for attachment in &previous.attachments {
             if attachment.mode == AttachmentMode::Copy {

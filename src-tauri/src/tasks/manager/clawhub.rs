@@ -23,10 +23,10 @@ impl TaskManager {
             agents,
         )
         .await?;
-        let commands = plan.command_preview(&plan.layout, None);
+        let commands = plan.command_preview(&plan.publication.layout, None);
         let preview = Preview {
-            coordinate: plan.coordinate.clone(),
-            name: plan.name.clone(),
+            coordinate: plan.publication.coordinate.clone(),
+            name: plan.publication.name.clone(),
             version: plan.version.clone(),
             reference_label: plan.reference_label(),
             canonical_url: plan.canonical_url.clone(),
@@ -59,7 +59,7 @@ impl TaskManager {
             .get(&preview_id)
             .cloned()
             .ok_or_else(AppError::cli_command_changed)?;
-        if scope != plan.layout.scope
+        if scope != plan.publication.layout.scope
             || crate::time::now_ms().saturating_sub(plan.created_at) > 900_000
         {
             return Err(AppError::cli_command_changed());
@@ -67,7 +67,7 @@ impl TaskManager {
         // The confirmed reference is authoritative; never resolve a different
         // archive version or commit after confirmation.
         let staged = stage_for_start(&plan).await?;
-        if staged.name != plan.name {
+        if staged.name != plan.publication.name {
             return Err(AppError::cli_command_changed());
         }
         let mut plan = plan;
