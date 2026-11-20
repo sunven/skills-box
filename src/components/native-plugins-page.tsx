@@ -63,7 +63,7 @@ function Dialog({
       }}
     >
       <div
-        className="modal-panel max-w-2xl"
+        className="modal-panel native-plugin-dialog max-w-2xl"
         ref={panelRef}
         role="dialog"
         aria-modal="true"
@@ -200,7 +200,7 @@ function NativeHostPage({
     }
   }
   async function verify() {
-    setWorking("正在临时目录验证 CLI；真实插件保持原样…");
+    setWorking("正在临时目录检查插件操作兼容性…");
     setError(null);
     try {
       client.setQueryData(key, await verifyNativePluginHost(host));
@@ -234,7 +234,11 @@ function NativeHostPage({
         <span key={action} title={reason ?? undefined}>
           <Button
             size="sm"
-            variant={action === "install" ? "outline" : "ghost"}
+            variant={
+              ["install", "enable", "disable"].includes(action)
+                ? "outline"
+                : "ghost"
+            }
             disabled={busy || !!reason}
             onClick={() => void prepare(pluginRequest(host, action, p.id))}
           >
@@ -249,9 +253,9 @@ function NativeHostPage({
       <div className="native-plugin-heading">
         <div>
           <h1 id="native-plugin-title">插件</h1>
-          <p>管理宿主的原生 Plugin 与市场</p>
+          <p>管理 Codex 与 Claude Code 的原生插件与市场</p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="native-host-context">
           <div
             className="native-host-switch"
             role="group"
@@ -290,9 +294,7 @@ function NativeHostPage({
             }}
           >
             <RefreshCw
-              className={
-                query.isFetching ? "size-3.5 animate-spin" : "size-3.5"
-              }
+              className={query.isFetching ? "animate-spin" : undefined}
             />
             重新读取
           </Button>
@@ -303,7 +305,7 @@ function NativeHostPage({
             disabled={busy || !data || !!blocked("add_market")}
             onClick={() => setAdding(true)}
           >
-            <Plus className="size-3.5" />
+            <Plus />
             添加市场
           </Button>
         </div>
@@ -362,9 +364,9 @@ function NativeHostPage({
       {data?.capabilities.some((c) => c.blockedReason) && (
         <div className="notice native-compatibility">
           <div>
-            <strong>部分操作尚未验证</strong>
+            <strong>部分操作暂不可用</strong>
             <p>
-              可在临时配置中验证基本生命周期。远程来源、同步与连带移除仍需对应契约验收。
+              可在临时配置中检查基本插件操作。远程来源、市场同步和移除的连带影响需要单独验证。
             </p>
             <ul>
               {data.capabilities
@@ -382,7 +384,7 @@ function NativeHostPage({
             disabled={busy}
             onClick={() => void verify()}
           >
-            隔离验证兼容性
+            检查兼容性
           </Button>
         </div>
       )}
@@ -390,21 +392,24 @@ function NativeHostPage({
         <div className="native-plugin-layout">
           <aside className="native-market-list" aria-label="插件市场">
             <h2>
-              已配置市场 <span>{data.markets.length}</span>
+              已配置市场
+              <span className="native-plugin-count">{data.markets.length}</span>
             </h2>
             <button
               className="native-market-item"
               data-selected={market === "all"}
+              aria-pressed={market === "all"}
               onClick={() => setMarket("all")}
             >
               <span>全部市场与安装记录</span>
-              <span>{data.plugins.length}</span>
+              <span className="native-plugin-count">{data.plugins.length}</span>
             </button>
             {data.markets.map((m) => (
               <button
                 key={m.name}
                 className="native-market-item"
                 data-selected={market === m.name}
+                aria-pressed={market === m.name}
                 onClick={() => setMarket(m.name)}
               >
                 <span className="min-w-0">
@@ -414,19 +419,25 @@ function NativeHostPage({
                       ? "目录读取失败"
                       : m.readOnlyReason
                         ? "只读来源"
-                        : m.sourceKind}
+                        : m.sourceKind === "git"
+                          ? "Git 仓库"
+                          : m.sourceKind === "local"
+                            ? "本地来源"
+                            : m.sourceKind === "url"
+                              ? "JSON 地址"
+                              : m.sourceKind}
                   </small>
                 </span>
-                <ChevronRight className="size-3.5 shrink-0" />
+                <ChevronRight />
               </button>
             ))}
             {data.markets.length === 0 && (
               <p className="native-empty-note">
-                还没有市场。添加本地来源或 Git 仓库开始浏览。
+                还没有市场，添加本地来源或 Git 仓库开始浏览
               </p>
             )}
             <p className="native-empty-note">
-              搜索仅包含已配置市场；缺失市场的安装记录仍会保留。
+              仅搜索已配置市场；市场缺失时仍保留安装记录
             </p>
           </aside>
           <section className="native-plugin-list" aria-label="原生插件列表">
@@ -482,7 +493,7 @@ function NativeHostPage({
               </div>
             )}
             {incomplete && (
-              <div className="notice" data-tone="warning">
+              <div className="notice native-catalog-warning" data-tone="warning">
                 市场目录读取不完整，搜索结果可能缺失。
                 {data.markets
                   .filter((m) => m.catalogError)
@@ -495,10 +506,10 @@ function NativeHostPage({
             )}
             <div className="native-plugin-filters">
               <label className="native-search">
-                <Search className="size-4" />
+                <Search />
                 <Input
                   aria-label="搜索已配置市场中的插件"
-                  placeholder="搜索名称或简介"
+                  placeholder="搜索插件"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                 />
@@ -508,20 +519,24 @@ function NativeHostPage({
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
               >
-                <option value="all">全部</option>
+                <option value="all">全部状态</option>
                 <option value="installed">已安装／待核对</option>
                 <option value="absent">未安装</option>
               </select>
-              <span>{visible.length} 个插件</span>
+              <span className="native-plugin-count">{visible.length} 个插件</span>
             </div>
             {visible.length === 0 && (
               <div className="native-plugin-empty">
-                <Package className="size-6" />
-                <h3>{search ? "没有匹配的插件" : "此处还没有插件"}</h3>
+                <Package />
+                <h3>
+                  {search || filter !== "all" ? "没有匹配的插件" : "此处还没有插件"}
+                </h3>
                 <p>
                   {incomplete
                     ? "部分目录未能读取，请修复来源后重新读取。"
-                    : "选择其他市场或添加一个来源。"}
+                    : search || filter !== "all"
+                      ? "调整搜索词或安装状态筛选"
+                      : "选择其他市场或添加一个来源"}
                 </p>
               </div>
             )}
@@ -533,17 +548,25 @@ function NativeHostPage({
                     onClick={() => setSelected(p)}
                   >
                     {p.name}
-                    <ChevronRight className="size-3.5" />
+                    <ChevronRight />
                   </button>
                   <p className="native-plugin-coordinate mono">
-                    {p.id}
-                    {p.version ? ` · ${p.version}` : ""}
+                    <span>{p.id}</span>
+                    {p.version && (
+                      <span className="native-plugin-version">
+                        <span className="sr-only">版本 </span>
+                        {p.version}
+                      </span>
+                    )}
                   </p>
                   <p className="native-plugin-description">
                     {p.description ?? "目录未提供介绍"}
                   </p>
                   <div className="native-plugin-state">
-                    <span>
+                    <span
+                      className="native-installation-state"
+                      data-state={p.installationState}
+                    >
                       {p.installationState === "installed"
                         ? "用户级已安装"
                         : p.installationState === "unconfirmed"
@@ -551,7 +574,14 @@ function NativeHostPage({
                           : "用户级未安装"}
                     </span>
                     {p.installationState !== "absent" && (
-                      <span>用户设置：{enabledLabel(p.userEnabled)}</span>
+                      <span
+                        className="native-enabled-state"
+                        data-enabled={
+                          p.userEnabled === null ? "unset" : String(p.userEnabled)
+                        }
+                      >
+                        用户设置：{enabledLabel(p.userEnabled)}
+                      </span>
                     )}
                     {p.installations.some((i) => i.scope !== "user") && (
                       <span>另有项目或其他作用域安装</span>
@@ -570,9 +600,9 @@ function NativeHostPage({
               </article>
             ))}
             <p className="native-plugin-footnote">
-              用户设置不代表当前项目或既有会话的生效状态。请在{" "}
+              用户设置可能与当前项目或已有会话不同，请在{" "}
               {pluginHostLabels[host]}{" "}
-              新会话中核对；认证、信任与安装命令批准由宿主处理。
+              新会话中核对。认证、信任与安装批准需在 {pluginHostLabels[host]} 中完成。
             </p>
           </section>
         </div>
@@ -620,7 +650,7 @@ function NativeHostPage({
               </div>
             )}
             <details open>
-              <summary>实际原生命令／配置动作</summary>
+              <summary>将执行的命令或配置操作</summary>
               <pre>{preview.command}</pre>
             </details>
           </div>
@@ -741,9 +771,9 @@ function AddMarket({
                 />
               </label>
               <label>
-                Sparse 目录（可选，每行一个）
+                仅检出指定目录（可选，每行一个）
                 <textarea
-                  aria-label="Sparse 目录"
+                  aria-label="仅检出指定目录"
                   rows={3}
                   value={sparse}
                   onChange={(e) => setSparse(e.target.value)}
@@ -751,7 +781,7 @@ function AddMarket({
               </label>
             </>
           )}
-          <p>使用本机已有凭据。下一步会显示实际动作与影响，确认后才写入。</p>
+          <p>使用本机已有凭据。下一步查看操作内容与影响，确认后执行。</p>
           {error && (
             <p role="alert" className="text-destructive">
               {error}
@@ -769,7 +799,7 @@ function AddMarket({
             取消
           </Button>
           <Button type="submit" size="sm" disabled={busy || !source.trim()}>
-            {busy ? "正在核对…" : "查看操作确认"}
+            {busy ? "正在核对…" : "查看操作"}
           </Button>
         </div>
       </form>
@@ -808,7 +838,7 @@ function PluginDetail({
         )}
         <p>
           用户设置：{enabledLabel(plugin.userEnabled)} ·
-          无项目上下文的宿主报告：
+          {pluginHostLabels[host]} 报告的状态（未指定项目）：
           {plugin.effectiveEnabled === null
             ? "未知"
             : enabledLabel(plugin.effectiveEnabled)}
