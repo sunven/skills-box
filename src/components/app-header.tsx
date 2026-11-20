@@ -1,8 +1,7 @@
-import { ArrowLeft, ArrowUpCircle, Download, RefreshCw, Settings, SlidersHorizontal } from "lucide-react";
+import { ArrowLeft, ArrowUpCircle, Download, RefreshCw, SlidersHorizontal } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button } from "./ui/button";
-import { environmentSummary } from "../lib/environment-display";
-import type { AppError, EnvReport, UpdateCheckReport } from "../lib/types";
+import type { AppError, UpdateCheckReport } from "../lib/types";
 import { formatEpochDateTime, type LastCheckSummary } from "../lib/update-view";
 
 interface AppHeaderProps {
@@ -15,11 +14,7 @@ interface AppHeaderProps {
   onOpenMarketplace?: () => void;
   discoveryCount: number;
   onOpenDiscovery: () => void;
-  onOpenSettings: () => void;
   onReturnToSkills: () => void;
-  report?: EnvReport;
-  isLoading: boolean;
-  isError: boolean;
   mutationsEnabled: boolean;
   onInstall: () => void;
   updateReport?: UpdateCheckReport | null;
@@ -62,11 +57,7 @@ export function AppHeader({
   onOpenMarketplace,
   discoveryCount,
   onOpenDiscovery,
-  onOpenSettings,
   onReturnToSkills,
-  report,
-  isLoading,
-  isError,
   mutationsEnabled,
   onInstall,
   updateReport,
@@ -110,15 +101,10 @@ export function AppHeader({
   ]
     .filter(Boolean)
     .join("\n");
-  const env = isLoading
-    ? { label: "环境检测中", tone: "muted" as const }
-    : isError || !report
-      ? { label: "环境异常", tone: "destructive" as const }
-      : environmentSummary(report);
 
   return (
     <header className="topbar" inert={inert}>
-      <div className="flex min-w-0 items-center gap-3">
+      <div className="topbar-start">
         {settingsOpen || discoveryOpen || marketplaceOpen || pluginsOpen ? null : <Button
           variant="ghost"
           size="icon"
@@ -129,32 +115,17 @@ export function AppHeader({
         >
           <SlidersHorizontal />
         </Button>}
-        <div className="brand">
-          <span className="brand-mark">
-            <BrandMark />
-          </span>
-          <span className="brand-name">Skills Box</span>
-          <span
-            role="img"
-            className="env-dot"
-            data-tone={env.tone}
-            title={env.label}
-            aria-label={env.label}
-          />
-          <span className="brand-scope">
-            {report?.lock.path ?? "~/.agents/.skill-lock.json"} ·{" "}
-            {report?.agents.length ?? 0} 个 agent
-          </span>
-        </div>
+        <span className="brand-mark">
+          <BrandMark />
+        </span>
+        {scopeSwitcher}
       </div>
-
-      <div className="topbar-center">{scopeSwitcher}</div>
 
       <div className="topbar-actions">
         <Button variant={pluginsOpen ? "outline" : "ghost"} size="sm" aria-pressed={pluginsOpen} onClick={onOpenPlugins}>插件</Button>
         <Button variant={marketplaceOpen ? "outline" : "ghost"} size="sm" aria-pressed={marketplaceOpen} onClick={onOpenMarketplace}>技能市场</Button>
         <Button variant={discoveryOpen ? "outline" : "ghost"} size="sm" onClick={onOpenDiscovery} aria-label={`发现 (${discoveryCount})`} aria-pressed={discoveryOpen}>发现{discoveryCount > 0 ? <span className="discovery-count" data-testid="discovery-badge">{discoveryCount}</span> : null}</Button>
-        {settingsOpen || discoveryOpen || marketplaceOpen || pluginsOpen ? <><Button variant="ghost" size="sm" onClick={onReturnToSkills}><ArrowLeft aria-hidden="true" />返回 skills</Button>{discoveryOpen ? <Button variant="ghost" size="icon" aria-label="设置" onClick={onOpenSettings}><Settings aria-hidden="true" /></Button> : null}</> : <>
+        {settingsOpen || discoveryOpen || marketplaceOpen || pluginsOpen ? <Button variant="ghost" size="sm" onClick={onReturnToSkills}><ArrowLeft aria-hidden="true" />返回 skills</Button> : <>
         <span
           data-testid="last-update-check"
           data-error={!checkingUpdates && updateError ? "true" : undefined}
@@ -213,7 +184,6 @@ export function AppHeader({
           <Download className="size-3.5" aria-hidden="true" />
           安装 skill
         </Button>
-        <Button variant="ghost" size="icon" aria-label="设置" title="设置" onClick={onOpenSettings}><Settings aria-hidden="true" /></Button>
         </>}
       </div>
     </header>

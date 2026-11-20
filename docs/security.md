@@ -33,11 +33,13 @@ the signature and signed version before installing an update. See
 
 ## Renderer permissions
 
-- Tauri capabilities expose **only** `core:default` and `dialog:allow-open`
+- Tauri capabilities expose **only** `core:default`,
+  `core:window:allow-start-dragging` and `dialog:allow-open`
   for the `main` window (`src-tauri/capabilities/default.json`). The dialog
   plugin is used by project registration and batch project destination selection; no save,
   message or ask dialog is allowed. There is no `shell`, `fs` or `opener`
-  permission in the frontend.
+  permission in the frontend. The window permission lets the custom titlebar
+  drag the native window; double-click maximization uses `core:default`.
 - `add_project` / `relocate_project` accept the folder chosen by that picker.
   Batch Copy to project also accepts an explicitly selected `projectRoot` for
   a bounded read-only preview. These path inputs use the same validation:

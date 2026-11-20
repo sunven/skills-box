@@ -19,6 +19,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { StaleRecordsDialog } from "./components/stale-records-dialog";
 import { AnomalyDialog } from "./components/anomaly-panel";
 import { AppHeader } from "./components/app-header";
+import { AppTitlebar } from "./components/app-titlebar";
 import { DetailPane, type DetailEntry } from "./components/detail-pane";
 import { EnvironmentBanner } from "./components/environment-banner";
 import { ExitDialog } from "./components/exit-dialog";
@@ -516,6 +517,11 @@ function App() {
   return (
     <ExpertPackProvider scope={scope} onOpen={(slug) => { setPackEntry({ slug, key: Date.now() }); setPluginsOpen(false); setMarketplaceOpen(true); setSettingsOpen(false); setDiscoveryEntry(null); setDetailEntry(null); }}>
     <div className="app-shell text-foreground">
+      <AppTitlebar
+        settingsOpen={settingsOpen}
+        disabled={marketplaceInstallOpen}
+        onOpenSettings={() => { setPluginsOpen(false); setMarketplaceOpen(false); setSettingsSection("github"); setSettingsOpen(true); setDiscoveryEntry(null); }}
+      />
       {appUpdate.critical ? (
         <p className="notice" role="status">正在安装应用更新并准备重启，暂时无法关闭应用或开始新的写入。</p>
       ) : null}
@@ -529,11 +535,7 @@ function App() {
         discoveryOpen={discoveryEntry !== null}
         discoveryCount={discovery.query.data?.unreadCount ?? 0}
         onOpenDiscovery={() => { setPluginsOpen(false); setMarketplaceOpen(false); setSettingsOpen(false); setDiscoveryEntry({ filter: "uninstalled", source: "all" }); }}
-        onOpenSettings={() => { setPluginsOpen(false); setMarketplaceOpen(false); setSettingsSection("github"); setSettingsOpen(true); setDiscoveryEntry(null); }}
         onReturnToSkills={() => { setPluginsOpen(false); setMarketplaceOpen(false); setSettingsOpen(false); setDiscoveryEntry(null); }}
-        report={report}
-        isLoading={environment.isPending}
-        isError={environment.isError}
         mutationsEnabled={mutationsEnabled}
         onInstall={() => openInstall()}
         updateReport={updateData}

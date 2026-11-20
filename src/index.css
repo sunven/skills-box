@@ -245,9 +245,45 @@
   overflow: hidden;
 }
 
+.app-titlebar {
+  display: flex;
+  flex: 0 0 32px;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  padding-right: 8px;
+  background: var(--raised);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.app-titlebar-drag {
+  display: flex;
+  flex: 1;
+  height: 100%;
+  align-items: center;
+  /* Leave the native macOS window controls clear. */
+  padding-left: 80px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.app-titlebar .titlebar-settings {
+  width: 24px;
+  height: 24px;
+  flex: none;
+  border-radius: 4px;
+}
+
+.titlebar-settings[aria-pressed="true"] {
+  background: var(--active);
+  color: var(--foreground);
+}
+
 .topbar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(0, 1fr);
   min-height: 52px;
   align-items: center;
   gap: 16px;
@@ -256,16 +292,11 @@
   padding: 0 16px;
 }
 
-.topbar-center {
-  min-width: 0;
-  justify-self: center;
-}
-
-.brand {
+.topbar-start {
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
 }
 
 .brand-mark {
@@ -273,27 +304,6 @@
   flex: none;
   place-items: center;
   color: var(--foreground);
-}
-
-.brand-name {
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: 0;
-  white-space: nowrap;
-}
-
-.brand-scope {
-  overflow: hidden;
-  color: var(--muted-foreground);
-  font-size: 12px;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.brand-scope::before {
-  content: "·";
-  margin-right: 8px;
-  color: var(--border-strong);
 }
 
 .topbar-actions {
@@ -625,16 +635,15 @@
 .scope-menu {
   position: fixed;
   inset: auto;
-  top: 58px;
-  left: 50%;
+  top: 90px;
+  left: 16px;
   position-anchor: --scope-switcher;
-  top: calc(anchor(bottom, 52px) + 6px);
-  left: anchor(center, 50%);
+  top: calc(anchor(bottom, 84px) + 6px);
+  left: clamp(12px, anchor(left, 16px), calc(100vw - 332px));
   width: min(320px, calc(100vw - 24px));
   max-height: calc(100dvh - 120px);
   overflow-y: auto;
   margin: 0;
-  transform: translateX(-50%);
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   padding: 6px;
@@ -657,10 +666,9 @@
 .scope-feedback {
   position: absolute;
   top: calc(100% + 8px);
-  left: 50%;
+  left: 0;
   z-index: 40;
-  width: min(320px, calc(100vw - 24px));
-  transform: translateX(-50%);
+  width: min(320px, calc(100vw - 100px));
   border: 1px solid var(--border-strong);
   border-radius: 6px;
   padding: 6px;
@@ -2037,7 +2045,6 @@
 /* ---------- Responsive ---------- */
 
 @media (max-width: 1180px) {
-  .brand-scope,
   .topbar-stamp {
     display: none;
   }
@@ -2142,10 +2149,6 @@
     padding: 0 12px;
   }
 
-  .brand-scope {
-    display: none;
-  }
-
   .canvas {
     padding: 16px 16px 16px;
   }
@@ -2166,6 +2169,21 @@
 
   .skill-col-source {
     display: none;
+  }
+
+  .topbar {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    padding-block: 8px;
+  }
+
+  .topbar-actions {
+    flex-wrap: wrap;
+  }
+
+  .scope-menu {
+    top: 80px;
+    top: calc(anchor(bottom, 74px) + 6px);
   }
 }
 
@@ -2189,22 +2207,6 @@
   .settings-menu button {
     flex: 1;
     justify-content: center;
-  }
-
-  .topbar {
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 8px;
-    padding-block: 8px;
-  }
-
-  .topbar-center {
-    grid-column: 1 / -1;
-    grid-row: 2;
-  }
-
-  .scope-menu {
-    top: 96px;
-    top: calc(anchor(bottom, 90px) + 6px);
   }
 
   .anomaly-strip .link {
@@ -2239,11 +2241,7 @@
     margin-left: 36px;
   }
 
-  .topbar > div:first-child {
-    gap: 6px;
-  }
-
-  .topbar .brand {
+  .topbar-start {
     gap: 6px;
   }
 
