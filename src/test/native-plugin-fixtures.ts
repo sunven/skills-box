@@ -18,7 +18,7 @@ export function nativePluginFixture(
       host,
       configRoot: `/Users/demo/.${host}`,
       executable: `/usr/local/bin/${host}`,
-      version: host === "codex" ? "0.170.0" : "2.1.323",
+      version: host === "codex" ? "0.170.0" : "2.1.325",
       fingerprint: "fixture-1",
       sourceKinds:
         host === "codex" ? ["local", "git"] : ["local", "git", "url"],

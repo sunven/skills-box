@@ -1,5 +1,5 @@
-//! Operation contracts have evidence, not a minimum-version promise. Unknown
-//! builds can earn individual capabilities through an isolated native probe.
+//! Host adapters provide default capabilities independently of CLI versions.
+//! Observed failures and isolated probes can disable individual operations.
 use super::{inventory, model::*, operations, transport::Runtime};
 use serde_json::json;
 use std::{collections::BTreeMap, fs};
@@ -7,6 +7,24 @@ use std::{collections::BTreeMap, fs};
 pub struct Contract {
     pub capabilities: Vec<Capability>,
     pub sources: Vec<String>,
+}
+impl Contract {
+    pub fn apply_probe(&mut self, tested: &Contract) {
+        // The basic probe does not cover sync, remote sources or cascading
+        // removal. Preserve their current state, including observed failures.
+        for capability in &mut self.capabilities {
+            if matches!(capability.action, Action::SyncMarket | Action::RemoveMarket) {
+                continue;
+            }
+            if let Some(result) = tested
+                .capabilities
+                .iter()
+                .find(|result| result.action == capability.action)
+            {
+                *capability = result.clone();
+            }
+        }
+    }
 }
 pub fn actions(host: Host) -> Vec<Action> {
     let mut a = vec![
@@ -25,14 +43,20 @@ pub fn actions(host: Host) -> Vec<Action> {
     });
     a
 }
-pub fn shipped(host: Host, version: &str) -> Contract {
-    // These are verification records, not a version ordering or a global CLI lock.
-    // Evidence: .scratch/native-plugin-management/verification/*-results.json.
-    let verified = matches!(
-        (host, version),
-        (Host::Codex, "0.170.0") | (Host::Claude, "2.1.323")
-    );
-    Contract{capabilities:actions(host).into_iter().map(|action|Capability{action,blocked_reason:(!verified).then(||"此 CLI 构建尚无该操作的验证记录。可运行隔离兼容性验证；未通过的动作保持不可用。".into())}).collect(),sources:if verified{if host==Host::Codex{vec!["local".into(),"git".into()]}else{vec!["local".into(),"git".into(),"url".into()]}}else{vec![]}}
+pub fn defaults(host: Host) -> Contract {
+    Contract {
+        capabilities: actions(host)
+            .into_iter()
+            .map(|action| Capability {
+                action,
+                blocked_reason: None,
+            })
+            .collect(),
+        sources: match host {
+            Host::Codex => vec!["local".into(), "git".into()],
+            Host::Claude => vec!["local".into(), "git".into(), "url".into()],
+        },
+    }
 }
 pub fn key(rt: &Runtime, version: &str) -> String {
     let executable = fs::canonicalize(&rt.executable).unwrap_or(rt.executable.clone());
@@ -178,15 +202,14 @@ pub fn verify(rt: &Runtime) -> Result<Contract, String> {
     {
         contract.sources.push("local".into());
     }
-    // Unknown builds' cascading marketplace removal remains blocked: the local
-    // fixture's empty-market removal cannot prove cross-scope deletion behavior.
+    // Empty-market cleanup does not test cascading removal. This result is
+    // excluded when merging the probe into the host's current capabilities.
     if let Some(c) = contract
         .capabilities
         .iter_mut()
         .find(|c| c.action == Action::RemoveMarket)
     {
-        c.blocked_reason =
-            Some("空市场契约已检测；此构建的连带移除影响仍需完整验收，暂不可用。".into());
+        c.blocked_reason = Some("仅检测了空市场移除；基本兼容性检查不覆盖连带移除影响。".into());
     }
     Ok(contract)
 }

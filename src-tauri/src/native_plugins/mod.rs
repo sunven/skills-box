@@ -73,7 +73,7 @@ impl Service {
             .map_err(|_| "兼容性状态不可用")?
             .get(&key)
             .cloned()
-            .unwrap_or_else(|| contracts::shipped(rt.host, &version));
+            .unwrap_or_else(|| contracts::defaults(rt.host));
         let projects = self.0.projects.list();
         let roots = projects
             .projects
@@ -231,14 +231,16 @@ impl Service {
                         }))
             });
             if contract_changed {
-                let reason =
-                    "原生命令返回或写后状态不符合已验证契约；此操作已停用，请重新做隔离验证。"
-                        .to_string();
+                let reason = if matches!(preview.request.action, Action::SyncMarket | Action::RemoveMarket) {
+                    "原生命令返回或写后状态不符合预期；此操作已停用，请在宿主中核对。基本兼容性检查不覆盖此操作。"
+                } else {
+                    "原生命令返回或写后状态不符合预期；此操作已停用，请运行检查兼容性后重试。"
+                }.to_string();
                 if let Ok(mut cache) = service.0.contracts.lock() {
                     let key = contracts::key(&rt, &before.snapshot.version);
                     let contract = cache
                         .entry(key)
-                        .or_insert_with(|| contracts::shipped(rt.host, &before.snapshot.version));
+                        .or_insert_with(|| contracts::defaults(rt.host));
                     if let Some(c) = contract
                         .capabilities
                         .iter_mut()
@@ -301,25 +303,11 @@ impl Service {
             let version = rt.version()?;
             let key = contracts::key(&rt, &version);
             let tested = contracts::verify(&rt)?;
-            let mut contract = contracts::shipped(host, &version);
-            // Reverification can revoke a shipped contract, and can certify
-            // individual actions for previously unknown builds.
-            for c in &mut contract.capabilities {
-                if let Some(test) = tested.capabilities.iter().find(|t| t.action == c.action) {
-                    if !matches!(c.action, Action::SyncMarket | Action::RemoveMarket) {
-                        *c = test.clone();
-                    }
-                }
-            }
-            if contract.sources.is_empty() {
-                contract.sources = tested.sources;
-            }
-            service
-                .0
-                .contracts
-                .lock()
-                .map_err(|_| "兼容性状态不可用")?
-                .insert(key, contract);
+            let mut cache = service.0.contracts.lock().map_err(|_| "兼容性状态不可用")?;
+            cache
+                .entry(key)
+                .or_insert_with(|| contracts::defaults(host))
+                .apply_probe(&tested);
             Ok::<(), String>(())
         })
         .await

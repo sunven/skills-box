@@ -6,9 +6,10 @@ codex='CODEX_HOME' in os.environ
 root=Path(os.environ['CODEX_HOME' if codex else 'CLAUDE_CONFIG_DIR'])
 a=sys.argv[1:]
 def read(name):return json.loads((root/name).read_text())
+version=(root/'cli-version').read_text().strip() if (root/'cli-version').exists() else ('0.170.0' if codex else '2.1.325')
 if codex:
     if a==['--version']:
-        print('codex-cli 0.170.0')
+        print('codex-cli '+version)
     elif a==['plugin','marketplace','list','--json']:
         print(json.dumps(read('marketplaces.json')))
     elif a==['plugin','list','--json']:
@@ -25,7 +26,7 @@ if codex:
         sys.exit(1)
     sys.exit(0)
 if a==['--version']:
-    print('2.1.323 (Claude Code)')
+    print(version+' (Claude Code)')
 elif a==['plugin','marketplace','list','--json']:
     known=read('plugins/known_marketplaces.json')
     print(json.dumps([{'name':name,**row['source'],'installLocation':row['installLocation']} for name,row in known.items()]))

@@ -207,13 +207,59 @@ fn local_detail_rejects_symlink_escape_and_limits_content() {
     assert!(inventory::local_path(&root, "../secret").is_err());
 }
 #[test]
-fn unknown_versions_are_per_action_and_cannot_inherit_write_semantics() {
-    let c = contracts::shipped(Host::Claude, "99.1.0");
-    assert!(c.capabilities.iter().all(|c| c.blocked_reason.is_some()));
-    assert!(c.sources.is_empty());
-    let c = contracts::shipped(Host::Codex, "0.170.0");
-    assert!(c.capabilities.iter().all(|c| c.blocked_reason.is_none()));
-    assert!(!c.capabilities.iter().any(|c| c.action == Action::Update));
+fn compatibility_probe_updates_basic_actions_without_resetting_market_state() {
+    for host in [Host::Claude, Host::Codex] {
+        for market_blocked in [false, true] {
+            let mut current = contracts::defaults(host);
+            let sources = current.sources.clone();
+            for capability in &mut current.capabilities {
+                if capability.action == Action::Enable
+                    || market_blocked
+                        && matches!(capability.action, Action::SyncMarket | Action::RemoveMarket)
+                {
+                    capability.blocked_reason = Some("observed failure".into());
+                }
+            }
+            let tested = contracts::Contract {
+                capabilities: vec![
+                    Capability {
+                        action: Action::Enable,
+                        blocked_reason: None,
+                    },
+                    Capability {
+                        action: Action::Disable,
+                        blocked_reason: Some("probe failed".into()),
+                    },
+                    Capability {
+                        action: Action::SyncMarket,
+                        blocked_reason: Some("not tested".into()),
+                    },
+                    Capability {
+                        action: Action::RemoveMarket,
+                        blocked_reason: None,
+                    },
+                ],
+                sources: vec!["local".into()],
+            };
+            current.apply_probe(&tested);
+            let reason = |action| {
+                current
+                    .capabilities
+                    .iter()
+                    .find(|c| c.action == action)
+                    .unwrap()
+                    .blocked_reason
+                    .as_deref()
+            };
+            assert_eq!(reason(Action::Enable), None);
+            assert_eq!(reason(Action::Disable), Some("probe failed"));
+            assert_eq!(reason(Action::Install), None);
+            for action in [Action::SyncMarket, Action::RemoveMarket] {
+                assert_eq!(reason(action), market_blocked.then_some("observed failure"));
+            }
+            assert_eq!(current.sources, sources);
+        }
+    }
 }
 
 /// Explicit opt-in: real CLIs, isolated HOME and static fixture only.
@@ -239,7 +285,7 @@ fn native_adapters_isolated_lifecycle() {
         };
         let rt = contracts::isolated_runtime(&base, temp.path()).unwrap();
         let market = contracts::fixture(temp.path()).unwrap();
-        let contract = contracts::shipped(host, &rt.version().unwrap());
+        let contract = contracts::defaults(host);
         let load = || {
             let mut o = inventory::load(&rt, contract.capabilities.clone(), &[]).unwrap();
             o.snapshot.source_kinds = contract.sources.clone();
@@ -317,7 +363,7 @@ fn native_adapters_scope_and_orphan() {
         };
         let rt = contracts::isolated_runtime(&base, temp.path()).unwrap();
         let market = contracts::fixture(temp.path()).unwrap();
-        let contract = contracts::shipped(host, &rt.version().unwrap());
+        let contract = contracts::defaults(host);
         assert!(
             rt.run(
                 &[
@@ -397,7 +443,7 @@ fn native_adapters_scope_and_orphan() {
             );
             let before = inventory::load(
                 &rt,
-                contracts::shipped(host, &rt.version().unwrap()).capabilities,
+                contracts::defaults(host).capabilities,
                 &[],
             )
             .unwrap();
@@ -510,6 +556,116 @@ fn fake_service() -> (tempfile::TempDir, Service, Runtime) {
     *service.0.runtime.lock().unwrap() = Some(rt.clone());
     (temp, service, rt)
 }
+#[tokio::test]
+async fn cli_versions_do_not_gate_host_actions_or_market_sources() {
+    for (host, versions) in [
+        (Host::Claude, ["2.1.323", "2.1.325", "99.1.0", "1.0.0"]),
+        (Host::Codex, ["0.170.0", "0.171.0", "99.1.0", "0.1.0"]),
+    ] {
+        let (_temp, service, mut rt) = fake_service();
+        rt.host = host;
+        if host == Host::Codex {
+            fs::write(rt.root.join("marketplaces.json"), r#"{"marketplaces":[]}"#).unwrap();
+            fs::write(rt.root.join("installed.json"), r#"{"installed":[]}"#).unwrap();
+        }
+        *service.0.runtime.lock().unwrap() = Some(rt.clone());
+        for version in versions {
+            fs::write(rt.root.join("cli-version"), version).unwrap();
+            let page = service.read(host).await.unwrap();
+            assert!(page.error.is_none(), "{host:?} {version}: {:?}", page.error);
+            let snapshot = page.snapshot.unwrap();
+            assert_eq!(snapshot.version, version);
+            assert!(
+                snapshot
+                    .capabilities
+                    .iter()
+                    .all(|c| c.blocked_reason.is_none())
+            );
+            let unsupported = if host == Host::Codex {
+                Action::Update
+            } else {
+                Action::Reinstall
+            };
+            assert!(
+                !snapshot
+                    .capabilities
+                    .iter()
+                    .any(|c| c.action == unsupported)
+            );
+            let sources = if host == Host::Codex {
+                vec!["local", "git"]
+            } else {
+                vec!["local", "git", "url"]
+            };
+            assert_eq!(snapshot.source_kinds, sources);
+            let mut add = request(host, Action::AddMarket, "");
+            add.source = "https://example.invalid/team.git".into();
+            assert!(service.prepare(add).await.is_ok());
+            if host == Host::Claude {
+                for action in [Action::SyncMarket, Action::RemoveMarket] {
+                    assert!(
+                        service
+                            .prepare(request(host, action, "skills-box-verification"))
+                            .await
+                            .is_ok()
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn compatibility_check_preserves_cached_market_failures_and_sources() {
+    let (_temp, service, rt) = fake_service();
+    let mut current = contracts::defaults(rt.host);
+    current
+        .capabilities
+        .iter_mut()
+        .find(|c| c.action == Action::SyncMarket)
+        .unwrap()
+        .blocked_reason = Some("observed sync failure".into());
+    let key = contracts::key(&rt, &rt.version().unwrap());
+    service.0.contracts.lock().unwrap().insert(key, current);
+    // This fixture cannot run the isolated basic lifecycle. Failed probes must
+    // disable those actions without resetting either market action or sources.
+    let page = service.verify(rt.host).await.unwrap();
+    assert!(page.error.is_none(), "{:?}", page.error);
+    let snapshot = page.snapshot.unwrap();
+    let reason = |action| {
+        snapshot
+            .capabilities
+            .iter()
+            .find(|c| c.action == action)
+            .unwrap()
+            .blocked_reason
+            .as_deref()
+    };
+    assert_eq!(reason(Action::SyncMarket), Some("observed sync failure"));
+    assert_eq!(reason(Action::RemoveMarket), None);
+    assert!(reason(Action::Enable).is_some_and(|r| r.starts_with("隔离验证未通过")));
+    assert_eq!(snapshot.source_kinds, vec!["local", "git", "url"]);
+    assert!(!rt.root.join("started").exists());
+}
+
+#[tokio::test]
+async fn cli_version_change_invalidates_confirmation_without_writing() {
+    let (_temp, service, rt) = fake_service();
+    let p = service
+        .prepare(request(
+            Host::Claude,
+            Action::Enable,
+            "demo@skills-box-verification",
+        ))
+        .await
+        .unwrap();
+    fs::write(rt.root.join("cli-version"), "2.1.326").unwrap();
+    let outcome = service.execute(p.token).await.unwrap();
+    assert_eq!(outcome.status, "conflict");
+    assert!(!outcome.executed);
+    assert!(!rt.root.join("started").exists());
+}
+
 #[tokio::test]
 async fn stale_confirmation_is_consumed_without_writing() {
     let (_temp, service, rt) = fake_service();
@@ -721,7 +877,7 @@ fn native_adapters_git_and_source_contracts() {
             .read_line(&mut port)
             .unwrap();
         let address = format!("http://127.0.0.1:{}/market.git", port.trim());
-        let contract = contracts::shipped(host, &rt.version().unwrap());
+        let contract = contracts::defaults(host);
         let load = || {
             let mut o = inventory::load(&rt, contract.capabilities.clone(), &[]).unwrap();
             o.snapshot.source_kinds = contract.sources.clone();
@@ -1197,7 +1353,7 @@ fn native_adapters_native_catalog_and_approval() {
             )
             .unwrap();
         assert!(out.success, "{}", out.diagnostic);
-        let contract = contracts::shipped(host, &rt.version().unwrap());
+        let contract = contracts::defaults(host);
         let obs = inventory::load(&rt, contract.capabilities.clone(), &[]).unwrap();
         assert_eq!(obs.snapshot.plugins.len(), 1);
         let install = request(host, Action::Install, "demo@skills-box-verification");
@@ -1296,7 +1452,7 @@ fn native_adapters_codex_override() {
         "[plugins.\"demo@skills-box-verification\"]\nenabled=true\n",
     )
     .unwrap();
-    let contract = contracts::shipped(Host::Codex, &rt.version().unwrap());
+    let contract = contracts::defaults(Host::Codex);
     let obs = inventory::load(&rt, contract.capabilities, &[]).unwrap();
     assert!(obs.snapshot.plugins[0].read_only_reason.is_some());
     assert!(operations::arguments(
@@ -1353,7 +1509,7 @@ fn native_adapters_network_failure() {
             isolated: true,
         };
         let rt = contracts::isolated_runtime(&base, temp.path()).unwrap();
-        let contract = contracts::shipped(host, &rt.version().unwrap());
+        let contract = contracts::defaults(host);
         let mut before = inventory::load(&rt, contract.capabilities.clone(), &[]).unwrap();
         before.snapshot.source_kinds = contract.sources;
         let mut r = request(host, Action::AddMarket, "");

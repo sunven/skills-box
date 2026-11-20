@@ -20,7 +20,7 @@ pub fn arguments(request: &Request, obs: &Observation) -> Result<Vec<String>, St
             return Err(reason.clone());
         }
     } else {
-        return Err("此操作尚未通过原生契约验证。".into());
+        return Err("当前宿主不支持此操作。".into());
     }
     let host = request.host;
     let action = request.action;
@@ -28,7 +28,7 @@ pub fn arguments(request: &Request, obs: &Observation) -> Result<Vec<String>, St
     if action == Action::AddMarket {
         validate_source(request)?;
         if !snapshot.source_kinds.contains(&request.source_kind) {
-            return Err("此来源格式尚未通过当前 CLI 的隔离验证。".into());
+            return Err("当前宿主不支持此市场来源格式。".into());
         }
         args.extend(["marketplace".into(), "add".into()]);
         let mut source = request.source.trim().to_string();

@@ -29,7 +29,7 @@ describe("native plugin management", () => {
     ).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
     fireEvent.click(screen.getByRole("button", { name: "Claude Code" }));
-    await screen.findByText("/Users/demo/.claude · 2.1.323");
+    await screen.findByText("/Users/demo/.claude · 2.1.325");
     expect(backend.callsOf("prepare_native_plugin")).toHaveLength(0);
     expect(backend.callsOf("execute_native_plugin")).toHaveLength(0);
     fireEvent.change(
@@ -39,6 +39,43 @@ describe("native plugin management", () => {
     expect(screen.queryByText("workspace-tools")).not.toBeInTheDocument();
     expect(screen.getByText("review-notes")).toBeInTheDocument();
   });
+  it.each([
+    { host: "claude" as const, version: "2.1.325" },
+    { host: "claude" as const, version: "99.1.0" },
+    { host: "codex" as const, version: "0.171.0" },
+  ])(
+    "allows market previews on $host $version without a compatibility check",
+    async ({ host, version }) => {
+      const state = nativePluginFixture(host);
+      state.snapshot!.version = version;
+      const backend = createFakeBackend({
+        commands: {
+          read_native_plugins: ({ host: requested }) =>
+            requested === host ? state : nativePluginFixture(requested),
+        },
+      }).install();
+      renderApp();
+      await openPlugins();
+      if (host === "claude") {
+        fireEvent.click(screen.getByRole("button", { name: "Claude Code" }));
+      }
+      await screen.findByText(`/Users/demo/.${host} · ${version}`);
+      fireEvent.click(
+        screen.getByRole("button", { name: /team-plugins.*Git 仓库/ }),
+      );
+      expect(screen.queryByText("部分操作暂不可用")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "同步市场" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "移除市场" })).toBeEnabled();
+      fireEvent.click(screen.getByRole("button", { name: "同步市场" }));
+      const sync = await screen.findByRole("dialog", { name: "确认同步市场" });
+      fireEvent.click(within(sync).getByRole("button", { name: "取消" }));
+      fireEvent.click(screen.getByRole("button", { name: "移除市场" }));
+      await screen.findByRole("dialog", { name: "确认移除市场" });
+      expect(backend.callsOf("prepare_native_plugin")).toHaveLength(2);
+      expect(backend.callsOf("verify_native_plugin_host")).toHaveLength(0);
+      expect(backend.callsOf("execute_native_plugin")).toHaveLength(0);
+    },
+  );
   it("requires a fresh confirmation before a Codex reinstall and explains enablement", async () => {
     const backend = createFakeBackend().install();
     renderApp();
@@ -57,15 +94,20 @@ describe("native plugin management", () => {
     expect(screen.getByText("用户设置：启用")).toBeInTheDocument();
   });
   it("shows cross-scope blocking and isolated market errors without hiding installed plugins", async () => {
-    const state = nativePluginFixture();
+    const state = nativePluginFixture("claude");
     const market = state.snapshot!.markets[0]!;
     market.catalogError = "目录文件不可读";
     market.removeBlockedReason = "存在项目安装，移除会连带卸载，已阻止。";
     createFakeBackend({
-      commands: { read_native_plugins: () => state },
+      commands: {
+        read_native_plugins: ({ host }) =>
+          host === "claude" ? state : nativePluginFixture(host),
+      },
     }).install();
     renderApp();
     await openPlugins();
+    fireEvent.click(screen.getByRole("button", { name: "Claude Code" }));
+    await screen.findByText("/Users/demo/.claude · 2.1.325");
     fireEvent.click(
       screen.getByRole("button", { name: /team-plugins.*目录读取失败/ }),
     );
