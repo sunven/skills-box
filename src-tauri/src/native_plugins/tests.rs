@@ -951,6 +951,150 @@ async fn unreadable_catalog_and_native_list_keep_other_markets_visible() {
     assert!(snapshot.warnings.iter().any(|w| w.contains("读取失败")));
 }
 
+#[tokio::test]
+async fn claude_session_plugins_do_not_require_installation_records() {
+    let (_temp, service, rt) = fake_service();
+    let path = rt.root.join("plugins/installed_plugins.json");
+    let mut installed = inventory::optional_json(&path).unwrap();
+    let mut project = installed["plugins"]["demo@skills-box-verification"][0].clone();
+    project["scope"] = json!("project");
+    project["projectPath"] = json!(rt.home.join("project"));
+    installed["plugins"]["demo@skills-box-verification"]
+        .as_array_mut()
+        .unwrap()
+        .push(project);
+    fs::write(path, installed.to_string()).unwrap();
+    fs::write(
+        rt.root.join("cli-only-plugins.json"),
+        json!([
+            {"id":"orca-agent-view@inline","scope":"session","enabled":true},
+            {"id":"demo@skills-box-verification","scope":"session","enabled":true}
+        ])
+        .to_string(),
+    )
+    .unwrap();
+
+    let page = service.read(Host::Claude).await.unwrap();
+    assert!(page.error.is_none(), "{:?}", page.error);
+    let snapshot = page.snapshot.unwrap();
+    assert_eq!(snapshot.plugins.len(), 1);
+    let plugin = &snapshot.plugins[0];
+    assert_eq!(plugin.id, "demo@skills-box-verification");
+    assert_eq!(plugin.installation_state, "installed");
+    assert_eq!(plugin.effective_enabled, Some(false));
+    assert_eq!(plugin.user_enabled, Some(false));
+    assert_eq!(plugin.installations.len(), 2);
+    assert!(plugin.installations.iter().any(|i| i.scope == "project"));
+    assert!(snapshot.markets[0].remove_blocked_reason.is_some());
+}
+
+#[tokio::test]
+async fn claude_non_session_cli_plugins_still_require_installation_records() {
+    let (_temp, service, rt) = fake_service();
+    for scope in ["user", "project", "local", "managed", "unknown"] {
+        fs::write(
+            rt.root.join("cli-only-plugins.json"),
+            json!([{"id":"orca-agent-view@inline","scope":scope,"enabled":true}]).to_string(),
+        )
+        .unwrap();
+        let page = service.read(Host::Claude).await.unwrap();
+        assert!(page.snapshot.is_none(), "scope: {scope}");
+        assert_eq!(
+            page.error.as_deref(),
+            Some("CLI 与原生安装记录不一致，请重新读取。"),
+            "scope: {scope}"
+        );
+    }
+}
+
+fn fake_codex_catalog() -> (tempfile::TempDir, Runtime, std::path::PathBuf) {
+    let (temp, _service, mut rt) = fake_service();
+    rt.host = Host::Codex;
+    rt.root = rt.home.join(".codex");
+    fs::create_dir_all(&rt.root).unwrap();
+    fs::write(rt.root.join("installed.json"), r#"{"installed":[]}"#).unwrap();
+    let market = temp.path().join("curated");
+    fs::create_dir_all(market.join(".agents/plugins")).unwrap();
+    for (file, name, plugin) in [
+        ("marketplace.json", "openai-curated", "regular"),
+        ("api_marketplace.json", "openai-api-curated", "api"),
+    ] {
+        fs::create_dir_all(market.join(plugin)).unwrap();
+        fs::write(
+            market.join(".agents/plugins").join(file),
+            json!({"name":name,"plugins":[{"name":plugin,"source":{"source":"local","path":format!("./{plugin}")}}]}).to_string(),
+        )
+        .unwrap();
+    }
+    (temp, rt, market)
+}
+
+#[test]
+fn codex_catalogs_select_the_manifest_matching_the_native_market() {
+    let (_temp, rt, market) = fake_codex_catalog();
+    // The native built-in markets share a root and do not have marketplaceSource.
+    fs::write(
+        rt.root.join("marketplaces.json"),
+        json!({"marketplaces":[
+            {"name":"openai-api-curated","root":market},
+            {"name":"openai-curated","root":market}
+        ]})
+        .to_string(),
+    )
+    .unwrap();
+    let snapshot = inventory::load(&rt, vec![], &[]).unwrap().snapshot;
+    for (name, plugin) in [("openai-api-curated", "api"), ("openai-curated", "regular")] {
+        let row = snapshot.markets.iter().find(|m| m.name == name).unwrap();
+        assert!(
+            row.catalog_error.is_none(),
+            "{name}: {:?}",
+            row.catalog_error
+        );
+        let entries: Vec<_> = snapshot
+            .plugins
+            .iter()
+            .filter(|p| p.marketplace == name)
+            .collect();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, format!("{plugin}@{name}"));
+        assert_eq!(
+            entries[0].local_root.as_deref(),
+            fs::canonicalize(market.join(plugin)).unwrap().to_str()
+        );
+    }
+}
+
+#[test]
+fn codex_api_catalog_works_without_the_regular_manifest_and_tracks_changes() {
+    let (_temp, rt, market) = fake_codex_catalog();
+    fs::remove_file(market.join(".agents/plugins/marketplace.json")).unwrap();
+    fs::write(
+        rt.root.join("marketplaces.json"),
+        json!({"marketplaces":[{"name":"openai-api-curated","root":market}]}).to_string(),
+    )
+    .unwrap();
+    let before = inventory::load(&rt, vec![], &[]).unwrap().snapshot;
+    assert!(before.markets[0].catalog_error.is_none());
+    assert_eq!(before.plugins.len(), 1);
+    let path = market.join(".agents/plugins/api_marketplace.json");
+    let mut doc = inventory::optional_json(&path).unwrap();
+    doc["plugins"][0]["description"] = json!("Changed API catalog");
+    fs::write(&path, doc.to_string()).unwrap();
+    let after = inventory::load(&rt, vec![], &[]).unwrap().snapshot;
+    assert_ne!(before.fingerprint, after.fingerprint);
+    assert_eq!(
+        after.plugins[0].description.as_deref(),
+        Some("Changed API catalog")
+    );
+
+    for contents in [r#"{"name":"other-market","plugins":[]}"#, "invalid json"] {
+        fs::write(&path, contents).unwrap();
+        let snapshot = inventory::load(&rt, vec![], &[]).unwrap().snapshot;
+        assert!(snapshot.markets[0].catalog_error.is_some());
+        assert!(snapshot.plugins.is_empty());
+    }
+}
+
 #[test]
 #[ignore = "real isolated Codex native catalog and Claude approval boundary"]
 fn native_adapters_native_catalog_and_approval() {

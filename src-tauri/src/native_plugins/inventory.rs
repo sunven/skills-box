@@ -179,8 +179,9 @@ pub fn load(
             }
         }
         let listed = array(&raw_plugins)?;
-        // Every CLI installation must have an authoritative record. Never interpret gaps as uninstalled.
-        for row in listed {
+        // Session plugins are transient CLI loads, not persisted installations.
+        // Every other scope must have an authoritative installation record.
+        for row in listed.iter().filter(|row| row["scope"] != "session") {
             if !records
                 .iter()
                 .any(|r| r["id"] == row["id"] && r["scope"] == row["scope"])
@@ -341,20 +342,39 @@ pub fn load(
             if !root.is_absolute() {
                 return Err("市场目录不是绝对路径。".into());
             }
-            let path = if root.is_file() {
-                root.clone()
-            } else if rt.host == Host::Codex
-                && root.join(".agents/plugins/marketplace.json").exists()
-            {
-                root.join(".agents/plugins/marketplace.json")
+            let paths = if root.is_file() {
+                vec![root.clone()]
+            } else if rt.host == Host::Codex {
+                // Curated API and ChatGPT markets can share one checkout.
+                // Select the document with the identity reported by the host.
+                vec![
+                    root.join(".agents/plugins/marketplace.json"),
+                    root.join(".agents/plugins/api_marketplace.json"),
+                    root.join(".claude-plugin/marketplace.json"),
+                ]
             } else {
-                root.join(".claude-plugin/marketplace.json")
+                vec![root.join(".claude-plugin/marketplace.json")]
             };
-            let doc = optional_json(&path)?;
-            evidence.push(json!({"path":path,"content":doc}));
-            if doc["name"] != name {
-                return Err("本地目录缺失或市场名称不匹配；搜索结果不完整。".into());
+            let mut catalog = None;
+            let mut read_error = None;
+            for path in paths {
+                match optional_json(&path) {
+                    Ok(doc) => {
+                        evidence.push(json!({"path":path,"content":doc}));
+                        if doc["name"] == name {
+                            catalog = Some(doc);
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        read_error.get_or_insert(error);
+                    }
+                }
             }
+            let doc = catalog.ok_or_else(|| {
+                read_error
+                    .unwrap_or_else(|| "本地目录缺失或市场名称不匹配；搜索结果不完整。".into())
+            })?;
             let content_root = if root.is_file() {
                 root.parent()
                     .and_then(Path::parent)
