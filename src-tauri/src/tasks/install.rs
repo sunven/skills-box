@@ -392,7 +392,8 @@ pub fn ensure_extra_attachments(
     let canonical_root = &layout.canonical_dir;
     let mut errors = HashMap::new();
     for name in installed {
-        let canonical = canonical_root.join(name);
+        let directory = crate::cli::install_directory_name(name);
+        let canonical = canonical_root.join(&directory);
         if !fs::metadata(&canonical)
             .map(|metadata| metadata.is_dir())
             .unwrap_or(false)
@@ -404,7 +405,7 @@ pub fn ensure_extra_attachments(
             .iter()
             .filter(|target| !target.universal && !crate::agents::is_catalog_agent(&target.id))
         {
-            if let Err(error) = ensure_extra_link(layout, &canonical, target, name) {
+            if let Err(error) = ensure_extra_link(layout, &canonical, target, &directory) {
                 errors.entry(name.clone()).or_insert(error);
             }
         }
@@ -724,7 +725,8 @@ fn verify_installed(
     name: &str,
     warnings: &mut Vec<AppError>,
 ) -> Result<(), AppError> {
-    let canonical = layout.canonical_dir.join(name);
+    let directory = crate::cli::install_directory_name(name);
+    let canonical = layout.canonical_dir.join(&directory);
     match fs::symlink_metadata(&canonical) {
         Ok(metadata) if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() => {}
         _ => return Err(AppError::verify_canonical_missing(name, &canonical)),
@@ -759,7 +761,7 @@ fn verify_installed(
 
     let canonical_resolved = fs::canonicalize(&canonical).unwrap_or_else(|_| canonical.clone());
     for target in plan.targets.iter().filter(|target| !target.universal) {
-        let attachment = target.skills_dir.join(name);
+        let attachment = target.skills_dir.join(&directory);
         match fs::symlink_metadata(&attachment) {
             Err(_) => {
                 return Err(AppError::verify_attachment_missing(
@@ -951,7 +953,10 @@ impl MutationAction for InstallAction {
             if result.status != TaskSkillStatus::Installed {
                 continue;
             }
-            let canonical = self.layout.canonical_dir.join(&result.name);
+            let canonical = self
+                .layout
+                .canonical_dir
+                .join(crate::cli::install_directory_name(&result.name));
             if let Err(error) = baselines.record_from_dir(&result.name, &canonical, true) {
                 warnings.push(write_warning(error));
             }

@@ -35,6 +35,16 @@ pub struct LockEntry {
     pub well_known_digest: Option<String>,
 }
 
+impl LockEntry {
+    pub(crate) fn directory_name(&self) -> String {
+        if crate::marketplace::is_native_source_type(&self.source_type) {
+            self.name.clone()
+        } else {
+            crate::cli::install_directory_name(&self.name)
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LockFile {
     entries: BTreeMap<String, LockEntry>,
@@ -157,6 +167,7 @@ fn entry_error(name: &str, detail: impl AsRef<str>) -> AppError {
 #[derive(Debug)]
 pub(crate) struct ScopedLock {
     entries: BTreeMap<String, LockEntry>,
+    directory_names: BTreeMap<String, String>,
 }
 impl ScopedLock {
     pub(crate) fn read(scope: &ScopeId, lock_path: &Path) -> Result<Self, AppError> {
@@ -186,7 +197,25 @@ impl ScopedLock {
                 )));
             }
         }
-        Ok(Self { entries })
+        let mut directory_names = BTreeMap::new();
+        for (name, entry) in &entries {
+            let directory = entry.directory_name();
+            if let Some(other) = directory_names.insert(directory.clone(), name.clone()) {
+                return Err(AppError::lock_corrupt(format!(
+                    "技能记录 {other} 与 {name} 指向同一目录：{directory}"
+                )));
+            }
+        }
+        Ok(Self {
+            entries,
+            directory_names,
+        })
+    }
+    pub(crate) fn name_for_directory<'a>(&'a self, directory: &'a str) -> &'a str {
+        self.directory_names
+            .get(directory)
+            .map(String::as_str)
+            .unwrap_or(directory)
     }
     pub(crate) fn entries(&self) -> &BTreeMap<String, LockEntry> {
         &self.entries
@@ -214,6 +243,54 @@ mod tests {
             "installedAt": "2026-01-02T03:04:05.000Z",
             "updatedAt": "2026-02-03T04:05:06.000Z"
         })
+    }
+
+    #[test]
+    fn scoped_lock_preserves_original_names_and_rejects_shared_git_destinations() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(".skill-lock.json");
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "version": 3, "skills": { "My Skill": full_entry() },
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let lock = ScopedLock::global(&path).unwrap();
+        assert_eq!(lock.name_for_directory("my-skill"), "My Skill");
+        assert_eq!(lock.get("My Skill").unwrap().name, "My Skill");
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "version": 3, "skills": { "My Skill": full_entry(), "my-skill": full_entry() },
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            ScopedLock::global(&path).unwrap_err().code,
+            ErrorCode::LockCorrupt
+        );
+    }
+
+    #[test]
+    fn native_marketplace_names_keep_their_original_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(".skill-lock.json");
+        let mut records = crate::marketplace::records::Records::default();
+        records.skills.insert(
+            "My Skill".into(),
+            crate::marketplace::records::Installation::fixture(
+                "My Skill",
+                crate::marketplace::Coordinate::from_canonical("@owner/my-skill").unwrap(),
+                "1.0.0",
+            ),
+        );
+        records.save(&path).unwrap();
+        let lock = ScopedLock::global(&path).unwrap();
+        assert_eq!(lock.get("My Skill").unwrap().directory_name(), "My Skill");
+        assert_eq!(lock.name_for_directory("my-skill"), "my-skill");
     }
 
     #[test]

@@ -172,21 +172,23 @@ pub fn plan_updates(
             };
             match attachment.mode {
                 AttachmentMode::Link | AttachmentMode::Copy => {
-                    if agent.universal {
+                    if agent.universal && marketplace_record.is_none() {
+                        continue;
+                    }
+                    let target = InstallTarget {
+                        id: attachment.agent_id.clone(),
+                        display_name: attachment.agent_name.clone(),
+                        universal: agent.universal,
+                        skills_dir: agent.skills_dir.clone(),
+                    };
+                    if !target.needs_attachment(&layout.canonical_dir) {
                         continue;
                     }
                     if attachment.mode == AttachmentMode::Copy {
                         copy_agents
                             .push((attachment.agent_id.clone(), attachment.agent_name.clone()));
                     }
-                    targets
-                        .entry(attachment.agent_id.clone())
-                        .or_insert(InstallTarget {
-                            id: attachment.agent_id.clone(),
-                            display_name: attachment.agent_name.clone(),
-                            universal: false,
-                            skills_dir: agent.skills_dir.clone(),
-                        });
+                    targets.entry(attachment.agent_id.clone()).or_insert(target);
                 }
                 AttachmentMode::Native | AttachmentMode::Broken => {}
             }

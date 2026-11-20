@@ -285,3 +285,97 @@ fn failed_publication_revalidation_keeps_the_existing_installation() {
             .is_symlink()
     );
 }
+
+#[test]
+fn marketplace_update_replaces_universal_copies_with_verified_attachments() {
+    for source in [
+        crate::marketplace::MarketplaceSource::Skillhub,
+        crate::marketplace::MarketplaceSource::Clawhub,
+    ] {
+        let mut fixture = Fixture::new();
+        fixture.plan.record.coordinate.source = source;
+        let first = stage(
+            &fixture,
+            "first",
+            "---\nname: fake-skill\ndescription: test\n---\n",
+            "first",
+        );
+        publish(
+            &fixture.paths,
+            Publication::Marketplace {
+                plan: &fixture.plan,
+                root: &first,
+            },
+        )
+        .result
+        .unwrap();
+        let gemini = fixture.paths.home().join(".gemini/skills/fake-skill");
+        fs::create_dir_all(&gemini).unwrap();
+        fs::write(gemini.join("SKILL.md"), "old copy").unwrap();
+        fs::write(gemini.join("notes.txt"), "local notes").unwrap();
+        fixture.plan.layout = ScopeLayout::resolve_detected(
+            &fixture.paths,
+            &ProjectRegistry::new(fixture.paths.clone()),
+            &ScopeId::Global,
+        )
+        .unwrap();
+        let update = crate::tasks::update::plan_updates(
+            &fixture.paths,
+            &fixture.plan.layout,
+            &["fake-skill".into()],
+        )
+        .unwrap()
+        .items
+        .remove(0);
+        assert!(
+            update
+                .targets
+                .iter()
+                .any(|target| target.id == "gemini-cli" && target.universal)
+        );
+        assert!(update.copy_agents.iter().any(|name| name == "Gemini CLI"));
+        let snapshot = crate::backup::BackupStore::for_layout(&fixture.paths, &fixture.plan.layout)
+            .create(
+                crate::backup::BackupAction::Update,
+                &update.name,
+                Some(&update.canonical),
+                &update.attachments,
+                &update.agent_ids,
+            )
+            .unwrap();
+        fixture.plan.previous = update.marketplace_record;
+        fixture.plan.previous_paths = Some(
+            crate::tasks::uninstall::plan_uninstall(
+                &fixture.paths,
+                &fixture.plan.layout,
+                "fake-skill",
+            )
+            .unwrap(),
+        );
+        fixture.plan.targets = update.targets;
+        let second = stage(
+            &fixture,
+            "second",
+            "---\nname: fake-skill\ndescription: test\n---\n",
+            "updated",
+        );
+        publish(
+            &fixture.paths,
+            Publication::Marketplace {
+                plan: &fixture.plan,
+                root: &second,
+            },
+        )
+        .result
+        .unwrap();
+        assert!(gemini.is_symlink());
+        assert_eq!(
+            fs::read_to_string(gemini.join("notes.txt")).unwrap(),
+            "updated"
+        );
+        assert_eq!(
+            fs::read_to_string(snapshot.path.join("attachments/gemini-cli/notes.txt")).unwrap(),
+            "local notes"
+        );
+    }
+}

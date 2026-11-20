@@ -225,7 +225,12 @@ fn resolve_attach_inner(
         });
     }
 
-    let target = strict_target(&agent.skills_dir, skill_id, canonical, false)?;
+    let target = strict_target(
+        &agent.skills_dir,
+        &located.directory_name(),
+        canonical,
+        false,
+    )?;
     context.ensure_inside(&target)?;
     let directory_state = match inspect_agent_dir(&agent.skills_dir) {
         AgentDirectoryState::Symlink => {
@@ -310,7 +315,12 @@ pub fn resolve_detach(
         }
         AgentDirectoryState::Ready => AgentDirectoryState::Ready,
     };
-    let target = strict_target(&agent.skills_dir, skill_id, canonical, true)?;
+    let target = strict_target(
+        &agent.skills_dir,
+        &located.directory_name(),
+        canonical,
+        true,
+    )?;
     context.ensure_inside(&target)?;
     let target_state = detach_target_state(&target, canonical);
 

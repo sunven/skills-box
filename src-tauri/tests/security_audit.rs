@@ -62,7 +62,7 @@ fn source_scan_keeps_product_code_after_test_imports_and_external_modules() {
 }
 
 #[test]
-fn capabilities_expose_core_and_only_the_folder_picker() {
+fn capabilities_expose_core_window_dragging_and_the_folder_picker() {
     let capabilities = manifest_dir().join("capabilities");
     let mut files = 0;
     for entry in fs::read_dir(&capabilities).unwrap() {
@@ -79,9 +79,10 @@ fn capabilities_expose_core_and_only_the_folder_picker() {
                 permissions,
                 &vec![
                     serde_json::Value::String("core:default".to_string()),
+                    serde_json::Value::String("core:window:allow-start-dragging".to_string()),
                     serde_json::Value::String("dialog:allow-open".to_string()),
                 ],
-                "{} must expose only core:default and dialog:allow-open",
+                "{} must expose only core, window dragging and the folder picker",
                 path.display()
             );
         }

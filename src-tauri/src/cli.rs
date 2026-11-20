@@ -21,7 +21,7 @@ pub use scoped::ScopedCli;
 /// npm package selector shared by environment probes, execution and previews.
 pub const CLI_VERSION: &str = "latest";
 
-/// Directory and lock key written by `skills add`, distinct from the metadata
+/// Directory written by `skills add`, distinct from the original lock key and metadata
 /// name passed to `-s`. Discovery and install collision checks must agree.
 pub(crate) fn install_directory_name(name: &str) -> String {
     let mut value = String::new();

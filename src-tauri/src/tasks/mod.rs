@@ -8,6 +8,8 @@ pub mod expert_packs;
 pub mod install;
 pub mod manager;
 pub mod marketplace;
+#[cfg(test)]
+mod normalized_names_tests;
 pub mod parser;
 pub mod preview;
 mod publication;

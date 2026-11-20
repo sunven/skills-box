@@ -45,10 +45,11 @@ pub fn find_conflicts(
     for name in names {
         super::install::validate_skill_name(name)?;
         let destination = crate::cli::install_directory_name(name);
-        let located = crate::inventory::locate_in_catalog(&catalog, &destination);
-        // Retain the requested-name check as well as the CLI's directory/lock
-        // identity. The map stays keyed by the metadata name for the preview.
-        let mut conflict = [&destination, name].into_iter().find_map(|key| {
+        let installed_name = catalog.lock.name_for_directory(&destination);
+        let located = crate::inventory::locate_in_catalog(&catalog, installed_name);
+        // Lock keys retain the original name; retry authorization must match
+        // that identity as well as cover every occupied physical destination.
+        let mut conflict = [installed_name, name.as_str()].into_iter().find_map(|key| {
             let located = crate::inventory::locate_in_catalog(&catalog, key);
             let entry = catalog.lock.get(key);
             let management = located
@@ -61,7 +62,7 @@ pub fn find_conflicts(
                     crate::update_target::resolve_source(entry)
                         .unwrap_or_else(|_| entry.source.clone())
                 }),
-                retryable: destination == *name,
+                retryable: key == name,
             })
         });
         // lstat catches case aliases, plain files and dangling symlinks even

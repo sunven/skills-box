@@ -157,16 +157,20 @@ pub fn absence(
     name: &str,
 ) -> Result<Vec<PathBuf>, AppError> {
     install::validate_skill_name(name)?;
+    let directory = layout
+        .lock()?
+        .get(name)
+        .map_or_else(|| name.to_string(), |entry| entry.directory_name());
     let dirs = directories(paths, layout)?;
     for dir in &dirs {
         if !readable_directory(dir, layout)? {
             continue;
         }
-        match fs::symlink_metadata(dir.join(name)) {
+        match fs::symlink_metadata(dir.join(&directory)) {
             Ok(_) => {
                 return Err(AppError::batch_target_changed(format!(
                     "{} 已有目录、文件或挂载，请重新预览。",
-                    dir.join(name).display()
+                    dir.join(&directory).display()
                 )));
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
@@ -320,12 +324,13 @@ pub fn inspect(
             plan.source = source.cli_source();
             target.source = Some(source.source);
             target.reference = source.reference;
-            target.paths = vec![paths.display(&layout.canonical_dir.join(name))];
+            let directory = entry.directory_name();
+            target.paths = vec![paths.display(&layout.canonical_dir.join(&directory))];
             target.paths.extend(
                 plan.targets
                     .iter()
                     .filter(|t| !t.universal)
-                    .map(|t| paths.display(&t.skills_dir.join(name))),
+                    .map(|t| paths.display(&t.skills_dir.join(&directory))),
             );
             install_plan = Some(plan);
         }
@@ -606,7 +611,12 @@ pub fn advance(
 }
 
 pub fn observed_state(layout: &ScopeLayout, name: &str) -> String {
-    let canonical = fs::symlink_metadata(layout.canonical_dir.join(name)).is_ok();
+    let canonical = fs::symlink_metadata(
+        layout
+            .canonical_dir
+            .join(crate::cli::install_directory_name(name)),
+    )
+    .is_ok();
     let lock = layout.lock().map(|l| l.contains(name));
     format!(
         "实际状态：共享目录{}；安装记录{}。请查看现有文件与备份。",
@@ -689,7 +699,11 @@ impl MutationAction for RestoreAction {
                 .filter(|r| r.status == install::CliSkillStatus::Installed)
             {
                 let name = result.name.as_ref().expect("installed result has name");
-                let entry_point = self.layout.canonical_dir.join(name).join("SKILL.md");
+                let entry_point = self
+                    .layout
+                    .canonical_dir
+                    .join(crate::cli::install_directory_name(name))
+                    .join("SKILL.md");
                 if !fs::metadata(&entry_point).is_ok_and(|metadata| metadata.is_file()) {
                     return Err(AppError::verify_failed(format!(
                         "恢复后的技能缺少可读取的 SKILL.md：{}",

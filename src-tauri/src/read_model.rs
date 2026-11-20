@@ -47,7 +47,7 @@ struct CachedCatalog {
 }
 
 /// Local installation identity without content fingerprints or update state.
-/// Discovery needs the directory key and SKILL.md name, not a full skill view.
+/// Discovery needs the installation name and SKILL.md name, not a full skill view.
 pub(crate) struct SkillIdentity {
     pub name: String,
     pub management: ManagementState,

@@ -667,7 +667,7 @@ fn capture(
             let attachment = located.attachments.iter().find(|a| a.agent_id == id);
             value.push_str(&path_fingerprint(
                 layout,
-                &agent.skills_dir.join(&located.name),
+                &agent.skills_dir.join(located.directory_name()),
                 attachment.is_some_and(|a| a.mode == AttachmentMode::Copy),
             )?);
         }

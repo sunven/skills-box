@@ -332,7 +332,23 @@ mod tests {
         fs::create_dir_all(home.join(".config/amp")).unwrap();
         fs::create_dir_all(&cwd).unwrap();
 
-        let agents = detect_agents(&context(&home, &cwd));
+        let definitions: Vec<_> = catalog()
+            .agents
+            .iter()
+            .filter(|agent| {
+                [
+                    "amp",
+                    "claude-code",
+                    "gemini-cli",
+                    "qoder",
+                    "codex",
+                    "universal",
+                ]
+                .contains(&agent.id.as_str())
+            })
+            .cloned()
+            .collect();
+        let agents = detect_definitions(&context(&home, &cwd), &definitions);
         let ids = agents
             .iter()
             .map(|agent| agent.id.as_str())

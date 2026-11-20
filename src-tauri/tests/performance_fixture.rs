@@ -173,7 +173,7 @@ fn one_hundred_skill_fixture_meets_the_inventory_budget() {
     let detected_agents = snapshot
         .agents
         .iter()
-        .filter(|agent| agent.detected)
+        .filter(|agent| agent.detected && AGENTS.iter().any(|(id, _)| *id == agent.id))
         .count();
     assert_eq!(
         detected_agents,

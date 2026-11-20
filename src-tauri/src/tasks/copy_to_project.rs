@@ -118,7 +118,7 @@ pub fn plan(
                     LocalModification::Unknown
                 };
             }
-            let target = layout.canonical_dir.join(name);
+            let target = layout.canonical_dir.join(entry.directory_name());
             ensure_inside(&layout, &target)?;
             let existed = fs::symlink_metadata(&target).is_ok();
             let destination_entry = destination_lock.get(name).cloned();
@@ -174,7 +174,14 @@ pub fn plan(
             let mut target = BatchTarget {
                 reason: source_reason.clone(),
                 local_modification: local,
-                paths: vec![paths.display(&layout.canonical_dir.join(name))],
+                paths: vec![paths.display(
+                    &layout.canonical_dir.join(
+                        inspected.as_ref().map_or_else(
+                            |_| name.to_string(),
+                            |skill| skill.entry.directory_name(),
+                        ),
+                    ),
+                )],
                 operation: Some(if agent_id.is_some() { "attach" } else { "copy" }.into()),
                 ..BatchTarget::new(
                     skill_id,
@@ -409,8 +416,8 @@ fn attachment(
             name: name.into(),
             management: ManagementState::Managed,
             lock_entry: Some(skill.entry.clone()),
-            canonical_path: Some(layout.canonical_dir.join(name)),
-            primary_path: Some(layout.canonical_dir.join(name)),
+            canonical_path: Some(layout.canonical_dir.join(skill.entry.directory_name())),
+            primary_path: Some(layout.canonical_dir.join(skill.entry.directory_name())),
             attachments: Vec::new(),
         }
     };
@@ -475,7 +482,7 @@ pub fn verify(
             "全局内容或来源与确认时不同。",
         ));
     }
-    let destination = current.canonical_dir.join(name);
+    let destination = current.canonical_dir.join(skill.entry.directory_name());
     ensure_inside(&current, &destination)?;
     let lock = current.lock()?;
     let expected_entry = if published && !skill.existed {
@@ -576,7 +583,7 @@ pub fn execute(
     let baselines = BaselineStore::for_scope(paths, &layout.scope);
     let baseline_path = baselines.baseline_path(name);
     let previous_baseline = fs::read(&baseline_path).ok();
-    let destination = layout.canonical_dir.join(name);
+    let destination = layout.canonical_dir.join(skill.entry.directory_name());
     crate::fsutil::rename_directory_new(staged.path(), &destination)
         .map_err(|e| AppError::agent_attach_failed(e.to_string()))?;
     let mut lock_written = false;

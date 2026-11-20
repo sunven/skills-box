@@ -57,9 +57,10 @@ pub fn observe(
     let lock = layout.lock()?;
     let market = crate::marketplace::records::Records::read(&layout.lock_path)?;
     let workflows = Records::read(&layout.lock_path)?;
+    let catalog = layout.catalog(paths)?;
     let mut skills = vec![];
     for name in snapshot.names() {
-        let located = layout.locate(paths, name)?;
+        let located = crate::inventory::locate_in_catalog(&catalog, name);
         let entry = lock.get(name);
         let member = snapshot.members.iter().find(|m| m.name == name);
         let identity = if let Some(member) = member {

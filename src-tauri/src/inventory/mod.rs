@@ -326,6 +326,14 @@ pub struct LocatedSkill {
     pub lock_entry: Option<LockEntry>,
 }
 
+impl LocatedSkill {
+    pub(crate) fn directory_name(&self) -> String {
+        self.lock_entry
+            .as_ref()
+            .map_or_else(|| self.name.clone(), LockEntry::directory_name)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttachmentLocation {
     pub agent_id: String,
@@ -384,12 +392,7 @@ pub(crate) fn build_catalog(paths: &AppPaths, agents: &[AgentDir]) -> Result<Cat
     // Strict lock read happens first: corruption must never degrade into an
     // empty list or partial scan.
     let lock = ScopedLock::global(&paths.lock_path())?;
-    Ok(build_catalog_from(
-        lock,
-        &paths.canonical_skills_dir(),
-        agents,
-        None,
-    ))
+    build_catalog_from(lock, &paths.canonical_skills_dir(), agents, None)
 }
 
 /// Project catalog: strict v1 lock plus the project agent dirs from the scope
@@ -402,12 +405,7 @@ pub(crate) fn build_project_catalog(
     agents: &[AgentDir],
 ) -> Result<Catalog, AppError> {
     let lock = ScopedLock::project(lock_path)?;
-    Ok(build_catalog_from(
-        lock,
-        canonical_dir,
-        agents,
-        Some(project_root),
-    ))
+    build_catalog_from(lock, canonical_dir, agents, Some(project_root))
 }
 
 fn build_catalog_from(
@@ -415,10 +413,20 @@ fn build_catalog_from(
     canonical_dir: &Path,
     agents: &[AgentDir],
     project_root: Option<&Path>,
-) -> Catalog {
+) -> Result<Catalog, AppError> {
     let mut warnings = Vec::new();
     let mut escapes = Vec::new();
-    let canonical = scan_canonical(canonical_dir, project_root, &mut warnings, &mut escapes);
+    let folders = scan_canonical(canonical_dir, project_root, &mut warnings, &mut escapes);
+    let mut canonical = BTreeMap::new();
+    for (directory, path) in folders {
+        let name = lock.name_for_directory(&directory).to_string();
+        if canonical.insert(name.clone(), path).is_some() {
+            return Err(AppError::skill_conflict(
+                &name,
+                "多个目录对应同一技能记录。",
+            ));
+        }
+    }
     let scanned_agents = scan_agents(
         agents,
         canonical_dir,
@@ -445,6 +453,16 @@ fn build_catalog_from(
         } else {
             for entry in &scanned.entries {
                 let aggregate = aggregates.entry(entry.name.clone()).or_default();
+                if aggregate
+                    .attachments
+                    .iter()
+                    .any(|a| a.agent_id == scanned.agent.id)
+                {
+                    return Err(AppError::skill_conflict(
+                        &entry.name,
+                        "同一 Agent 的多个目录对应同一技能记录。",
+                    ));
+                }
                 if entry.mode != AttachmentMode::Broken {
                     aggregate.has_real_content = true;
                     if aggregate.primary.is_none() {
@@ -466,7 +484,7 @@ fn build_catalog_from(
     names.extend(aggregates.keys().cloned());
     names.extend(lock.entries().keys().cloned());
 
-    Catalog {
+    Ok(Catalog {
         lock,
         canonical_dir: canonical_dir.to_path_buf(),
         canonical,
@@ -474,7 +492,7 @@ fn build_catalog_from(
         names,
         warnings,
         escapes,
-    }
+    })
 }
 
 #[derive(Debug, Default)]
@@ -670,6 +688,7 @@ fn scan_agents<'a>(
             match read_entries(&agent.skills_dir) {
                 Ok(found) => {
                     for (name, path) in found {
+                        let name = lock.name_for_directory(&name).to_string();
                         let Ok(metadata) = fs::symlink_metadata(&path) else {
                             continue;
                         };
@@ -875,6 +894,33 @@ mod tests {
             "installedAt": "2026-01-01T00:00:00.000Z",
             "updatedAt": "2026-02-03T04:05:06.000Z"
         })
+    }
+
+    #[test]
+    fn normalized_copy_only_names_resolve_to_the_original_lock_entry() {
+        let fixture = Fixture::new();
+        fixture.write_lock(&["My Skill"]);
+        let copy = fixture.agent_copy(&fixture.claude, "my-skill", "copy");
+        let catalog = build_catalog(&fixture.paths, &fixture.agents).unwrap();
+        let located = locate_in_catalog(&catalog, "My Skill").unwrap();
+        assert_eq!(located.management, ManagementState::CopyOnly);
+        assert_eq!(located.primary_path, Some(copy));
+        assert_eq!(located.attachments.len(), 1);
+        assert!(locate_in_catalog(&catalog, "my-skill").is_none());
+    }
+
+    #[test]
+    fn original_and_normalized_folders_cannot_silently_merge() {
+        let fixture = Fixture::new();
+        fixture.write_lock(&["My Skill"]);
+        fixture.canonical_skill("my-skill", "installed");
+        fixture.canonical_skill("My Skill", "unrelated");
+        assert_eq!(
+            build_catalog(&fixture.paths, &fixture.agents)
+                .unwrap_err()
+                .code,
+            ErrorCode::SkillConflict
+        );
     }
 
     fn skill<'a>(snapshot: &'a InventorySnapshot, name: &str) -> &'a InventorySkill {
