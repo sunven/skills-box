@@ -1,5 +1,6 @@
 //! Native Plugin boundary. Installation truth belongs to the host. Stored
 //! records describe only operations and never replace the native inventory.
+mod context;
 mod contracts;
 mod inventory;
 mod model;
@@ -63,9 +64,45 @@ impl Service {
         }
         Runtime::discover(host, &self.0.paths)
     }
-    fn observation(&self, rt: &Runtime) -> Result<Observation, String> {
+    fn resolve(&self, target: &Context) -> Result<ResolvedContext, String> {
+        if target.scope.is_global() {
+            if target.layer != Layer::User {
+                return Err("全局只能使用用户配置层。".into());
+            }
+            return Ok(ResolvedContext::default());
+        }
+        if target.layer == Layer::User {
+            return Err("项目操作必须明确项目共享或个人配置层，不能写入全局。".into());
+        }
+        let entry = self
+            .0
+            .projects
+            .lookup_available(target.scope.project_id().unwrap())
+            .map_err(|e| e.message)?;
+        Ok(ResolvedContext {
+            target: target.clone(),
+            project_root: Some(entry.project.root.to_string_lossy().into()),
+            project_name: Some(entry.project.display_name),
+            revision: Some(entry.project.check_revision),
+        })
+    }
+    fn scoped_runtime(&self, host: Host, context: &ResolvedContext) -> Result<Runtime, String> {
+        if host == Host::Codex && context.target.layer == Layer::Local {
+            return Err("Codex 没有此项目个人配置层。".into());
+        }
+        let mut rt = self.runtime(host)?;
+        if let Some(root) = &context.project_root {
+            rt.cwd = root.into();
+        }
+        Ok(rt)
+    }
+    fn observe_context(
+        &self,
+        rt: &Runtime,
+        context: ResolvedContext,
+    ) -> Result<Observation, String> {
         let version = rt.version()?;
-        let key = contracts::key(rt, &version);
+        let key = contracts::context_key(rt, &version, context.target.layer);
         let contract = self
             .0
             .contracts
@@ -80,7 +117,7 @@ impl Service {
             .iter()
             .map(|p| p.project.root.clone())
             .collect::<Vec<_>>();
-        let mut observation = inventory::load(rt, contract.capabilities, &roots)?;
+        let mut observation = inventory::load_context(rt, contract.capabilities, &roots, context)?;
         if observation.snapshot.version != version {
             return Err("CLI 在读取期间变化，请重新检测。".into());
         }
@@ -115,13 +152,16 @@ impl Service {
         }
     }
     pub async fn read(&self, host: Host) -> Result<PageState, String> {
+        self.read_at(host, Context::default()).await
+    }
+    pub async fn read_at(&self, host: Host, target: Context) -> Result<PageState, String> {
         let service = self.clone();
         tokio::task::spawn_blocking(move||{
             let mut operation=service.record(host)?;
             let active=service.0.tasks.active_mutation().is_some_and(|m|m.kind==crate::interrupted::MutationKind::NativePlugin);
             if let Some(r)=&mut operation {if matches!(r.phase.as_str(),"writing"|"verifying")&&!active{r.phase="interrupted".into();r.message=Some("上次操作异常中断。请核对当前可读取的原生状态；命令是否完整结束仍未知，必要时在宿主处理。".into());service.write_record(r)?;}}
             if active{return Ok(PageState{snapshot:None,error:Some("原生操作正在执行，等待写入和核验结束。".into()),operation});}
-            match service.runtime(host).and_then(|rt|service.observation(&rt)) {
+            match service.resolve(&target).and_then(|context|service.scoped_runtime(host,&context).and_then(|rt|service.observe_context(&rt,context))) {
                 Ok(obs)=>Ok(PageState{snapshot:Some(obs.snapshot),error:None,operation}),
                 Err(e)=>Ok(PageState{snapshot:None,error:Some(e),operation}),
             }
@@ -130,8 +170,9 @@ impl Service {
     pub async fn prepare(&self, request: Request) -> Result<Preview, String> {
         let service = self.clone();
         tokio::task::spawn_blocking(move || {
-            let rt = service.runtime(request.host)?;
-            let obs = service.observation(&rt)?;
+            let context = service.resolve(&request.context)?;
+            let rt = service.scoped_runtime(request.host, &context)?;
+            let obs = service.observe_context(&rt, context.clone())?;
             let args = operations::arguments(&request, &obs)?;
             let fingerprint = operations::confirmation_fingerprint(&request, &obs)?;
             let (consequences, affected_plugins) = operations::consequences(&request, &obs);
@@ -144,6 +185,7 @@ impl Service {
             let preview = Preview {
                 token: token.clone(),
                 request,
+                context,
                 config_root: obs.snapshot.config_root,
                 version: obs.snapshot.version,
                 command,
@@ -192,8 +234,10 @@ impl Service {
         let service = self.clone();
         tokio::task::spawn_blocking(move || {
             let _guard = guard;
-            let rt = service.runtime(preview.request.host)?;
-            let before = service.observation(&rt)?;
+            let context = service.resolve(&preview.request.context)?;
+            if context != preview.context { return Err("项目已重新定位或确认目标变化，请重新预览；本次没有写入。".into()); }
+            let rt = service.scoped_runtime(preview.request.host, &context)?;
+            let before = service.observe_context(&rt, context.clone())?;
             operations::arguments(&preview.request, &before)?;
             if operations::confirmation_fingerprint(&preview.request, &before)?
                 != preview.fingerprint
@@ -220,7 +264,7 @@ impl Service {
             let output = operations::execute(&rt, &preview.request, &before);
             record.phase = "verifying".into();
             let record_error = service.write_record(&record).err();
-            let mut after = service.observation(&rt);
+            let mut after = service.observe_context(&rt, context);
             let contract_changed = output.as_ref().is_ok_and(|out| {
                 out.success
                     && (!operations::response_matches(&preview.request, out)
@@ -231,13 +275,15 @@ impl Service {
                         }))
             });
             if contract_changed {
-                let reason = if matches!(preview.request.action, Action::SyncMarket | Action::RemoveMarket) {
+                let reason = if preview.request.context.layer != Layer::User {
+                    "原生命令返回或写后状态不符合预期；此配置层的操作已停用，请在宿主中核对。基本兼容性检查只覆盖用户层。"
+                } else if matches!(preview.request.action, Action::SyncMarket | Action::RemoveMarket) {
                     "原生命令返回或写后状态不符合预期；此操作已停用，请在宿主中核对。基本兼容性检查不覆盖此操作。"
                 } else {
                     "原生命令返回或写后状态不符合预期；此操作已停用，请运行检查兼容性后重试。"
                 }.to_string();
                 if let Ok(mut cache) = service.0.contracts.lock() {
-                    let key = contracts::key(&rt, &before.snapshot.version);
+                    let key = contracts::context_key(&rt, &before.snapshot.version, preview.request.context.layer);
                     let contract = cache
                         .entry(key)
                         .or_insert_with(|| contracts::defaults(rt.host));
@@ -274,11 +320,17 @@ impl Service {
         .await
         .map_err(|e| format!("插件 worker 异常结束，操作记录保留，结果待核对：{e}"))?
     }
-    pub async fn details(&self, host: Host, id: String) -> Result<Details, String> {
+    pub async fn details_at(
+        &self,
+        host: Host,
+        id: String,
+        target: Context,
+    ) -> Result<Details, String> {
         let service = self.clone();
         tokio::task::spawn_blocking(move || {
-            let rt = service.runtime(host)?;
-            let obs = service.observation(&rt)?;
+            let context = service.resolve(&target)?;
+            let rt = service.scoped_runtime(host, &context)?;
+            let obs = service.observe_context(&rt, context)?;
             let p = obs
                 .snapshot
                 .plugins
@@ -329,8 +381,12 @@ fn shell_display(s: &str) -> String {
 pub async fn read_native_plugins(
     state: tauri::State<'_, crate::AppState>,
     host: Host,
+    context: Option<Context>,
 ) -> Result<PageState, String> {
-    state.native_plugins.read(host).await
+    state
+        .native_plugins
+        .read_at(host, context.unwrap_or_default())
+        .await
 }
 #[tauri::command]
 pub async fn prepare_native_plugin(
@@ -351,8 +407,12 @@ pub async fn native_plugin_details(
     state: tauri::State<'_, crate::AppState>,
     host: Host,
     id: String,
+    context: Option<Context>,
 ) -> Result<Details, String> {
-    state.native_plugins.details(host, id).await
+    state
+        .native_plugins
+        .details_at(host, id, context.unwrap_or_default())
+        .await
 }
 #[tauri::command]
 pub async fn verify_native_plugin_host(

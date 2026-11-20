@@ -1,0 +1,9 @@
+   Compiling skills-box v0.1.8 (/Users/sunven/github/skills-box/src-tauri)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.30s
+     Running unittests src/lib.rs (src-tauri/target/debug/deps/skills_box_lib-37b7ed1ef6e57034)
+
+running 1 test
+Validated 0.170.0 project read and all write gates
+test native_plugins::tests::native_codex_project_context_is_readable_without_global_write_fallback ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 862 filtered out; finished in 2.00s

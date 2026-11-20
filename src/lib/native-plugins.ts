@@ -1,3 +1,4 @@
+import type { ScopeId } from "./types";
 export type PluginHost = "codex" | "claude";
 export type PluginAction =
   | "add_market"
@@ -24,7 +25,32 @@ export const pluginHostLabels: Record<PluginHost, string> = {
   codex: "Codex",
   claude: "Claude Code",
 };
+export type PluginLayer = "user" | "project" | "local";
+export interface PluginContext {
+  scope: ScopeId;
+  layer: PluginLayer;
+}
+export interface ResolvedPluginContext extends PluginContext {
+  projectRoot: string | null;
+  projectName: string | null;
+  revision: string | null;
+}
+export const globalPluginContext: PluginContext = {
+  scope: "global",
+  layer: "user",
+};
+export const pluginLayerLabels: Record<PluginLayer, string> = {
+  user: "全局",
+  project: "项目共享",
+  local: "仅自己在此项目",
+};
+export function pluginContextLabel(context?: ResolvedPluginContext) {
+  return context?.projectName
+    ? `${context.projectName} · ${pluginLayerLabels[context.layer]}`
+    : "全局";
+}
 export interface PluginRequest {
+  context: PluginContext;
   host: PluginHost;
   action: PluginAction;
   target: string;
@@ -49,6 +75,8 @@ export interface NativeMarket {
   syncBlockedReason: string | null;
   catalogError: string | null;
   affectedPlugins: string[];
+  declarations: string[];
+  declaredInTarget: boolean;
 }
 export interface NativeInstallation {
   scope: string;
@@ -65,6 +93,11 @@ export interface NativePlugin {
   installationState: "installed" | "absent" | "unconfirmed";
   installations: NativeInstallation[];
   userEnabled: boolean | null;
+  selectedEnabled: boolean | null;
+  installedInTarget: boolean;
+  enabledSource: string | null;
+  enabledOverridden: boolean;
+  actionBlocks: Partial<Record<PluginAction, string>>;
   effectiveEnabled: boolean | null;
   source: unknown;
   localRoot: string | null;
@@ -72,6 +105,7 @@ export interface NativePlugin {
   installBlockedReason: string | null;
 }
 export interface PluginSnapshot {
+  context: ResolvedPluginContext;
   host: PluginHost;
   configRoot: string;
   executable: string;
@@ -84,6 +118,7 @@ export interface PluginSnapshot {
   sourceKinds: string[];
 }
 export interface PluginPreview {
+  context: ResolvedPluginContext;
   token: string;
   request: PluginRequest;
   configRoot: string;
@@ -125,13 +160,18 @@ export interface PluginDetails {
   components: Record<string, string[]>;
   messages: string[];
 }
-export const pluginQueryKey = (host: PluginHost) =>
-  ["native-plugins", host] as const;
+export const pluginQueryKey = (
+  host: PluginHost,
+  context: PluginContext = globalPluginContext,
+  rootRevision = "",
+) =>
+  ["native-plugins", host, context.scope, context.layer, rootRevision] as const;
 export const pluginRequest = (
   host: PluginHost,
   action: PluginAction,
   target = "",
 ): PluginRequest => ({
+  context: globalPluginContext,
   host,
   action,
   target,

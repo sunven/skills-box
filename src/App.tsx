@@ -551,11 +551,12 @@ function App() {
         filtersOpen={filtersOpen}
         onToggleFilters={() => setFiltersOpen((open) => !open)}
         scopeSwitcher={
-          settingsOpen || discoveryEntry || pluginsOpen ? null : (
+          settingsOpen || discoveryEntry ? null : (
             <ScopeSwitcher
               disabled={appUpdate.critical || batchRunning || marketplaceInstallOpen}
               activeScope={scope}
-              projects={view.scopeProjects}
+              purpose={pluginsOpen ? "plugins" : "skills"}
+              projects={pluginsOpen ? view.scopeProjects.map((entry) => ({ ...entry, updateCount: 0, error: false })) : view.scopeProjects}
               warnings={projects?.warnings ?? EMPTY_WARNINGS}
               notice={scopeNotice}
               onSelect={handleSelectScope}
@@ -567,7 +568,7 @@ function App() {
         }
       />
       {pluginsOpen ? (
-        <NativePluginsPage disabled={appUpdate.critical || batchRunning} />
+        <NativePluginsPage scope={scope} project={activeProject ?? undefined} disabled={appUpdate.critical || batchRunning} />
       ) : settingsOpen ? (
         <SettingsPage onAgentsChanged={handleRecheck} appUpdate={appUpdate} initialSection={settingsSection} />
       ) : marketplaceOpen ? (

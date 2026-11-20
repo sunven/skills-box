@@ -1,0 +1,22 @@
+Frontend full suite
+$ TZ=Asia/Shanghai vitest run
+ Test Files  51 passed (51)
+      Tests  531 passed (531)
+   Duration  13.24s (tests 61%, environment 20%, import 9%, setup 6%, transform 4%)
+
+Frontend final feature checks
+$ TZ=Asia/Shanghai vitest run src/App.native-plugins.test.tsx src/components/native-plugins-page.test.tsx
+ Test Files  2 passed (2)
+      Tests  13 passed (13)
+   Duration  1.83s (tests 37%, environment 33%, import 12%, setup 10%, transform 8%)
+
+Rust full suite
+test result: ok. 840 passed; 0 failed; 23 ignored; 0 measured; 0 filtered out; finished in 8.59s
+
+Rust final native-plugin checks
+test result: ok. 29 passed; 0 failed; 9 ignored; 0 measured; 825 filtered out; finished in 4.89s
+
+Production build
+$ tsc && vite build
+(!) Some chunks are larger than 500 kB after minification. Consider:
+✓ built in 399ms

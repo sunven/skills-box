@@ -160,6 +160,7 @@ pub fn verify(rt: &Runtime) -> Result<Contract, String> {
     }
     for action in sequence {
         let request = Request {
+            context: Context::default(),
             host: rt.host,
             action,
             target: if action == Action::RemoveMarket {
@@ -212,4 +213,13 @@ pub fn verify(rt: &Runtime) -> Result<Contract, String> {
         c.blocked_reason = Some("仅检测了空市场移除；基本兼容性检查不覆盖连带移除影响。".into());
     }
     Ok(contract)
+}
+
+pub fn context_key(rt: &Runtime, version: &str, layer: Layer) -> String {
+    let key = key(rt, version);
+    if layer == Layer::User {
+        key
+    } else {
+        format!("{key}:{}", layer.native())
+    }
 }

@@ -1,14 +1,14 @@
 use super::{
-    inventory::{identity, valid_name, Observation},
+    inventory::{Observation, identity, valid_name},
     model::*,
     transport::{Output, Runtime},
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::Path;
 
 pub fn arguments(request: &Request, obs: &Observation) -> Result<Vec<String>, String> {
     let snapshot = &obs.snapshot;
-    if snapshot.host != request.host {
+    if snapshot.host != request.host || snapshot.context.target != request.context {
         return Err("宿主身份不匹配。".into());
     }
     if let Some(c) = snapshot
@@ -41,7 +41,7 @@ pub fn arguments(request: &Request, obs: &Observation) -> Result<Vec<String>, St
             args.extend(["--ref".into(), request.reference.clone()]);
         }
         if host == Host::Claude {
-            args.extend(["--scope".into(), "user".into()]);
+            args.extend(["--scope".into(), request.context.layer.native().into()]);
         }
         args.push("--json".into());
         for path in &request.sparse_paths {
@@ -65,8 +65,10 @@ pub fn arguments(request: &Request, obs: &Observation) -> Result<Vec<String>, St
             .iter()
             .find(|m| m.name == request.target)
             .ok_or("市场已不存在，请重新读取。")?;
-        if let Some(reason) = &market.read_only_reason {
-            return Err(reason.clone());
+        if action == Action::RemoveMarket || host == Host::Codex {
+            if let Some(reason) = &market.read_only_reason {
+                return Err(reason.clone());
+            }
         }
         if action == Action::RemoveMarket {
             if let Some(reason) = &market.remove_blocked_reason {
@@ -79,16 +81,12 @@ pub fn arguments(request: &Request, obs: &Observation) -> Result<Vec<String>, St
             if market.catalog_error.is_some() {
                 return Err("市场目录读取不完整，无法确认同步影响，请在宿主处理。".into());
             }
-            for p in snapshot
-                .plugins
-                .iter()
-                .filter(|p| p.marketplace == market.name && p.installation_state != "absent")
-            {
-                if p.install_blocked_reason.is_some()
-                    || p.read_only_reason.is_some()
-                    || p.installations.iter().any(|i| i.scope != "user")
-                {
-                    return Err("同步可能影响非用户插件或需要批准的安装，请在宿主处理。".into());
+            for p in snapshot.plugins.iter().filter(|p| {
+                p.marketplace == market.name
+                    && (p.installation_state != "absent" || !p.installations.is_empty())
+            }) {
+                if p.install_blocked_reason.is_some() || p.read_only_reason.is_some() {
+                    return Err("同步涉及无法确认来源或需要批准的安装，请在宿主处理。".into());
                 }
             }
         }
@@ -105,7 +103,7 @@ pub fn arguments(request: &Request, obs: &Observation) -> Result<Vec<String>, St
             request.target.clone(),
         ]);
         if host == Host::Claude && action == Action::RemoveMarket {
-            args.extend(["--scope".into(), "user".into()]);
+            args.extend(["--scope".into(), request.context.layer.native().into()]);
         }
     } else {
         identity(&request.target)?;
@@ -122,16 +120,28 @@ pub fn arguments(request: &Request, obs: &Observation) -> Result<Vec<String>, St
                 return Err(reason.clone());
             }
         }
-        if !matches!(action, Action::Enable | Action::Disable)
-            && plugin.installations.iter().any(|i| i.scope != "user")
+        if action == Action::Uninstall
+            && plugin
+                .installations
+                .iter()
+                .any(|i| !snapshot.context.matches_installation(i))
         {
             return Err("原生操作可能影响共享的项目安装，请在宿主中处理。".into());
         }
-        if action == Action::Install && plugin.installation_state != "absent" {
+        if action == Action::Install
+            && (plugin.installed_in_target || plugin.installation_state == "unconfirmed")
+        {
             return Err("目标已有安装或待核对记录，请重新读取。".into());
         }
         if action != Action::Install && plugin.installation_state == "absent" {
-            return Err("此插件没有用户级安装。".into());
+            return Err("当前项目没有可用的原生安装。".into());
+        }
+        if matches!(
+            action,
+            Action::Uninstall | Action::Update | Action::Reinstall
+        ) && !plugin.installed_in_target
+        {
+            return Err("此安装来自其他配置层，请切换到安装所属层操作。".into());
         }
         if host == Host::Codex && matches!(action, Action::Enable | Action::Disable) {
             if obs.user_version.is_none() {
@@ -158,7 +168,7 @@ pub fn arguments(request: &Request, obs: &Observation) -> Result<Vec<String>, St
         };
         args.extend([command.into(), request.target.clone()]);
         if host == Host::Claude {
-            args.extend(["--scope".into(), "user".into()]);
+            args.extend(["--scope".into(), request.context.layer.native().into()]);
         }
     }
     args.push("--json".into());
@@ -245,7 +255,10 @@ pub fn confirmation_fingerprint(request: &Request, obs: &Observation) -> Result<
     ])))
 }
 pub fn consequences(r: &Request, obs: &Observation) -> (Vec<String>, Vec<String>) {
-    let mut lines=vec!["操作仅指定用户级设置；实际生效请在宿主新会话中确认。开始写入后，正常退出会等待写入和核验结束。".into()];
+    let mut lines = vec![format!(
+        "操作目标：{}。实际生效请在宿主新会话中确认。开始写入后，正常退出会等待写入和核验结束。",
+        obs.snapshot.context.label()
+    )];
     let market_name = identity(&r.target)
         .map(|(_, market)| market)
         .unwrap_or(&r.target);
@@ -258,7 +271,20 @@ pub fn consequences(r: &Request, obs: &Observation) -> (Vec<String>, Vec<String>
         .iter()
         .find(|m| m.name == r.target)
         .map(|m| m.affected_plugins.clone())
-        .unwrap_or_default();
+        .unwrap_or_else(|| {
+            obs.snapshot
+                .plugins
+                .iter()
+                .find(|p| p.id == r.target)
+                .map(super::context::installation_labels)
+                .unwrap_or_default()
+        });
+    if matches!(
+        r.action,
+        Action::SyncMarket | Action::Update | Action::Reinstall
+    ) {
+        lines.push("市场目录和插件内容可能由全局与多个项目共享；本次内容变化会影响所列安装，不改变其他配置层的启用设置。".into());
+    }
     match r.action {
         Action::SyncMarket=>lines.push("同步是写操作，可能刷新或安装该市场已配置插件的文件，包括禁用插件；不会改变宿主自动更新设置。".into()),
         Action::Reinstall=>lines.push("Codex 会重新启用此插件，包括原先禁用的插件；重新安装不保证取得最新版。".into()),
@@ -307,7 +333,7 @@ pub fn response_matches(r: &Request, out: &Output) -> bool {
                 Action::SyncMarket | Action::RemoveMarket => v["marketplace"] == r.target,
                 _ => {
                     v["pluginId"] == r.target
-                        && v["scope"] == "user"
+                        && v["scope"] == r.context.layer.native()
                         && (r.action != Action::Update
                             || matches!(
                                 v["updateOutcome"].as_str(),
@@ -344,6 +370,11 @@ pub fn response_matches(r: &Request, out: &Output) -> bool {
     }
 }
 pub fn postcondition(r: &Request, before: &Observation, after: &Observation, out: &Output) -> bool {
+    if before.snapshot.context != after.snapshot.context
+        || !preserves_other_layers(r, before, after)
+    {
+        return false;
+    }
     let next = &after.snapshot;
     let plugin = next.plugins.iter().find(|p| p.id == r.target);
     let value = out.value.as_ref().unwrap_or(&Value::Null);
@@ -357,15 +388,18 @@ pub fn postcondition(r: &Request, before: &Observation, after: &Observation, out
             .as_str();
             next.markets
                 .iter()
-                .any(|m| Some(m.name.as_str()) == name && m.read_only_reason.is_none())
+                .any(|m| Some(m.name.as_str()) == name && m.declared_in_target)
         }
         Action::RemoveMarket => {
-            !next.markets.iter().any(|m| m.name == r.target)
+            !next
+                .markets
+                .iter()
+                .any(|m| m.name == r.target && m.declared_in_target)
                 && (r.host == Host::Codex
-                    || !next.plugins.iter().any(|p| {
-                        p.marketplace == r.target
-                            && p.installations.iter().any(|i| i.scope == "user")
-                    }))
+                    || !next
+                        .plugins
+                        .iter()
+                        .any(|p| p.marketplace == r.target && p.installed_in_target))
         }
         Action::SyncMarket => {
             next.markets
@@ -382,31 +416,31 @@ pub fn postcondition(r: &Request, before: &Observation, after: &Observation, out
                                 || p.user_enabled.is_some())
                     })
                     .all(|p| {
-                        next.plugins
-                            .iter()
-                            .find(|n| n.id == p.id)
-                            .is_some_and(|n| n.user_enabled == p.user_enabled)
+                        next.plugins.iter().find(|n| n.id == p.id).is_some_and(|n| {
+                            n.user_enabled == p.user_enabled
+                                && n.selected_enabled == p.selected_enabled
+                        })
                     })
         }
         Action::Install | Action::Reinstall => plugin.is_some_and(|p| {
-            p.installation_state == "installed"
-                && p.user_enabled == Some(true)
+            p.installed_in_target
+                && p.selected_enabled == Some(true)
                 && p.local_root.as_ref().is_some_and(|p| Path::new(p).is_dir())
         }),
-        Action::Enable => plugin.is_some_and(|p| p.user_enabled == Some(true)),
-        Action::Disable => plugin.is_some_and(|p| p.user_enabled == Some(false)),
+        Action::Enable => plugin.is_some_and(|p| p.selected_enabled == Some(true)),
+        Action::Disable => plugin.is_some_and(|p| p.selected_enabled == Some(false)),
         Action::Uninstall => {
-            plugin.is_none_or(|p| p.installation_state == "absent" && p.user_enabled.is_none())
+            plugin.is_none_or(|p| !p.installed_in_target && p.selected_enabled.is_none())
         }
         Action::Update => plugin.is_some_and(|p| {
-            p.installation_state == "installed"
+            p.installed_in_target
                 && p.version.as_deref() == value["newVersion"].as_str()
                 && before
                     .snapshot
                     .plugins
                     .iter()
                     .find(|b| b.id == p.id)
-                    .is_some_and(|b| b.user_enabled == p.user_enabled)
+                    .is_some_and(|b| b.selected_enabled == p.selected_enabled)
         }),
     }
 }
@@ -490,7 +524,8 @@ pub fn outcome(
                 "unconfirmed"
             };
             let message = if verified {
-                "原生命令完成，用户设置和原生记录已核对。请在宿主新会话中确认实际效果。".into()
+                "原生命令完成，所选配置层设置和原生记录已核对。请在宿主新会话中确认实际效果。"
+                    .into()
             } else {
                 format!(
                     "{}{} 当前可读取的原生状态已保留；没有自动回滚或重试。",
@@ -517,4 +552,54 @@ pub fn outcome(
             }
         }
     }
+}
+
+// Verify the scope promise independently of command exit status. Updating shared
+// content may change versions, but never another installation identity or setting.
+fn preserves_other_layers(r: &Request, before: &Observation, after: &Observation) -> bool {
+    for layer in &before.layers {
+        if !layer.selected(&before.snapshot.context)
+            && after
+                .layers
+                .iter()
+                .find(|l| l.path == layer.path)
+                .is_none_or(|l| l.settings != layer.settings)
+        {
+            return false;
+        }
+    }
+    for layer in &after.layers {
+        if !layer.selected(&after.snapshot.context)
+            && !before.layers.iter().any(|l| l.path == layer.path)
+            && layer.settings.as_object().is_none_or(|s| !s.is_empty())
+        {
+            return false;
+        }
+    }
+    let foreign = |obs: &Observation| {
+        let mut rows = Vec::new();
+        for p in &obs.snapshot.plugins {
+            for i in &p.installations {
+                if !obs.snapshot.context.matches_installation(i) {
+                    let content_change = (matches!(r.action, Action::Update | Action::Reinstall)
+                        && p.id == r.target)
+                        || r.action == Action::SyncMarket && p.marketplace == r.target;
+                    rows.push((
+                        p.id.clone(),
+                        i.scope.clone(),
+                        i.project_path.clone(),
+                        if content_change {
+                            None
+                        } else {
+                            i.version.clone()
+                        },
+                        if content_change { None } else { i.path.clone() },
+                    ));
+                }
+            }
+        }
+        rows.sort();
+        rows
+    };
+    foreign(before) == foreign(after)
 }

@@ -1,0 +1,37 @@
+   Compiling skills-box v0.1.8 (/Users/sunven/github/skills-box/src-tauri)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.10s
+     Running unittests src/lib.rs (src-tauri/target/debug/deps/skills_box_lib-37b7ed1ef6e57034)
+
+running 1 test
+project 添加市场: succeeded 原生命令完成，所选配置层设置和原生记录已核对。请在宿主新会话中确认实际效果。
+project 安装: succeeded 原生命令完成，所选配置层设置和原生记录已核对。请在宿主新会话中确认实际效果。
+project 禁用: succeeded 原生命令完成，所选配置层设置和原生记录已核对。请在宿主新会话中确认实际效果。
+project 更新: succeeded 原生命令完成，所选配置层设置和原生记录已核对。请在宿主新会话中确认实际效果。
+project 启用: succeeded 原生命令完成，所选配置层设置和原生记录已核对。请在宿主新会话中确认实际效果。
+project 卸载: succeeded 原生命令完成，所选配置层设置和原生记录已核对。请在宿主新会话中确认实际效果。
+project 移除市场: succeeded 原生命令完成，所选配置层设置和原生记录已核对。请在宿主新会话中确认实际效果。
+project 添加市场: succeeded 原生命令完成，所选配置层设置和原生记录已核对。请在宿主新会话中确认实际效果。
+project 添加市场: succeeded 原生命令完成，所选配置层设置和原生记录已核对。请在宿主新会话中确认实际效果。
+project 安装: succeeded 原生命令完成，所选配置层设置和原生记录已核对。请在宿主新会话中确认实际效果。
+project 移除市场: succeeded 原生命令完成，所选配置层设置和原生记录已核对。请在宿主新会话中确认实际效果。
+user 添加市场: succeeded 原生命令完成，所选配置层设置和原生记录已核对。请在宿主新会话中确认实际效果。
+user 安装: succeeded 原生命令完成，所选配置层设置和原生记录已核对。请在宿主新会话中确认实际效果。
+test native_plugins::tests::native_project_layers_isolated_lifecycle has been running for over 60 seconds
+user 禁用: succeeded 原生命令完成，所选配置层设置和原生记录已核对。请在宿主新会话中确认实际效果。
+project 启用: succeeded 原生命令完成，所选配置层设置和原生记录已核对。请在宿主新会话中确认实际效果。
+project 禁用: succeeded 原生命令完成，所选配置层设置和原生记录已核对。请在宿主新会话中确认实际效果。
+project 添加市场: succeeded 原生命令完成，所选配置层设置和原生记录已核对。请在宿主新会话中确认实际效果。
+project 安装: succeeded 原生命令完成，所选配置层设置和原生记录已核对。请在宿主新会话中确认实际效果。
+project 禁用: succeeded 原生命令完成，所选配置层设置和原生记录已核对。请在宿主新会话中确认实际效果。
+local 添加市场: succeeded 原生命令完成，所选配置层设置和原生记录已核对。请在宿主新会话中确认实际效果。
+local 安装: succeeded 原生命令完成，所选配置层设置和原生记录已核对。请在宿主新会话中确认实际效果。
+local 禁用: succeeded 原生命令完成，所选配置层设置和原生记录已核对。请在宿主新会话中确认实际效果。
+project 添加市场: succeeded 原生命令完成，所选配置层设置和原生记录已核对。请在宿主新会话中确认实际效果。
+project 安装: succeeded 原生命令完成，所选配置层设置和原生记录已核对。请在宿主新会话中确认实际效果。
+project 禁用: succeeded 原生命令完成，所选配置层设置和原生记录已核对。请在宿主新会话中确认实际效果。
+project 更新: succeeded 原生命令完成，所选配置层设置和原生记录已核对。请在宿主新会话中确认实际效果。
+project 同步市场: succeeded 原生命令完成，所选配置层设置和原生记录已核对。请在宿主新会话中确认实际效果。
+Validated Claude 2.1.325 in /var/folders/38/s1qf24m11tn897xgx9khf2gm0000gn/T/.tmpe7nhTX
+test native_plugins::tests::native_project_layers_isolated_lifecycle ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 862 filtered out; finished in 134.21s

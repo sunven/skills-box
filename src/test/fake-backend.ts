@@ -1,5 +1,5 @@
 import { nativePluginFake } from "./native-plugin-fixtures";
-import type { PluginHost, PluginRequest, PluginPreview, PluginOutcome, PluginPageState, PluginDetails } from "../lib/native-plugins";
+import type { PluginContext, PluginHost, PluginRequest, PluginPreview, PluginOutcome, PluginPageState, PluginDetails } from "../lib/native-plugins";
 import type { PackListing, PackDetail, PackPreview, LocalPack, PackSnapshot } from "../lib/expert-packs";
 import { expertPack, packSnapshot } from "./expert-pack-fixtures";
 import type { SkillsShCoordinate, SkillsShListing, SkillsShSnapshot, SkillsShView } from "../lib/skills-sh";
@@ -79,10 +79,10 @@ type Factory<T> = T | (() => T);
 type MaybePromise<T> = T | Promise<T>;
 
 export interface FakeCommandContract {
-  read_native_plugins: { args: { host: PluginHost }; result: PluginPageState };
+  read_native_plugins: { args: { host: PluginHost; context?: PluginContext }; result: PluginPageState };
   prepare_native_plugin: { args: { request: PluginRequest }; result: PluginPreview };
   execute_native_plugin: { args: { token: string }; result: PluginOutcome };
-  native_plugin_details: { args: { host: PluginHost; id: string }; result: PluginDetails };
+  native_plugin_details: { args: { host: PluginHost; id: string; context?: PluginContext }; result: PluginDetails };
   verify_native_plugin_host: { args: { host: PluginHost }; result: PluginPageState };
   list_skills_sh: { args: { keyword: string; view: SkillsShView; page: number }; result: SkillsShListing };
   get_skills_sh_snapshot: { args: { coordinate: SkillsShCoordinate }; result: SkillsShSnapshot };
@@ -1915,7 +1915,7 @@ export function createFakeBackend(
       scheduleAutoTask(task, "install", [plan.preview.name], scope);
       return task.taskId;
     },
-    ...nativePluginFake(),
+    ...nativePluginFake(() => projectList.projects),
     get_cli_commands: () => cliRecords,
     preview_cli_commands: ({ scope, request }) => cliPreview(scope, request),
     get_environment: ({ refresh }) => {

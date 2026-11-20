@@ -16,6 +16,10 @@ import {
   verifyNativePluginHost,
 } from "../lib/api";
 import {
+  pluginLayerLabels,
+  pluginContextLabel,
+  type PluginContext,
+  type PluginLayer,
   pluginActionLabels,
   pluginHostLabels,
   pluginOutcomeLabels,
@@ -29,6 +33,7 @@ import {
   type PluginOutcome,
   type PluginPageState,
 } from "../lib/native-plugins";
+import type { ScopeId, ProjectEntry } from "../lib/types";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { SkillMarkdown } from "./skill-markdown";
@@ -90,15 +95,37 @@ function Dialog({
 }
 export function NativePluginsPage({
   disabled = false,
+  scope = "global",
+  project,
 }: {
   disabled?: boolean;
+  scope?: ScopeId;
+  project?: ProjectEntry;
 }) {
   const [host, setHost] = useState<PluginHost>("codex");
+  const [selection, setSelection] = useState<{
+    scope: ScopeId;
+    layer: PluginLayer;
+  }>({ scope, layer: "project" });
+  const layer: PluginLayer =
+    scope === "global"
+      ? "user"
+      : host === "codex"
+        ? "project"
+        : selection.scope === scope
+          ? selection.layer
+          : "project";
+  const context: PluginContext = { scope, layer };
+  const rootRevision = `${project?.root ?? ""}:${project?.checkRevision ?? ""}`;
   return (
     <NativeHostPage
-      key={host}
+      key={`${host}:${scope}:${layer}:${rootRevision}`}
       host={host}
       onHost={setHost}
+      context={context}
+      rootRevision={rootRevision}
+      project={project}
+      onLayer={(layer) => setSelection({ scope, layer })}
       disabled={disabled}
     />
   );
@@ -107,10 +134,18 @@ function NativeHostPage({
   host,
   onHost,
   disabled,
+  context,
+  rootRevision,
+  project,
+  onLayer,
 }: {
   host: PluginHost;
   onHost: (host: PluginHost) => void;
   disabled: boolean;
+  context: PluginContext;
+  rootRevision: string;
+  project?: ProjectEntry;
+  onLayer: (layer: PluginLayer) => void;
 }) {
   const client = useQueryClient();
   const [search, setSearch] = useState("");
@@ -122,10 +157,11 @@ function NativeHostPage({
   const [result, setResult] = useState<PluginOutcome | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [working, setWorking] = useState<string | null>(null);
-  const key = pluginQueryKey(host);
+  const key = pluginQueryKey(host, context, rootRevision);
+  const projectMode = context.scope !== "global";
   const query = useQuery({
     queryKey: key,
-    queryFn: () => readNativePlugins(host),
+    queryFn: () => readNativePlugins(host, context),
     retry: false,
     refetchOnWindowFocus: false,
     refetchInterval: (q) =>
@@ -164,7 +200,7 @@ function NativeHostPage({
     setWorking("正在核对操作范围…");
     setResult(null);
     try {
-      setPreview(await prepareNativePlugin(request));
+      setPreview(await prepareNativePlugin({ ...request, context }));
       setAdding(false);
       setSelected(null);
     } catch (e) {
@@ -196,14 +232,18 @@ function NativeHostPage({
       setError(message(e));
     } finally {
       setWorking(null);
-      await query.refetch();
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ["native-plugins"] }),
+        client.invalidateQueries({ queryKey: ["native-plugin-detail"] }),
+      ]);
     }
   }
   async function verify() {
     setWorking("正在临时目录检查插件操作兼容性…");
     setError(null);
     try {
-      client.setQueryData(key, await verifyNativePluginHost(host));
+      await verifyNativePluginHost(host);
+      await client.invalidateQueries({ queryKey: ["native-plugins"] });
     } catch (e) {
       setError(message(e));
     } finally {
@@ -215,20 +255,26 @@ function NativeHostPage({
       p.installationState === "absent"
         ? ["install"]
         : [
-            p.userEnabled ? "disable" : "enable",
-            host === "codex" ? "reinstall" : "update",
-            "uninstall",
+            ...(!p.installedInTarget && projectMode
+              ? ["install" as const]
+              : []),
+            (p.selectedEnabled ?? p.effectiveEnabled) ? "disable" : "enable",
+            ...(p.installedInTarget
+              ? [
+                  host === "codex"
+                    ? ("reinstall" as const)
+                    : ("update" as const),
+                  "uninstall" as const,
+                ]
+              : []),
           ];
     return actions.map((action) => {
       const reason =
         blocked(action) ??
+        p.actionBlocks[action] ??
         p.readOnlyReason ??
         (["install", "reinstall", "update"].includes(action)
           ? p.installBlockedReason
-          : null) ??
-        (!["enable", "disable"].includes(action) &&
-        p.installations.some((i) => i.scope !== "user")
-          ? "涉及项目安装，请在宿主中处理。"
           : null);
       return (
         <span key={action} title={reason ?? undefined}>
@@ -274,14 +320,38 @@ function NativeHostPage({
               </Button>
             ))}
           </div>
-          <span className="native-user-scope">用户级</span>
+          {projectMode && host === "claude" ? (
+            <label className="native-layer-control">
+              配置层
+              <select
+                aria-label="插件配置层"
+                value={context.layer}
+                disabled={running}
+                onChange={(event) => onLayer(event.target.value as PluginLayer)}
+              >
+                <option value="project">项目共享</option>
+                <option value="local">仅自己在此项目</option>
+              </select>
+            </label>
+          ) : (
+            <span className="native-user-scope">
+              {projectMode ? "项目共享 · 只读" : "用户级"}
+            </span>
+          )}
         </div>
       </div>
+      {projectMode && (
+        <div className="native-project-context">
+          <strong>{project?.displayName ?? "当前项目"}</strong>
+          <span className="mono">{project?.root ?? "项目不可用"}</span>
+          <span>{pluginLayerLabels[context.layer]}</span>
+        </div>
+      )}
       <div className="native-plugin-tools">
         <p className="mono truncate" title={data?.configRoot}>
           {data
             ? `${data.configRoot} · ${data.version}`
-            : `${pluginHostLabels[host]} · 独立于技能项目选择`}
+            : `${pluginHostLabels[host]} · ${pluginLayerLabels[context.layer]}`}
         </p>
         <div className="flex flex-wrap gap-2">
           <Button
@@ -348,6 +418,7 @@ function NativeHostPage({
           }
         >
           <strong>{pluginOutcomeLabels[shownResult.status]}</strong>
+          <span>{pluginContextLabel(shownResult.preview.context)}</span>
           <span>{shownResult.message}</span>
           <span className="text-muted-foreground">
             命令：
@@ -366,7 +437,9 @@ function NativeHostPage({
           <div>
             <strong>部分操作暂不可用</strong>
             <p>
-              可在临时配置中重新检查基本插件操作。此检查不覆盖远程来源、市场同步或移除市场的连带影响；这些操作若因异常停用，请在宿主中核对。
+              {projectMode
+                ? "当前检查只验证用户层基本操作，不能解除项目层限制。项目操作若因异常停用，请在宿主中核对。"
+                : "可在临时配置中重新检查基本插件操作。此检查不覆盖远程来源、市场同步或移除市场的连带影响；这些操作若因异常停用，请在宿主中核对。"}
             </p>
             <ul>
               {data.capabilities
@@ -446,6 +519,11 @@ function NativeHostPage({
                 <div>
                   <h2>{selectedMarket.name}</h2>
                   <p className="mono break-all">{selectedMarket.source}</p>
+                  <p>
+                    市场声明：
+                    {selectedMarket.declarations.join("；") ||
+                      "共享缓存，当前未发现声明"}
+                  </p>
                   {selectedMarket.reference && (
                     <p>分支／标签：{selectedMarket.reference}</p>
                   )}
@@ -457,9 +535,14 @@ function NativeHostPage({
                   {(["sync_market", "remove_market"] as const).map((action) => {
                     const reason =
                       blocked(action) ??
-                      selectedMarket.readOnlyReason ??
+                      (action === "remove_market" || host === "codex"
+                        ? selectedMarket.readOnlyReason
+                        : null) ??
                       (action === "sync_market"
-                        ? selectedMarket.syncBlockedReason
+                        ? (selectedMarket.syncBlockedReason ??
+                          (selectedMarket.catalogError
+                            ? "市场目录读取不完整，无法确认同步影响。"
+                            : null))
                         : selectedMarket.removeBlockedReason);
                     return (
                       <span key={action} title={reason ?? undefined}>
@@ -493,7 +576,10 @@ function NativeHostPage({
               </div>
             )}
             {incomplete && (
-              <div className="notice native-catalog-warning" data-tone="warning">
+              <div
+                className="notice native-catalog-warning"
+                data-tone="warning"
+              >
                 市场目录读取不完整，搜索结果可能缺失。
                 {data.markets
                   .filter((m) => m.catalogError)
@@ -523,13 +609,17 @@ function NativeHostPage({
                 <option value="installed">已安装／待核对</option>
                 <option value="absent">未安装</option>
               </select>
-              <span className="native-plugin-count">{visible.length} 个插件</span>
+              <span className="native-plugin-count">
+                {visible.length} 个插件
+              </span>
             </div>
             {visible.length === 0 && (
               <div className="native-plugin-empty">
                 <Package />
                 <h3>
-                  {search || filter !== "all" ? "没有匹配的插件" : "此处还没有插件"}
+                  {search || filter !== "all"
+                    ? "没有匹配的插件"
+                    : "此处还没有插件"}
                 </h3>
                 <p>
                   {incomplete
@@ -568,23 +658,43 @@ function NativeHostPage({
                       data-state={p.installationState}
                     >
                       {p.installationState === "installed"
-                        ? "用户级已安装"
+                        ? p.installedInTarget
+                          ? "当前层已安装"
+                          : "继承的安装"
                         : p.installationState === "unconfirmed"
                           ? "配置仍在 · 安装待核对"
-                          : "用户级未安装"}
+                          : "当前范围未安装"}
                     </span>
                     {p.installationState !== "absent" && (
                       <span
                         className="native-enabled-state"
                         data-enabled={
-                          p.userEnabled === null ? "unset" : String(p.userEnabled)
+                          p.selectedEnabled === null
+                            ? "unset"
+                            : String(p.selectedEnabled)
                         }
                       >
-                        用户设置：{enabledLabel(p.userEnabled)}
+                        {projectMode ? "当前层设置" : "用户设置"}：
+                        {p.selectedEnabled === null && projectMode
+                          ? "继承"
+                          : enabledLabel(p.selectedEnabled)}
                       </span>
                     )}
-                    {p.installations.some((i) => i.scope !== "user") && (
-                      <span>另有项目或其他作用域安装</span>
+                    {p.enabledSource && projectMode && (
+                      <span>
+                        {p.enabledOverridden
+                          ? "被覆盖，生效配置来源"
+                          : "配置来源"}
+                        ：{p.enabledSource}
+                      </span>
+                    )}
+                    {projectMode && (
+                      <span>
+                        宿主报告：
+                        {p.effectiveEnabled === null
+                          ? "未知"
+                          : enabledLabel(p.effectiveEnabled)}
+                      </span>
                     )}
                   </div>
                   {p.readOnlyReason && (
@@ -600,9 +710,9 @@ function NativeHostPage({
               </article>
             ))}
             <p className="native-plugin-footnote">
-              用户设置可能与当前项目或已有会话不同，请在{" "}
-              {pluginHostLabels[host]}{" "}
-              新会话中核对。认证、信任与安装批准需在 {pluginHostLabels[host]} 中完成。
+              配置设置可能与已有会话的实际加载状态不同，请在{" "}
+              {pluginHostLabels[host]} 新会话中核对。认证、信任与安装批准需在{" "}
+              {pluginHostLabels[host]} 中完成。
             </p>
           </section>
         </div>
@@ -626,7 +736,16 @@ function NativeHostPage({
           <div className="modal-body native-confirm">
             <dl>
               <dt>宿主与范围</dt>
-              <dd>{pluginHostLabels[preview.request.host]} · 用户级</dd>
+              <dd>
+                {pluginHostLabels[preview.request.host]} ·{" "}
+                {pluginContextLabel(preview.context)}
+              </dd>
+              {preview.context.projectRoot && (
+                <>
+                  <dt>项目根目录</dt>
+                  <dd className="mono">{preview.context.projectRoot}</dd>
+                </>
+              )}
               <dt>目标</dt>
               <dd>{preview.request.target || preview.request.source}</dd>
               <dt>配置目录</dt>
@@ -673,6 +792,8 @@ function NativeHostPage({
         <PluginDetail
           host={host}
           plugin={selected}
+          context={context}
+          rootRevision={rootRevision}
           onClose={() => setSelected(null)}
         />
       )}
@@ -810,14 +931,25 @@ function PluginDetail({
   host,
   plugin,
   onClose,
+  context,
+  rootRevision,
 }: {
   host: PluginHost;
+  context: PluginContext;
+  rootRevision: string;
   plugin: NativePlugin;
   onClose: () => void;
 }) {
   const query = useQuery({
-    queryKey: ["native-plugin-detail", host, plugin.id],
-    queryFn: () => nativePluginDetails(host, plugin.id),
+    queryKey: [
+      "native-plugin-detail",
+      host,
+      context.scope,
+      context.layer,
+      rootRevision,
+      plugin.id,
+    ],
+    queryFn: () => nativePluginDetails(host, plugin.id, context),
     retry: false,
     staleTime: 0,
   });
@@ -837,8 +969,11 @@ function PluginDetail({
           </p>
         )}
         <p>
-          用户设置：{enabledLabel(plugin.userEnabled)} ·
-          {pluginHostLabels[host]} 报告的状态（未指定项目）：
+          当前层设置：
+          {plugin.selectedEnabled === null
+            ? "继承／未设置"
+            : enabledLabel(plugin.selectedEnabled)}{" "}
+          ·{pluginHostLabels[host]} 报告的状态：
           {plugin.effectiveEnabled === null
             ? "未知"
             : enabledLabel(plugin.effectiveEnabled)}

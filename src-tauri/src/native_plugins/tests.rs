@@ -1,9 +1,11 @@
 use super::*;
 use serde_json::json;
+use std::path::PathBuf;
 use transport::{Output, Runtime};
 fn observation(host: Host) -> Observation {
     let mut o = Observation {
         snapshot: Snapshot {
+            context: ResolvedContext::default(),
             host,
             config_root: "/fixture".into(),
             executable: "/cli".into(),
@@ -27,6 +29,8 @@ fn observation(host: Host) -> Observation {
                 sync_blocked_reason: None,
                 catalog_error: None,
                 affected_plugins: vec!["demo@team".into()],
+                declarations: vec!["全局".into()],
+                declared_in_target: true,
             }],
             plugins: vec![],
             warnings: vec![],
@@ -34,6 +38,7 @@ fn observation(host: Host) -> Observation {
             source_kinds: vec!["local".into(), "git".into(), "url".into()],
         },
         user_version: Some("sha256:before".into()),
+        layers: vec![],
     };
     o.snapshot.plugins.push(Plugin {
         id: "demo@team".into(),
@@ -49,6 +54,11 @@ fn observation(host: Host) -> Observation {
             project_path: None,
         }],
         user_enabled: Some(false),
+        selected_enabled: Some(false),
+        installed_in_target: true,
+        enabled_source: Some("全局".into()),
+        enabled_overridden: false,
+        action_blocks: Default::default(),
         effective_enabled: Some(false),
         source: json!("./demo"),
         local_root: None,
@@ -59,6 +69,7 @@ fn observation(host: Host) -> Observation {
 }
 fn request(host: Host, action: Action, target: &str) -> Request {
     Request {
+        context: Context::default(),
         host,
         action,
         target: target.into(),
@@ -71,6 +82,7 @@ fn request(host: Host, action: Action, target: &str) -> Request {
 fn preview(r: Request) -> Preview {
     Preview {
         token: "fixture".into(),
+        context: ResolvedContext::default(),
         request: r,
         config_root: "/fixture".into(),
         version: "test".into(),
@@ -327,8 +339,7 @@ fn native_adapters_isolated_lifecycle() {
             rt.rpc("config/value/write",json!({"keyPath":key,"value":false,"mergeStrategy":"replace","filePath":rt.root.join("config.toml"),"expectedVersion":after.user_version})).unwrap();
             assert_eq!(
                 rt.rpc("config/read", json!({"includeLayers":true}))
-                    .unwrap()["config"]["plugins"]["dotted.name@skills-box-verification"]
-                    ["enabled"],
+                    .unwrap()["config"]["plugins"]["dotted.name@skills-box-verification"]["enabled"],
                 false
             );
         } else {
@@ -419,11 +430,13 @@ fn native_adapters_scope_and_orphan() {
             );
             let obs = inventory::load(&rt, contract.capabilities, &[]).unwrap();
             assert!(obs.snapshot.markets[0].remove_blocked_reason.is_some());
-            assert!(operations::arguments(
-                &request(host, Action::RemoveMarket, "skills-box-verification"),
-                &obs
-            )
-            .is_err());
+            assert!(
+                operations::arguments(
+                    &request(host, Action::RemoveMarket, "skills-box-verification"),
+                    &obs
+                )
+                .is_err()
+            );
             assert_eq!(obs.snapshot.plugins[0].installations.len(), 2);
             assert!(
                 project_rt
@@ -441,18 +454,15 @@ fn native_adapters_scope_and_orphan() {
                     .unwrap()
                     .success
             );
-            let before = inventory::load(
-                &rt,
-                contracts::defaults(host).capabilities,
-                &[],
-            )
-            .unwrap();
+            let before = inventory::load(&rt, contracts::defaults(host).capabilities, &[]).unwrap();
             assert_eq!(before.snapshot.plugins[0].installations.len(), 3);
-            assert!(operations::arguments(
-                &request(host, Action::RemoveMarket, "skills-box-verification"),
-                &before
-            )
-            .is_err());
+            assert!(
+                operations::arguments(
+                    &request(host, Action::RemoveMarket, "skills-box-verification"),
+                    &before
+                )
+                .is_err()
+            );
             // Verify the native user-scope flag really has broader effects;
             // production preflight above must prevent this command.
             let removed = rt
@@ -759,8 +769,7 @@ async fn service_preserves_partial_and_unknown_results_without_retry() {
             status
         );
         assert_eq!(
-            inventory::optional_json(&rt.root.join("settings.json")).unwrap()["enabledPlugins"]
-                ["demo@skills-box-verification"],
+            inventory::optional_json(&rt.root.join("settings.json")).unwrap()["enabledPlugins"]["demo@skills-box-verification"],
             true
         );
     }
@@ -959,11 +968,11 @@ fn native_adapters_git_and_source_contracts() {
         );
         assert_eq!(updated.snapshot.plugins[0].user_enabled, Some(false));
         let plugin_root = updated.snapshot.plugins[0].local_root.as_ref().unwrap();
-        assert!(fs::read_to_string(
-            std::path::Path::new(plugin_root).join("skills/hello/SKILL.md")
-        )
-        .unwrap()
-        .contains("Version 2"));
+        assert!(
+            fs::read_to_string(std::path::Path::new(plugin_root).join("skills/hello/SKILL.md"))
+                .unwrap()
+                .contains("Version 2")
+        );
         perform(request(
             host,
             Action::Uninstall,
@@ -1112,7 +1121,9 @@ async fn plugin_update_checks_new_source_instead_of_old_installation() {
         r#"{"name":"demo"}"#,
     )
     .unwrap();
-    let obs = service.observation(&rt).unwrap();
+    let obs = service
+        .observe_context(&rt, ResolvedContext::default())
+        .unwrap();
     assert_eq!(obs.snapshot.plugins[0].local_root.as_deref(), old.to_str());
     assert!(
         obs.snapshot.plugins[0]
@@ -1150,23 +1161,27 @@ async fn unreadable_catalog_and_native_list_keep_other_markets_visible() {
     let state = service.read(Host::Claude).await.unwrap();
     let snapshot = state.snapshot.unwrap();
     assert_eq!(snapshot.markets.len(), 2);
-    assert!(snapshot
-        .markets
-        .iter()
-        .find(|m| m.name == "broken")
-        .unwrap()
-        .catalog_error
-        .is_some());
+    assert!(
+        snapshot
+            .markets
+            .iter()
+            .find(|m| m.name == "broken")
+            .unwrap()
+            .catalog_error
+            .is_some()
+    );
     assert_eq!(snapshot.plugins[0].installation_state, "installed");
     fs::write(rt.root.join("fail-read"), "").unwrap();
     let snapshot = service.read(Host::Claude).await.unwrap().snapshot.unwrap();
     assert_eq!(snapshot.markets.len(), 2);
     assert_eq!(snapshot.plugins[0].installation_state, "installed");
-    assert!(snapshot
-        .capabilities
-        .iter()
-        .filter(|c| c.action != Action::AddMarket)
-        .all(|c| c.blocked_reason.is_some()));
+    assert!(
+        snapshot
+            .capabilities
+            .iter()
+            .filter(|c| c.action != Action::AddMarket)
+            .all(|c| c.blocked_reason.is_some())
+    );
     assert!(snapshot.warnings.iter().any(|w| w.contains("读取失败")));
 }
 
@@ -1455,11 +1470,13 @@ fn native_adapters_codex_override() {
     let contract = contracts::defaults(Host::Codex);
     let obs = inventory::load(&rt, contract.capabilities, &[]).unwrap();
     assert!(obs.snapshot.plugins[0].read_only_reason.is_some());
-    assert!(operations::arguments(
-        &request(Host::Codex, Action::Enable, "demo@skills-box-verification"),
-        &obs
-    )
-    .is_err());
+    assert!(
+        operations::arguments(
+            &request(Host::Codex, Action::Enable, "demo@skills-box-verification"),
+            &obs
+        )
+        .is_err()
+    );
     let response=rt.rpc("config/value/write",json!({"keyPath":"plugins.\"demo@skills-box-verification\".enabled","value":true,"mergeStrategy":"replace","filePath":rt.root.join("config.toml"),"expectedVersion":obs.user_version})).unwrap();
     assert_eq!(response["status"], "okOverridden");
     assert_eq!(
@@ -1477,14 +1494,16 @@ async fn missing_cli_is_an_error_instead_of_empty_inventory() {
     let page = service.read(Host::Claude).await.unwrap();
     assert!(page.snapshot.is_none());
     assert!(page.error.is_some());
-    assert!(service
-        .prepare(request(
-            Host::Claude,
-            Action::Enable,
-            "demo@skills-box-verification"
-        ))
-        .await
-        .is_err());
+    assert!(
+        service
+            .prepare(request(
+                Host::Claude,
+                Action::Enable,
+                "demo@skills-box-verification"
+            ))
+            .await
+            .is_err()
+    );
     assert!(!rt.root.join("started").exists());
 }
 
@@ -1541,24 +1560,469 @@ async fn unknown_mutation_contract_disables_only_affected_action() {
     assert_eq!(outcome.status, "unconfirmed");
     let page = service.read(Host::Claude).await.unwrap();
     let caps = page.snapshot.unwrap().capabilities;
-    assert!(caps
-        .iter()
-        .find(|c| c.action == Action::Enable)
-        .unwrap()
-        .blocked_reason
-        .is_some());
-    assert!(caps
-        .iter()
-        .find(|c| c.action == Action::Disable)
-        .unwrap()
-        .blocked_reason
-        .is_none());
-    assert!(service
-        .prepare(request(
-            Host::Claude,
-            Action::Enable,
-            "demo@skills-box-verification"
-        ))
+    assert!(
+        caps.iter()
+            .find(|c| c.action == Action::Enable)
+            .unwrap()
+            .blocked_reason
+            .is_some()
+    );
+    assert!(
+        caps.iter()
+            .find(|c| c.action == Action::Disable)
+            .unwrap()
+            .blocked_reason
+            .is_none()
+    );
+    assert!(
+        service
+            .prepare(request(
+                Host::Claude,
+                Action::Enable,
+                "demo@skills-box-verification"
+            ))
+            .await
+            .is_err()
+    );
+}
+
+fn registered_context(service: &Service, root: &std::path::Path, layer: Layer) -> Context {
+    fs::create_dir_all(root).unwrap();
+    let entry = service.0.projects.add(root.to_str().unwrap()).unwrap();
+    Context {
+        scope: entry.project.scope(),
+        layer,
+    }
+}
+#[tokio::test]
+async fn project_context_rejects_user_layer_missing_roots_and_stale_previews() {
+    let (temp, service, rt) = fake_service();
+    let target = registered_context(&service, &temp.path().join("project-a"), Layer::Project);
+    assert!(
+        service
+            .resolve(&Context {
+                scope: target.scope.clone(),
+                layer: Layer::User
+            })
+            .is_err()
+    );
+    assert!(
+        service
+            .resolve(&Context {
+                scope: crate::scope::ScopeId::global(),
+                layer: Layer::Local
+            })
+            .is_err()
+    );
+    let mut r = request(Host::Claude, Action::Enable, "demo@skills-box-verification");
+    r.context = target.clone();
+    let preview = service.prepare(r.clone()).await.unwrap();
+    assert!(preview.command.contains("--scope project"));
+    let old_root = PathBuf::from(preview.context.project_root.as_ref().unwrap());
+    fs::rename(&old_root, temp.path().join("moved-a")).unwrap();
+    let unavailable = service.read_at(Host::Claude, target.clone()).await.unwrap();
+    assert!(unavailable.snapshot.is_none());
+    assert!(unavailable.error.is_some());
+    assert!(service.prepare(r.clone()).await.is_err());
+    service
+        .0
+        .projects
+        .relocate(
+            &target.scope.project_id().unwrap().to_string(),
+            temp.path().join("moved-a").to_str().unwrap(),
+        )
+        .unwrap();
+    assert!(
+        service
+            .execute(preview.token)
+            .await
+            .unwrap_err()
+            .contains("重新定位")
+    );
+    assert!(!rt.root.join("started").exists());
+    let preview = service.prepare(r).await.unwrap();
+    service
+        .0
+        .projects
+        .forget(&target.scope.project_id().unwrap().to_string())
+        .unwrap();
+    assert!(service.execute(preview.token).await.is_err());
+    assert!(!rt.root.join("started").exists());
+}
+#[tokio::test]
+async fn project_projection_distinguishes_inherited_installation_and_local_override() {
+    let (temp, service, rt) = fake_service();
+    let target = registered_context(&service, &temp.path().join("project-a"), Layer::Project);
+    let context = service.resolve(&target).unwrap();
+    let root = PathBuf::from(context.project_root.as_ref().unwrap());
+    fs::create_dir_all(root.join(".claude")).unwrap();
+    fs::write(
+        root.join(".claude/settings.json"),
+        json!({"enabledPlugins":{"demo@skills-box-verification":true}}).to_string(),
+    )
+    .unwrap();
+    fs::write(
+        root.join(".claude/settings.local.json"),
+        json!({"enabledPlugins":{"demo@skills-box-verification":false}}).to_string(),
+    )
+    .unwrap();
+    let page = service.read_at(Host::Claude, target.clone()).await.unwrap();
+    let snapshot = page.snapshot.unwrap();
+    let plugin = &snapshot.plugins[0];
+    assert!(!plugin.installed_in_target);
+    assert_eq!(plugin.installation_state, "installed");
+    assert_eq!(plugin.selected_enabled, Some(true));
+    assert_eq!(plugin.user_enabled, Some(false));
+    assert!(plugin.enabled_source.as_ref().unwrap().contains("个人"));
+    assert!(plugin.enabled_overridden);
+    assert!(snapshot.markets[0].read_only_reason.is_some());
+    let mut r = request(Host::Claude, Action::Disable, &plugin.id);
+    r.context = target;
+    let preview = service.prepare(r).await.unwrap();
+    fs::write(root.join(".claude/settings.local.json"), "{}").unwrap();
+    let outcome = service.execute(preview.token).await.unwrap();
+    assert_eq!(outcome.status, "conflict");
+    assert!(!rt.root.join("started").exists());
+}
+
+#[tokio::test]
+async fn project_configuration_survives_missing_market_and_installation_content() {
+    let (temp, service, _rt) = fake_service();
+    let target = registered_context(&service, &temp.path().join("project"), Layer::Project);
+    let root = PathBuf::from(service.resolve(&target).unwrap().project_root.unwrap());
+    fs::create_dir_all(root.join(".claude")).unwrap();
+    fs::write(root.join(".claude/settings.json"),json!({
+        "enabledPlugins":{"missing@missing-market":false},
+        "extraKnownMarketplaces":{"missing-market":{"source":{"source":"directory","path":"/missing"}}}
+    }).to_string()).unwrap();
+    let snapshot = service
+        .read_at(Host::Claude, target)
         .await
-        .is_err());
+        .unwrap()
+        .snapshot
+        .unwrap();
+    let plugin = snapshot
+        .plugins
+        .iter()
+        .find(|p| p.id == "missing@missing-market")
+        .unwrap();
+    assert_eq!(plugin.installation_state, "unconfirmed");
+    assert_eq!(plugin.selected_enabled, Some(false));
+    assert!(plugin.install_blocked_reason.is_some());
+    let market = snapshot
+        .markets
+        .iter()
+        .find(|m| m.name == "missing-market")
+        .unwrap();
+    assert!(market.catalog_error.is_some());
+    assert_eq!(market.declarations.len(), 1);
+}
+
+#[tokio::test]
+#[ignore = "real Codex project configuration read and rejected writes, isolated HOME only"]
+async fn native_codex_project_context_is_readable_without_global_write_fallback() {
+    let (temp, service, mut rt) = fake_service();
+    fs::remove_dir_all(&rt.root).unwrap();
+    fs::create_dir_all(&rt.root).unwrap();
+    rt.host = Host::Codex;
+    rt.executable = "/opt/homebrew/bin/codex".into();
+    *service.0.runtime.lock().unwrap() = Some(rt.clone());
+    let target = registered_context(&service, &temp.path().join("project"), Layer::Project);
+    let root = PathBuf::from(service.resolve(&target).unwrap().project_root.unwrap());
+    fs::create_dir_all(root.join(".git")).unwrap();
+    fs::create_dir_all(root.join(".codex")).unwrap();
+    let market = contracts::fixture(temp.path()).unwrap();
+    let id = "demo@skills-box-verification";
+    fs::write(
+        rt.root.join("config.toml"),
+        format!(
+            "[projects.{}]\ntrust_level = \"trusted\"\n[plugins.\"{id}\"]\nenabled = false\n",
+            json!(root)
+        ),
+    )
+    .unwrap();
+    fs::write(root.join(".codex/config.toml"),format!("[plugins.\"{id}\"]\nenabled = true\n[marketplaces.skills-box-verification]\nsource_type = \"local\"\nsource = {}\n",json!(market))).unwrap();
+    let user_before = fs::read(rt.root.join("config.toml")).unwrap();
+    let project_before = fs::read(root.join(".codex/config.toml")).unwrap();
+    let page = service.read_at(Host::Codex, target.clone()).await.unwrap();
+    let snapshot = page.snapshot.unwrap_or_else(|| panic!("{:?}", page.error));
+    let plugin = snapshot.plugins.iter().find(|p| p.id == id).unwrap();
+    assert_eq!(plugin.user_enabled, Some(false));
+    assert_eq!(plugin.selected_enabled, Some(true));
+    assert!(!plugin.installed_in_target);
+    assert!(
+        plugin
+            .enabled_source
+            .as_deref()
+            .unwrap()
+            .contains("项目共享")
+    );
+    let declaration = snapshot
+        .markets
+        .iter()
+        .find(|m| m.name == "skills-box-verification")
+        .unwrap();
+    assert!(declaration.declared_in_target);
+    assert!(
+        declaration
+            .declarations
+            .iter()
+            .any(|d| d.contains("项目共享"))
+    );
+    for action in contracts::actions(Host::Codex) {
+        let mut request = request(Host::Codex, action, id);
+        request.context = target.clone();
+        assert!(service.prepare(request).await.is_err());
+    }
+    assert_eq!(fs::read(rt.root.join("config.toml")).unwrap(), user_before);
+    assert_eq!(
+        fs::read(root.join(".codex/config.toml")).unwrap(),
+        project_before
+    );
+    let global = service.read(Host::Codex).await.unwrap().snapshot.unwrap();
+    assert!(
+        global
+            .capabilities
+            .iter()
+            .all(|c| c.blocked_reason.is_none())
+    );
+    assert_eq!(
+        global
+            .plugins
+            .iter()
+            .find(|p| p.id == id)
+            .unwrap()
+            .selected_enabled,
+        Some(false)
+    );
+    eprintln!(
+        "Validated {} project read and all write gates",
+        snapshot.version
+    );
+}
+#[test]
+fn layer_postconditions_detect_foreign_deletion_and_configuration_changes() {
+    let mut before = observation(Host::Claude);
+    before.snapshot.context = ResolvedContext {
+        target: Context {
+            scope: crate::scope::ScopeId::project(uuid::Uuid::new_v4()),
+            layer: Layer::Project,
+        },
+        project_root: Some("/a".into()),
+        project_name: Some("a".into()),
+        revision: Some("one".into()),
+    };
+    before.snapshot.plugins[0].installations.push(Installation {
+        scope: "project".into(),
+        project_path: Some("/a".into()),
+        version: Some("1.0.0".into()),
+        path: None,
+    });
+    let mut after = observation(Host::Claude);
+    after.snapshot = before.snapshot.clone();
+    let mut r = request(Host::Claude, Action::Enable, "demo@team");
+    r.context = before.snapshot.context.target.clone();
+    let out = Output {
+        success: true,
+        value: None,
+        diagnostic: String::new(),
+    };
+    after.snapshot.plugins[0].selected_enabled = Some(true);
+    assert!(operations::postcondition(&r, &before, &after, &out));
+    after.snapshot.plugins[0].installations.remove(0);
+    assert!(!operations::postcondition(&r, &before, &after, &out));
+    after.snapshot.plugins[0].installations = before.snapshot.plugins[0].installations.clone();
+    let global = context::ConfigLayer {
+        scope: "user".into(),
+        root: None,
+        path: "/fixture/settings.json".into(),
+        settings: json!({"enabledPlugins":{"demo@team":false}}),
+    };
+    before.layers.push(global.clone());
+    after.layers.push(global);
+    assert!(operations::postcondition(&r, &before, &after, &out));
+    after.layers[0].settings["enabledPlugins"]["demo@team"] = json!(true);
+    assert!(!operations::postcondition(&r, &before, &after, &out));
+    after.layers = before.layers.clone();
+    after.layers.push(context::ConfigLayer {
+        scope: "local".into(),
+        root: Some("/b".into()),
+        path: "/b/.claude/settings.local.json".into(),
+        settings: json!({"enabledPlugins":{"demo@team":true}}),
+    });
+    assert!(!operations::postcondition(&r, &before, &after, &out));
+}
+#[tokio::test]
+#[ignore = "real Claude project/local lifecycle in isolated configuration and temporary projects"]
+async fn native_project_layers_isolated_lifecycle() {
+    let (temp, service, mut rt) = fake_service();
+    fs::remove_dir_all(&rt.root).unwrap();
+    fs::create_dir_all(&rt.root).unwrap();
+    rt.executable = "/Users/sunven/.local/bin/claude".into();
+    *service.0.runtime.lock().unwrap() = Some(rt.clone());
+    let a = registered_context(&service, &temp.path().join("a"), Layer::Project);
+    let b = registered_context(&service, &temp.path().join("b"), Layer::Project);
+    let local = Context {
+        scope: a.scope.clone(),
+        layer: Layer::Local,
+    };
+    let market = contracts::fixture(temp.path()).unwrap();
+    let id = "demo@skills-box-verification";
+    async fn perform(
+        service: &Service,
+        context: &Context,
+        action: Action,
+        target: &str,
+        source: &std::path::Path,
+    ) {
+        let mut r = request(Host::Claude, action, target);
+        r.context = context.clone();
+        r.source_kind = "local".into();
+        r.source = source.to_string_lossy().into();
+        let preview = service.prepare(r).await.unwrap();
+        let result = service.execute(preview.token).await.unwrap();
+        eprintln!(
+            "{} {}: {} {}",
+            context.layer.native(),
+            action.label(),
+            result.status,
+            result.message
+        );
+        assert_eq!(result.status, "succeeded", "{}", result.message);
+    }
+    // A standalone project supports the full lifecycle, including removal.
+    for (action, target) in [
+        (Action::AddMarket, ""),
+        (Action::Install, id),
+        (Action::Disable, id),
+        (Action::Update, id),
+        (Action::Enable, id),
+        (Action::Uninstall, id),
+        (Action::RemoveMarket, "skills-box-verification"),
+    ] {
+        perform(&service, &a, action, target, &market).await;
+    }
+    // Removing A's declaration must preserve B's declaration even when no
+    // foreign installation exists. The selected installation follows the host.
+    perform(&service, &a, Action::AddMarket, "", &market).await;
+    perform(&service, &b, Action::AddMarket, "", &market).await;
+    perform(&service, &a, Action::Install, id, &market).await;
+    perform(
+        &service,
+        &a,
+        Action::RemoveMarket,
+        "skills-box-verification",
+        &market,
+    )
+    .await;
+    let b_root = service.resolve(&b).unwrap().project_root.unwrap();
+    assert!(!inventory::optional_json(&PathBuf::from(b_root).join(".claude/settings.json")).unwrap()["extraKnownMarketplaces"]["skills-box-verification"].is_null());
+    // Shared user/A/local/B installs retain their configuration identities.
+    for context in [&Context::default(), &a, &local, &b] {
+        perform(&service, context, Action::AddMarket, "", &market).await;
+        perform(&service, context, Action::Install, id, &market).await;
+        perform(&service, context, Action::Disable, id, &market).await;
+        if context.scope.is_global() {
+            perform(&service, &a, Action::Enable, id, &market).await;
+            let inherited = service
+                .read_at(Host::Claude, a.clone())
+                .await
+                .unwrap()
+                .snapshot
+                .unwrap();
+            assert!(!inherited.plugins[0].installed_in_target);
+            assert_eq!(inherited.plugins[0].selected_enabled, Some(true));
+            assert_eq!(inherited.plugins[0].user_enabled, Some(false));
+            perform(&service, &a, Action::Disable, id, &market).await;
+        }
+    }
+    fs::write(
+        market.join("demo/.claude-plugin/plugin.json"),
+        json!({"name":"demo","version":"2.0.0"}).to_string(),
+    )
+    .unwrap();
+    perform(&service, &a, Action::Update, id, &market).await;
+    assert_eq!(
+        service
+            .read_at(Host::Claude, a.clone())
+            .await
+            .unwrap()
+            .snapshot
+            .unwrap()
+            .plugins[0]
+            .version
+            .as_deref(),
+        Some("2.0.0")
+    );
+    perform(
+        &service,
+        &a,
+        Action::SyncMarket,
+        "skills-box-verification",
+        &market,
+    )
+    .await;
+    for action in [Action::Uninstall, Action::RemoveMarket] {
+        let mut r = request(
+            Host::Claude,
+            action,
+            if action == Action::Uninstall {
+                id
+            } else {
+                "skills-box-verification"
+            },
+        );
+        r.context = a.clone();
+        assert!(service.prepare(r).await.is_err());
+    }
+    let snapshot = service
+        .read_at(Host::Claude, local)
+        .await
+        .unwrap()
+        .snapshot
+        .unwrap();
+    assert_eq!(snapshot.plugins[0].installations.len(), 4);
+    assert_eq!(snapshot.plugins[0].selected_enabled, Some(false));
+    let old = service.resolve(&a).unwrap().project_root.unwrap();
+    let moved = temp.path().join("relocated-a");
+    fs::rename(&old, &moved).unwrap();
+    service
+        .0
+        .projects
+        .relocate(
+            &a.scope.project_id().unwrap().to_string(),
+            moved.to_str().unwrap(),
+        )
+        .unwrap();
+    let relocated = service
+        .read_at(Host::Claude, a.clone())
+        .await
+        .unwrap()
+        .snapshot
+        .unwrap();
+    assert!(!relocated.plugins[0].installed_in_target);
+    assert!(
+        relocated.plugins[0]
+            .installations
+            .iter()
+            .any(|i| i.project_path.as_deref() == Some(&old))
+    );
+    service
+        .0
+        .projects
+        .forget(&b.scope.project_id().unwrap().to_string())
+        .unwrap();
+    let remaining = service.read(Host::Claude).await.unwrap().snapshot.unwrap();
+    assert_eq!(remaining.plugins[0].installations.len(), 4);
+    assert!(
+        service
+            .prepare(request(Host::Claude, Action::Uninstall, id))
+            .await
+            .is_err()
+    );
+    eprintln!(
+        "Validated Claude {} in {}",
+        snapshot.version,
+        temp.path().display()
+    );
 }

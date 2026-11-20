@@ -1,6 +1,6 @@
 # Skills Box
 
-A macOS-first desktop tool for managing Agent Skills at global and project scope and native Plugins at user scope across coding agents.
+A macOS-first desktop tool for managing Agent Skills and native Plugins in global and project contexts across coding agents.
 
 ## Language
 
@@ -9,11 +9,11 @@ A skill installed at user scope, available across projects and mounted into one 
 _Avoid_: user skill, system skill
 
 **Project**:
-A directory registered in the app whose skills are managed independently of the global scope.
+A directory registered in the app that provides a shared project context for Skill and native Plugin management.
 _Avoid_: workspace, folder
 
 **Project root**:
-The directory that anchors one project's skills and agent attachments; relocating a project changes its root but not its identity.
+The directory that anchors one Project's Skills, Agent attachments and native Plugin configuration; relocating a Project changes its root but not its identity.
 _Avoid_: project path, folder
 
 **Relocate**:
@@ -21,7 +21,7 @@ Point an existing project at a new root while keeping its identity, used when th
 _Avoid_: move, rename
 
 **Forget**:
-Remove a project from the registry without deleting any skill files or attachments.
+Remove a Project from the registry without deleting its files, Agent attachments or native Plugin configuration.
 _Avoid_: remove project, delete project
 
 **Canonical store**:
@@ -36,9 +36,21 @@ _Avoid_: package, plugin
 A native extension recognized by an Agent and managed as one unit, which may contain Skills and other capabilities.
 _Avoid_: skill, expert pack
 
+**Plugin configuration layer**:
+The native configuration context that owns a Plugin setting or Plugin marketplace declaration, such as the user's defaults, shared Project configuration or personal configuration within a Project.
+_Avoid_: installation location, cache scope
+
+**Inherited plugin**:
+A Plugin made available to a Project through a broader configuration context, subject to the Agent's configuration and loading rules.
+_Avoid_: project installation, copied plugin
+
 **Plugin marketplace**:
 A source registered with an Agent that catalogs Plugins available to that Agent.
 _Avoid_: skill marketplace, marketplace source
+
+**Plugin marketplace declaration**:
+A Plugin configuration layer's reference to a Plugin marketplace, distinct from the marketplace content and Plugin installations that the Agent may share across Projects.
+_Avoid_: marketplace cache, installed marketplace
 
 **Plugin marketplace sync**:
 Refresh a Plugin marketplace and apply any related Plugin content changes defined by its Agent, including changes to disabled Plugins.
@@ -325,5 +337,5 @@ A state that does not match the canonical model, such as an orphan folder, broke
 _Avoid_: error, corruption
 
 **Scope**:
-Whether a skill belongs to the global store or to one registered project.
+The global user context or one registered Project in which Skills and native Plugins are managed.
 _Avoid_: level, target

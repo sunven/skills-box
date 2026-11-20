@@ -1,4 +1,11 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 import App from "./App";
@@ -19,14 +26,64 @@ async function openPlugins() {
   await screen.findByText("workspace-tools");
 }
 describe("native plugin management", () => {
-  it("keeps native hosts and user scope independent from skills, and refresh only reads", async () => {
+  it("shares the active project with skills and keeps Codex project writes unavailable", async () => {
+    const id = "11111111-1111-4111-8111-111111111111";
+    const scope = `project:${id}` as const;
+    const backend = createFakeBackend({
+      data: {
+        projects: {
+          projects: [
+            {
+              id,
+              root: "/tmp/plugin-project",
+              displayName: "plugin-project",
+              addedAt: 1,
+              lastOpenedAt: 1,
+              available: true,
+            },
+          ],
+          lastActiveScope: scope,
+          warnings: [],
+        },
+      },
+    }).install();
+    renderApp();
+    await screen.findByTestId("project-header");
+    await openPlugins();
+    await screen.findByText("项目共享 · 只读");
+    expect(screen.getByRole("button", { name: "添加市场" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "启用" })).toBeDisabled();
+    expect(
+      backend.callsOf("read_native_plugins").slice(-1)[0]?.payload.context,
+    ).toEqual({ scope, layer: "project" });
+    fireEvent.click(screen.getByRole("button", { name: "切换到全局" }));
+    await screen.findByText("用户级");
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "启用" })).toBeEnabled(),
+    );
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "切换到项目 plugin-project",
+        hidden: true,
+      }),
+    );
+    await screen.findByText("项目共享 · 只读");
+    fireEvent.click(screen.getByRole("button", { name: "返回 skills" }));
+    expect(await screen.findByTestId("project-header")).toHaveTextContent(
+      "plugin-project",
+    );
+    expect(backend.callsOf("prepare_native_plugin")).toHaveLength(0);
+  });
+  it("shares the scope selector while keeping refresh read-only", async () => {
     const backend = createFakeBackend().install();
     renderApp();
     await openPlugins();
     expect(screen.getByText("用户级")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "切换项目" }));
     expect(
-      screen.queryByRole("button", { name: "添加项目" }),
-    ).not.toBeInTheDocument();
+      screen.queryByRole("button", { name: "添加项目", hidden: true }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "切换项目" }));
     fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
     fireEvent.click(screen.getByRole("button", { name: "Claude Code" }));
     await screen.findByText("/Users/demo/.claude · 2.1.325");
@@ -112,6 +169,7 @@ describe("native plugin management", () => {
       screen.getByRole("button", { name: /team-plugins.*目录读取失败/ }),
     );
     expect(screen.getByRole("button", { name: "移除市场" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "同步市场" })).toBeDisabled();
     expect(
       screen.getByText("存在项目安装，移除会连带卸载，已阻止。"),
     ).toBeInTheDocument();

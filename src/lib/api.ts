@@ -1,4 +1,4 @@
-import type { PluginHost, PluginRequest, PluginPreview, PluginOutcome, PluginPageState, PluginDetails } from "./native-plugins";
+import type { PluginContext, PluginHost, PluginRequest, PluginPreview, PluginOutcome, PluginPageState, PluginDetails } from "./native-plugins";
 import type { PackListing, PackDetail, PackPreview, LocalPack } from "./expert-packs";
 import type { SkillsShCoordinate, SkillsShListing, SkillsShSnapshot, SkillsShView } from "./skills-sh";
 import type { ClawHubCoordinate, ClawHubDetail, ClawHubInstallPreview, ClawHubListing, ClawHubSearch, ClawHubSort, ClawHubVersionFiles } from "./clawhub";
@@ -633,8 +633,8 @@ export function startPackInstall(scope: ScopeId, previewId: string, onEvent: (ev
   return invoke(API_COMMANDS.startPackInstall, { scope, previewId, onEvent: channel });
 }
 
-export function readNativePlugins(host: PluginHost): Promise<PluginPageState> { return invoke(API_COMMANDS.readNativePlugins, { host }); }
+export function readNativePlugins(host: PluginHost, context?: PluginContext): Promise<PluginPageState> { return invoke(API_COMMANDS.readNativePlugins, { host, context }); }
 export function prepareNativePlugin(request: PluginRequest): Promise<PluginPreview> { return invoke(API_COMMANDS.prepareNativePlugin, { request }); }
 export function executeNativePlugin(token: string): Promise<PluginOutcome> { return invoke(API_COMMANDS.executeNativePlugin, { token }); }
-export function nativePluginDetails(host: PluginHost, id: string): Promise<PluginDetails> { return invoke(API_COMMANDS.nativePluginDetails, { host, id }); }
+export function nativePluginDetails(host: PluginHost, id: string, context?: PluginContext): Promise<PluginDetails> { return invoke(API_COMMANDS.nativePluginDetails, { host, id, context }); }
 export function verifyNativePluginHost(host: PluginHost): Promise<PluginPageState> { return invoke(API_COMMANDS.verifyNativePluginHost, { host }); }

@@ -1,8 +1,8 @@
 use super::{
     model::*,
-    transport::{same_path, Runtime},
+    transport::{Runtime, same_path},
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
@@ -13,6 +13,7 @@ use std::{
 pub struct Observation {
     pub snapshot: Snapshot,
     pub user_version: Option<String>,
+    pub layers: Vec<super::context::ConfigLayer>,
 }
 pub fn optional_json(path: &Path) -> Result<Value, String> {
     match fs::read(path) {
@@ -107,8 +108,16 @@ pub(super) fn owns(config: &Value, user: &Value, section: &str, key: &str, path:
 }
 pub fn load(
     rt: &Runtime,
+    capabilities: Vec<Capability>,
+    projects: &[PathBuf],
+) -> Result<Observation, String> {
+    load_context(rt, capabilities, projects, ResolvedContext::default())
+}
+pub fn load_context(
+    rt: &Runtime,
     mut capabilities: Vec<Capability>,
     projects: &[PathBuf],
+    context: ResolvedContext,
 ) -> Result<Observation, String> {
     let version = rt.version()?;
     let raw_markets = rt.json(&["plugin", "marketplace", "list", "--json"])?;
@@ -135,7 +144,7 @@ pub fn load(
     }
     let mut evidence = vec![raw_markets.clone(), raw_plugins.clone()];
     let (config, user, user_version, records, known) = if rt.host == Host::Codex {
-        let config = rt.rpc("config/read", json!({"includeLayers":true}))?;
+        let config = rt.rpc("config/read", json!({"includeLayers":true,"cwd":rt.cwd}))?;
         let layers = array(&config["layers"])?;
         let layer = layers
             .iter()
@@ -336,6 +345,8 @@ pub fn load(
             },
             catalog_error: None,
             affected_plugins: affected,
+            declarations: vec![],
+            declared_in_target: owned,
         };
         let catalog = (|| {
             let root = PathBuf::from(root.ok_or("原生工具未提供本地目录，目录内容不可用。")?);
@@ -539,6 +550,11 @@ pub fn load(
             .into(),
             installations,
             user_enabled,
+            selected_enabled: user_enabled,
+            installed_in_target: installed.is_some(),
+            enabled_source: user_enabled.map(|_| "全局".into()),
+            enabled_overridden: false,
+            action_blocks: BTreeMap::new(),
             effective_enabled,
             // Expose source identity, never command bodies, headers or credentials.
             source: source_summary(&entry["source"]),
@@ -570,9 +586,10 @@ pub fn load(
         version,
         evidence
     ]));
-    Ok(Observation {
+    let mut observation = Observation {
         snapshot: Snapshot {
             host: rt.host,
+            context,
             config_root: root,
             executable: executable.to_string_lossy().into_owned(),
             version,
@@ -584,7 +601,10 @@ pub fn load(
             fingerprint,
         },
         user_version,
-    })
+        layers: vec![],
+    };
+    super::context::project(rt, &mut observation, projects, &config, &raw_plugins)?;
+    Ok(observation)
 }
 fn source_summary(source: &Value) -> Value {
     if let Some(source) = source.as_str() {

@@ -7,6 +7,7 @@ import type { ScopeProjectView } from "../lib/workspace-view";
 
 interface ScopeSwitcherProps {
   disabled?: boolean;
+  purpose?: "skills" | "plugins";
   activeScope: ScopeId;
   projects: ScopeProjectView[];
   warnings: string[];
@@ -105,6 +106,7 @@ function ProjectRow({
 /** Header scope controls with the registered projects in a native popover. */
 export function ScopeSwitcher({
   disabled = false,
+  purpose = "skills",
   activeScope,
   projects,
   warnings,
@@ -132,7 +134,7 @@ export function ScopeSwitcher({
         aria-pressed={activeScope === GLOBAL_SCOPE}
         onClick={() => selectScope(GLOBAL_SCOPE)}
         className="scope-tab"
-        title="全局 · ~/.agents/skills"
+        title={purpose === "plugins" ? "全局 · 原生用户配置" : "全局 · ~/.agents/skills"}
       >
         <Globe2 className="size-3.5 shrink-0" aria-hidden="true" />
         全局

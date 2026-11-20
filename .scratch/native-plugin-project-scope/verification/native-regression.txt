@@ -1,0 +1,13 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.60s
+     Running unittests src/lib.rs (src-tauri/target/debug/deps/skills_box_lib-37b7ed1ef6e57034)
+
+running 7 tests
+test native_plugins::tests::native_adapters_codex_override ... ok
+test native_plugins::tests::native_adapters_network_failure ... ok
+test native_plugins::tests::native_adapters_native_catalog_and_approval ... ok
+test native_plugins::tests::native_adapters_scope_and_orphan ... ok
+test native_plugins::tests::native_adapters_compatibility_probe ... ok
+test native_plugins::tests::native_adapters_isolated_lifecycle ... ok
+test native_plugins::tests::native_adapters_git_and_source_contracts ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 856 filtered out; finished in 12.05s
