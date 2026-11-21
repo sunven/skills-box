@@ -1,6 +1,6 @@
 //! Host adapters provide default capabilities independently of CLI versions.
 //! Observed failures and isolated probes can disable individual operations.
-use super::{inventory, model::*, operations, transport::Runtime};
+use super::{inventory, model::*, transport::Runtime};
 use serde_json::json;
 use std::{collections::BTreeMap, fs};
 #[derive(Clone)]
@@ -24,38 +24,6 @@ impl Contract {
                 *capability = result.clone();
             }
         }
-    }
-}
-pub fn actions(host: Host) -> Vec<Action> {
-    let mut a = vec![
-        Action::AddMarket,
-        Action::SyncMarket,
-        Action::RemoveMarket,
-        Action::Install,
-        Action::Enable,
-        Action::Disable,
-        Action::Uninstall,
-    ];
-    a.push(if host == Host::Codex {
-        Action::Reinstall
-    } else {
-        Action::Update
-    });
-    a
-}
-pub fn defaults(host: Host) -> Contract {
-    Contract {
-        capabilities: actions(host)
-            .into_iter()
-            .map(|action| Capability {
-                action,
-                blocked_reason: None,
-            })
-            .collect(),
-        sources: match host {
-            Host::Codex => vec!["local".into(), "git".into()],
-            Host::Claude => vec!["local".into(), "git".into(), "url".into()],
-        },
     }
 }
 pub fn key(rt: &Runtime, version: &str) -> String {
@@ -124,41 +92,15 @@ pub fn verify(rt: &Runtime) -> Result<Contract, String> {
         .map_err(|e| e.to_string())?;
     let isolated = isolated_runtime(rt, temp.path())?;
     let market = fixture(temp.path())?;
+    let permissive = rt.host.defaults().capabilities;
     let mut contract = Contract {
-        capabilities: actions(rt.host)
-            .into_iter()
-            .map(|action| Capability {
-                action,
-                blocked_reason: Some("此操作未通过隔离验证。".into()),
-            })
-            .collect(),
+        capabilities: permissive.clone(),
         sources: vec![],
     };
-    let permissive: Vec<_> = actions(rt.host)
-        .into_iter()
-        .map(|action| Capability {
-            action,
-            blocked_reason: None,
-        })
-        .collect();
-    let mut sequence = vec![
-        Action::AddMarket,
-        Action::Install,
-        Action::Disable,
-        if rt.host == Host::Codex {
-            Action::Reinstall
-        } else {
-            Action::Update
-        },
-        Action::Enable,
-        Action::Uninstall,
-        Action::RemoveMarket,
-    ];
-    // Codex reinstall enables again; Claude update preserves the disabled setting.
-    if rt.host == Host::Codex {
-        sequence.insert(4, Action::Disable);
+    for capability in &mut contract.capabilities {
+        capability.blocked_reason = Some("此操作未通过隔离验证。".into());
     }
-    for action in sequence {
+    for action in rt.host.probe_sequence() {
         let request = Request {
             context: Context::default(),
             host: rt.host,
@@ -175,13 +117,21 @@ pub fn verify(rt: &Runtime) -> Result<Contract, String> {
             sparse_paths: vec![],
         };
         let result = (|| {
-            let mut before = inventory::load(&isolated, permissive.clone(), &[])?;
+            let mut before = rt.host.observe(
+                &isolated,
+                permissive.clone(),
+                &[],
+                ResolvedContext::default(),
+            )?;
             before.snapshot.source_kinds = vec!["local".into()];
-            let out = operations::execute(&isolated, &request, &before)?;
-            let after = inventory::load(&isolated, permissive.clone(), &[])?;
-            if !operations::response_matches(&request, &out)
-                || !operations::postcondition(&request, &before, &after, &out)
-            {
+            let out = before.execute(&isolated, &request)?;
+            let after = rt.host.observe(
+                &isolated,
+                permissive.clone(),
+                &[],
+                ResolvedContext::default(),
+            )?;
+            if !out.response_accepted || !before.verify(&request, &after, &out) {
                 return Err(out.diagnostic);
             }
             Ok::<(), String>(())

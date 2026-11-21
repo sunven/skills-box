@@ -1,15 +1,13 @@
 //! Native Plugin boundary. Installation truth belongs to the host. Stored
 //! records describe only operations and never replace the native inventory.
-mod context;
 mod contracts;
+mod hosts;
 mod inventory;
 mod model;
 mod operations;
-#[cfg(test)]
-mod tests;
 mod transport;
 use crate::{paths::AppPaths, projects::ProjectRegistry, tasks::TaskManager};
-use inventory::Observation;
+use hosts::Observation;
 pub use model::*;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -87,9 +85,7 @@ impl Service {
         })
     }
     fn scoped_runtime(&self, host: Host, context: &ResolvedContext) -> Result<Runtime, String> {
-        if host == Host::Codex && context.target.layer == Layer::Local {
-            return Err("Codex 没有此项目个人配置层。".into());
-        }
+        host.check_context(context)?;
         let mut rt = self.runtime(host)?;
         if let Some(root) = &context.project_root {
             rt.cwd = root.into();
@@ -110,14 +106,16 @@ impl Service {
             .map_err(|_| "兼容性状态不可用")?
             .get(&key)
             .cloned()
-            .unwrap_or_else(|| contracts::defaults(rt.host));
+            .unwrap_or_else(|| rt.host.defaults());
         let projects = self.0.projects.list();
         let roots = projects
             .projects
             .iter()
             .map(|p| p.project.root.clone())
             .collect::<Vec<_>>();
-        let mut observation = inventory::load_context(rt, contract.capabilities, &roots, context)?;
+        let mut observation = rt
+            .host
+            .observe(rt, contract.capabilities, &roots, context)?;
         if observation.snapshot.version != version {
             return Err("CLI 在读取期间变化，请重新检测。".into());
         }
@@ -173,12 +171,10 @@ impl Service {
             let context = service.resolve(&request.context)?;
             let rt = service.scoped_runtime(request.host, &context)?;
             let obs = service.observe_context(&rt, context.clone())?;
-            let args = operations::arguments(&request, &obs)?;
-            let fingerprint = operations::confirmation_fingerprint(&request, &obs)?;
-            let (consequences, affected_plugins) = operations::consequences(&request, &obs);
+            let prepared = obs.prepare(&request)?;
             let token = uuid::Uuid::new_v4().to_string();
             let command = std::iter::once(rt.executable.to_string_lossy().into_owned())
-                .chain(args)
+                .chain(prepared.arguments)
                 .map(|a| shell_display(&a))
                 .collect::<Vec<_>>()
                 .join(" ");
@@ -189,9 +185,9 @@ impl Service {
                 config_root: obs.snapshot.config_root,
                 version: obs.snapshot.version,
                 command,
-                consequences,
-                affected_plugins,
-                fingerprint,
+                consequences: prepared.consequences,
+                affected_plugins: prepared.affected_plugins,
+                fingerprint: prepared.fingerprint,
             };
             let mut previews = service.0.previews.lock().map_err(|_| "确认状态不可用")?;
             previews.retain(|_, (_, time)| crate::time::now_ms().saturating_sub(*time) < 600_000);
@@ -238,9 +234,8 @@ impl Service {
             if context != preview.context { return Err("项目已重新定位或确认目标变化，请重新预览；本次没有写入。".into()); }
             let rt = service.scoped_runtime(preview.request.host, &context)?;
             let before = service.observe_context(&rt, context.clone())?;
-            operations::arguments(&preview.request, &before)?;
-            if operations::confirmation_fingerprint(&preview.request, &before)?
-                != preview.fingerprint
+            let prepared = before.prepare(&preview.request)?;
+            if prepared.fingerprint != preview.fingerprint
             {
                 return Ok(Outcome {
                     status: "conflict".into(),
@@ -261,17 +256,17 @@ impl Service {
                 message: None,
             };
             service.write_record(&record)?;
-            let output = operations::execute(&rt, &preview.request, &before);
+            let output = before.execute(&rt, &preview.request);
             record.phase = "verifying".into();
             let record_error = service.write_record(&record).err();
             let mut after = service.observe_context(&rt, context);
             let contract_changed = output.as_ref().is_ok_and(|out| {
                 out.success
-                    && (!operations::response_matches(&preview.request, out)
+                    && (!out.response_accepted
                         || after.as_ref().is_ok_and(|next| {
                             next.snapshot.capabilities.iter().any(|c| {
                                 c.action == preview.request.action && c.blocked_reason.is_none()
-                            }) && !operations::postcondition(&preview.request, &before, next, out)
+                            }) && !before.verify(&preview.request, next, out)
                         }))
             });
             if contract_changed {
@@ -286,7 +281,7 @@ impl Service {
                     let key = contracts::context_key(&rt, &before.snapshot.version, preview.request.context.layer);
                     let contract = cache
                         .entry(key)
-                        .or_insert_with(|| contracts::defaults(rt.host));
+                        .or_insert_with(|| rt.host.defaults());
                     if let Some(c) = contract
                         .capabilities
                         .iter_mut()
@@ -358,7 +353,7 @@ impl Service {
             let mut cache = service.0.contracts.lock().map_err(|_| "兼容性状态不可用")?;
             cache
                 .entry(key)
-                .or_insert_with(|| contracts::defaults(host))
+                .or_insert_with(|| host.defaults())
                 .apply_probe(&tested);
             Ok::<(), String>(())
         })

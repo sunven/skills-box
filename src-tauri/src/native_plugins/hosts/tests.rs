@@ -1,6 +1,10 @@
 use super::*;
+use crate::native_plugins::{
+    OperationRecord, Service, contracts, inventory, operations, transport,
+};
+use crate::{paths::AppPaths, projects::ProjectRegistry, tasks::TaskManager};
 use serde_json::json;
-use std::path::PathBuf;
+use std::{fs, path::PathBuf, sync::Arc};
 use transport::{Output, Runtime};
 fn observation(host: Host) -> Observation {
     let mut o = Observation {
@@ -10,7 +14,11 @@ fn observation(host: Host) -> Observation {
             config_root: "/fixture".into(),
             executable: "/cli".into(),
             version: "test".into(),
-            capabilities: contracts::actions(host)
+            capabilities: host
+                .defaults()
+                .capabilities
+                .into_iter()
+                .map(|c| c.action)
                 .into_iter()
                 .map(|action| Capability {
                     action,
@@ -37,8 +45,12 @@ fn observation(host: Host) -> Observation {
             fingerprint: "before".into(),
             source_kinds: vec!["local".into(), "git".into(), "url".into()],
         },
-        user_version: Some("sha256:before".into()),
-        layers: vec![],
+        evidence: match host {
+            Host::Codex => Evidence::Codex(codex::NativeEvidence {
+                user_version: Some("sha256:before".into()),
+            }),
+            Host::Claude => Evidence::Claude(claude::NativeEvidence { layers: vec![] }),
+        },
     };
     o.snapshot.plugins.push(Plugin {
         id: "demo@team".into(),
@@ -97,7 +109,9 @@ fn blocks_cross_scope_removal_and_shared_plugin_changes() {
     let mut o = observation(Host::Claude);
     o.snapshot.markets[0].remove_blocked_reason = Some("project impact".into());
     assert!(
-        operations::arguments(&request(Host::Claude, Action::RemoveMarket, "team"), &o).is_err()
+        o.prepare(&request(Host::Claude, Action::RemoveMarket, "team"))
+            .map(|p| p.arguments)
+            .is_err()
     );
     o.snapshot.plugins[0].installations.push(Installation {
         scope: "project".into(),
@@ -106,9 +120,15 @@ fn blocks_cross_scope_removal_and_shared_plugin_changes() {
         project_path: Some("/project".into()),
     });
     assert!(
-        operations::arguments(&request(Host::Claude, Action::Uninstall, "demo@team"), &o).is_err()
+        o.prepare(&request(Host::Claude, Action::Uninstall, "demo@team"))
+            .map(|p| p.arguments)
+            .is_err()
     );
-    assert!(operations::arguments(&request(Host::Claude, Action::Enable, "demo@team"), &o).is_ok());
+    assert!(
+        o.prepare(&request(Host::Claude, Action::Enable, "demo@team"))
+            .map(|p| p.arguments)
+            .is_ok()
+    );
 }
 #[test]
 fn sync_allows_unused_catalog_removal_but_preserves_installed_and_configured_plugins() {
@@ -117,22 +137,25 @@ fn sync_allows_unused_catalog_removal_but_preserves_installed_and_configured_plu
         let mut after = observation(host);
         after.snapshot.plugins.clear();
         let r = request(host, Action::SyncMarket, "team");
-        let out = Output {
-            success: true,
-            value: None,
-            diagnostic: String::new(),
-        };
-        assert!(!operations::postcondition(&r, &before, &after, &out));
+        let out = CommandResult::new(
+            &r,
+            Output {
+                success: true,
+                value: None,
+                diagnostic: String::new(),
+            },
+        );
+        assert!(!before.verify(&r, &after, &out));
         before.snapshot.plugins[0].installation_state = "absent".into();
         before.snapshot.plugins[0].installations.clear();
-        assert!(!operations::postcondition(&r, &before, &after, &out));
+        assert!(!before.verify(&r, &after, &out));
         before.snapshot.plugins[0].user_enabled = None;
-        assert!(operations::postcondition(&r, &before, &after, &out));
+        assert!(before.verify(&r, &after, &out));
 
         let before = observation(host);
         let mut after = observation(host);
         after.snapshot.plugins[0].user_enabled = Some(true);
-        assert!(!operations::postcondition(&r, &before, &after, &out));
+        assert!(!before.verify(&r, &after, &out));
     }
 }
 #[test]
@@ -141,11 +164,15 @@ fn unknown_response_cannot_be_success_and_partial_writes_are_preserved() {
     let mut after = observation(Host::Claude);
     after.snapshot.fingerprint = "after".into();
     after.snapshot.plugins[0].user_enabled = Some(true);
-    let out = Output {
-        success: true,
-        value: Some(json!({"unexpected":true})),
-        diagnostic: "unknown response".into(),
-    };
+    let r = request(Host::Claude, Action::Enable, "demo@team");
+    let out = CommandResult::new(
+        &r,
+        Output {
+            success: true,
+            value: Some(json!({"unexpected":true})),
+            diagnostic: "unknown response".into(),
+        },
+    );
     let result = operations::outcome(
         preview(request(Host::Claude, Action::Enable, "demo@team")),
         &before,
@@ -163,11 +190,14 @@ fn post_read_failure_is_unknown_and_approval_failure_needs_host() {
         preview(request(Host::Claude, Action::Install, "demo@team")),
         &before,
         Err("read failed".into()),
-        Ok(Output {
-            success: true,
-            value: Some(json!({"outcome":"ok"})),
-            diagnostic: String::new(),
-        }),
+        Ok(CommandResult::new(
+            &request(Host::Claude, Action::Install, "demo@team"),
+            Output {
+                success: true,
+                value: Some(json!({"outcome":"ok"})),
+                diagnostic: String::new(),
+            },
+        )),
     );
     assert_eq!(result.status, "unconfirmed");
     assert!(result.executed);
@@ -175,11 +205,14 @@ fn post_read_failure_is_unknown_and_approval_failure_needs_host() {
         preview(request(Host::Claude, Action::Install, "demo@team")),
         &before,
         Ok(observation(Host::Claude)),
-        Ok(Output {
-            success: false,
-            value: Some(json!({"outcome":"failed"})),
-            diagnostic: "installation requires approval".into(),
-        }),
+        Ok(CommandResult::new(
+            &request(Host::Claude, Action::Install, "demo@team"),
+            Output {
+                success: false,
+                value: Some(json!({"outcome":"failed"})),
+                diagnostic: "installation requires approval".into(),
+            },
+        )),
     );
     assert_eq!(result.status, "needs_host");
 }
@@ -193,16 +226,16 @@ fn input_guards_and_native_argument_shapes() {
         "https://example.com/repo?token=secret",
     ] {
         r.source = source.into();
-        assert!(operations::arguments(&r, &o).is_err());
+        assert!(o.prepare(&r).map(|p| p.arguments).is_err());
     }
     r.source = "owner/repo".into();
     r.reference = "main".into();
     r.sparse_paths = vec![".claude-plugin".into(), "plugins/demo".into()];
-    let args = operations::arguments(&r, &o).unwrap();
+    let args = o.prepare(&r).map(|p| p.arguments).unwrap();
     assert!(args.contains(&"owner/repo#main".into()));
     assert_eq!(args.iter().filter(|s| *s == "--sparse").count(), 1);
     r.sparse_paths = vec!["../outside".into()];
-    assert!(operations::arguments(&r, &o).is_err());
+    assert!(o.prepare(&r).map(|p| p.arguments).is_err());
 }
 #[test]
 fn local_detail_rejects_symlink_escape_and_limits_content() {
@@ -222,7 +255,7 @@ fn local_detail_rejects_symlink_escape_and_limits_content() {
 fn compatibility_probe_updates_basic_actions_without_resetting_market_state() {
     for host in [Host::Claude, Host::Codex] {
         for market_blocked in [false, true] {
-            let mut current = contracts::defaults(host);
+            let mut current = host.defaults();
             let sources = current.sources.clone();
             for capability in &mut current.capabilities {
                 if capability.action == Action::Enable
@@ -297,9 +330,17 @@ fn native_adapters_isolated_lifecycle() {
         };
         let rt = contracts::isolated_runtime(&base, temp.path()).unwrap();
         let market = contracts::fixture(temp.path()).unwrap();
-        let contract = contracts::defaults(host);
+        let contract = host.defaults();
         let load = || {
-            let mut o = inventory::load(&rt, contract.capabilities.clone(), &[]).unwrap();
+            let mut o = rt
+                .host
+                .observe(
+                    &rt,
+                    contract.capabilities.clone(),
+                    &[],
+                    ResolvedContext::default(),
+                )
+                .unwrap();
             o.snapshot.source_kinds = contract.sources.clone();
             o
         };
@@ -308,15 +349,15 @@ fn native_adapters_isolated_lifecycle() {
             r.source = market.to_string_lossy().into();
             r.source_kind = "local".into();
             let before = load();
-            let out = operations::execute(&rt, &r, &before).unwrap();
+            let out = before.execute(&rt, &r).unwrap();
             assert!(
-                operations::response_matches(&r, &out),
+                out.response_accepted,
                 "{host:?} {action:?}: {}",
                 out.diagnostic
             );
             let after = load();
             assert!(
-                operations::postcondition(&r, &before, &after, &out),
+                before.verify(&r, &after, &out),
                 "{host:?} {action:?}: {}\n{}",
                 out.diagnostic,
                 serde_json::to_string_pretty(&after.snapshot).unwrap()
@@ -330,13 +371,13 @@ fn native_adapters_isolated_lifecycle() {
         if host == Host::Codex {
             // Official config compare-and-swap rejects stale versions, including dotted IDs.
             perform(Action::Enable, "demo@skills-box-verification");
-            assert!(rt.rpc("config/value/write",json!({"keyPath":"plugins.\"demo@skills-box-verification\".enabled","value":false,"mergeStrategy":"replace","filePath":rt.root.join("config.toml"),"expectedVersion":disabled.user_version})).is_err());
+            assert!(rt.rpc("config/value/write",json!({"keyPath":"plugins.\"demo@skills-box-verification\".enabled","value":false,"mergeStrategy":"replace","filePath":rt.root.join("config.toml"),"expectedVersion":codex_evidence(&disabled).user_version})).is_err());
             let after = perform(Action::Reinstall, "demo@skills-box-verification");
             assert_eq!(after.snapshot.plugins[0].user_enabled, Some(true));
             let details = inventory::details(&after.snapshot.plugins[0]);
             assert_eq!(details.components["Skills"], vec!["hello"]);
             let key = "plugins.\"dotted.name@skills-box-verification\".enabled";
-            rt.rpc("config/value/write",json!({"keyPath":key,"value":false,"mergeStrategy":"replace","filePath":rt.root.join("config.toml"),"expectedVersion":after.user_version})).unwrap();
+            rt.rpc("config/value/write",json!({"keyPath":key,"value":false,"mergeStrategy":"replace","filePath":rt.root.join("config.toml"),"expectedVersion":codex_evidence(&after).user_version})).unwrap();
             assert_eq!(
                 rt.rpc("config/read", json!({"includeLayers":true}))
                     .unwrap()["config"]["plugins"]["dotted.name@skills-box-verification"]["enabled"],
@@ -374,7 +415,7 @@ fn native_adapters_scope_and_orphan() {
         };
         let rt = contracts::isolated_runtime(&base, temp.path()).unwrap();
         let market = contracts::fixture(temp.path()).unwrap();
-        let contract = contracts::defaults(host);
+        let contract = host.defaults();
         assert!(
             rt.run(
                 &[
@@ -428,14 +469,20 @@ fn native_adapters_scope_and_orphan() {
                     .unwrap()
                     .success
             );
-            let obs = inventory::load(&rt, contract.capabilities, &[]).unwrap();
+            let obs = rt
+                .host
+                .observe(&rt, contract.capabilities, &[], ResolvedContext::default())
+                .unwrap();
             assert!(obs.snapshot.markets[0].remove_blocked_reason.is_some());
             assert!(
-                operations::arguments(
-                    &request(host, Action::RemoveMarket, "skills-box-verification"),
-                    &obs
-                )
-                .is_err()
+                (&obs)
+                    .prepare(&request(
+                        host,
+                        Action::RemoveMarket,
+                        "skills-box-verification"
+                    ))
+                    .map(|p| p.arguments)
+                    .is_err()
             );
             assert_eq!(obs.snapshot.plugins[0].installations.len(), 2);
             assert!(
@@ -454,14 +501,25 @@ fn native_adapters_scope_and_orphan() {
                     .unwrap()
                     .success
             );
-            let before = inventory::load(&rt, contracts::defaults(host).capabilities, &[]).unwrap();
+            let before = rt
+                .host
+                .observe(
+                    &rt,
+                    host.defaults().capabilities,
+                    &[],
+                    ResolvedContext::default(),
+                )
+                .unwrap();
             assert_eq!(before.snapshot.plugins[0].installations.len(), 3);
             assert!(
-                operations::arguments(
-                    &request(host, Action::RemoveMarket, "skills-box-verification"),
-                    &before
-                )
-                .is_err()
+                (&before)
+                    .prepare(&request(
+                        host,
+                        Action::RemoveMarket,
+                        "skills-box-verification"
+                    ))
+                    .map(|p| p.arguments)
+                    .is_err()
             );
             // Verify the native user-scope flag really has broader effects;
             // production preflight above must prevent this command.
@@ -491,7 +549,15 @@ fn native_adapters_scope_and_orphan() {
                 "[plugins.\"demo@skills-box-verification\"]\nenabled=true\n",
             )
             .unwrap();
-            let obs = inventory::load(&rt, contract.capabilities.clone(), &[project]).unwrap();
+            let obs = rt
+                .host
+                .observe(
+                    &rt,
+                    contract.capabilities.clone(),
+                    &[project],
+                    ResolvedContext::default(),
+                )
+                .unwrap();
             assert!(obs.snapshot.markets[0].remove_blocked_reason.is_some());
             assert!(
                 rt.run(
@@ -507,7 +573,10 @@ fn native_adapters_scope_and_orphan() {
                 .unwrap()
                 .success
             );
-            let obs = inventory::load(&rt, contract.capabilities, &[]).unwrap();
+            let obs = rt
+                .host
+                .observe(&rt, contract.capabilities, &[], ResolvedContext::default())
+                .unwrap();
             assert_eq!(obs.snapshot.plugins[0].installation_state, "unconfirmed");
             assert_eq!(obs.snapshot.plugins[0].user_enabled, Some(true));
         }
@@ -538,7 +607,7 @@ fn fake_service() -> (tempfile::TempDir, Service, Runtime) {
     let executable = temp.path().join("fake-cli");
     fs::write(
         &executable,
-        include_str!("../../tests/fixtures/native-plugins/fake-cli.py"),
+        include_str!("../../../tests/fixtures/native-plugins/fake-cli.py"),
     )
     .unwrap();
     #[cfg(unix)]
@@ -628,7 +697,7 @@ async fn cli_versions_do_not_gate_host_actions_or_market_sources() {
 #[tokio::test]
 async fn compatibility_check_preserves_cached_market_failures_and_sources() {
     let (_temp, service, rt) = fake_service();
-    let mut current = contracts::defaults(rt.host);
+    let mut current = rt.host.defaults();
     current
         .capabilities
         .iter_mut()
@@ -886,24 +955,31 @@ fn native_adapters_git_and_source_contracts() {
             .read_line(&mut port)
             .unwrap();
         let address = format!("http://127.0.0.1:{}/market.git", port.trim());
-        let contract = contracts::defaults(host);
+        let contract = host.defaults();
         let load = || {
-            let mut o = inventory::load(&rt, contract.capabilities.clone(), &[]).unwrap();
+            let mut o = rt
+                .host
+                .observe(
+                    &rt,
+                    contract.capabilities.clone(),
+                    &[],
+                    ResolvedContext::default(),
+                )
+                .unwrap();
             o.snapshot.source_kinds = contract.sources.clone();
             o
         };
         let perform = |r: Request| {
             let before = load();
-            let output = operations::execute(&rt, &r, &before).unwrap();
+            let output = before.execute(&rt, &r).unwrap();
             let after = load();
             assert!(
-                operations::response_matches(&r, &output),
+                output.response_accepted,
                 "{host:?} {:?}: {}",
-                r.action,
-                output.diagnostic
+                r.action, output.diagnostic
             );
             assert!(
-                operations::postcondition(&r, &before, &after, &output),
+                before.verify(&r, &after, &output),
                 "{host:?} {:?}: {}",
                 r.action,
                 format!(
@@ -1030,32 +1106,14 @@ fn nested_origins_require_every_user_owned_leaf() {
     let user = json!({"marketplaces":{"team":{"source":"https://example.invalid/market.git","sparse_paths":["catalog","plugins"]}}});
     let origin = json!({"name":{"type":"user","profile":null,"file":path}});
     let mut config = json!({"config":user,"origins":{"marketplaces.team.source":origin,"marketplaces.team.sparse_paths.0":origin,"marketplaces.team.sparse_paths.1":origin}});
-    assert!(inventory::owns(
-        &config,
-        &user,
-        "marketplaces",
-        "team",
-        path
-    ));
+    assert!(codex::owns(&config, &user, "marketplaces", "team", path));
     config["origins"]["marketplaces.team.sparse_paths.1"]["name"]["type"] = json!("system");
-    assert!(!inventory::owns(
-        &config,
-        &user,
-        "marketplaces",
-        "team",
-        path
-    ));
+    assert!(!codex::owns(&config, &user, "marketplaces", "team", path));
     config["origins"]
         .as_object_mut()
         .unwrap()
         .remove("marketplaces.team.sparse_paths.1");
-    assert!(!inventory::owns(
-        &config,
-        &user,
-        "marketplaces",
-        "team",
-        path
-    ));
+    assert!(!codex::owns(&config, &user, "marketplaces", "team", path));
 }
 
 #[test]
@@ -1065,13 +1123,10 @@ fn native_install_policies_and_unverified_sources_are_blocked() {
         json!({"source":"npm","package":"fixture"}),
         json!({"source":"archive","url":"https://example.invalid/plugin.zip"}),
     ] {
-        assert!(inventory::install_restriction(Host::Claude, &json!({"source":source})).is_some());
+        assert!(claude::install_restriction(&json!({"source":source})).is_some());
     }
-    assert!(inventory::install_restriction(Host::Codex,&json!({"source":{"source":"local","path":"./demo"},"policy":{"installation":"NOT_AVAILABLE"}})).is_some());
-    assert!(inventory::install_restriction(
-        Host::Codex,
-        &json!({"source":{"source":"local","path":"./demo"},"policy":{"installation":"AVAILABLE"}})
-    )
+    assert!(codex::install_restriction(&json!({"source":{"source":"local","path":"./demo"},"policy":{"installation":"NOT_AVAILABLE"}})).is_some());
+    assert!(codex::install_restriction(&json!({"source":{"source":"local","path":"./demo"},"policy":{"installation":"AVAILABLE"}}))
     .is_none());
     let text = transport::diagnostic(
         r#"{"url":"https://person:credential@example.invalid/path?token=secret#secret","error":"denied"}"#,
@@ -1133,11 +1188,14 @@ async fn plugin_update_checks_new_source_instead_of_old_installation() {
             .contains("Node")
     );
     assert!(
-        operations::arguments(
-            &request(Host::Claude, Action::Update, "demo@skills-box-verification"),
-            &obs
-        )
-        .is_err()
+        (&obs)
+            .prepare(&request(
+                Host::Claude,
+                Action::Update,
+                "demo@skills-box-verification"
+            ))
+            .map(|p| p.arguments)
+            .is_err()
     );
 }
 
@@ -1276,7 +1334,11 @@ fn codex_catalogs_select_the_manifest_matching_the_native_market() {
         .to_string(),
     )
     .unwrap();
-    let snapshot = inventory::load(&rt, vec![], &[]).unwrap().snapshot;
+    let snapshot = rt
+        .host
+        .observe(&rt, vec![], &[], ResolvedContext::default())
+        .unwrap()
+        .snapshot;
     for (name, plugin) in [("openai-api-curated", "api"), ("openai-curated", "regular")] {
         let row = snapshot.markets.iter().find(|m| m.name == name).unwrap();
         assert!(
@@ -1307,14 +1369,22 @@ fn codex_api_catalog_works_without_the_regular_manifest_and_tracks_changes() {
         json!({"marketplaces":[{"name":"openai-api-curated","root":market}]}).to_string(),
     )
     .unwrap();
-    let before = inventory::load(&rt, vec![], &[]).unwrap().snapshot;
+    let before = rt
+        .host
+        .observe(&rt, vec![], &[], ResolvedContext::default())
+        .unwrap()
+        .snapshot;
     assert!(before.markets[0].catalog_error.is_none());
     assert_eq!(before.plugins.len(), 1);
     let path = market.join(".agents/plugins/api_marketplace.json");
     let mut doc = inventory::optional_json(&path).unwrap();
     doc["plugins"][0]["description"] = json!("Changed API catalog");
     fs::write(&path, doc.to_string()).unwrap();
-    let after = inventory::load(&rt, vec![], &[]).unwrap().snapshot;
+    let after = rt
+        .host
+        .observe(&rt, vec![], &[], ResolvedContext::default())
+        .unwrap()
+        .snapshot;
     assert_ne!(before.fingerprint, after.fingerprint);
     assert_eq!(
         after.plugins[0].description.as_deref(),
@@ -1323,7 +1393,11 @@ fn codex_api_catalog_works_without_the_regular_manifest_and_tracks_changes() {
 
     for contents in [r#"{"name":"other-market","plugins":[]}"#, "invalid json"] {
         fs::write(&path, contents).unwrap();
-        let snapshot = inventory::load(&rt, vec![], &[]).unwrap().snapshot;
+        let snapshot = rt
+            .host
+            .observe(&rt, vec![], &[], ResolvedContext::default())
+            .unwrap()
+            .snapshot;
         assert!(snapshot.markets[0].catalog_error.is_some());
         assert!(snapshot.plugins.is_empty());
     }
@@ -1368,19 +1442,30 @@ fn native_adapters_native_catalog_and_approval() {
             )
             .unwrap();
         assert!(out.success, "{}", out.diagnostic);
-        let contract = contracts::defaults(host);
-        let obs = inventory::load(&rt, contract.capabilities.clone(), &[]).unwrap();
+        let contract = host.defaults();
+        let obs = rt
+            .host
+            .observe(
+                &rt,
+                contract.capabilities.clone(),
+                &[],
+                ResolvedContext::default(),
+            )
+            .unwrap();
         assert_eq!(obs.snapshot.plugins.len(), 1);
         let install = request(host, Action::Install, "demo@skills-box-verification");
         if host == Host::Codex {
             assert!(obs.snapshot.plugins[0].install_blocked_reason.is_none());
             assert!(obs.snapshot.plugins[0].local_root.is_some());
-            let out = operations::execute(&rt, &install, &obs).unwrap();
-            let after = inventory::load(&rt, contract.capabilities, &[]).unwrap();
-            assert!(operations::response_matches(&install, &out));
-            assert!(operations::postcondition(&install, &obs, &after, &out));
+            let out = obs.execute(&rt, &install).unwrap();
+            let after = rt
+                .host
+                .observe(&rt, contract.capabilities, &[], ResolvedContext::default())
+                .unwrap();
+            assert!(out.response_accepted);
+            assert!(obs.verify(&install, &after, &out));
         } else {
-            assert!(operations::arguments(&install, &obs).is_err());
+            assert!(obs.prepare(&install).map(|p| p.arguments).is_err());
             // Invoke without any approval flag to prove the CLI refuses. The
             // fixture command is /usr/bin/false and cannot alter user data.
             let out = rt
@@ -1397,7 +1482,11 @@ fn native_adapters_native_catalog_and_approval() {
                 )
                 .unwrap();
             assert!(!out.success, "{}", out.diagnostic);
-            let after = inventory::load(&rt, contract.capabilities, &[]).unwrap();
+            let after = rt
+                .host
+                .observe(&rt, contract.capabilities, &[], ResolvedContext::default())
+                .unwrap();
+            let out = CommandResult::new(&install, out);
             let outcome = operations::outcome(preview(install), &obs, Ok(after), Ok(out));
             assert!(
                 matches!(outcome.status.as_str(), "needs_host" | "partial"),
@@ -1467,17 +1556,23 @@ fn native_adapters_codex_override() {
         "[plugins.\"demo@skills-box-verification\"]\nenabled=true\n",
     )
     .unwrap();
-    let contract = contracts::defaults(Host::Codex);
-    let obs = inventory::load(&rt, contract.capabilities, &[]).unwrap();
+    let contract = Host::Codex.defaults();
+    let obs = rt
+        .host
+        .observe(&rt, contract.capabilities, &[], ResolvedContext::default())
+        .unwrap();
     assert!(obs.snapshot.plugins[0].read_only_reason.is_some());
     assert!(
-        operations::arguments(
-            &request(Host::Codex, Action::Enable, "demo@skills-box-verification"),
-            &obs
-        )
-        .is_err()
+        (&obs)
+            .prepare(&request(
+                Host::Codex,
+                Action::Enable,
+                "demo@skills-box-verification"
+            ))
+            .map(|p| p.arguments)
+            .is_err()
     );
-    let response=rt.rpc("config/value/write",json!({"keyPath":"plugins.\"demo@skills-box-verification\".enabled","value":true,"mergeStrategy":"replace","filePath":rt.root.join("config.toml"),"expectedVersion":obs.user_version})).unwrap();
+    let response=rt.rpc("config/value/write",json!({"keyPath":"plugins.\"demo@skills-box-verification\".enabled","value":true,"mergeStrategy":"replace","filePath":rt.root.join("config.toml"),"expectedVersion":codex_evidence(&obs).user_version})).unwrap();
     assert_eq!(response["status"], "okOverridden");
     assert_eq!(
         rt.rpc("config/read", json!({"includeLayers":true}))
@@ -1528,15 +1623,26 @@ fn native_adapters_network_failure() {
             isolated: true,
         };
         let rt = contracts::isolated_runtime(&base, temp.path()).unwrap();
-        let contract = contracts::defaults(host);
-        let mut before = inventory::load(&rt, contract.capabilities.clone(), &[]).unwrap();
+        let contract = host.defaults();
+        let mut before = rt
+            .host
+            .observe(
+                &rt,
+                contract.capabilities.clone(),
+                &[],
+                ResolvedContext::default(),
+            )
+            .unwrap();
         before.snapshot.source_kinds = contract.sources;
         let mut r = request(host, Action::AddMarket, "");
         r.source_kind = "git".into();
         r.source = format!("http://127.0.0.1:{port}/unreachable.git");
-        let out = operations::execute(&rt, &r, &before).unwrap();
+        let out = before.execute(&rt, &r).unwrap();
         assert!(!out.success);
-        let after = inventory::load(&rt, contract.capabilities, &[]).unwrap();
+        let after = rt
+            .host
+            .observe(&rt, contract.capabilities, &[], ResolvedContext::default())
+            .unwrap();
         let outcome = operations::outcome(preview(r), &before, Ok(after), Ok(out));
         assert_ne!(outcome.status, "succeeded");
         assert_eq!(outcome.command_succeeded, Some(false));
@@ -1769,7 +1875,12 @@ async fn native_codex_project_context_is_readable_without_global_write_fallback(
             .iter()
             .any(|d| d.contains("项目共享"))
     );
-    for action in contracts::actions(Host::Codex) {
+    for action in Host::Codex
+        .defaults()
+        .capabilities
+        .into_iter()
+        .map(|c| c.action)
+    {
         let mut request = request(Host::Codex, action, id);
         request.context = target.clone();
         assert!(service.prepare(request).await.is_err());
@@ -1822,35 +1933,40 @@ fn layer_postconditions_detect_foreign_deletion_and_configuration_changes() {
     after.snapshot = before.snapshot.clone();
     let mut r = request(Host::Claude, Action::Enable, "demo@team");
     r.context = before.snapshot.context.target.clone();
-    let out = Output {
-        success: true,
-        value: None,
-        diagnostic: String::new(),
-    };
+    let out = CommandResult::new(
+        &r,
+        Output {
+            success: true,
+            value: None,
+            diagnostic: String::new(),
+        },
+    );
     after.snapshot.plugins[0].selected_enabled = Some(true);
-    assert!(operations::postcondition(&r, &before, &after, &out));
+    assert!(before.verify(&r, &after, &out));
     after.snapshot.plugins[0].installations.remove(0);
-    assert!(!operations::postcondition(&r, &before, &after, &out));
+    assert!(!before.verify(&r, &after, &out));
     after.snapshot.plugins[0].installations = before.snapshot.plugins[0].installations.clone();
-    let global = context::ConfigLayer {
+    let global = claude::ConfigLayer {
         scope: "user".into(),
         root: None,
         path: "/fixture/settings.json".into(),
         settings: json!({"enabledPlugins":{"demo@team":false}}),
     };
-    before.layers.push(global.clone());
-    after.layers.push(global);
-    assert!(operations::postcondition(&r, &before, &after, &out));
-    after.layers[0].settings["enabledPlugins"]["demo@team"] = json!(true);
-    assert!(!operations::postcondition(&r, &before, &after, &out));
-    after.layers = before.layers.clone();
-    after.layers.push(context::ConfigLayer {
-        scope: "local".into(),
-        root: Some("/b".into()),
-        path: "/b/.claude/settings.local.json".into(),
-        settings: json!({"enabledPlugins":{"demo@team":true}}),
-    });
-    assert!(!operations::postcondition(&r, &before, &after, &out));
+    claude_evidence(&mut before).layers.push(global.clone());
+    claude_evidence(&mut after).layers.push(global);
+    assert!(before.verify(&r, &after, &out));
+    claude_evidence(&mut after).layers[0].settings["enabledPlugins"]["demo@team"] = json!(true);
+    assert!(!before.verify(&r, &after, &out));
+    claude_evidence(&mut after).layers = claude_evidence(&mut before).layers.clone();
+    claude_evidence(&mut after)
+        .layers
+        .push(claude::ConfigLayer {
+            scope: "local".into(),
+            root: Some("/b".into()),
+            path: "/b/.claude/settings.local.json".into(),
+            settings: json!({"enabledPlugins":{"demo@team":true}}),
+        });
+    assert!(!before.verify(&r, &after, &out));
 }
 #[tokio::test]
 #[ignore = "real Claude project/local lifecycle in isolated configuration and temporary projects"]
@@ -2025,4 +2141,221 @@ async fn native_project_layers_isolated_lifecycle() {
         snapshot.version,
         temp.path().display()
     );
+}
+
+fn codex_evidence(obs: &Observation) -> &codex::NativeEvidence {
+    let Evidence::Codex(e) = &obs.evidence else {
+        panic!("Codex fixture")
+    };
+    e
+}
+fn claude_evidence(obs: &mut Observation) -> &mut claude::NativeEvidence {
+    let Evidence::Claude(e) = &mut obs.evidence else {
+        panic!("Claude fixture")
+    };
+    e
+}
+
+#[test]
+fn action_blocks_prepare_and_execute_preserve_error_precedence() {
+    for host in [Host::Codex, Host::Claude] {
+        let (_temp, _service, mut rt) = fake_service();
+        rt.host = host;
+        rt.executable = "/missing-native-cli".into();
+        for (action, blocked) in [
+            (Action::Install, "capability"),
+            (Action::Install, "ownership"),
+            (Action::Install, "source"),
+            (
+                Action::Uninstall,
+                "原生操作可能影响共享的项目安装，请在宿主中处理。",
+            ),
+            (Action::Uninstall, "当前项目没有可用的原生安装。"),
+            (
+                Action::Uninstall,
+                "此安装来自其他配置层，请切换到安装所属层操作。",
+            ),
+        ] {
+            let mut obs = observation(host);
+            let plugin = &mut obs.snapshot.plugins[0];
+            plugin.installed_in_target = false;
+            if blocked == "capability" {
+                plugin.read_only_reason = Some("ownership".into());
+                obs.snapshot
+                    .capabilities
+                    .iter_mut()
+                    .find(|c| c.action == action)
+                    .unwrap()
+                    .blocked_reason = Some(blocked.into());
+            } else if blocked == "ownership" {
+                plugin.read_only_reason = Some(blocked.into());
+                plugin.install_blocked_reason = Some("source".into());
+            } else if blocked == "source" {
+                plugin.install_blocked_reason = Some(blocked.into());
+                plugin.installed_in_target = true;
+            } else if blocked.contains("共享") {
+                plugin.installation_state = "absent".into();
+                plugin.installations.push(Installation {
+                    scope: "project".into(),
+                    project_path: Some("/foreign".into()),
+                    version: None,
+                    path: None,
+                });
+            } else if blocked.contains("没有可用") {
+                plugin.installation_state = "absent".into();
+            }
+            let r = request(host, action, "demo@team");
+            obs.project_action_blocks();
+            let key = serde_json::to_value(action).unwrap();
+            assert_eq!(
+                obs.snapshot.plugins[0].action_blocks[key.as_str().unwrap()],
+                blocked
+            );
+            assert_eq!(obs.prepare(&r).err().as_deref(), Some(blocked));
+            assert_eq!(obs.execute(&rt, &r).err().as_deref(), Some(blocked));
+        }
+    }
+}
+
+#[test]
+fn host_identity_and_codex_write_evidence_keep_their_validation_order() {
+    let mut obs = observation(Host::Codex);
+    let r = request(Host::Codex, Action::Enable, "demo@team");
+    let Evidence::Codex(evidence) = &mut obs.evidence else {
+        unreachable!()
+    };
+    evidence.user_version = None;
+    obs.snapshot.plugins[0].read_only_reason = Some("ownership".into());
+    assert_eq!(obs.prepare(&r).err().as_deref(), Some("ownership"));
+    obs.snapshot.plugins[0].read_only_reason = None;
+    obs.snapshot.plugins[0].installation_state = "absent".into();
+    assert_eq!(
+        obs.prepare(&r).err().as_deref(),
+        Some("当前项目没有可用的原生安装。")
+    );
+    obs.snapshot.plugins[0].installation_state = "installed".into();
+    obs.project_action_blocks();
+    assert_eq!(
+        obs.snapshot.plugins[0].action_blocks["enable"],
+        "缺少用户配置版本，无法安全写入。"
+    );
+    assert_eq!(
+        obs.prepare(&r).err().as_deref(),
+        Some("缺少用户配置版本，无法安全写入。")
+    );
+    obs.snapshot
+        .capabilities
+        .iter_mut()
+        .find(|c| c.action == Action::Enable)
+        .unwrap()
+        .blocked_reason = Some("capability".into());
+    let mut mismatched = r;
+    mismatched.host = Host::Claude;
+    assert_eq!(
+        obs.prepare(&mismatched).err().as_deref(),
+        Some("宿主身份不匹配。")
+    );
+    mismatched.host = Host::Codex;
+    mismatched.context.layer = Layer::Project;
+    assert_eq!(
+        obs.prepare(&mismatched).err().as_deref(),
+        Some("宿主身份不匹配。")
+    );
+}
+
+#[tokio::test]
+async fn invalid_success_response_is_cached_even_when_post_read_is_degraded() {
+    for invalid_response in [false, true] {
+        let (_temp, service, rt) = fake_service();
+        fs::write(rt.root.join("fail-verification"), "").unwrap();
+        if invalid_response {
+            fs::write(rt.root.join("unknown-response"), "").unwrap();
+        }
+        let preview = service
+            .prepare(request(
+                Host::Claude,
+                Action::Enable,
+                "demo@skills-box-verification",
+            ))
+            .await
+            .unwrap();
+        let outcome = service.execute(preview.token).await.unwrap();
+        assert_eq!(outcome.status, "unconfirmed");
+        assert_eq!(outcome.command_succeeded, Some(true));
+        fs::remove_file(rt.root.join("fail-read")).unwrap();
+        let snapshot = service.read(Host::Claude).await.unwrap().snapshot.unwrap();
+        for action in [Action::Enable, Action::Disable] {
+            let blocked = snapshot
+                .capabilities
+                .iter()
+                .find(|c| c.action == action)
+                .unwrap()
+                .blocked_reason
+                .is_some();
+            assert_eq!(blocked, invalid_response && action == Action::Enable);
+        }
+    }
+}
+
+#[test]
+fn local_confirmation_uses_each_hosts_selected_manifest() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = contracts::fixture(temp.path()).unwrap();
+    let native = root.join(".agents/plugins/marketplace.json");
+    fs::create_dir_all(native.parent().unwrap()).unwrap();
+    fs::write(&native, r#"{"name":"native"}"#).unwrap();
+    let legacy = root.join(".claude-plugin/marketplace.json");
+    let prepared = |host| {
+        let mut r = request(host, Action::AddMarket, "");
+        r.source_kind = "local".into();
+        r.source = root.to_string_lossy().into();
+        observation(host).prepare(&r).unwrap().fingerprint
+    };
+    let codex = prepared(Host::Codex);
+    let claude = prepared(Host::Claude);
+    fs::write(&legacy, r#"{"name":"legacy-changed"}"#).unwrap();
+    assert_eq!(prepared(Host::Codex), codex);
+    assert_ne!(prepared(Host::Claude), claude);
+    fs::write(&native, r#"{"name":"native-changed"}"#).unwrap();
+    assert_ne!(prepared(Host::Codex), codex);
+    fs::remove_file(native).unwrap();
+    assert_eq!(prepared(Host::Codex), prepared(Host::Claude));
+}
+
+#[test]
+fn market_action_blocks_keep_host_ownership_and_error_precedence() {
+    for host in [Host::Codex, Host::Claude] {
+        let (_temp, _service, mut rt) = fake_service();
+        rt.host = host;
+        rt.executable = "/missing-native-cli".into();
+        let mut obs = observation(host);
+        let market = &mut obs.snapshot.markets[0];
+        market.read_only_reason = Some("ownership".into());
+        market.sync_blocked_reason = Some("source".into());
+        market.remove_blocked_reason = Some("foreign installation".into());
+        market.catalog_error = Some("catalog".into());
+        obs.project_action_blocks();
+        for (action, reason) in [
+            (
+                Action::SyncMarket,
+                if host == Host::Codex {
+                    "ownership"
+                } else {
+                    "source"
+                },
+            ),
+            (Action::RemoveMarket, "ownership"),
+        ] {
+            let market = &obs.snapshot.markets[0];
+            let block = if action == Action::SyncMarket {
+                &market.sync_blocked_reason
+            } else {
+                &market.remove_blocked_reason
+            };
+            assert_eq!(block.as_deref(), Some(reason));
+            let r = request(host, action, "team");
+            assert_eq!(obs.prepare(&r).err().as_deref(), Some(reason));
+            assert_eq!(obs.execute(&rt, &r).err().as_deref(), Some(reason));
+        }
+    }
 }
