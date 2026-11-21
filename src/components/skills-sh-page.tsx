@@ -2,16 +2,14 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Search } from "lucide-react";
 import { TitlebarBack } from "./app-titlebar";
-import { asAppError, getSkillsShSnapshot, listSkillsSh } from "../lib/api";
+import { asAppError, listSkillsSh } from "../lib/api";
 import { useMarketplaceSession } from "../hooks/use-marketplace-session";
-import { skillsShInstallation, skillsShKey, skillsShViews, type MarketplaceInstallSeed, type SkillsShListing, type SkillsShSkill, type SkillsShSnapshot, type SkillsShView } from "../lib/skills-sh";
+import { skillsShInstallation, skillsShKey, skillsShViews, type MarketplaceInstallSeed, type SkillsShListing, type SkillsShSkill, type SkillsShView } from "../lib/skills-sh";
 import type { InventorySnapshot } from "../lib/types";
-import { formatBytes, parentDir } from "../lib/skill-content";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
-import { MarketplaceFileTree } from "./marketplace-files-tab";
+import { MarketplaceContentBrowser } from "./marketplace-content-browser";
 import { OfficialLink } from "./official-link";
-import { SkillMarkdown } from "./skill-markdown";
 
 interface Props {
   active: boolean;
@@ -137,10 +135,6 @@ export function SkillsShPage(props: Props) {
 
 function SkillsShDetail({ skill, metric, onBack, ...props }: Props & { skill: SkillsShSkill; metric: string; onBack: () => void }) {
   const heading = useRef<HTMLHeadingElement>(null);
-  const content = useQuery({
-    queryKey: ["marketplace", "skills-sh", "snapshot", skillsShKey(skill.coordinate)],
-    queryFn: () => getSkillsShSnapshot(skill.coordinate), enabled: props.active, retry: false, staleTime: 60_000,
-  });
   const { installed, collision } = skillsShInstallation(skill, props.snapshot);
   useEffect(() => { heading.current?.focus({ preventScroll: true }); }, []);
   return <main className="marketplace-detail-page" aria-labelledby="skills-sh-detail-title">
@@ -171,72 +165,7 @@ function SkillsShDetail({ skill, metric, onBack, ...props }: Props & { skill: Sk
           <Button variant="outline" size="sm" onClick={props.onRecheck}>重新检测环境</Button>
         </div> : null}
       </header>
-      <div className="marketplace-snapshot-notice">
-        <p>市场内容快照 · 只读</p>
-        <p>由 skills.sh 收录，可能与 Git 上游当前内容不同，文件列表也可能不完整。</p>
-        <Button variant="ghost" size="sm" disabled={content.isFetching} onClick={() => void content.refetch()}>刷新内容快照</Button>
-      </div>
-      {content.isPending ? <p role="status">正在读取内容快照…</p> : null}
-      {content.isError ? <div role="alert" className="notice">
-        <p>内容快照读取失败。{content.data?.files ? "保留上次成功的快照。" : "未获取到可浏览的快照；这不代表上游没有文件。"}</p>
-        <p>{asAppError(content.error)?.message}</p>
-        <Button variant="outline" size="sm" onClick={() => void content.refetch()}>重试内容快照</Button>
-      </div> : null}
-      {content.data?.files ? <SnapshotContent key={content.dataUpdatedAt} snapshot={content.data} />
-        : content.data ? <p className="notice">此条目暂无可浏览的内容快照，可打开官方页面查看。{skill.gitSource ? "仍可通过 Git 仓库预览后安装。" : ""}</p> : null}
+      <MarketplaceContentBrowser source={{ kind: "skills-sh", skill }} active={props.active} />
     </div>
   </main>;
-}
-
-function SnapshotContent({ snapshot }: { snapshot: SkillsShSnapshot }) {
-  const [tab, setTab] = useState<"overview" | "files">("overview");
-  const [path, setPath] = useState("SKILL.md");
-  const [expanded, setExpanded] = useState(new Set<string>());
-  const [raw, setRaw] = useState(false);
-  const tabs = useRef<HTMLDivElement>(null);
-  const preview = useRef<HTMLDivElement>(null);
-  const files = snapshot.files ?? [];
-  const shownPath = tab === "overview" ? "SKILL.md" : path;
-  const file = files.find((file) => file.path === shownPath);
-  function navigate(next: string) {
-    setPath(next); setTab("files"); setRaw(false);
-    setExpanded((previous) => { const result = new Set(previous); const parts = next.split("/");
-      for (let i = 1; i < parts.length; i++) result.add(parts.slice(0, i).join("/")); return result; });
-    preview.current?.focus({ preventScroll: true });
-    preview.current?.scrollIntoView?.({ block: "nearest" });
-  }
-  const markdown = /\.(md|markdown)$/i.test(shownPath);
-  return <>
-    <div ref={tabs} className="marketplace-detail-tabs" role="tablist" aria-label="市场详情内容" onKeyDown={(event) => {
-      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-      event.preventDefault();
-      const next = event.key === "Home" ? "overview" : event.key === "End" ? "files" : tab === "overview" ? "files" : "overview";
-      setTab(next); setRaw(false);
-      tabs.current?.querySelector<HTMLButtonElement>(`#skills-sh-tab-${next}`)?.focus();
-    }}>
-      {(["overview", "files"] as const).map((value) => <button key={value} role="tab" id={`skills-sh-tab-${value}`}
-        aria-controls="skills-sh-content" aria-selected={tab === value} tabIndex={tab === value ? 0 : -1}
-        onClick={() => { setTab(value); setRaw(false); }}>{value === "overview" ? "概述" : "文件"}</button>)}
-    </div>
-    <div id="skills-sh-content" role="tabpanel" aria-labelledby={`skills-sh-tab-${tab}`} tabIndex={0}>
-      <div className={tab === "files" ? "marketplace-files-body" : "marketplace-detail-overview"}>
-        {tab === "files" ? <nav className="marketplace-file-tree" aria-label="市场文件树">
-          <MarketplaceFileTree files={files} selectedPath={path} expanded={expanded} onSelectFile={navigate}
-            onToggleDir={(path) => setExpanded((previous) => { const next = new Set(previous); if (next.has(path)) next.delete(path); else next.add(path); return next; })} />
-        </nav> : null}
-        <div ref={preview} className="marketplace-file-preview" role="region" tabIndex={-1} aria-label="文件预览">
-          <div className="marketplace-file-head"><span className="mono">{shownPath}</span><div>
-            {file ? <span>{formatBytes(file.sizeBytes)}</span> : null}
-            {file?.contents != null && markdown ? <Button variant="ghost" size="sm" aria-pressed={raw} onClick={() => setRaw(!raw)}>{raw ? "返回渲染" : "查看原文"}</Button> : null}
-          </div></div>
-          <div className="marketplace-file-content">
-            {!file ? <p role="status">此快照未包含该文件，请选择其他文件或打开官方页面。</p>
-              : file.contents === null ? <p>此文件不是可预览文本，或超过 1 MB 预览上限。</p>
-              : markdown && !raw ? <SkillMarkdown content={file.contents} fileLinks={{ baseDir: parentDir(shownPath), onNavigate: navigate }} />
-              : <pre className="content-text" role="region" aria-label={`${shownPath} 原文`} tabIndex={0}>{file.contents}</pre>}
-          </div>
-        </div>
-      </div>
-    </div>
-  </>;
 }

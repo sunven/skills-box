@@ -6,7 +6,7 @@ import { asAppError, fallbackError, getMarketplaceSkill, openExternalUrl } from 
 import { marketplaceAddress, marketplaceKey, type MarketplaceSkill } from "../lib/marketplace";
 import type { InventorySnapshot, ScopeId } from "../lib/types";
 import { Button } from "./ui/button";
-import { MarketplaceDetailTabs } from "./marketplace-detail-tabs";
+import { MarketplaceContentBrowser } from "./marketplace-content-browser";
 import { MarketplaceStats } from "./marketplace-stats";
 import { MarketplaceInstallDialog } from "./marketplace-install-dialog";
 import { MutationError } from "./mutation/mutation-error";
@@ -136,7 +136,7 @@ export function MarketplaceDetailPage({
                   当前作用域已有同名技能 {collision.name}（{collision.source ?? "本地技能"}）。请先卸载原技能。
                 </p>
               ) : null}
-              <MarketplaceDetailTabs key={data.version} detail={data} />
+              <MarketplaceContentBrowser source={{ kind: "skillhub", detail: data }} active={active} />
             </>
           ) : null}
         </div>
