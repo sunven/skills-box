@@ -1,8 +1,8 @@
 # ClawHub Overview relative links may use the selected file's directory
 
-Status: needs-triage
+Status: resolved
 Date: 2026-11-21.
-Evidence: static code inference; not reproduced at runtime.
+Evidence: reproduced through the React Content browser; fixed and covered by a regression test on 2026-11-23.
 
 ## Finding
 
@@ -47,3 +47,12 @@ and the missing sequence in current test coverage.
 `src/components/marketplace-content-browser/clawhub.tsx` near line 40. The
 source adapter still uses the selected path's parent directory. This issue
 remains a static inference; no fix or dedicated reproduction was included.
+
+2026-11-23: Fixed `ClawHubContent` in
+`src/components/marketplace-content-browser/clawhub.tsx` so Overview links
+resolve from root `SKILL.md`. The selected file path and version are retained;
+Files links continue to resolve relative to the displayed file. The new
+`resolves ClawHub Overview links from SKILL.md after reading a nested file`
+regression in `src/components/marketplace-content-browser.test.tsx` follows
+Overview -> nested guide -> Overview -> guide again, then opens the guide's
+relative script link. `pnpm test` passed all 540 tests and `pnpm build` passed.

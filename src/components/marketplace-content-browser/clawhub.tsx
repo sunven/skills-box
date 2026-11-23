@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { asAppError, fallbackError, listClawhubVersionFiles, readClawhubVersionFile } from "../../lib/api";
 import { clawhubKey, type ClawHubCoordinate } from "../../lib/clawhub";
-import { parentDir } from "../../lib/skill-content";
 import { Button } from "../ui/button";
 import { MutationError } from "../mutation/mutation-error";
 import { OfficialLink } from "../official-link";
@@ -37,7 +36,7 @@ export function ClawHubContent({ source, active, browser }: {
     retry: false, staleTime: Infinity, gcTime: 300_000,
   });
   const path = browser.path ?? (hasSkillMd ? "SKILL.md" : (files[0]?.path ?? ""));
-  const fileLinks = { baseDir: parentDir(path), onNavigate: browser.navigate };
+  const fileLinks = { baseDir: "", onNavigate: browser.navigate };
   function refresh() {
     void listing.refetch();
     if (hasSkillMd) void overview.refetch();

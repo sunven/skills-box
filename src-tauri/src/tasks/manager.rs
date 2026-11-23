@@ -2434,6 +2434,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn install_rejects_a_new_local_skill_after_the_backup_without_invoking_the_writer() {
+        let fixture = install_fixture(InstallResponse::output(0, INSTALL_SUCCESS, ""));
+        let target = fixture.home.join(".agents/skills/find-skills");
+        let injected_target = target.clone();
+        let (sender, mut receiver) = unbounded_channel();
+        let event_sink: EventSink = Arc::new(move |event| {
+            if event.message.starts_with("已创建安装备份：") {
+                fs::create_dir_all(&injected_target).unwrap();
+                fs::write(
+                    injected_target.join("SKILL.md"),
+                    "LOCAL UNPUBLISHED CONTENT",
+                )
+                .unwrap();
+            }
+            let _ = sender.send(event);
+        });
+        fixture
+            .manager
+            .start_install(
+                crate::scope::ScopeId::Global,
+                install_request(&["find-skills"], &["qoder"]),
+                event_sink,
+            )
+            .await
+            .unwrap();
+
+        let event = final_event(&mut receiver).await;
+        assert_eq!(event.phase, TaskPhase::Failed);
+        assert_eq!(event.error.unwrap().code, ErrorCode::SkillConflict);
+        assert_eq!(fixture.executor.call_count(), 0);
+        assert_eq!(
+            fs::read_to_string(target.join("SKILL.md")).unwrap(),
+            "LOCAL UNPUBLISHED CONTENT"
+        );
+    }
+
+    #[tokio::test]
     async fn unparseable_json_is_fatal_even_with_exit_zero() {
         let fixture = install_fixture(InstallResponse::output(0, "garbage", ""));
         let (_phases, final_event) = run_install_task(

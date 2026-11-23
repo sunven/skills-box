@@ -32,7 +32,7 @@ export function useSkillRowActions({
   checkingUpdates: boolean;
   checkError: AppError | null;
   skills: UpdateViewSkill[];
-  onCheckUpdates: (names: string[]) => boolean;
+  onCheckUpdates: (skillIds: string[]) => boolean;
 }) {
   const queryClient = useQueryClient();
   const mounted = useRef(false);
@@ -75,7 +75,7 @@ export function useSkillRowActions({
 
   const checkSkill = useCallback(
     (skill: UpdateViewSkill) => {
-      if (!onCheckUpdates([skill.name])) return;
+      if (!onCheckUpdates([skill.id])) return;
       setNotice(null);
       setCheckingName(skill.name);
     },

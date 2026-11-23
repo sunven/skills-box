@@ -109,6 +109,37 @@ async function openMenu(name = "alpha") {
 }
 
 describe("skill row actions", () => {
+  it.each(["menu", "detail"] as const)("checks a Project skill using its full id from the %s", async (surface) => {
+    const backend = renderApp({
+      data: {
+        projects: {
+          projects: [{ id: PROJECT_SCOPE.slice(8), root: "/tmp/project", displayName: "project",
+            addedAt: 1, lastOpenedAt: 1, available: true, checkRevision: "initial" }],
+          lastActiveScope: PROJECT_SCOPE,
+          warnings: [],
+        },
+        snapshots: { [PROJECT_SCOPE]: makeSnapshot({ skills: [makeSkill({
+          id: `${PROJECT_SCOPE}/alpha`, name: "alpha", source: "acme/skills",
+          canonicalPath: "/tmp/project/.agents/skills/alpha",
+        })] }) },
+        updateReports: { [PROJECT_SCOPE]: report([updateResult("alpha", "current")]) },
+        updateCheckStates: { [PROJECT_SCOPE]: freshCheck() },
+      },
+    });
+    const menu = await openMenu();
+    if (surface === "menu") {
+      fireEvent.click(menu.getByRole("menuitem", { name: "检查更新" }));
+    } else {
+      fireEvent.click(menu.getByRole("menuitem", { name: "查看内容" }));
+      const detail = within(await screen.findByRole("complementary", { name: "详情" }));
+      fireEvent.click(detail.getByRole("button", { name: "检查更新" }));
+    }
+    await waitFor(() => expect(backend.count("check_updates")).toBe(1));
+    expect(backend.callsOf("check_updates")[0]?.payload).toEqual({
+      scope: PROJECT_SCOPE, skillIds: [`${PROJECT_SCOPE}/alpha`], checkRevision: "initial",
+    });
+  });
+
   it("opens the skill folder without selecting the row and prevents repeated opens", async () => {
     let finish!: () => void;
     const backend = renderApp({

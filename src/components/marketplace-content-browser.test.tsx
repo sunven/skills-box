@@ -1,7 +1,7 @@
 import type { ComponentProps } from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createQueryClient } from "../lib/query-client";
 import type { SkillFileContent } from "../lib/types";
 import { createFakeBackend, type FakeBackendOptions } from "../test/fake-backend";
@@ -37,6 +37,46 @@ function selectGuide() {
 }
 
 describe("Marketplace Content browser interface", () => {
+  it("resolves ClawHub Overview links from SKILL.md after reading a nested file", async () => {
+    setup(clawhub);
+    await screen.findByRole("heading", { name: "Weather 1.2.0" });
+    fireEvent.click(screen.getByRole("link", { name: "阅读指南" }));
+    await panel().findByRole("heading", { name: "天气指南 1.2.0" });
+    fireEvent.click(overviewTab());
+    fireEvent.click(screen.getByRole("link", { name: "阅读指南" }));
+    await panel().findByRole("heading", { name: "天气指南 1.2.0" });
+    expect(panel().getByRole("button", { name: /guide.md/ })).toHaveAttribute("aria-current", "true");
+    expect(panel().queryByText("references/references/guide.md")).not.toBeInTheDocument();
+    // File links still resolve relative to the displayed nested file.
+    fireEvent.click(panel().getByRole("link", { name: "查看脚本" }));
+    await panel().findByLabelText("scripts/forecast.py 原文");
+  });
+
+  it("releases unobserved skills.sh snapshots after five minutes", async () => {
+    createFakeBackend().install();
+    const client = createQueryClient();
+    const view = render(<QueryClientProvider client={client}>
+      {["first", "second"].map((skillId) => <MarketplaceContentBrowser key={skillId} active
+        source={{ kind: "skills-sh", skill: { ...skillsShSkill, coordinate: { ...skillsShSkill.coordinate, skillId } } }} />)}
+    </QueryClientProvider>);
+    const snapshots = () => client.getQueryCache().findAll({ queryKey: ["marketplace", "skills-sh", "snapshot"] });
+    await waitFor(() => {
+      expect(snapshots()).toHaveLength(2);
+      expect(snapshots().every((query) => query.state.data)).toBe(true);
+    });
+    vi.useFakeTimers();
+    try {
+      view.unmount();
+      await act(async () => { await vi.advanceTimersByTimeAsync(299_999); });
+      expect(snapshots()).toHaveLength(2);
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      expect(snapshots()).toHaveLength(0);
+    } finally {
+      client.clear();
+      vi.useRealTimers();
+    }
+  });
+
   it("preserves SkillHub Overview raw mode and resets file raw mode across paths and tabs", async () => {
     const { backend, rerender } = setup(skillhub);
     fireEvent.click(screen.getByRole("button", { name: "查看原文" }));

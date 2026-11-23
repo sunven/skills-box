@@ -9,7 +9,7 @@ import { BrowserFileLayout, BrowserSession, ContentTabs, type Browser } from "./
 export function SkillsShContent({ skill, active }: { skill: SkillsShSkill; active: boolean }) {
   const content = useQuery({
     queryKey: ["marketplace", "skills-sh", "snapshot", skillsShKey(skill.coordinate)],
-    queryFn: () => getSkillsShSnapshot(skill.coordinate), enabled: active, retry: false, staleTime: 60_000,
+    queryFn: () => getSkillsShSnapshot(skill.coordinate), enabled: active, retry: false, staleTime: 60_000, gcTime: 300_000,
   });
   return <>
     <div className="marketplace-snapshot-notice">

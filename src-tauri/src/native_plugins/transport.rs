@@ -1,6 +1,6 @@
 //! Native processes are owned by the worker until reaped. Writes have no UI timeout or cancellation.
 use super::model::Host;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
     fs,
@@ -72,30 +72,10 @@ impl Runtime {
             let shell = std::env::var_os("SHELL")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("/bin/zsh"));
-            let output = Command::new(shell)
-                .args(["-ilc", "printf '\\n__SKILLS_BOX_PATH__%s\\n' \"$PATH\""])
-                .current_dir("/")
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .spawn()
-                .map_err(|e| e.to_string())?;
-            // Login shell is a read-only probe; it may be stopped on timeout.
-            let mut child = output;
-            let start = Instant::now();
-            while child.try_wait().map_err(|e| e.to_string())?.is_none() {
-                if start.elapsed() > Duration::from_secs(5) {
-                    let _ = child.kill();
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            let out = child.wait_with_output().map_err(|e| e.to_string())?;
-            for line in String::from_utf8_lossy(&out.stdout).lines() {
-                if let Some(path) = line.strip_prefix("__SKILLS_BOX_PATH__") {
-                    dirs.extend(std::env::split_paths(path).filter(|p| p.is_absolute()));
-                }
-            }
+            dirs.extend(read_login_shell_paths(
+                &shell,
+                crate::timeouts::PROBE_TIMEOUT,
+            )?);
             executable = dirs
                 .iter()
                 .map(|p| p.join(host.command()))
@@ -220,6 +200,54 @@ impl Runtime {
         let _ = p.child.wait();
         result
     }
+}
+fn read_login_shell_paths(shell: &Path, timeout: Duration) -> Result<Vec<PathBuf>, String> {
+    let mut command = Command::new(shell);
+    command
+        .args(["-ilc", "printf '\\n__SKILLS_BOX_PATH__%s\\n' \"$PATH\""])
+        .current_dir("/")
+        .stdin(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    // Regular files give bounded reads without waiting for descendants' pipe EOF.
+    let mut process = Process::start(command, false)?;
+    let start = Instant::now();
+    let result = (|| {
+        loop {
+            if process
+                .child
+                .try_wait()
+                .map_err(|e| e.to_string())?
+                .is_some()
+            {
+                return Ok(());
+            }
+            if start.elapsed() >= timeout {
+                return Err("登录 shell PATH 探测超时。".to_string());
+            }
+            std::thread::sleep(
+                Duration::from_millis(20).min(timeout.saturating_sub(start.elapsed())),
+            );
+        }
+    })();
+    // Only the read-only probe gets stopped; native writers retain their lifecycle.
+    #[cfg(unix)]
+    unsafe {
+        // The child started its own process group; a negative PID targets that group.
+        libc::kill(-(process.child.id() as i32), libc::SIGKILL);
+    }
+    let _ = process.child.kill();
+    let _ = process.child.wait();
+    result?;
+    Ok(read(&mut process.stdout)?
+        .lines()
+        .filter_map(|line| line.strip_prefix("__SKILLS_BOX_PATH__"))
+        .flat_map(std::env::split_paths)
+        .filter(|p| p.is_absolute())
+        .collect())
 }
 fn executable_file(p: &Path) -> bool {
     #[cfg(unix)]
@@ -357,4 +385,57 @@ pub fn diagnostic(s: &str) -> String {
 pub fn same_path(a: &Path, b: &Path) -> bool {
     fs::canonicalize(a).unwrap_or_else(|_| a.into())
         == fs::canonicalize(b).unwrap_or_else(|_| b.into())
+}
+
+#[cfg(test)]
+mod tests {
+    #![cfg(unix)]
+
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn shell_with_background_writer(exit_early: bool) -> (tempfile::TempDir, PathBuf) {
+        let fixture = tempfile::tempdir().unwrap();
+        let shell = fixture.path().join("probe-shell");
+        let mut script = String::from(
+            "#!/bin/sh\n(/bin/sleep 2; printf leaked > \"${0%/*}/survived\") &\nprintf ready > \"${0%/*}/started\"\nprintf '__SKILLS_BOX_PATH__/custom/bin:relative:/usr/bin\\n'\n",
+        );
+        script.push_str(if exit_early { "exit 0\n" } else { "wait\n" });
+        fs::write(&shell, script).unwrap();
+        fs::set_permissions(&shell, fs::Permissions::from_mode(0o700)).unwrap();
+        (fixture, shell)
+    }
+
+    #[test]
+    fn login_probe_does_not_wait_for_background_stdout_after_shell_exit() {
+        let (fixture, shell) = shell_with_background_writer(true);
+        let started = Instant::now();
+        let dirs = read_login_shell_paths(&shell, Duration::from_secs(1)).unwrap();
+        assert_eq!(
+            dirs,
+            vec![PathBuf::from("/custom/bin"), PathBuf::from("/usr/bin")]
+        );
+        assert!(started.elapsed() < Duration::from_millis(1500));
+        assert!(fixture.path().join("started").exists());
+        std::thread::sleep(Duration::from_millis(2100));
+        assert!(
+            !fixture.path().join("survived").exists(),
+            "probe descendants must be stopped"
+        );
+    }
+
+    #[test]
+    fn login_probe_timeout_stops_the_shell_and_background_writer() {
+        let (fixture, shell) = shell_with_background_writer(false);
+        let started = Instant::now();
+        let error = read_login_shell_paths(&shell, Duration::from_secs(1)).unwrap_err();
+        assert!(error.contains("超时"));
+        assert!(started.elapsed() < Duration::from_millis(1500));
+        assert!(fixture.path().join("started").exists());
+        std::thread::sleep(Duration::from_millis(2100));
+        assert!(
+            !fixture.path().join("survived").exists(),
+            "timed-out descendants must be stopped"
+        );
+    }
 }

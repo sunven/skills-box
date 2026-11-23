@@ -898,6 +898,16 @@ impl MutationAction for InstallAction {
                 .collect::<Vec<_>>();
             validate_project_agents(&self.paths, &self.layout, &agents)?;
         }
+        // External tools can create a same-name skill while we take the backup.
+        // A fresh install has not backed up that content and must not overwrite it.
+        if let Some(conflict) = conflicts_for(
+            &self.paths,
+            &self.layout,
+            &plan.skills,
+            plan.retry.then_some(plan.source.as_str()),
+        )? {
+            return Err(conflict);
+        }
         Ok(())
     }
 

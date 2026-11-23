@@ -1999,6 +1999,13 @@ export function createFakeBackend(
           checkRevision: checkRevision ?? "initial",
         };
       }
+      if (scope !== GLOBAL_SCOPE && skillIds?.some((id) => !id.startsWith(`${scope}/`))) {
+        throw {
+          code: "path.invalid",
+          message: "skill id 不属于当前项目 scope。",
+          retryable: false,
+        } satisfies AppError;
+      }
       const report = reportFor(scope);
       if (skillIds !== null) {
         return {

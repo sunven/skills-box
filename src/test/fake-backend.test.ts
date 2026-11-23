@@ -412,6 +412,14 @@ describe("fake backend", () => {
       report: { skills: [{ name: "alpha", state: "update" }] },
       state: { candidateCount: 1 },
     });
+    for (const invalidId of ["alpha", "project:another/alpha"]) {
+      expect(() => backend.dispatch(API_COMMANDS.checkUpdates, {
+        skillIds: [invalidId], scope: projectScope,
+      })).toThrow("skill id 不属于当前项目 scope。");
+    }
+    expect(backend.dispatch(API_COMMANDS.checkUpdates, {
+      skillIds: [`${projectScope}/alpha`], scope: projectScope,
+    })).toMatchObject({ report: { skills: [{ name: "alpha", state: "update" }] } });
     expect(
       backend.dispatch(API_COMMANDS.getUpdateCheckState, {
         scope: projectScope,

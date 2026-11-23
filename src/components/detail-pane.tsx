@@ -521,7 +521,7 @@ export const DetailPane = memo(function DetailPane({
                     aria-label="检查更新"
                     disabled={checkingUpdates}
                     aria-busy={checkingUpdates}
-                    onClick={() => onCheckUpdates([skill.name])}
+                    onClick={() => onCheckUpdates([skill.id])}
                     title="检查更新"
                   >
                     <RefreshCw

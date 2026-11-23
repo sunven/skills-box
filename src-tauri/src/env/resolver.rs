@@ -199,8 +199,10 @@ impl EnvResolver {
             warnings.push(warning);
         }
         let mut login_dirs: Vec<PathBuf> = Vec::new();
+        let mut login_attempted = false;
 
         if !override_mode && node_result.npx.is_none() {
+            login_attempted = true;
             let login = self.login_shell_paths().await;
             if let Some(warning) = login.warning {
                 warnings.push(warning);
@@ -231,7 +233,16 @@ impl EnvResolver {
 
         let (node, node_issue) = self.node_status(&node_result);
         let (npx, npx_issue) = self.npx_status(&node_result);
-        let git = self.resolve_git(&login_dirs).await;
+        let mut git = self.resolve_git(&login_dirs).await;
+        // Finding Node does not imply Git is visible in the same static paths.
+        // Reuse a previous login probe, including a failed one, at most once.
+        if !override_mode && !login_attempted && git.info.is_none() {
+            let login = self.login_shell_paths().await;
+            if let Some(warning) = login.warning {
+                warnings.push(warning);
+            }
+            git = self.resolve_git(&login.dirs).await;
+        }
         let (cli, cli_issue) = self.resolve_cli(&node_result, git.info.as_ref()).await;
 
         let mut issues = Vec::new();
@@ -1542,6 +1553,39 @@ mod tests {
                 .warnings
                 .iter()
                 .any(|warning| warning.contains("登录 shell"))
+        );
+    }
+
+    #[tokio::test]
+    async fn finds_login_only_git_after_finding_node_statically() {
+        let mut fixture = Fixture::new();
+        let node = make_node_bin(&fixture._tmp.path().join("fnm/aliases/default/bin"));
+        fixture.search.fnm_bases = vec![fixture._tmp.path().join("fnm")];
+        let login_bin = fixture._tmp.path().join("custom-git/bin");
+        let git = make_git(&login_bin);
+        let executor = Arc::new(login_rule(
+            standard_executor(&node, "v24.15.0", "11.12.1", "1.7.4", &git),
+            &login_bin.display().to_string(),
+        ));
+
+        let report = fixture.resolver(executor.clone()).resolve().await.unwrap();
+
+        assert_eq!(report.path_source, PathSource::Fnm);
+        assert_eq!(report.node.status, ToolState::Ok);
+        assert_eq!(report.npx.status, ToolState::Ok);
+        assert_eq!(report.git.status, ToolState::Ok);
+        assert_eq!(
+            report.git.path.as_deref(),
+            Some(fixture.paths.display(&git).as_str())
+        );
+        assert!(report.mutations_enabled);
+        assert_eq!(
+            executor
+                .calls()
+                .iter()
+                .filter(|call| call.program.file_name().unwrap() == "zsh")
+                .count(),
+            1
         );
     }
 
