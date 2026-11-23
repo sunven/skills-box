@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.9] - 2026-11-23
+
+### Bug Fixes
+
+- Handle Codex API catalogs and Claude session plugins
+- Prevent install overwrites and resolve audit findings
+- Remove native plugin CLI version allowlist
+- Resolve five codebase audit findings
+
+### Features
+
+- Add native Codex and Claude plugin management
+- Add project scope support for native plugins
+
+### Refactor
+
+- Centralize skill publication plans and validation
+- Centralize native plugin host semantics
+- Centralize marketplace content browsing
+
+### Styling
+
+- Polish inventory and skill detail interfaces
+- Polish native plugin management interface
+- Move scope switcher left and settings to titlebar
+- Center navigation tabs and highlight skills by default
+- Move page back navigation to titlebar
+
 ## [0.1.8] - 2026-11-18
 
 ### Bug Fixes
