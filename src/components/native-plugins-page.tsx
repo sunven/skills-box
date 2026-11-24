@@ -633,22 +633,24 @@ function NativeHostPage({
             {visible.map((p) => (
               <article key={p.id} className="native-plugin-row">
                 <div className="min-w-0">
-                  <button
-                    className="native-plugin-name"
-                    onClick={() => setSelected(p)}
-                  >
-                    {p.name}
-                    <ChevronRight />
-                  </button>
-                  <p className="native-plugin-coordinate mono">
-                    <span>{p.id}</span>
-                    {p.version && (
-                      <span className="native-plugin-version">
-                        <span className="sr-only">版本 </span>
-                        {p.version}
-                      </span>
-                    )}
-                  </p>
+                  <div className="native-plugin-summary">
+                    <button
+                      className="native-plugin-name"
+                      onClick={() => setSelected(p)}
+                    >
+                      {p.name}
+                      <ChevronRight />
+                    </button>
+                    <p className="native-plugin-coordinate mono">
+                      <span>{p.id}</span>
+                      {p.version && (
+                        <span className="native-plugin-version">
+                          <span className="sr-only">版本 </span>
+                          {p.version}
+                        </span>
+                      )}
+                    </p>
+                  </div>
                   <p className="native-plugin-description">
                     {p.description ?? "目录未提供介绍"}
                   </p>
